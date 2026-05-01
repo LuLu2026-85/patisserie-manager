@@ -2621,6 +2621,27 @@ function loadData() {
       if (!d.version || d.version < 15) {
         // 'crawl' 是新增枚举值，旧数据不存在；normalizeImageEntry 已通过 spread 兼容新字段
       }
+      // v16 迁移: suppliers.closureWindows 从 MM-DD 升级到 YYYY-MM-DD (绝对日期，跨年安全)
+      if (!d.version || d.version < 16) {
+        if (Array.isArray(d.suppliers)) {
+          const yr = new Date().getFullYear();
+          d.suppliers = d.suppliers.map(s => {
+            if (!Array.isArray(s.closureWindows)) return s;
+            const upgraded = s.closureWindows.map(w => {
+              if (!w || !w.start || !w.end) return w;
+              // 已经是 YYYY-MM-DD 则不动
+              const isYMD = (str) => str.length === 10 && str.split("-").length === 3 && str.split("-")[0].length === 4;
+              if (isYMD(w.start) && isYMD(w.end)) return w;
+              // 老 MM-DD 升级: start 用当年, end 同年(若 end >= start) 或下一年(跨年)
+              const startMD = w.start.length === 5 ? w.start : w.start.slice(-5);
+              const endMD = w.end.length === 5 ? w.end : w.end.slice(-5);
+              const endYear = endMD < startMD ? yr + 1 : yr;
+              return { ...w, start: `${yr}-${startMD}`, end: `${endYear}-${endMD}` };
+            });
+            return { ...s, closureWindows: upgraded };
+          });
+        }
+      }
       return d;
     }
   } catch (e) {}
@@ -2629,7 +2650,7 @@ function loadData() {
 
 function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers) {
   try {
-    const payload = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, savedAt: new Date().toISOString(), version: 15 });
+    const payload = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, savedAt: new Date().toISOString(), version: 16 });
     localStorage.setItem(STORAGE_KEY, payload);
     // 自动备份到 IndexedDB (fire-and-forget,失败不影响主流程)
     addBackupSnapshot(payload);
@@ -3023,6 +3044,13 @@ function ContentQualityScanDialog({ onClose, materials, brands, lang, onJumpMate
 
 // ═══ 批量关联材料百科向导 ═══
 function BulkMaterialLinkWizard({ recipes, components, creations, materials, brands, lang, onApply, onClose }) {
+  // [B3 修复] 弹窗打开时锁 body 滚动,关闭时恢复 — 防手机滑动穿透
+  useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = orig; };
+  }, []);
+
   // 扫描所有 ing,未关联 materialId 的
   const allUnlinkedIngs = useMemo(() => {
     const list = [];
@@ -3863,7 +3891,11 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             setEditTarget(null);
           });
         }}
-        onBack={() => setEditTarget(null)}
+        onBack={() => {
+          // [B4 修复] 有 id 跳详情(从详情进编辑则回详情),无 id 回列表(新建则回列表)
+          if (editTarget && editTarget.id) setViewId(editTarget.id);
+          setEditTarget(null);
+        }}
         onQuickAddKnowledge={onQuickAddKnowledge}
         lang={lang}
         setLang={setLang}
@@ -6474,7 +6506,11 @@ function CreationsView({ creations, setCreations, components, cats, onUpdateCats
             setEditTarget(null);
           });
         }}
-        onBack={() => setEditTarget(null)}
+        onBack={() => {
+          // [B4 修复] 有 id 跳详情,无 id 回列表
+          if (editTarget && editTarget.id) setViewId(editTarget.id);
+          setEditTarget(null);
+        }}
         onUpdateComponent={onUpdateComponent}
       />
     );
@@ -7023,6 +7059,41 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
           </div>
         )}
       </div>
+
+      {/* 🎂 整体组装工艺 (creation.stepsZh / stepsJa) — 多层组装的全局工艺步骤 */}
+      {viewMode !== "menu" && (() => {
+        const overallSteps = lang === "zh" ? (c.stepsZh || []) : (c.stepsJa || c.stepsZh || []);
+        if (overallSteps.length === 0) return null;
+        return (
+          <div style={{ background: "#FFFFFF", border: `0.5px solid ${T.border}`, borderRadius: "12px", padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+            <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>
+              🎂 {lang === "zh" ? `整体组装工艺(${overallSteps.length} 步)` : `組立工程(${overallSteps.length} ステップ)`}
+            </div>
+            <ol style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {overallSteps.map((s, idx) => (
+                <li key={idx} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "6px 0", fontSize: 13, lineHeight: 1.7, borderBottom: idx < overallSteps.length - 1 ? "0.5px solid #F5F5F5" : "none" }}>
+                  <span style={{ minWidth: 22, height: 22, borderRadius: "50%", background: T.bgMuted, color: T.brand, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 500, flexShrink: 0, marginTop: 2 }}>{idx + 1}</span>
+                  <span style={{ whiteSpace: "pre-wrap" }}>{s}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        );
+      })()}
+
+      {/* 📝 整体备注 (creation.notesZh / notesJa) */}
+      {viewMode !== "menu" && (() => {
+        const overallNotes = lang === "zh" ? (c.notesZh || "") : (c.notesJa || c.notesZh || "");
+        if (!overallNotes) return null;
+        return (
+          <div style={{ background: "#FFFBEB", border: "0.5px solid #FDE68A", borderRadius: "12px", padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+            <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 10, color: "#92400E" }}>
+              📝 {lang === "zh" ? "整体备注" : "メモ"}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.8, color: "#78350F", whiteSpace: "pre-wrap" }}>{overallNotes}</div>
+          </div>
+        );
+      })()}
 
       {/* 📝 试吃笔记（仅详细模式） */}
       {viewMode === "detail" && (c.tasting?.notes || c.tasting?.feedback || c.tasting?.improvement) && (
@@ -8010,7 +8081,11 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             setEditTarget(null);
           });
         }}
-        onBack={() => setEditTarget(null)}
+        onBack={() => {
+          // [B4 修复] 有 id 跳详情,无 id 回列表
+          if (editTarget && editTarget.id) setViewId(editTarget.id);
+          setEditTarget(null);
+        }}
       />
     );
   }
@@ -8601,9 +8676,12 @@ function getUsageScenes(material, recipes, components, creations) {
 }
 
 // ─── 材料百科主视图 ─────────────
+// [B7 修复] brandFilter / searchQ 提升到 App,从详情返回不丢筛选
 function MaterialsView({ brands, setBrands, materials, setMaterials, shopMaterials = [], setShopMaterials, recipes, components, creations, lang, setLang, confirmDialog, showToast,
   categoryFilter, setCategoryFilter,
   subcategoryFilter, setSubcategoryFilter,
+  brandFilter = "", setBrandFilter = () => {},
+  searchQ = "", setSearchQ = () => {},
   brandViewId, setBrandViewId, brandEditTarget, setBrandEditTarget,
   materialViewId, setMaterialViewId, materialEditTarget, setMaterialEditTarget,
   materialReturnTo, setMaterialReturnTo,
@@ -8724,6 +8802,10 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
       subcategoryFilter={subcategoryFilter}
       setSubcategoryFilter={setSubcategoryFilter}
       setCategoryFilter={setCategoryFilter}
+      brandFilter={brandFilter}
+      setBrandFilter={setBrandFilter}
+      searchQ={searchQ}
+      setSearchQ={setSearchQ}
       setBrandViewId={setBrandViewId}
       setBrandEditTarget={setBrandEditTarget}
       setMaterialViewId={setMaterialViewId}
@@ -9179,6 +9261,13 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
 
 // ═══ 批量智能匹配弹窗:一键扫描配方 ingredient 匹配到百科 ═══
 function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
+  // [B3 修复] 弹窗打开时锁 body 滚动,关闭时恢复 — 防手机滑动穿透
+  useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = orig; };
+  }, []);
+
   // 对所有未关联的 ing 进行智能匹配
   const analysis = useMemo(() => {
     return ings
@@ -9348,14 +9437,15 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
 }
 
 // ═══ 大类详情视图(含搜索 + 厂家过滤 + 子分类 tab)═══
+// [B7 修复] brandFilter / searchQ 改为接 props(原本内部 useState 在卸载时丢失)
 function CategoryDetailView({
   categoryId, brands, materials, recipes, components, creations, lang,
   subcategoryFilter, setSubcategoryFilter, setCategoryFilter,
+  brandFilter = "", setBrandFilter = () => {},
+  searchQ = "", setSearchQ = () => {},
   setBrandViewId, setBrandEditTarget,
   setMaterialViewId, setMaterialEditTarget
 }) {
-  const [searchQ, setSearchQ] = useState("");
-  const [brandFilter, setBrandFilter] = useState(""); // brand id 或 ""
 
   const cat = getMaterialCat(categoryId);
   const subcats = getSubcategoriesFor(categoryId);
@@ -11299,7 +11389,8 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 // 数据: { id, nameZh, nameJa, imageUrls, items:[{linkedId, linkedType, qty}],
 //        currentStock, threshold, leadTimeDays, sellPrice, note }
 // ═══════════════════════════════════════════════════════════════
-function ProductsView({ products, setProducts, recipes, creations, lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog }) {
+// [B6 修复] 加 components 参数,商品可关联组件
+function ProductsView({ products, setProducts, recipes, creations, components = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog }) {
   const today = new Date().toISOString().slice(0, 10);
   // v12: 销售/生产按天 upsert,同日累加。forDate 可指定补录日期
   const logQty = (kind, productId, addQty, forDate) => {
@@ -11350,6 +11441,7 @@ function ProductsView({ products, setProducts, recipes, creations, lang, showToa
       product={editTarget._new ? null : editTarget}
       recipes={recipes}
       creations={creations}
+      components={components}
       lang={lang}
       onSave={(p) => {
         setProducts(prev => {
@@ -11367,7 +11459,11 @@ function ProductsView({ products, setProducts, recipes, creations, lang, showToa
           setEditTarget(null);
         });
       }}
-      onBack={() => setEditTarget(null)}
+      onBack={() => {
+        // [B4 修复] 有 id 跳详情,无 id 回列表
+        if (editTarget && editTarget.id) setViewId(editTarget.id);
+        setEditTarget(null);
+      }}
     />;
   }
 
@@ -11409,20 +11505,28 @@ function ProductsView({ products, setProducts, recipes, creations, lang, showToa
               </div>
             )}
           </div>
-          {p.note && <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 12, lineHeight: 1.6 }}>📌 {p.note}</div>}
+          {/* [B5 修复] 备注双语,旧 note 兜底 */}
+          {(() => {
+            const noteText = lang === "zh" ? (p.notesZh || p.notesJa || p.note) : (p.notesJa || p.notesZh || p.note);
+            return noteText ? <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 12, lineHeight: 1.6 }}>📌 {noteText}</div> : null;
+          })()}
         </div>
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12 }}>📦 {lang === "zh" ? "组成(每份含)" : "構成"}</div>
           {(p.items || []).length === 0 ? (
-            <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "未关联任何配方/组合蛋糕" : "レシピ未関連"}</div>
+            <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "未关联任何配方/组合蛋糕/组件" : "未関連"}</div>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {p.items.map((it, i) => {
-                const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId) : recipes.find(r => r.id === it.linkedId);
+                // [B6 修复] 支持 component
+                const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId)
+                  : it.linkedType === "component" ? components.find(c => c.id === it.linkedId)
+                  : recipes.find(r => r.id === it.linkedId);
+                const emoji = it.linkedType === "creation" ? "🎂" : it.linkedType === "component" ? "🧩" : "🧁";
                 return (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: T.bgMuted, borderRadius: T.radiusSm, fontSize: 13 }}>
                     <div>
-                      <span style={{ color: T.textTertiary, fontSize: 11, marginRight: 6 }}>{it.linkedType === "creation" ? "🎂" : "🧁"}</span>
+                      <span style={{ color: T.textTertiary, fontSize: 11, marginRight: 6 }}>{emoji}</span>
                       {target ? mLabel(target) : (lang === "zh" ? `(已删除 ${it.linkedId})` : `(削除済)`)}
                     </div>
                     <div style={{ color: T.textSecondary }}>× {it.qty || 1}</div>
@@ -11489,9 +11593,10 @@ function ProductsView({ products, setProducts, recipes, creations, lang, showToa
             const low = products.filter(p => (p.currentStock || 0) <= (p.threshold || 0));
             if (low.length === 0) return null;
             return (
-              <div style={{ background: T.warningBg, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusLg, padding: "12px 16px", marginBottom: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: T.warning, marginBottom: 8, fontFamily: T.fontSerif }}>
-                  ⚠️ {lang === "zh" ? `今日要做 · ${low.length} 个商品低库存` : `今日の予定 · ${low.length} 件補充必要`}
+              <div style={{ background: T.dangerBg, border: `2px solid ${T.danger}`, borderRadius: T.radiusLg, padding: "16px 20px", marginBottom: 16, boxShadow: "0 2px 8px rgba(220, 38, 38, 0.15)" }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: T.danger, marginBottom: 10, fontFamily: T.fontSerif, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 22 }}>⚠️</span>
+                  <span>{lang === "zh" ? `今日要做 · ${low.length} 个商品低库存` : `今日の予定 · ${low.length} 件補充必要`}</span>
                 </div>
                 <div style={{ display: "grid", gap: 6 }}>
                   {low.map(p => {
@@ -11572,9 +11677,86 @@ function SalesInput({ kind, today, onSubmit, lang }) {
 }
 
 // 商品编辑表单 (v12)
-function ProductEditForm({ product, recipes, creations, lang, onSave, onDelete, onBack }) {
-  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, note: "" };
-  const [form, setForm] = useState(product ? { ...empty, ...product } : empty);
+// [B6 优化 v2] 商品关联 picker — 加搜索 + 分组折叠,防配方多了一长串
+function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPick, onCancel }) {
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState({ recipe: false, component: false, creation: false });
+
+  // 把 3 类数据归一格式 + 模糊匹配关键字
+  const filterByQuery = (item) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    return (item.name || "").toLowerCase().includes(q) || (item.cat || "").toLowerCase().includes(q);
+  };
+
+  const recipePool = recipes.map(r => ({ id: r.id, name: mLabel(r), cat: r.category || "" })).filter(filterByQuery);
+  const componentPool = components.map(c => ({ id: c.id, name: mLabel(c), cat: c.category || "" })).filter(filterByQuery);
+  const creationPool = creations.map(c => ({ id: c.id, name: mLabel(c), cat: "" })).filter(filterByQuery);
+
+  // 搜索时强制展开所有段
+  const isSearching = !!query.trim();
+  const totalMatched = recipePool.length + componentPool.length + creationPool.length;
+  const totalAll = recipes.length + components.length + creations.length;
+
+  const Section = ({ title, emoji, pool, type, color, originCount }) => {
+    if (originCount === 0) return null;
+    const isCollapsed = !isSearching && collapsed[type];
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <div
+          onClick={() => !isSearching && setCollapsed(c => ({ ...c, [type]: !c[type] }))}
+          style={{ fontSize: 12, fontWeight: 500, color: color, marginBottom: 6, padding: "6px 8px", letterSpacing: "0.5px", cursor: isSearching ? "default" : "pointer", background: T.bgMuted, borderRadius: T.radiusSm, display: "flex", justifyContent: "space-between", alignItems: "center", userSelect: "none" }}
+        >
+          <span>{emoji} {title} <span style={{ color: T.textTertiary, fontWeight: 400, fontSize: 11 }}>{isSearching ? `(${pool.length}/${originCount})` : `(${originCount})`}</span></span>
+          {!isSearching && <span style={{ fontSize: 11, color: T.textTertiary }}>{isCollapsed ? "▶" : "▼"}</span>}
+        </div>
+        {!isCollapsed && pool.length > 0 && (
+          <div style={{ display: "grid", gap: 4 }}>
+            {pool.map(item => (
+              <div key={type + item.id} onClick={() => onPick(item.id, type)} style={{ padding: "10px 14px", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>{item.name}</div>
+                {item.cat && <div style={{ fontSize: 11, color: T.textTertiary }}>{item.cat}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+        {!isCollapsed && pool.length === 0 && isSearching && (
+          <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic", padding: "4px 8px" }}>—</div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <Btn onClick={onCancel}>← {lang === "zh" ? "返回" : "戻る"}</Btn>
+        {isSearching && <span style={{ fontSize: 11, color: T.textTertiary }}>{lang === "zh" ? `匹配 ${totalMatched} / ${totalAll}` : `${totalMatched} / ${totalAll}`}</span>}
+      </div>
+      <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>{lang === "zh" ? "选择关联项" : "関連項目を選択"}</div>
+      <input
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder={lang === "zh" ? "🔍 搜索名称 / 分类" : "🔍 検索"}
+        style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, marginBottom: 16, fontFamily: T.fontSans }}
+      />
+      <Section title={lang === "zh" ? "配方" : "レシピ"} emoji="🧁" pool={recipePool} type="recipe" color="#a87b3e" originCount={recipes.length} />
+      <Section title={lang === "zh" ? "组件" : "部品"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
+      <Section title={lang === "zh" ? "组合蛋糕" : "ケーキ"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
+    </div>
+  );
+}
+
+// [B6 修复] 加 components,商品可关联组件
+function ProductEditForm({ product, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {
+  // [B5 修复] note → notesZh/notesJa 双语
+  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, notesZh: "", notesJa: "" };
+  // 旧数据兼容:有 note 但没 notesZh/notesJa,迁移到 notesZh
+  const initial = product ? { ...empty, ...product } : empty;
+  if (initial.note && !initial.notesZh && !initial.notesJa) {
+    initial.notesZh = initial.note;
+  }
+  const [form, setForm] = useState(initial);
   const [picker, setPicker] = useState(null); // { forItemIdx? null=新增 }
   const [errorMsg, setErrorMsg] = useState("");
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
@@ -11606,24 +11788,13 @@ function ProductEditForm({ product, recipes, creations, lang, onSave, onDelete, 
   const removeItem = (idx) => setForm(f => ({ ...f, items: (f.items || []).filter((_, i) => i !== idx) }));
 
   if (picker) {
-    const pool = [
-      ...recipes.map(r => ({ id: r.id, type: "recipe", name: mLabel(r), cat: r.category || "" })),
-      ...creations.map(c => ({ id: c.id, type: "creation", name: mLabel(c), cat: "" })),
-    ];
-    return (
-      <div>
-        <div style={{ marginBottom: 12 }}><Btn onClick={() => setPicker(null)}>← {lang === "zh" ? "返回" : "戻る"}</Btn></div>
-        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>{lang === "zh" ? "从配方 / 组合蛋糕选一项" : "レシピ / ケーキから選択"}</div>
-        <div style={{ display: "grid", gap: 6 }}>
-          {pool.map(item => (
-            <div key={item.type + item.id} onClick={() => addItem(item.id, item.type)} style={{ padding: "10px 14px", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><span style={{ fontSize: 11, color: T.textTertiary, marginRight: 8 }}>{item.type === "creation" ? "🎂 组合" : "🧁 配方"}</span>{item.name}</div>
-              {item.cat && <div style={{ fontSize: 11, color: T.textTertiary }}>{item.cat}</div>}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
+    // [B6 优化 v2] picker 加搜索 + 分组折叠
+    return <ProductItemPicker
+      recipes={recipes} components={components} creations={creations}
+      mLabel={mLabel} lang={lang}
+      onPick={(id, type) => addItem(id, type)}
+      onCancel={() => setPicker(null)}
+    />;
   }
 
   return (
@@ -11655,14 +11826,18 @@ function ProductEditForm({ product, recipes, creations, lang, onSave, onDelete, 
           <Btn size="sm" variant="primary" onClick={() => setPicker({})}>+ {lang === "zh" ? "加一项" : "追加"}</Btn>
         </div>
         {(form.items || []).length === 0 ? (
-          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic", padding: "12px 0" }}>{lang === "zh" ? "还没有组成项。点「+ 加一项」从配方或组合蛋糕选。礼盒可加多项。" : "未追加"}</div>
+          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic", padding: "12px 0" }}>{lang === "zh" ? "还没有组成项。点「+ 加一项」从配方/组合蛋糕/组件选。礼盒可加多项。" : "未追加"}</div>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>
             {(form.items || []).map((it, i) => {
-              const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId) : recipes.find(r => r.id === it.linkedId);
+              // [B6 修复] 支持 component
+              const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId)
+                : it.linkedType === "component" ? components.find(c => c.id === it.linkedId)
+                : recipes.find(r => r.id === it.linkedId);
+              const emoji = it.linkedType === "creation" ? "🎂" : it.linkedType === "component" ? "🧩" : "🧁";
               return (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: T.bgMuted, borderRadius: T.radiusSm }}>
-                  <span style={{ fontSize: 12, color: T.textTertiary }}>{it.linkedType === "creation" ? "🎂" : "🧁"}</span>
+                  <span style={{ fontSize: 12, color: T.textTertiary }}>{emoji}</span>
                   <div style={{ flex: 1, fontSize: 13 }}>{target ? mLabel(target) : (lang === "zh" ? "(已删除)" : "(削除済)")}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <span style={{ fontSize: 11, color: T.textTertiary }}>×</span>
@@ -11697,8 +11872,12 @@ function ProductEditForm({ product, recipes, creations, lang, onSave, onDelete, 
           </label>
         </div>
         <label style={{ display: "block", marginTop: 12 }}>
-          <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "备注" : "メモ"}</div>
-          <input value={form.note || ""} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={lang === "zh" ? "储存方式 / 保质期 / 其它" : "保存方法 等"} style={inputStyle} />
+          <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "备注(中文)" : "メモ(中国語)"}</div>
+          <input value={form.notesZh || ""} onChange={e => setForm({ ...form, notesZh: e.target.value })} placeholder="储存方式 / 保质期 / 其它" style={inputStyle} />
+        </label>
+        <label style={{ display: "block", marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "备注(日文)" : "メモ(日本語)"}</div>
+          <input value={form.notesJa || ""} onChange={e => setForm({ ...form, notesJa: e.target.value })} placeholder="保存方法 / 賞味期限 / その他" style={inputStyle} />
         </label>
       </div>
 
@@ -11742,7 +11921,11 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, materials, bran
           setEditTarget(null);
         });
       }}
-      onBack={() => setEditTarget(null)}
+      onBack={() => {
+        // [B4 修复] 有 id 跳详情,无 id 回列表
+        if (editTarget && editTarget.id) setViewId(editTarget.id);
+        setEditTarget(null);
+      }}
     />;
   }
 
@@ -11908,17 +12091,17 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15 }}>🏖 {lang === "zh" ? "闭店 / 休业窗口" : "休業期間"}</div>
           <Btn size="sm" variant="primary" onClick={addWindow}>+ {lang === "zh" ? "加一条" : "追加"}</Btn>
         </div>
-        <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 10 }}>{lang === "zh" ? "格式 MM-DD (例 12-28)。跨年也用每年重复的 MM-DD" : "MM-DD 形式 (例 12-28)"}</div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 10 }}>{lang === "zh" ? "选择起止日期(支持跨年,例 2026-12-30 ~ 2027-01-03)" : "開始・終了日を選択(年跨ぎ対応)"}</div>
         {(form.closureWindows || []).length === 0 ? (
           <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "没有闭店窗口(常年送货)" : "通年配送"}</div>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>
             {(form.closureWindows || []).map((w, i) => (
-              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <input value={w.start || ""} onChange={e => updateWindow(i, "start", e.target.value)} placeholder="12-28" style={{ ...inputStyle, width: 80 }} />
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <input type="date" value={w.start || ""} onChange={e => updateWindow(i, "start", e.target.value)} style={{ ...inputStyle, minWidth: 140 }} />
                 <span style={{ color: T.textTertiary }}>~</span>
-                <input value={w.end || ""} onChange={e => updateWindow(i, "end", e.target.value)} placeholder="01-04" style={{ ...inputStyle, width: 80 }} />
-                <input value={w.label || ""} onChange={e => updateWindow(i, "label", e.target.value)} placeholder={lang === "zh" ? "标签(新年休)" : "ラベル"} style={{ ...inputStyle, flex: 1 }} />
+                <input type="date" value={w.end || ""} min={w.start || undefined} onChange={e => updateWindow(i, "end", e.target.value)} style={{ ...inputStyle, minWidth: 140 }} />
+                <input value={w.label || ""} onChange={e => updateWindow(i, "label", e.target.value)} placeholder={lang === "zh" ? "标签(新年休)" : "ラベル"} style={{ ...inputStyle, flex: 1, minWidth: 100 }} />
                 <button onClick={() => removeWindow(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.danger, fontSize: 16 }}>×</button>
               </div>
             ))}
@@ -11944,7 +12127,8 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 // 📦 采购清单 View (v13)
 // 给定窗口 → 按计划产量展开 ingredient 消耗 → 按 supplier 分组
 // ═══════════════════════════════════════════════════════════════
-function PurchaseView({ products, salesLog, recipes, creations, materials, brands, shopMaterials, suppliers, lang }) {
+// [B6 修复] 加 components,采购计算支持组件
+function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang }) {
   const today = new Date().toISOString().slice(0, 10);
   const plus = (d, days) => { const x = new Date(d); x.setDate(x.getDate() + days); return x.toISOString().slice(0, 10); };
   const [startDate, setStartDate] = useState(today);
@@ -11997,9 +12181,12 @@ function PurchaseView({ products, salesLog, recipes, creations, materials, brand
       const planQty = parseFloat(plan[p.id]) || 0;
       if (planQty <= 0) return;
       (p.items || []).forEach(it => {
-        const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId) : recipes.find(r => r.id === it.linkedId);
+        // [B6 修复] 支持 component(组件)
+        const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId)
+          : it.linkedType === "component" ? components.find(c => c.id === it.linkedId)
+          : recipes.find(r => r.id === it.linkedId);
         if (!target) return;
-        // recipe: 每份 item 需要 recipe.yield 个单位;实际要做 planQty * it.qty 个单位 → 配方 multiplier = planQty * it.qty / recipe.yield
+        // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 planQty * it.qty 个单位 → multiplier = planQty * it.qty / yield
         // creation: 每份 item 是一整个 creation,直接 planQty * it.qty
         const unit = parseFloat(it.qty) || 1;
         const mult = it.linkedType === "creation"
@@ -12021,14 +12208,11 @@ function PurchaseView({ products, salesLog, recipes, creations, materials, brand
     setComputed({ grams, bySupplier, computedAt: new Date().toISOString() });
   };
 
-  // 闭店窗口判定(MM-DD)
-  const mmdd = (d) => (d || "").slice(5);
+  // 闭店窗口判定(YYYY-MM-DD 绝对日期, v16+)
   const isClosureAt = (sup, dateStr) => {
-    const md = mmdd(dateStr);
     return (sup.closureWindows || []).some(w => {
       if (!w.start || !w.end) return false;
-      if (w.start <= w.end) return md >= w.start && md <= w.end;
-      return md >= w.start || md <= w.end; // 跨年
+      return dateStr >= w.start && dateStr <= w.end;
     });
   };
   // 某 supplier 下次送货日: 从某日起往后找 deliveryDaysOfWeek 且不在闭店窗口的第一天
@@ -12070,9 +12254,8 @@ function PurchaseView({ products, salesLog, recipes, creations, materials, brand
               const nextD = nextDelivery(sup, startDate);
               const isInWindowClosure = (sup.closureWindows || []).some(w => {
                 if (!w.start || !w.end) return false;
-                const s = mmdd(startDate), e = mmdd(endDate);
-                if (w.start <= w.end) return !(e < w.start || s > w.end);
-                return !(e < w.start && s > w.end);
+                // 窗口 [startDate, endDate] 与闭店窗口 [w.start, w.end] 有重叠
+                return startDate <= w.end && w.start <= endDate;
               });
               return (
                 <div key={sup.id} style={{ fontSize: 11, color: T.textSecondary, display: "flex", gap: 10, alignItems: "center" }}>
@@ -12102,11 +12285,22 @@ function PurchaseView({ products, salesLog, recipes, creations, materials, brand
                 <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bgMuted, borderRadius: T.radiusSm }}>
                   <div style={{ flex: 1, fontSize: 13 }}>{mLabel(p)}</div>
                   <div style={{ fontSize: 10, color: T.textTertiary, minWidth: 80 }}>{lang === "zh" ? `建议 ${recommend}` : `推奨 ${recommend}`}</div>
-                  <input type="number" value={cur} min="0" onChange={e => {
+                  {/* [B2 修复] 手机端没原生 +/- 箭头 → 加自定义按钮; value 处理前置 0 */}
+                  <button onClick={() => {
+                    const next = Math.max(0, cur - 1);
+                    setPlan(prev => ({ ...prev, [p.id]: next }));
+                    setDirtyPlanIds(s => new Set([...s, p.id]));
+                  }} style={{ width: 28, height: 28, borderRadius: T.radiusSm, border: `0.5px solid ${T.border}`, background: T.bgCard, fontSize: 16, lineHeight: 1, cursor: "pointer", color: T.textSecondary, flexShrink: 0 }}>−</button>
+                  <input type="number" value={cur === 0 ? "" : cur} min="0" placeholder="0" onChange={e => {
                     const v = e.target.value;
                     setPlan(prev => ({ ...prev, [p.id]: v === "" ? 0 : parseFloat(v) }));
                     setDirtyPlanIds(s => new Set([...s, p.id]));
-                  }} style={{ ...inputStyle, width: 70, textAlign: "right" }} />
+                  }} style={{ ...inputStyle, width: 50, textAlign: "center" }} />
+                  <button onClick={() => {
+                    const next = cur + 1;
+                    setPlan(prev => ({ ...prev, [p.id]: next }));
+                    setDirtyPlanIds(s => new Set([...s, p.id]));
+                  }} style={{ width: 28, height: 28, borderRadius: T.radiusSm, border: `0.5px solid ${T.border}`, background: T.bgCard, fontSize: 16, lineHeight: 1, cursor: "pointer", color: T.textSecondary, flexShrink: 0 }}>+</button>
                   <span style={{ fontSize: 11, color: T.textTertiary }}>{p.unit || (lang === "zh" ? "件" : "件")}</span>
                 </div>
               );
@@ -12206,6 +12400,9 @@ export default function App() {
   const [supplierEditTarget, setSupplierEditTarget] = useState(null);
   const [materialCategoryFilter, setMaterialCategoryFilter] = useState(null); // 当前查看的分类
   const [materialSubcategoryFilter, setMaterialSubcategoryFilter] = useState(null); // 🆕 v5.3 子分类筛选
+  // [B7 修复] 提升到 App 层,防止从详情返回时筛选丢失
+  const [materialBrandFilter, setMaterialBrandFilter] = useState("");
+  const [materialSearchQ, setMaterialSearchQ] = useState("");
   const [brandViewId, setBrandViewId] = useState(null);
   const [brandEditTarget, setBrandEditTarget] = useState(null);
   const [materialViewId, setMaterialViewId] = useState(null);
@@ -12533,12 +12730,15 @@ export default function App() {
     });
   };
 
-  const navBtn = (t, label) => (
-    <button onClick={() => setTab(t)} style={{ flex: "1 0 auto", padding: "9px 12px", background: tab === t ? T.bgCard : "transparent", color: tab === t ? T.brand : T.textSecondary, borderRadius: T.radius, cursor: "pointer", fontSize: 13, fontWeight: tab === t ? 500 : 400, border: tab === t ? `0.5px solid ${T.border}` : "0.5px solid transparent", whiteSpace: "nowrap", minWidth: 0, fontFamily: T.fontSans, letterSpacing: "0.3px", transition: "all 0.15s" }}>{label}</button>
+  const navBtn = (t, label, badge) => (
+    <button onClick={() => setTab(t)} style={{ position: "relative", flex: "1 0 auto", padding: "9px 12px", background: tab === t ? T.bgCard : "transparent", color: tab === t ? T.brand : T.textSecondary, borderRadius: T.radius, cursor: "pointer", fontSize: 13, fontWeight: tab === t ? 500 : 400, border: tab === t ? `0.5px solid ${T.border}` : "0.5px solid transparent", whiteSpace: "nowrap", minWidth: 0, fontFamily: T.fontSans, letterSpacing: "0.3px", transition: "all 0.15s" }}>
+      {label}
+      {badge > 0 && <span style={{ position: "absolute", top: 2, right: 2, background: "#DC2626", color: "#FFFFFF", fontSize: 10, fontWeight: 600, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 8, display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 0 0 1.5px #FFFFFF" }}>{badge}</span>}
+    </button>
   );
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, exportedAt: new Date().toISOString(), version: 15 }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, exportedAt: new Date().toISOString(), version: 16 }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `patisserie_${new Date().toISOString().slice(0, 10)}.json`; a.click();
     URL.revokeObjectURL(url); showToast("✓ 导出成功");
@@ -12555,7 +12755,7 @@ export default function App() {
       cats,                     // 老价格表保留(里面也可能有价,用户自决是否清理 cats)
       // shopMaterials 不导出 ← IP 保护核心
       exportedAt: new Date().toISOString(),
-      version: 15,
+      version: 16,
       _ipPackage: true,         // 标记,导入端可识别这是分发包
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -12808,6 +13008,123 @@ export default function App() {
               });
             }
 
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // [B1 修复] 补充 7 个被遗漏的字段合并(2026-05-01)
+            // products / salesLog / productionLog / suppliers / productFamilies / customCompCats / printSettings
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            // 7. 合并 products(商品,按 id/nameZh/nameJa 去重)
+            if (Array.isArray(d.products)) {
+              setProducts(prev => {
+                const result = [...prev];
+                d.products.forEach(inc => {
+                  const dup = result.find(p =>
+                    (inc.id && p.id === inc.id) ||
+                    (inc.nameZh && p.nameZh && inc.nameZh === p.nameZh) ||
+                    (inc.nameJa && p.nameJa && inc.nameJa === p.nameJa)
+                  );
+                  if (!dup) {
+                    result.push({ ...inc, id: inc.id || ("prod_" + Date.now() + Math.random().toString(36).slice(2,6)) });
+                    report.productsNew = (report.productsNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 8. 合并 salesLog(销售记录,只按 id 去重)
+            if (Array.isArray(d.salesLog)) {
+              setSalesLog(prev => {
+                const result = [...prev];
+                d.salesLog.forEach(inc => {
+                  const dup = inc.id && result.find(s => s.id === inc.id);
+                  if (!dup) {
+                    result.push({ ...inc, id: inc.id || ("sl_" + Date.now() + Math.random().toString(36).slice(2,6)) });
+                    report.salesLogNew = (report.salesLogNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 9. 合并 productionLog(生产记录,只按 id 去重)
+            if (Array.isArray(d.productionLog)) {
+              setProductionLog(prev => {
+                const result = [...prev];
+                d.productionLog.forEach(inc => {
+                  const dup = inc.id && result.find(s => s.id === inc.id);
+                  if (!dup) {
+                    result.push({ ...inc, id: inc.id || ("pl_" + Date.now() + Math.random().toString(36).slice(2,6)) });
+                    report.productionLogNew = (report.productionLogNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 10. 合并 suppliers(供应商,按 id/nameZh/nameJa 去重)
+            if (Array.isArray(d.suppliers)) {
+              setSuppliers(prev => {
+                const result = [...prev];
+                d.suppliers.forEach(inc => {
+                  const dup = result.find(s =>
+                    (inc.id && s.id === inc.id) ||
+                    (inc.nameZh && s.nameZh && inc.nameZh === s.nameZh) ||
+                    (inc.nameJa && s.nameJa && inc.nameJa === s.nameJa)
+                  );
+                  if (!dup) {
+                    result.push({ ...inc, id: inc.id || ("sup_" + Date.now() + Math.random().toString(36).slice(2,6)) });
+                    report.suppliersNew = (report.suppliersNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 11. 合并 productFamilies(产品家族,按 id/nameZh/nameJa 去重)
+            if (Array.isArray(d.productFamilies)) {
+              setProductFamilies(prev => {
+                const result = [...prev];
+                d.productFamilies.forEach(inc => {
+                  const dup = result.find(f =>
+                    (inc.id && f.id === inc.id) ||
+                    (inc.nameZh && f.nameZh && inc.nameZh === f.nameZh) ||
+                    (inc.nameJa && f.nameJa && inc.nameJa === f.nameJa)
+                  );
+                  if (!dup) {
+                    result.push({ ...inc, id: inc.id || ("fam_" + Date.now() + Math.random().toString(36).slice(2,6)) });
+                    report.familiesNew = (report.familiesNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 12. 合并 customCompCats(自定义组件分类,按 id 去重)
+            if (Array.isArray(d.customCompCats)) {
+              setCustomCompCats(prev => {
+                const result = [...prev];
+                d.customCompCats.forEach(inc => {
+                  const dup = inc.id && result.find(c => c.id === inc.id);
+                  if (!dup) {
+                    result.push(inc);
+                    report.customCompCatsNew = (report.customCompCatsNew || 0) + 1;
+                  }
+                });
+                return result;
+              });
+            }
+
+            // 13. 合并 printSettings(对象;只在当前是默认值时才用导入的,避免覆盖用户配置)
+            if (d.printSettings && typeof d.printSettings === "object") {
+              setPrintSettings(prev => {
+                const isDefault = !prev || (prev.brandName === "RURU" && !prev.logoUrl && prev.brandSubtitle === "PATISSERIE");
+                return isDefault ? d.printSettings : prev;
+              });
+            }
+
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
             // 报告
             const lines = [];
             if (report.catsNew) lines.push("+ 新大类: " + report.catsNew);
@@ -12816,6 +13133,13 @@ export default function App() {
             if (report.recipesNew) lines.push("+ 新配方: " + report.recipesNew);
             if (report.creationsNew) lines.push("+ 新组合蛋糕: " + report.creationsNew);
             if (report.knowledgeNew) lines.push("+ 新知识点: " + report.knowledgeNew);
+            // [B1 修复] 7 个补字段的报告
+            if (report.productsNew) lines.push("+ 新商品: " + report.productsNew);
+            if (report.salesLogNew) lines.push("+ 新销售记录: " + report.salesLogNew);
+            if (report.productionLogNew) lines.push("+ 新生产记录: " + report.productionLogNew);
+            if (report.suppliersNew) lines.push("+ 新供应商: " + report.suppliersNew);
+            if (report.familiesNew) lines.push("+ 新产品家族: " + report.familiesNew);
+            if (report.customCompCatsNew) lines.push("+ 新组件分类: " + report.customCompCatsNew);
 
             const msg = lines.length > 0
               ? "✓ 合并完成\n" + lines.join("\n")
@@ -13365,7 +13689,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 2, background: T.bgMuted, borderRadius: T.radiusLg, padding: 5, overflowX: "auto", flexWrap: "nowrap", border: `0.5px solid ${T.borderSoft}`, flex: "1 1 auto", minWidth: 0 }}>
-          {navBtn("products", lang === "zh" ? "🍰商品" : "🍰商品")}
+          {navBtn("products", lang === "zh" ? "🍰商品" : "🍰商品", products.filter(p => (p.currentStock||0) <= (p.threshold||0)).length)}
           {navBtn("purchase", lang === "zh" ? "📦采购" : "📦仕入")}
           {navBtn("list", lang === "zh" ? "配方一览" : "レシピ一覧")}
           {navBtn("components", lang === "zh" ? "组件仓库" : "コンポーネント")}
@@ -13655,7 +13979,11 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
       {/* EDIT */}
       {tab === "edit" && (
-        <EditForm recipe={editTarget} cats={cats} materials={materials} brands={brands} setMaterials={setMaterials} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} lang={lang} onSave={handleSaveRecipe} onDelete={handleDeleteRecipe} onBack={() => setTab("list")} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} />
+        <EditForm recipe={editTarget} cats={cats} materials={materials} brands={brands} setMaterials={setMaterials} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} lang={lang} onSave={handleSaveRecipe} onDelete={handleDeleteRecipe} onBack={() => {
+          // [B4 修复] 有 id 跳详情,无 id 回列表
+          if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
+          else { setTab("list"); }
+        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} />
       )}
 
       {/* MATERIALS */}
@@ -13777,6 +14105,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setProducts={setProducts}
           recipes={recipes}
           creations={creations}
+          components={components}
           lang={lang}
           showToast={showToast}
           confirmDialog={confirmDialog}
@@ -13798,6 +14127,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           salesLog={salesLog}
           recipes={recipes}
           creations={creations}
+          components={components}
           materials={materials}
           brands={brands}
           shopMaterials={shopMaterials}
@@ -13858,6 +14188,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setCategoryFilter={setMaterialCategoryFilter}
           subcategoryFilter={materialSubcategoryFilter}
           setSubcategoryFilter={setMaterialSubcategoryFilter}
+          brandFilter={materialBrandFilter}
+          setBrandFilter={setMaterialBrandFilter}
+          searchQ={materialSearchQ}
+          setSearchQ={setMaterialSearchQ}
           brandViewId={brandViewId}
           setBrandViewId={setBrandViewId}
           brandEditTarget={brandEditTarget}
@@ -14009,16 +14343,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {[
             { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `✨ v13.1 新增。每次保存自动写一份到浏览器内置数据库 (IndexedDB,跟主数据隔离),保留最近 ${BACKUP_MAX} 份历史。万一 localStorage 数据丢失,从这里挑一个版本恢复。` : `自動バックアップ (最大 ${BACKUP_MAX} 件) から復元`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
             { title: lang === "zh" ? "🔍 内容质量扫描(中日混杂 + 图片标记)" : "🔍 品質スキャン", desc: lang === "zh" ? "扫描材料/厂家百科:① 中文字段里混入的日语假名 / 日本汉字 / 繁体字符 ② 文本里写了 ![](url) 或 <img> 但应用渲染成纯文本的图片标记。结果可点「编辑」直接跳过去改。" : "中日混在 / 画像マーク検出", action: <Btn onClick={() => setShowQualityScan(true)}>{lang === "zh" ? "🔍 启动扫描" : "🔍 スキャン"}</Btn> },
-            { title: lang === "zh" ? "🤖 批量关联材料百科(智能迁移)" : "🤖 材料事典一括連動(スマート)", desc: lang === "zh" ? "✨ 扫描所有历史配方/组件/组合蛋糕,AI 模糊匹配材料百科。高置信度自动推荐,你只需审查并点击应用。适合首次上线百科后一次性迁移老配方。" : "全履歴レシピをスキャン、百科へ一括連動。高信頼度は自動推定。", action: <Btn variant="primary" onClick={() => setShowBulkLinkWizard(true)}>{lang === "zh" ? "🤖 启动批量关联向导" : "🤖 ウィザード起動"}</Btn> },
-            { title: lang === "zh" ? "🔄 老价格表 → 材料百科(数据迁移)" : "🔄 旧価格表 → 材料事典", desc: lang === "zh" ? `将老「价格表」tab 里的 ${(cats || []).length} 大类数据迁移到材料百科。自动创建 brand 和 material 条目,并把历史配方里的 catId+brandIdx 转为 materialId。老价格表保留不删。` : `旧価格表 (${(cats || []).length} 件) を材料事典へ移行。旧カテゴリは保持。`, action: <Btn onClick={migrateCatsToMaterials}>{lang === "zh" ? "🔄 执行迁移" : "🔄 移行実行"}</Btn> },
             { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
             { title: lang === "zh" ? "📦 导出 IP 分发包(卖给买家用)" : "📦 IP パック出力(顧客向け)", desc: lang === "zh" ? `✨ 剥离本店原料 (${shopMaterials.length} 条) 的版本。百科/配方/组件/知识库完整保留。买家导入后看到的是百科参考价,自己录入本店价,不会看到你的采购价。` : `仕入れ原料 (${shopMaterials.length} 件) を除外。百科・レシピ等は完全保持。顧客は百科参考価のみ見え、自分の仕入れ価は別途入力。`, action: <Btn variant="primary" onClick={exportPublicIP}>{lang === "zh" ? "📦 导出 IP 分发包" : "📦 IP パック出力"}</Btn> },
             { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的 JSON 文件恢复全部数据。用于跨设备迁移或灾难恢复。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             { title: lang === "zh" ? "🆕 合并导入(只新增不覆盖)" : "🆕 マージインポート(追加のみ)", desc: lang === "zh" ? "✨ 推荐!只追加新内容,不覆盖现有数据。用于:从 Claude 拿到的新配方包 / 一键加入新材料和组件。已存在的项目会自动跳过。" : "✨ おすすめ!新規のみ追加、既存は上書きしない。Claude から受け取った新レシピパック等に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
-            { title: lang === "zh" ? "📷 orderie 一键补图工具(P1)" : "📷 orderie 画像一括取得", desc: lang === "zh" ? `✨ v14 新增。扫所有 source='orderie' 但未本地化的图 + 738 条没图但有 _orderie_sku 的 material,Node 脚本批量下载 → IndexedDB。同时检测死链(像 0J4939 这种 404)。预计 1416 条 SKU,~6 分钟,命中 ~1200 张。` : `orderie URL 画像を一括ダウンロードして IndexedDB に保存。約 6 分。`, action: <Btn variant="primary" onClick={() => setShowOrderieFetcher(true)}>{lang === "zh" ? "📷 打开补图工具" : "📷 ツール起動"}</Btn> },
-            { title: lang === "zh" ? "📥 导入 P3 候选(B+X 方案)" : "📥 P3 候補インポート", desc: lang === "zh" ? "✨ Claude Code 端跑批次爬图（乐天主+亚马逊兜底）→ 输出 batch 文件夹（含 manifest.json）→ 此处选文件夹 → dialog 一条条审 top 3 候选 → 选 1 / 空格全否决 / Esc 取消整批。完成后弹总结 dialog 含「撤销本批」。详见 .claude/p3_crawl_design_v2.md。" : `Claude Code 側でバッチ爬画 → manifest フォルダを選択 → dialog で 1 件ずつ審査`, action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#FEF3C7", border: `0.5px solid #FDE68A`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#854F0B", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "📁 选择 batch 文件夹" : "📁 バッチフォルダ選択"}<input type="file" webkitdirectory="" directory="" multiple onChange={handleP3CandidatesImport} style={{ display: "none" }} /></label> },
-            { title: lang === "zh" ? "📤 导出 P3 待爬清单" : "📤 P3 対象リスト出力", desc: lang === "zh" ? "✨ B4 v2。过滤掉已有图 / 已 _crawl_failed 的 material，导出剩下 (clean) 的 [{material_id, brand, name, _jan, _orderie_sku}] JSON 给 Claude Code 端批量跑 crawlMaterialImage 用。" : `画像なし & 未試行の material のみ出力（バッチ爬画の入力用）`, action: <Btn onClick={handleP3ExportEligibleList}>{lang === "zh" ? "📤 导出清单" : "📤 リスト出力"}</Btn> },
-            ...(p3HasPendingBatch ? [{ title: lang === "zh" ? "📂 恢复未完成 P3 批次" : "📂 P3 バッチ復元", desc: lang === "zh" ? "⚠️ 检测到上次未审完的批次（页面刷新前未完成）。点击恢复继续审查；忽略可重新导入新 batch（旧批数据会被覆盖）。" : `未完了の P3 バッチが検出されました`, action: <Btn variant="primary" onClick={restoreP3Batch}>{lang === "zh" ? "📂 恢复继续" : "📂 復元"}</Btn> }] : []),
           ].map((s, i) => (
             <div key={i} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "0.75rem" }}>
               <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>{s.title}</div>
@@ -14068,13 +14396,21 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           </div>
 
           <div style={{ background: "#F5F5F5", borderRadius: "12px", padding: "1.25rem", marginBottom: "1rem" }}>
-            <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 8 }}>当前数据</div>
+            <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 8 }}>{lang === "zh" ? "当前数据" : "現在のデータ"}</div>
             <div style={{ fontSize: 13, color: "#666666", lineHeight: 2 }}>
-              配方数：<strong>{recipes.length}</strong> 个<br />
-              组件数：<strong>{components.length}</strong> 个<br />
-              组合蛋糕：<strong>{creations.length}</strong> 个<br />
-              知识点：<strong>{knowledge.length}</strong> 条<br />
-              原料种类：<strong>{cats.length}</strong> 种
+              {lang === "zh" ? "配方" : "レシピ"}：<strong>{recipes.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "组件" : "コンポーネント"}：<strong>{components.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "组合蛋糕" : "組立ケーキ"}：<strong>{creations.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "知识点" : "ナレッジ"}：<strong>{knowledge.length}</strong> {lang === "zh" ? "条" : "件"}<br />
+              {lang === "zh" ? "厂家" : "ブランド"}：<strong>{brands.length}</strong> {lang === "zh" ? "家" : "社"}<br />
+              {lang === "zh" ? "材料百科" : "材料事典"}：<strong>{materials.length}</strong> {lang === "zh" ? "条" : "件"}<br />
+              {lang === "zh" ? "本店原料" : "店舗仕入"}：<strong>{shopMaterials.length}</strong> {lang === "zh" ? "条" : "件"}<br />
+              {lang === "zh" ? "商品" : "商品"}：<strong>{products.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "供货商" : "仕入先"}：<strong>{suppliers.length}</strong> {lang === "zh" ? "家" : "社"}<br />
+              {lang === "zh" ? "产品家族" : "ファミリー"}：<strong>{productFamilies.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "销售记录" : "売上記録"}：<strong>{salesLog.length}</strong> {lang === "zh" ? "条" : "件"}<br />
+              {lang === "zh" ? "生产记录" : "生産記録"}：<strong>{productionLog.length}</strong> {lang === "zh" ? "条" : "件"}
+              {(cats || []).length > 0 && <><br />{lang === "zh" ? "老价格表（已废弃）" : "旧価格表（廃止）"}：<strong>{cats.length}</strong> {lang === "zh" ? "种" : "件"}</>}
             </div>
           </div>
           <div style={{ background: "#FCEBEB", border: "0.5px solid #F7C1C1", borderRadius: "12px", padding: "1.25rem" }}>

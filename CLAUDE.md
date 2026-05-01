@@ -95,21 +95,35 @@ There is no linter, type-checker, or test suite configured. Verification happens
 
 Single-page React 18 + Vite 5 app, pure client-side. All persistence is `localStorage` under the key `patisserie_v4`. No backend, no routing library, no CSS framework — styles are inline.
 
-**The entire application lives in `src/App.jsx` (~3000 lines).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
+**The entire application lives in `src/App.jsx` (~14366 lines).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
 
-## Data model — five top-level entities
+## Data model — 13 top-level entities
 
-All saved together as a single JSON blob:
+All saved together as a single JSON blob. See `.claude/manual.md §2` for the full bilingual schema and reference graph; this is just the orientation list.
 
+**Core 5 (legacy)**:
 - `recipes` — standalone recipes (e.g. seeded `FINANCIER`). Ingredients carry a `group` field (`bowl1`..`bowl5`, `none`) that drives the grouped-ingredient layout.
 - `components` — reusable parts (biscuit, mousse, jelly, glaze, etc.) used inside `creations`. Seeded with `AGREABLE_MOUSSE`.
 - `creations` — "组合蛋糕" layered cakes that reference `components` as layers.
-- `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` array of free-text name strings; cross-linking between views is done by substring matching against `nameZh/nameJa/nameFr`, not by id.
-- `cats` — materials catalog, each with an array of branded prices; the cheapest valid brand is marked "最優" automatically.
+- `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` free-text name array (substring match, not id).
+- `cats` — **deprecated** old price table; UI hidden but kept for compat.
+
+**Materials encyclopedia (IP asset)**:
+- `brands` — manufacturer dim (origin / founded year / story / image).
+- `materials` — branded SKU products with `priceRange.mid` reference price.
+
+**Shop ops (private — stripped from IP package)**:
+- `shopMaterials` — actual purchase records with `pricePerG` real cost; **stripped on `exportPublicIP`**.
+- `suppliers` — vendor + delivery days + closure windows.
+- `products` — sellable units; `items[].linkedType: "recipe" | "creation" | "component"` (multi-link gift box).
+- `salesLog` / `productionLog` — daily upsert by `productId`.
+- `productFamilies` — recipe groupings sharing mold / temp / time.
+
+Plus 2 configs: `printSettings` (logo / brand name) and `customCompCats` (user-defined component categories).
 
 `FINANCIER`, `AGREABLE_MOUSSE`, `DEFAULT_KNOWLEDGE`, and `DEFAULT_CATS` are bundled as seed data. On load, `mergeWithDefaults(userItems, defaultItems)` folds in any default whose `id` is missing from the user's data — user edits are never overwritten. Keep this contract when adding new seed items: give them stable string/number ids so they stay dedupable.
 
-Storage key is frozen at `patisserie_v4` for backward compatibility, but the payload's internal `version` field is currently `6`. Bump the payload `version` when adding fields; do not rename the storage key.
+Storage key is frozen at `patisserie_v4` for backward compatibility, but the payload's internal `version` field is currently `15`. Bump the payload `version` when adding fields; do not rename the storage key.
 
 Auto-save: a single `useEffect` in `App()` writes the full blob on every state change and flashes "✓ 已保存" for 2s.
 
