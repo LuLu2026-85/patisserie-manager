@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import { SEED_RECIPES, SEED_COMPONENTS, SEED_CREATIONS, SEED_KNOWLEDGE, SEED_FAMILIES } from "./seedData.js";
 
 const STORAGE_KEY = "patisserie_v4";
 
@@ -12378,11 +12379,13 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
 // ─── Main App ─────────────────────────────────────────────────────
 export default function App() {
   const stored = loadData();
-  const [recipes, setRecipes] = useState(mergeWithDefaults(stored?.recipes, [FINANCIER, COFFEE_BASQUE_V2, COFFEE_BASQUE_V3A, COFFEE_BASQUE_V3B, COFFEE_BASQUE_V3C]));
-  const [cats, setCats] = useState(migrateCats(stored?.cats) || DEFAULT_CATS);
-  const [components, setComponents] = useState(mergeWithDefaults(stored?.components, [AGREABLE_MOUSSE]));
-  const [creations, setCreations] = useState(stored?.creations || []);
-  const [knowledge, setKnowledge] = useState(mergeWithDefaults(stored?.knowledge, DEFAULT_KNOWLEDGE));
+  // v1 内测: 默认种子 = 今天录入的 Framboisier + Caramel Abricot 全套
+  // 老种子 (FINANCIER / COFFEE_BASQUE_* / AGREABLE_MOUSSE / DEFAULT_KNOWLEDGE / DEFAULT_CATS) 已隐藏 (代码保留以备回退)
+  const [recipes, setRecipes] = useState(mergeWithDefaults(stored?.recipes, SEED_RECIPES));
+  const [cats, setCats] = useState(migrateCats(stored?.cats) || []);
+  const [components, setComponents] = useState(mergeWithDefaults(stored?.components, SEED_COMPONENTS));
+  const [creations, setCreations] = useState(mergeWithDefaults(stored?.creations, SEED_CREATIONS));
+  const [knowledge, setKnowledge] = useState(mergeWithDefaults(stored?.knowledge, SEED_KNOWLEDGE));
   // 📚 材料百科
   const [brands, setBrands] = useState(stored?.brands || []);
   const [materials, setMaterials] = useState(stored?.materials || []);
@@ -12418,25 +12421,14 @@ export default function App() {
   // v11: 同步 shopMaterials 到全局 lookup,让所有 getMaterialEffectivePrice 调用能读到
   useEffect(() => { setShopMaterialsForLookup(shopMaterials); }, [shopMaterials]);
   // 🏷 产品家族（Product Family）
-  const [productFamilies, setProductFamilies] = useState(mergeWithDefaults(stored?.productFamilies, [{
-    id: "family_basque",
-    nameZh: "巴斯克家族",
-    nameJa: "バスクチーズケーキ系",
-    nameFr: "Basque Famille",
-    description: "以巴斯克芝士蛋糕为基础的RURU招牌系列。从经典咖啡版到柚子/橙花/瑰夏的多个变体。",
-    commonMold: "15cm セルクル",
-    commonTemp: "230°C",
-    commonTime: "28分",
-    colorIdx: 0,
-    tags: ["招牌", "冷藏甜品", "礼盒", "咖啡搭配"],
-    imageUrls: [],
-  }]));
+  // v1 内测: 默认种子 = SEED_FAMILIES (family_buttercream_cake + family_pate_a_cake), 老 family_basque 已隐藏
+  const [productFamilies, setProductFamilies] = useState(mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES));
   const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family"
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
   const [tab, setTab] = useState("list");
-  const [lang, setLang] = useState("zh");
+  const [lang, setLang] = useState("ja"); // v1 内测: 默认日语启动 (测试者是日本人)
   const [viewId, setViewId] = useState(null);
   const [editTarget, setEditTarget] = useState(null); // null=new, recipe obj=edit
   // 组件库 & 组合蛋糕 & 知识库 状态
