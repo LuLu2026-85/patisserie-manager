@@ -12376,8 +12376,64 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
   );
 }
 
+// ─── 🔒 v1 内部テスト密码门 (LuLu 改这一行换密码) ─────────────────────
+const RURU_V1_PWD = "ruru2026";
+const RURU_V1_PWD_KEY = "ruru_v1_test_pwd_ok";
+
+function PasswordGate({ onUnlock }) {
+  const [input, setInput] = useState("");
+  const [error, setError] = useState("");
+  const submit = (e) => {
+    e.preventDefault();
+    if (input === RURU_V1_PWD) {
+      try { localStorage.setItem(RURU_V1_PWD_KEY, "true"); } catch {}
+      onUnlock();
+    } else {
+      setError("パスワードが正しくありません / 密码不正确");
+      setInput("");
+    }
+  };
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#FCFAF6", padding: 20, fontFamily: '"Hiragino Sans", "Yu Gothic", "Microsoft YaHei", system-ui, sans-serif', colorScheme: "light" }}>
+      <form onSubmit={submit} style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: 12, padding: "36px 32px", maxWidth: 380, width: "100%", textAlign: "center", boxShadow: "0 2px 16px rgba(0,0,0,0.05)" }}>
+        <div style={{ fontSize: 24, fontWeight: 500, color: "#5B21B6", fontFamily: "Georgia, 'Hiragino Mincho Pro', serif", marginBottom: 6, fontStyle: "italic" }}>RURU</div>
+        <div style={{ fontSize: 11, color: "#999", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 28 }}>パティスリー管理 · v1 内部テスト</div>
+        <div style={{ fontSize: 13, color: "#666", marginBottom: 18, lineHeight: 1.7 }}>
+          このアプリは内部テスト中です<br/>
+          このアプリは正在内部测试中
+        </div>
+        <input
+          type="password"
+          value={input}
+          onChange={e => { setInput(e.target.value); setError(""); }}
+          placeholder="パスワード / 密码"
+          autoFocus
+          style={{ width: "100%", padding: "10px 14px", fontSize: 14, border: "1px solid #E5E5E5", borderRadius: 6, marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }}
+          onFocus={e => e.target.style.borderColor = "#5B21B6"}
+          onBlur={e => e.target.style.borderColor = "#E5E5E5"}
+        />
+        {error && <div style={{ fontSize: 12, color: "#DC2626", marginBottom: 8 }}>{error}</div>}
+        <button type="submit" style={{ width: "100%", padding: "10px 14px", background: "#111111", color: "#FFFFFF", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 500, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>入る / 进入</button>
+        <div style={{ fontSize: 11, color: "#999", marginTop: 22, lineHeight: 1.7 }}>
+          パスワードは LuLu からお伝えします<br/>
+          一度入力すれば次回は不要です
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ─── 🔒 v1 内部测试 wrapper (默认 export, 包 PasswordGate + App) ─────
+export default function AppRoot() {
+  const [pwdOk, setPwdOk] = useState(() => {
+    try { return localStorage.getItem(RURU_V1_PWD_KEY) === "true"; } catch { return false; }
+  });
+  if (!pwdOk) return <PasswordGate onUnlock={() => setPwdOk(true)} />;
+  return <App />;
+}
+
 // ─── Main App ─────────────────────────────────────────────────────
-export default function App() {
+function App() {
   const stored = loadData();
   // v1 内测: 默认种子 = 今天录入的 Framboisier + Caramel Abricot 全套
   // 老种子 (FINANCIER / COFFEE_BASQUE_* / AGREABLE_MOUSSE / DEFAULT_KNOWLEDGE / DEFAULT_CATS) 已隐藏 (代码保留以备回退)
