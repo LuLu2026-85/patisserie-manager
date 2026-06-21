@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- RURU 配方管理 app 图标 · 品牌色: 深咖啡 #2D1B0E / 焦糖 #C9A06B / 奶油 #F7F1E8 -->
+  <rect width="512" height="512" fill="#2D1B0E"/>
+  <!-- 盘 -->
+  <ellipse cx="256" cy="436" rx="150" ry="16" fill="#3A2C1F"/>
+  <!-- 杯托 -->
+  <polygon points="178,300 334,300 314,418 198,418" fill="#C9A06B"/>
+  <g stroke="#2D1B0E" stroke-width="6" opacity="0.35">
+    <line x1="220" y1="306" x2="214" y2="414"/>
+    <line x1="256" y1="306" x2="256" y2="414"/>
+    <line x1="292" y1="306" x2="298" y2="414"/>
+  </g>
+  <!-- 奶油 -->
+  <g fill="#F7F1E8">
+    <ellipse cx="256" cy="300" rx="92" ry="30"/>
+    <circle cx="206" cy="276" r="40"/>
+    <circle cx="306" cy="276" r="40"/>
+    <circle cx="256" cy="252" r="46"/>
+  </g>
+  <!-- 樱桃 -->
+  <circle cx="256" cy="214" r="22" fill="#C9A06B"/>
+  <path d="M256 196 q6 -26 30 -32" fill="none" stroke="#F7F1E8" stroke-width="6" stroke-linecap="round"/>
+</svg>
