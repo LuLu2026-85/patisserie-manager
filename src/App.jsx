@@ -14414,20 +14414,41 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             );
           })()}
 
-          {[
-            { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `✨ v13.1 新增。每次保存自动写一份到浏览器内置数据库 (IndexedDB,跟主数据隔离),保留最近 ${BACKUP_MAX} 份历史。万一 localStorage 数据丢失,从这里挑一个版本恢复。` : `自動バックアップ (最大 ${BACKUP_MAX} 件) から復元`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
-            { title: lang === "zh" ? "🔍 内容质量扫描(中日混杂 + 图片标记)" : "🔍 品質スキャン", desc: lang === "zh" ? "扫描材料/厂家百科:① 中文字段里混入的日语假名 / 日本汉字 / 繁体字符 ② 文本里写了 ![](url) 或 <img> 但应用渲染成纯文本的图片标记。结果可点「编辑」直接跳过去改。" : "中日混在 / 画像マーク検出", action: <Btn onClick={() => setShowQualityScan(true)}>{lang === "zh" ? "🔍 启动扫描" : "🔍 スキャン"}</Btn> },
-            { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
-            { title: lang === "zh" ? "📦 导出 IP 分发包(卖给买家用)" : "📦 IP パック出力(顧客向け)", desc: lang === "zh" ? `✨ 剥离本店原料 (${shopMaterials.length} 条) 的版本。百科/配方/组件/知识库完整保留。买家导入后看到的是百科参考价,自己录入本店价,不会看到你的采购价。` : `仕入れ原料 (${shopMaterials.length} 件) を除外。百科・レシピ等は完全保持。顧客は百科参考価のみ見え、自分の仕入れ価は別途入力。`, action: <Btn variant="primary" onClick={exportPublicIP}>{lang === "zh" ? "📦 导出 IP 分发包" : "📦 IP パック出力"}</Btn> },
-            { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的 JSON 文件恢复全部数据。用于跨设备迁移或灾难恢复。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
-            { title: lang === "zh" ? "🆕 合并导入(只新增不覆盖)" : "🆕 マージインポート(追加のみ)", desc: lang === "zh" ? "✨ 推荐!只追加新内容,不覆盖现有数据。用于:从 Claude 拿到的新配方包 / 一键加入新材料和组件。已存在的项目会自动跳过。" : "✨ おすすめ!新規のみ追加、既存は上書きしない。Claude から受け取った新レシピパック等に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
-          ].map((s, i) => (
-            <div key={i} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "0.75rem" }}>
-              <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>{s.title}</div>
-              <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>{s.desc}</p>
-              {s.action}
-            </div>
-          ))}
+          {(() => {
+            // v17: 数据管理页整理 — 6 张操作卡片按用途分 3 组 + 小标题(功能/handler 不变,仅重排+加层次)
+            const card = (s, i) => (
+              <div key={i} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "0.75rem" }}>
+                <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>{s.title}</div>
+                <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>{s.desc}</p>
+                {s.action}
+              </div>
+            );
+            const secTitle = (txt) => (
+              <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.2px", textTransform: "uppercase", fontWeight: 500, margin: "1.5rem 0 0.6rem" }}>{txt}</div>
+            );
+            const backupCards = [
+              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `✨ v13.1 新增。每次保存自动写一份到浏览器内置数据库 (IndexedDB,跟主数据隔离),保留最近 ${BACKUP_MAX} 份历史。万一 localStorage 数据丢失,从这里挑一个版本恢复。` : `自動バックアップ (最大 ${BACKUP_MAX} 件) から復元`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
+              { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
+              { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的 JSON 文件恢复全部数据。用于跨设备迁移或灾难恢复。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
+            ];
+            const exchangeCards = [
+              { title: lang === "zh" ? "🆕 合并导入(只新增不覆盖)" : "🆕 マージインポート(追加のみ)", desc: lang === "zh" ? "✨ 推荐!只追加新内容,不覆盖现有数据。用于:从 Claude 拿到的新配方包 / 一键加入新材料和组件。已存在的项目会自动跳过。" : "✨ おすすめ!新規のみ追加、既存は上書きしない。Claude から受け取った新レシピパック等に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
+              { title: lang === "zh" ? "📦 导出 IP 分发包(卖给买家用)" : "📦 IP パック出力(顧客向け)", desc: lang === "zh" ? `✨ 剥离本店原料 (${shopMaterials.length} 条) 的版本。百科/配方/组件/知识库完整保留。买家导入后看到的是百科参考价,自己录入本店价,不会看到你的采购价。` : `仕入れ原料 (${shopMaterials.length} 件) を除外。百科・レシピ等は完全保持。顧客は百科参考価のみ見え、自分の仕入れ価は別途入力。`, action: <Btn variant="primary" onClick={exportPublicIP}>{lang === "zh" ? "📦 导出 IP 分发包" : "📦 IP パック出力"}</Btn> },
+            ];
+            const maintainCards = [
+              { title: lang === "zh" ? "🔍 内容质量扫描(中日混杂 + 图片标记)" : "🔍 品質スキャン", desc: lang === "zh" ? "扫描材料/厂家百科:① 中文字段里混入的日语假名 / 日本汉字 / 繁体字符 ② 文本里写了 ![](url) 或 <img> 但应用渲染成纯文本的图片标记。结果可点「编辑」直接跳过去改。" : "中日混在 / 画像マーク検出", action: <Btn onClick={() => setShowQualityScan(true)}>{lang === "zh" ? "🔍 启动扫描" : "🔍 スキャン"}</Btn> },
+            ];
+            return (
+              <>
+                {secTitle(lang === "zh" ? "备份与恢复（防数据丢失）" : "バックアップと復元（紛失防止）")}
+                {backupCards.map(card)}
+                {secTitle(lang === "zh" ? "内容交换（与 Claude / 买家）" : "データ交換")}
+                {exchangeCards.map(card)}
+                {secTitle(lang === "zh" ? "维护工具" : "メンテナンス")}
+                {maintainCards.map(card)}
+              </>
+            );
+          })()}
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
             <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>
               {lang === "zh" ? "⚙ 自定义组件分类" : "⚙ カスタムカテゴリー"}
