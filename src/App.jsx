@@ -793,6 +793,32 @@ const getBrandName = (brand, lang) => {
   return primary || fallback || "";
 };
 
+// ═══ v17 中文优先: 统一语言取值器 ═══
+// 痛点根因: 全 app 散落数百处「lang==="zh" ? x.nameZh : x.nameJa」三元，
+// 部分有回退、部分没有，切日文时未翻字段白屏。统一收拢到这三个 helper。
+// 读取/渲染端用 pickLang/pickSteps；表单 value={} 绑定、导出 JSON 一律不用(见计划"读 vs 写")。
+
+// 普通字段(name/title/notes/content/story): 当前语言空 → 回退另一语言 → 都空返回 ""
+const pickLang = (obj, base, lang) => {
+  if (!obj) return "";
+  const primary = lang === "zh" ? obj[base + "Zh"] : obj[base + "Ja"];
+  const fallback = lang === "zh" ? obj[base + "Ja"] : obj[base + "Zh"];
+  return primary || fallback || "";
+};
+
+// steps 数组: 当前语言为空数组 → 回退另一语言 → 都空返回 []。兼容老数据 obj.steps
+const pickSteps = (obj, lang) => {
+  if (!obj) return [];
+  const zh = (obj.stepsZh && obj.stepsZh.length) ? obj.stepsZh : (obj.steps || []);
+  const ja = (obj.stepsJa && obj.stepsJa.length) ? obj.stepsJa : (obj.steps || []);
+  const primary = lang === "zh" ? zh : ja;
+  const fallback = lang === "zh" ? ja : zh;
+  return (primary && primary.length) ? primary : ((fallback && fallback.length) ? fallback : []);
+};
+
+// 取「另一语言」原始值、不回退 — 专供双语并排的副行(否则回退会显示成「中文·中文」)
+const rawLang = (obj, base, lang) => (obj && obj[base + (lang === "zh" ? "Ja" : "Zh")]) || "";
+
 // 根据ing的catId/brandIdx，从cats里解析出当前绑定的大类和品牌
 const resolveIngBinding = (ing, cats) => {
   if (!ing?.catId || !Array.isArray(cats)) return { cat: null, brand: null };
@@ -2786,8 +2812,8 @@ function UnlinkedIngredientsDialog({ unlinkedItems, lang, onConfirm, onSkip, onC
                     <input type="checkbox" checked={!!checked[it.idx]} onChange={() => toggle(it.idx)} style={{ cursor: "pointer" }} />
                   </td>
                   <td style={{ padding: "6px 8px" }}>
-                    <div>{lang === "zh" ? (it.nameZh || it.nameJa) : (it.nameJa || it.nameZh)}</div>
-                    {it.nameZh && it.nameJa && <div style={{ fontSize: 10, color: "#999" }}>{lang === "zh" ? it.nameJa : it.nameZh}</div>}
+                    <div>{pickLang(it, "name", lang)}</div>
+                    {it.nameZh && it.nameJa && <div style={{ fontSize: 10, color: "#999" }}>{rawLang(it, "name", lang)}</div>}
                   </td>
                   <td style={{ padding: "6px 8px", color: "#666" }}>{it.brand || (lang === "zh" ? "—未定—" : "—未定—")}</td>
                   <td style={{ padding: "6px 8px", textAlign: "right", color: "#666" }}>{it.unitPrice ? `¥${it.unitPrice}` : "—"}</td>
@@ -3479,8 +3505,8 @@ function StickySaveBar({ onSave, label = "保存" }) {
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
 function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast }) {
-  const name = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
-  const nameOther = lang === "zh" ? r.nameJa : r.nameZh;
+  const name = pickLang(r, "name", lang);
+  const nameOther = rawLang(r, "name", lang);
 
   // 🔢 缩放计算器
   const [targetYield, setTargetYield] = useState("");
@@ -3711,8 +3737,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
                 </div>
               )}
               {arr.map((ing, i) => {
-                const n = lang === "zh" ? ing.nameZh : ing.nameJa;
-                const sub = lang === "zh" ? ing.nameJa : ing.nameZh;
+                const n = pickLang(ing, "name", lang);
+                const sub = rawLang(ing, "name", lang);
                 const scaledQty = (parseFloat(ing.qty) || 0) * scale;
                 const scaledCost = getIngLiveCost(ing, materials, brands, []) * scale;
                 // 🔗 材料百科关联
@@ -3786,7 +3812,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
 
       {/* Steps */}
       {(() => {
-        const displaySteps = lang === "zh" ? (r.stepsZh || r.steps) : (r.stepsJa || r.steps);
+        const displaySteps = pickSteps(r, lang);
         return displaySteps && displaySteps.length > 0 && (
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
             <div style={{ fontWeight: 500, marginBottom: 10 }}>{lang === "zh" ? "制作流程" : "製法"}</div>
@@ -3823,7 +3849,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
       })()}
 
       {(() => {
-        const displayNotes = lang === "zh" ? (r.notesZh || r.notes) : (r.notesJa || r.notes);
+        const displayNotes = pickLang(r, "notes", lang) || r.notes;
         return (r.storage || r.allergens || displayNotes) && (
           <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", padding: "1.25rem" }}>
             {(r.storage || r.allergens) && (
@@ -3846,7 +3872,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📚 相关知识点（点击跳转）</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {relatedKnowledge.map(k => {
-              const kTitle = lang === "zh" ? (k.titleZh || k.titleJa) : (k.titleJa || k.titleZh);
+              const kTitle = pickLang(k, "title", lang);
               return (
                 <button
                   key={k.id}
@@ -4207,8 +4233,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
       <div style={{ display: "grid", gap: 10 }}>
         {filtered.map(c => {
           const cat = getCompCat(c.componentCategory);
-          const name = lang === "zh" ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh);
-          const nameSub = lang === "zh" ? (c.nameJa || "") : (c.nameZh || "");
+          const name = pickLang(c, "name", lang);
+          const nameSub = rawLang(c, "name", lang);
           const flavor = c.flavorFamily ? getFlavorFamily(c.flavorFamily) : null;
           const avatarLetter = (c.nameFr || name || "?").charAt(0).toUpperCase();
           return (
@@ -4294,9 +4320,9 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 // ─── 组件详情 View ───────────────────────────────────────────────
 function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledge = [], onNavigateToKnowledge, onPrint, materials = [], brands = [] }) {
   const cat = getCompCat(c.componentCategory);
-  const name = lang === "zh" ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh);
-  const nameOther = lang === "zh" ? c.nameJa : c.nameZh;
-  const notes = lang === "zh" ? (c.notesZh || c.notes) : (c.notesJa || c.notes);
+  const name = pickLang(c, "name", lang);
+  const nameOther = rawLang(c, "name", lang);
+  const notes = pickLang(c, "notes", lang) || c.notes;
 
   // 🔢 缩放计算器
   const [targetYield, setTargetYield] = useState("");
@@ -4470,8 +4496,8 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
                   </div>
                 )}
                 {arr.map((ing, i) => {
-                  const n = lang === "zh" ? ing.nameZh : ing.nameJa;
-                  const sub = lang === "zh" ? ing.nameJa : ing.nameZh;
+                  const n = pickLang(ing, "name", lang);
+                  const sub = rawLang(ing, "name", lang);
                   const scaledQty = (parseFloat(ing.qty) || 0) * scale;
                   const scaledCost = getIngLiveCost(ing, materials, brands, []) * scale;
                   return (
@@ -4495,7 +4521,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
 
       {/* 制法 */}
       {(() => {
-        const displaySteps = lang === "zh" ? (c.stepsZh || c.steps) : (c.stepsJa || c.steps);
+        const displaySteps = pickSteps(c, lang);
         return displaySteps && displaySteps.length > 0 && (
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
             <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>{lang === "zh" ? "制作流程" : "製法"}</div>
@@ -4527,7 +4553,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📚 相关知识点（点击跳转）</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {relatedKnowledge.map(k => {
-              const kTitle = lang === "zh" ? (k.titleZh || k.titleJa) : (k.titleJa || k.titleZh);
+              const kTitle = pickLang(k, "title", lang);
               return (
                 <button
                   key={k.id}
@@ -4640,7 +4666,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   };
 
   const handleSave = () => {
-    if (!form.nameZh.trim() && !form.nameJa.trim()) {
+    if (!form.nameZh.trim()) {
       setErrorMsg("请输入组件名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -5523,7 +5549,7 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
 
   const handleSave = () => {
-    if (!form.nameZh.trim() && !form.nameJa.trim()) {
+    if (!form.nameZh.trim()) {
       setErrorMsg("请输入家族名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -5727,7 +5753,7 @@ function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
       ) : (
         <div style={{ display: "grid", gap: 8, marginBottom: "1rem" }}>
           {familyRecipes.map(r => {
-            const n = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
+            const n = pickLang(r, "name", lang);
             const isSelected = selectedForCompare.includes(r.id);
             return (
               <div
@@ -5759,7 +5785,7 @@ function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
               <tr style={{ borderBottom: `1px solid ${color.color}` }}>
                 <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 500, minWidth: 120 }}>原料</th>
                 {compareRecipes.map(r => {
-                  const n = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
+                  const n = pickLang(r, "name", lang);
                   return <th key={r.id} style={{ textAlign: "center", padding: "6px 10px", fontWeight: 500, minWidth: 100 }}>{r.variantLabel || n}</th>;
                 })}
               </tr>
@@ -6390,12 +6416,12 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
   };
 
   const handleSave = () => {
-    if (!titleZh.trim() && !titleJa.trim()) {
-      setError("至少填写一种语言的标题");
+    if (!titleZh.trim()) {
+      setError("请输入标题（中文）");
       return;
     }
-    if (!contentZh.trim() && !contentJa.trim()) {
-      setError("至少填写一种语言的内容");
+    if (!contentZh.trim()) {
+      setError("请输入内容（中文）");
       return;
     }
     const newK = {
@@ -6560,8 +6586,8 @@ function CreationsView({ creations, setCreations, components, cats, onUpdateCats
 
       <div style={{ display: "grid", gap: 10 }}>
         {creations.map(c => {
-          const name = lang === "zh" ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh);
-          const nameSub = lang === "zh" ? (c.nameJa || "") : (c.nameZh || "");
+          const name = pickLang(c, "name", lang);
+          const nameSub = rawLang(c, "name", lang);
           const layers = c.layers || [];
           const totalCost = layers.reduce((s, l) => s + (l.totalCost || 0), 0);
           const servesNum = parseFloat(c.serves) || 1;
@@ -6714,7 +6740,7 @@ function LayerRecipeSteps({ steps, cat, lang }) {
 function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onNavigateToKnowledge }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
-  const name = lang === "zh" ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh);
+  const name = pickLang(c, "name", lang);
   const description = c.description || "";
   const layers = c.layers || [];
 
@@ -6957,10 +6983,10 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
             <div>
               {layers.map((l, i) => {
                 const cat = getCompCat(l.componentCategory);
-                const n = lang === "zh" ? (l.nameZh || l.nameJa) : (l.nameJa || l.nameZh);
+                const n = pickLang(l, "name", lang);
                 const isExpanded = expandedLayer === i;
-                const displaySteps = lang === "zh" ? (l.stepsZh || l.steps || []) : (l.stepsJa || l.steps || []);
-                const displayNotes = lang === "zh" ? (l.notesZh || l.notes || "") : (l.notesJa || l.notes || "");
+                const displaySteps = pickSteps(l, lang);
+                const displayNotes = pickLang(l, "notes", lang) || l.notes;
                 const actualCost = calcLayerActualCost(l);
                 const usedAmount = parseFloat(l.usedAmount) || 0;
 
@@ -7063,7 +7089,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
 
       {/* 🎂 整体组装工艺 (creation.stepsZh / stepsJa) — 多层组装的全局工艺步骤 */}
       {viewMode !== "menu" && (() => {
-        const overallSteps = lang === "zh" ? (c.stepsZh || []) : (c.stepsJa || c.stepsZh || []);
+        const overallSteps = pickSteps(c, lang);
         if (overallSteps.length === 0) return null;
         return (
           <div style={{ background: "#FFFFFF", border: `0.5px solid ${T.border}`, borderRadius: "12px", padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -7084,7 +7110,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
 
       {/* 📝 整体备注 (creation.notesZh / notesJa) */}
       {viewMode !== "menu" && (() => {
-        const overallNotes = lang === "zh" ? (c.notesZh || "") : (c.notesJa || c.notesZh || "");
+        const overallNotes = pickLang(c, "notes", lang);
         if (!overallNotes) return null;
         return (
           <div style={{ background: "#FFFBEB", border: "0.5px solid #FDE68A", borderRadius: "12px", padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -7131,7 +7157,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📚 相关知识点（点击跳转）</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {relatedKnowledge.map(k => {
-              const kTitle = lang === "zh" ? (k.titleZh || k.titleJa) : (k.titleJa || k.titleZh);
+              const kTitle = pickLang(k, "title", lang);
               return (
                 <button
                   key={k.id}
@@ -7267,7 +7293,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   };
 
   const handleSave = () => {
-    if (!form.nameZh.trim() && !form.nameJa.trim()) {
+    if (!form.nameZh.trim()) {
       setErrorMsg("请输入蛋糕名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -8197,8 +8223,8 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
 
       <div style={{ display: "grid", gap: 10 }}>
         {filtered.map(k => {
-          const title = lang === "zh" ? (k.titleZh || k.titleJa) : (k.titleJa || k.titleZh);
-          const content = lang === "zh" ? (k.contentZh || k.contentJa) : (k.contentJa || k.contentZh);
+          const title = pickLang(k, "title", lang);
+          const content = pickLang(k, "content", lang);
           const preview = (content || "").replace(/【[^】]+】/g, "").replace(/\n+/g, " ").slice(0, 80);
           const avatarLetter = (title || "?").charAt(0).toUpperCase();
           return (
@@ -8271,9 +8297,9 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
 
 // ─── 知识点详情 ─────────────────────────────────────────────
 function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, components, creations }) {
-  const title = lang === "zh" ? (k.titleZh || k.titleJa) : (k.titleJa || k.titleZh);
-  const content = lang === "zh" ? (k.contentZh || k.contentJa) : (k.contentJa || k.contentZh);
-  const titleOther = lang === "zh" ? k.titleJa : k.titleZh;
+  const title = pickLang(k, "title", lang);
+  const content = pickLang(k, "content", lang);
+  const titleOther = rawLang(k, "title", lang);
 
   // 智能匹配：在 recipes / components / creations 中查找对应项
   // 使用关键词匹配：只要关联名和候选项名称有共同的关键词就算匹配
@@ -8432,12 +8458,12 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
   };
 
   const handleSave = () => {
-    if (!form.titleZh.trim() && !form.titleJa.trim()) {
+    if (!form.titleZh.trim()) {
       setErrorMsg("请输入标题");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
-    if (!form.contentZh.trim() && !form.contentJa.trim()) {
+    if (!form.contentZh.trim()) {
       setErrorMsg("请输入内容");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -9749,7 +9775,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
   const handleSave = () => {
-    if (!form.nameZh.trim() && !form.nameJa.trim()) {
+    if (!form.nameZh.trim()) {
       setErrorMsg("请输入厂家名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -9828,8 +9854,8 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
 // ─── 厂家详情 + 产品列表 ─────────────
 function BrandDetail({ brand, materials, allMaterials, recipes, components, creations, lang, onEdit, onBack, onAddMaterial, onViewMaterial, onEditMaterial }) {
   const cat = getMaterialCat(brand.categoryId);
-  const name = lang === "zh" ? (brand.nameZh || brand.nameJa) : (brand.nameJa || brand.nameZh);
-  const story = lang === "zh" ? (brand.storyZh || brand.storyJa) : (brand.storyJa || brand.storyZh);
+  const name = pickLang(brand, "name", lang);
+  const story = pickLang(brand, "story", lang);
 
   return (
     <div>
@@ -9984,10 +10010,10 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
 // ─── 产品详情 ─────────────
 function MaterialDetail({ material, brand, allMaterials, recipes, components, creations, lang, onEdit, onBack, onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, returnLabel }) {
   const cat = getMaterialCat(material.categoryId);
-  const name = lang === "zh" ? (material.nameZh || material.nameJa) : (material.nameJa || material.nameZh);
+  const name = pickLang(material, "name", lang);
   const features = lang === "zh" ? (material.featuresZh || material.featuresJa) : (material.featuresJa || material.featuresZh);
   const uses = lang === "zh" ? (material.usesZh || material.usesJa) : (material.usesJa || material.usesZh);
-  const notes = lang === "zh" ? (material.notesZh || material.notesJa) : (material.notesJa || material.notesZh);
+  const notes = pickLang(material, "notes", lang);
 
   // 自动联动使用场景
   const usage = getUsageScenes({ ...material, productBrandName: brand ? (brand.nameZh || brand.nameJa) : "" }, recipes, components, creations);
@@ -10322,7 +10348,7 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
   });
 
   const handleSave = () => {
-    if (!form.nameZh.trim() && !form.nameJa.trim()) {
+    if (!form.nameZh.trim()) {
       setErrorMsg("请输入产品名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -10666,7 +10692,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
   const handleSave = () => {
     const nameZh = (form.nameZh || "").trim(), nameJa = (form.nameJa || "").trim();
-    if (!nameZh && !nameJa) {
+    if (!nameZh) {
       setErrorMsg("请输入配方名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -11485,7 +11511,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
         </div>
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
           <div style={{ fontFamily: T.fontSerif, fontSize: 24, fontWeight: 500, color: T.textPrimary, marginBottom: 4 }}>{mLabel(p)}</div>
-          {lang === "zh" ? p.nameJa : p.nameZh ? <div style={{ fontSize: 13, color: T.textSecondary }}>{lang === "zh" ? p.nameJa : p.nameZh}</div> : null}
+          {p.nameZh && p.nameJa && <div style={{ fontSize: 13, color: T.textSecondary }}>{rawLang(p, "name", lang)}</div>}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 16 }}>
             <div style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
               <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "当前库存" : "現在庫"}</div>
@@ -11508,7 +11534,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           </div>
           {/* [B5 修复] 备注双语,旧 note 兜底 */}
           {(() => {
-            const noteText = lang === "zh" ? (p.notesZh || p.notesJa || p.note) : (p.notesJa || p.notesZh || p.note);
+            const noteText = pickLang(p, "notes", lang) || p.note;
             return noteText ? <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 12, lineHeight: 1.6 }}>📌 {noteText}</div> : null;
           })()}
         </div>
@@ -11764,7 +11790,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   const mLabel = (obj) => obj ? (lang === "zh" ? (obj.nameZh || obj.nameJa) : (obj.nameJa || obj.nameZh)) : "";
 
   const handleSave = () => {
-    if (!(form.nameZh || "").trim() && !(form.nameJa || "").trim()) {
+    if (!(form.nameZh || "").trim()) {
       setErrorMsg(lang === "zh" ? "请输入商品名" : "商品名を入力");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
@@ -12484,7 +12510,7 @@ function App() {
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
   const [tab, setTab] = useState("list");
-  const [lang, setLang] = useState("ja"); // v1 内测: 默认日语启动 (测试者是日本人)
+  const [lang, setLang] = useState("zh"); // v17 中文优先: 默认中文启动 (LuLu 主要国内中文录入)
   const [viewId, setViewId] = useState(null);
   const [editTarget, setEditTarget] = useState(null); // null=new, recipe obj=edit
   // 组件库 & 组合蛋糕 & 知识库 状态
@@ -13807,7 +13833,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {familyViewMode === "flat" && (
             <div style={{ display: "grid", gap: 10 }}>
               {recipes.map(r => {
-                const name = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
+                const name = pickLang(r, "name", lang);
                 const nameSub = lang === "zh" ? (r.nameJa || "") : (r.nameZh || "");
                 const mc = r.margin >= 50 ? "green" : r.margin >= 30 ? "amber" : "red";
                 const family = productFamilies.find(fm => fm.id === r.familyId);
@@ -14000,7 +14026,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     </div>
                     <div style={{ display: "grid", gap: 6 }}>
                       {orphanRecipes.map(r => {
-                        const name = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
+                        const name = pickLang(r, "name", lang);
                         return (
                           <div key={r.id} onClick={() => { setViewId(r.id); setTab("view"); }} style={{ background: T.bgCard, border: `0.5px dashed ${T.border}`, borderRadius: T.radius, padding: "10px 14px", cursor: "pointer", fontSize: 13, color: T.textSecondary, transition: "border-color 0.12s" }}>
                             {name}
