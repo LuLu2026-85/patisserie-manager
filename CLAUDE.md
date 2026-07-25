@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🏢 我是 LuLu 甜品店事业的「子项目 A · 店铺管理软件」
+
+**新 Claude 接手前必读**: `C:\Users\11508\Desktop\05_工作店铺\_LULU_甜品店事业_HUB.md` — 业务总览 + 子项目分工 + 跨项目桥
+**业务术语遇到陌生词** → `C:\Users\11508\Desktop\05_工作店铺\_LULU_甜品店事业_GLOSSARY.md`
+
+**姊妹项目**: **子项目 B · 找店面**(物件爬虫 + 周报 + 走街决策)在 `C:\Users\11508\Desktop\05_工作店铺\店铺创业_2026-05\`(2026-06-04 已从桌面顶层并入 05_工作店铺),入口 `_HANDOFF_新窗口必读.md`。
+
+**判断现在该开哪个**:
+- 配方 / 试作 / 材料百科 / 销售記録 / 录入 / 主数据(my_data_export.json) → **当前项目(A)**
+- 物件 / 走街 / 内見 / 周报 / 街区 / 鮮度 / 居抜き → **切去店铺创业(B)**
+- 业务整体 / 跨项目讨论 → 先读 Hub
+
+---
+
 ## 沟通语言
 
 默认用**中文**回复用户，除非用户另行说明。代码注释和 commit message 保留原文（项目内中日文混用是常态）。
@@ -93,9 +107,42 @@ There is no linter, type-checker, or test suite configured. Verification happens
 
 ## Project shape
 
-Single-page React 18 + Vite 5 app, pure client-side. All persistence is `localStorage` under the key `patisserie_v4`. No backend, no routing library, no CSS framework — styles are inline.
+Single-page React 18 + Vite 5 app, pure client-side. All persistence is `localStorage` under the key `patisserie_v4`. No backend, no routing library, no CSS framework.
 
-**The entire application lives in `src/App.jsx` (~14366 lines).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
+**The entire application lives in `src/App.jsx` (~15000 lines).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
+
+## 设计系统 · kororā「1a 美術館」(2026-07-25 改版)
+
+UI 按 Claude Design 的交付稿整体重做过。**改版式之前先回设计稿对,别在代码里凭感觉改** ——
+权威源是 Claude Design 项目 `c9a4346a-2bf2-4508-9643-22a6a6cc1c6e` 的 `kororā 配方页改版.dc.html`
+(用 `DesignSync` 的 `get_file` 读)。里面 §2a 是 token 全表,§2b 手机端,§2c A4 打印稿。
+
+三条落地约定:
+
+1. **`T` 是唯一色板/字体/间距来源**(`src/App.jsx` 顶部,~1600 处点号引用,从不解构)。
+ 旧 key 名全部保留、只换过值,所以改 `T` 一处 = 10 个 tab 一起变。新增了 `T.fs`(11 级字号阶梯)、
+ `T.sp`(4px 网格 12 档)、`T.sh`(只给浮层的两个阴影)、`T.z`(zIndex 常量表)、`T.num`(tabular-nums)。
+2. **样式仍以 inline 为主,但伪类/媒体查询/@page 一律放 `GLOBAL_CSS`**(`src/App.jsx` 里的一个模块常量,
+ 在 App 根和 PasswordGate 各注入一次)。hover / focus-visible / disabled / ::placeholder / 三个断点 /
+ 打印规范都在那里,用 `.k-*` `.rc-*` 语义 class 挂到元素上。**不要再往 inline style 里塞 transition 以外的交互态。**
+3. **字体自托管在 `public/fonts/`**(Jost + Zen Kaku Gothic New + Noto Sans SC,共 346 个 woff2,约 7MB)。
+ 走 `public/fonts/fonts.css`,由 `index.html` 引入,不碰 Google CDN(国内打不开)。
+ 中日文字体按语言切换:App 往 `<html>` 写 `data-lang`,`GLOBAL_CSS` 里的 `--k-cjk` 变量据此切栈。
+ **PWA 预缓存因此涨到约 8.3MB / 362 项。**
+
+### 状态与反馈(设计稿 §09)
+
+已有共享原语,新写页面直接复用,别再手搓:
+- `EmptyState` — 两型。`variant="first"` 首次为空(给下一步动作);`variant="filter"` 筛选无结果
+ (把生效条件做成可摘的 chip + 清除全部,**不给「新建」按钮**)。两者必须长得不一样。
+- `InlineError` — 局部错误就地长在出错的那块旁边,不弹全局提示;必须说清「哪几项」和「怎么修」。
+- `showToast(msg, { undo })` — 左下角队列,最多 3 条,5 秒消失,hover 暂停计时。
+ **破坏性操作默认「先做 + 给撤销」,不拦确认框。**
+- `confirmDialog(msg, onConfirm, { title, kicker, refs })` — 只在「不可撤销 + 影响到别的数据」时才用,
+ 且**必须把受影响的引用方列进 `refs`**。Esc 关闭,默认焦点在取消。
+- `SaveStatus` — 自动保存三态。数据只在浏览器本地,所以「已保存」必须显式带时间。
+
+骨架屏刻意没做:数据来自 localStorage,同步就到,设计稿自己写了 200ms 内出内容就不显示骨架。
 
 ## Data model — 13 top-level entities
 
@@ -137,10 +184,15 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 
 ## Shared primitives and conventions
 
-- `Btn`, `Badge`, `GroupPill`, `LangToggle` — use these instead of re-rolling styled buttons.
-- `ConfirmDialog` + the `confirmDialog(message, onConfirm, opts?)` helper in `App()` replaces `window.confirm`. **Never use `window.confirm` or `window.alert`** — they don't render reliably in embedded / webview environments this app targets. Use `confirmDialog` for destructive prompts and `showToast` for transient success/failure messages.
+- `Btn`, `GroupPill`, `LangToggle`, `Wordmark` — use these instead of re-rolling styled buttons.
+ `Btn` 有 5 个 variant(default/primary/ghost/danger/success)和 3 档尺寸(sm 28 / md 32 / lg 44,lg 给手机和主 CTA)。
+ `Badge` 已删除(0 调用的死代码)。`Wordmark` 是 kororā 字标,自绘字标定稿后只改这一个组件。
+- 状态与反馈用 `EmptyState` / `InlineError` / `showToast` / `confirmDialog` / `SaveStatus`,见上面「设计系统」一节。
+- `ConfirmDialog` + the `confirmDialog(message, onConfirm, opts?)` helper in `App()` replaces `window.confirm`. **Never use `window.confirm` or `window.alert`** — they don't render reliably in embedded / webview environments this app targets.
 - Color scheme is forced light (`colorScheme: "light"` on the root) because the app is deployed into surfaces where OS dark mode would otherwise break the inline colors. Keep this in mind when picking colors.
 - Group colors (`GROUPS`) use a transparent background with a colored left border + pill border so they render identically in light and dark embeds.
+ 五个盆的色相刻意分散、明度统一压在 32~42%,**转灰度打印仍能分出 3 档以上**,红绿色觉障碍也能靠明度区分 —— 改这五个色值前先想清楚这条。
+- 配料表列宽只在模块常量 `ING_COLS` 定义一次,表头 / 数据行 / 汇总条三处共用。
 
 ## RURU_*.json files at repo root
 

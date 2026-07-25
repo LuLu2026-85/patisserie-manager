@@ -5,45 +5,107 @@ import { SEED_RECIPES, SEED_COMPONENTS, SEED_CREATIONS, SEED_KNOWLEDGE, SEED_FAM
 const STORAGE_KEY = "patisserie_v4";
 
 // ═══════════════════════════════════════════════════════════════
-// 🎨 RURU 主题设计系统 · Style C（法式优雅 + 现代工具）
+// 🎨 kororā 设计系统 · 1a「美術館 / Gallery」
+// 纸感白 + 1px 发丝线 + 零阴影 + 排版即层级。
+// 出自 Claude Design 交付稿 `kororā 配方页改版.dc.html` 的 2a token 全表。
+//
+// ⚠️ 旧 key 名全部保留（全站 1600+ 处 `T.xxx` 点号引用，不解构），
+//    改版只换值不改名，所以 10 个 tab 同时换装、零调用点改动。
 // ═══════════════════════════════════════════════════════════════
+
+// 13 级中性阶（paper → ink）
+const N = {
+  paper: "#FAFAF8",      // 页面底
+  surface: "#FFFFFF",    // 卡片 / 输入框
+  sunken: "#F2F2EC",     // hover / 表头
+  lineFaint: "#F0F0EA",  // 行分隔
+  line: "#EAEAE2",       // 区块分隔
+  border: "#DEDED6",     // 控件描边
+  disabled: "#C9C9C0",   // 禁用
+  muted: "#A8A89E",      // 三语法文 / 序号
+  subtle: "#8A8A82",     // 微标签
+  secondary: "#77776E",  // 次要文字
+  body: "#55554E",       // 正文
+  strong: "#3A3A32",     // hover 深色
+  ink: "#16160F",        // 标题 / 主按钮
+};
+
 const T = {
-  // 核心色板
-  bgApp: "#FCFAF6",        // 全局底色 · 温米
-  bgCard: "#FFFFFF",       // 卡片底色 · 纯白
-  bgSoft: "#F5ECD8",       // 柔和标签底 · 奶油
-  bgMuted: "#F7F2E8",      // 更弱底色 · 极浅米
+  // ── 旧 key（值已换新，调用点不动）──
+  bgApp: N.paper,
+  bgCard: N.surface,
+  bgSoft: N.sunken,
+  bgMuted: N.sunken,
 
-  brand: "#2D1B0E",        // 品牌主色 · 深咖啡
-  brandSoft: "#5A3A25",    // 品牌次色 · 中咖啡
-  accent: "#AC6B3A",       // 强调色 · 金棕
-  accentSoft: "#D4A574",   // 浅金棕
+  brand: N.ink,
+  brandSoft: N.strong,
+  accent: "#B0442F",       // 朱 · 主强调（也是 danger）
+  accentSoft: "#C9C9C0",
 
-  textPrimary: "#2D1B0E",  // 主文字
-  textSecondary: "#7A5F4A",// 次文字（原 #666 换温暖版）
-  textTertiary: "#9B7E5F", // 弱文字
-  textMuted: "#B8A38B",    // 极弱文字
+  textPrimary: N.ink,
+  textSecondary: N.body,
+  textTertiary: N.secondary,
+  textMuted: N.muted,
 
-  border: "#EDE4D0",       // 主边框 · 奶油边
-  borderSoft: "#F0E8D4",   // 弱边框
-  borderHover: "#D4B88A",  // hover 边
+  border: N.border,
+  borderSoft: N.lineFaint,
+  borderHover: N.ink,      // hover 一律描边转黑
 
-  success: "#2D6A4F",
-  successBg: "#E8F4EA",
-  warning: "#A05A1E",
-  warningBg: "#FBF0E0",
-  danger: "#A63030",
-  dangerBg: "#FCEAEA",
+  success: "#2F5D50",      // positive · 利润率 / 已完成
+  successBg: "#FFFFFF",    // 语义标签一律白底 + 语义色描边
+  warning: "#9A7B2E",      // 待补价 / 低库存
+  warningBg: "#FFFFFF",
+  danger: "#B0442F",       // 缺货 / 删除 / 关键备注
+  dangerBg: "#FFFFFF",
 
-  // 圆角
-  radius: "10px",          // 主圆角
-  radiusLg: "14px",        // 大卡片
-  radiusPill: "100px",     // 徽章/按钮 pill
-  radiusSm: "6px",         // 输入框/按钮
+  // 圆角 —— 这套几乎是方的
+  radius: "2px",           // 输入框 / 标签
+  radiusLg: "0",           // 面 / 卡片 / 表格
+  radiusPill: "2px",       // ⚠️ 原 100px 胶囊 → 方角
+  radiusSm: "2px",
 
-  // 字体
-  fontSerif: 'Georgia, "Times New Roman", "Hiragino Mincho ProN", "Yu Mincho", serif',
-  fontSans: '-apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif',
+  // 字体（自托管，见 public/fonts/fonts.css）
+  // --k-cjk 是一个 CSS 变量，按当前语言切换中文/日文字体（见 GLOBAL_CSS 的 :root[data-lang]）：
+  //   中文 → Noto Sans SC 打头（日文字体缺 2/3 的简体专用字，会逐字掉回系统字）
+  //   日文 → Zen Kaku Gothic New 打头（汉字用日本字形，直/骨/穀 这类中日不同形的字才对）
+  // fontSerif 是「拉丁 + 数字」face：配方法文名、价格、序号、全大写微标签
+  fontSerif: '"Jost", var(--k-cjk)',
+  // fontSans 是中日文正文 face
+  fontSans: 'var(--k-cjk)',
+
+  // ── 新增 key ──
+  ...N,                    // paper / surface / sunken / lineFaint / line / disabled / muted / subtle / body / strong / ink
+  info: "#3B4E8C",         // 提示 / 链接 / focus ring
+
+  // 字号阶梯：相邻可用档位至少差 2px；层级只靠 字号跳档 + 字重 + 字距，不靠颜色
+  fs: {
+    micro:   { fontSize: 10, lineHeight: 1.4,  letterSpacing: "0.20em", textTransform: "uppercase" },
+    label:   { fontSize: 11, lineHeight: 1.45, letterSpacing: "0.12em" },
+    caption: { fontSize: 12, lineHeight: 1.5,  letterSpacing: "0.02em" },
+    small:   { fontSize: 13, lineHeight: 1.55 },
+    body:    { fontSize: 15, lineHeight: 1.6 },
+    strong:  { fontSize: 17, lineHeight: 1.5,  letterSpacing: "0.01em", fontWeight: 500 },
+    titleS:  { fontSize: 20, lineHeight: 1.4 },
+    title:   { fontSize: 24, lineHeight: 1.3,  letterSpacing: "-0.01em" },
+    titleL:  { fontSize: 28, lineHeight: 1.2,  letterSpacing: "0.02em", fontWeight: 300 },
+    displayS:{ fontSize: 34, lineHeight: 1.15, letterSpacing: "-0.01em", fontWeight: 300 },
+    display: { fontSize: 44, lineHeight: 1.05, letterSpacing: "-0.01em", fontWeight: 300 },
+  },
+
+  // 4px 网格 · 全站只用这 12 个值，单位一律 px
+  sp: { xxs: 2, xs: 4, s: 8, m: 12, l: 16, xl: 20, xxl: 24, pad: 32, block: 40, gap: 56, head: 72, page: 96 },
+
+  // 阴影只有这两个，且只给浮层；页面里的静态卡一律无阴影
+  sh: {
+    popover: "0 4px 16px rgba(22,22,15,0.10)",
+    overlay: "0 12px 40px rgba(22,22,15,0.16), 0 2px 6px rgba(22,22,15,0.08)",
+  },
+
+  // zIndex 常量表（原先 100/500/999/1000/1001/2000/9998 散落各处）
+  z: { sticky: 100, bar: 500, drawer: 600, toast: 900, modal: 1000, popover: 1100, confirm: 2000, print: 9998 },
+
+  // 数字列上下对齐
+  num: { fontVariantNumeric: "tabular-nums" },
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -218,42 +280,53 @@ const styles = {
   }),
 };
 
-// 分组颜色策略：背景全部transparent，只用左侧色条+标签边框区分
-// 这样在深色和浅色模式下都能正常显示
+// 五个盆 · 五色取自不同色相区（朱 / 青緑 / 黄土 / 群青 / 紫），明度都压在 32–42% 之间：
+// 打印转灰度后仍有 3 档以上差别，红绿色觉障碍下也能靠明度区分。
+// 盆色只用在 3px 竖条、6px 圆点和组标签文字，不做填充。
 const GROUPS = {
-  bowl1: { zh: "①盆", ja: "①ボウル", fr: "①Bol",           bg: "transparent", border: "#F59E0B", label: "①", labelBorder: "#F59E0B", labelColor: "#F59E0B" },
-  bowl2: { zh: "②盆", ja: "②ボウル", fr: "②Bol",           bg: "transparent", border: "#3B82F6", label: "②", labelBorder: "#3B82F6", labelColor: "#3B82F6" },
-  bowl3: { zh: "③盆/锅", ja: "③ボウル/鍋", fr: "③Bol/Casserole", bg: "transparent", border: "#10B981", label: "③", labelBorder: "#10B981", labelColor: "#10B981" },
-  bowl4: { zh: "④盆", ja: "④ボウル", fr: "④Bol",           bg: "transparent", border: "#A78BFA", label: "④", labelBorder: "#A78BFA", labelColor: "#A78BFA" },
-  bowl5: { zh: "⑤盆", ja: "⑤ボウル", fr: "⑤Bol",          bg: "transparent", border: "#F97316", label: "⑤", labelBorder: "#F97316", labelColor: "#F97316" },
-  none:  { zh: "未分组", ja: "未分類", fr: "—",              bg: "transparent", border: "transparent", label: "", labelBorder: "transparent", labelColor: "#666666" },
+  bowl1: { zh: "①盆", ja: "①ボウル", fr: "①Bol",           bg: "transparent", border: "#B0442F", label: "①", labelBorder: "#B0442F", labelColor: "#B0442F" },
+  bowl2: { zh: "②盆", ja: "②ボウル", fr: "②Bol",           bg: "transparent", border: "#2F5D50", label: "②", labelBorder: "#2F5D50", labelColor: "#2F5D50" },
+  bowl3: { zh: "③盆/锅", ja: "③ボウル/鍋", fr: "③Bol/Casserole", bg: "transparent", border: "#9A7B2E", label: "③", labelBorder: "#9A7B2E", labelColor: "#9A7B2E" },
+  bowl4: { zh: "④盆", ja: "④ボウル", fr: "④Bol",           bg: "transparent", border: "#3B4E8C", label: "④", labelBorder: "#3B4E8C", labelColor: "#3B4E8C" },
+  bowl5: { zh: "⑤盆", ja: "⑤ボウル", fr: "⑤Bol",          bg: "transparent", border: "#6E3E6B", label: "⑤", labelBorder: "#6E3E6B", labelColor: "#6E3E6B" },
+  none:  { zh: "未分组", ja: "未分類", fr: "—",              bg: "transparent", border: "transparent", label: "", labelBorder: "transparent", labelColor: "#77776E" },
 };
 
 const GROUP_ORDER = ["bowl1", "bowl2", "bowl3", "bowl4", "bowl5", "none"];
 
+// 手机底栏固定这 4 个高频 tab（+ 第 5 格是「更多」）；
+// 其余 5 个（采购 / 组合蛋糕 / 知识库 / 供货商 / 数据）收进「更多」全屏抽屉。
+const MOBILE_NAV = ["list", "components", "products", "materialsPedia"];
+
+// 配料表列宽：名称(吃剩余) / 用量 / 品牌 / 成本。
+// 只在这里定义一次，表头 · 数据行 · 汇总条三处共用（原先在两个地方各写了一遍，改一处漏一处）
+const ING_COLS = "1fr 96px 132px 88px";
+
 // ───────────── 组件类别（用于仓库分类 & 组合蛋糕的层结构）─────────────
+// 分类标签型：灰底(sunken) + 色点。bg 一律 sunken，颜色只出现在圆点上。
 const COMPONENT_CATEGORIES = [
-  { id: "base",     zh: "基础组件",        ja: "ベース",          color: "#475569", bg: "#E2E8F0" },
-  { id: "biscuit",   zh: "生地・底",        ja: "生地・土台",     color: "#A16207", bg: "#FEF3C7" },
-  { id: "mousse",    zh: "慕斯・奶油",      ja: "ムース・クリーム", color: "#BE185D", bg: "#FCE7F3" },
-  { id: "jelly",     zh: "果冻・果酱",      ja: "ジュレ・コンフィ", color: "#7C3AED", bg: "#EDE9FE" },
-  { id: "accent",    zh: "脆片・口感重点",   ja: "アクセント",      color: "#059669", bg: "#D1FAE5" },
-  { id: "glaze",     zh: "淋面・酱汁",      ja: "グラサージュ",    color: "#2563EB", bg: "#DBEAFE" },
-  { id: "decor",     zh: "装饰",            ja: "デコレーション",   color: "#EA580C", bg: "#FED7AA" },
-  { id: "other",     zh: "其他",            ja: "その他",         color: "#6B7280", bg: "#F3F4F6" },
+  { id: "base",     zh: "基础组件",        ja: "ベース",          color: "#77776E", bg: "#F2F2EC" },
+  { id: "biscuit",   zh: "生地・底",        ja: "生地・土台",     color: "#9A7B2E", bg: "#F2F2EC" },
+  { id: "mousse",    zh: "慕斯・奶油",      ja: "ムース・クリーム", color: "#7A4E9C", bg: "#F2F2EC" },
+  { id: "jelly",     zh: "果冻・果酱",      ja: "ジュレ・コンフィ", color: "#C1583D", bg: "#F2F2EC" },
+  { id: "accent",    zh: "脆片・口感重点",   ja: "アクセント",      color: "#35785C", bg: "#F2F2EC" },
+  { id: "glaze",     zh: "淋面・酱汁",      ja: "グラサージュ",    color: "#A6363F", bg: "#F2F2EC" },
+  { id: "decor",     zh: "装饰",            ja: "デコレーション",   color: "#4E7591", bg: "#F2F2EC" },
+  { id: "other",     zh: "其他",            ja: "その他",         color: "#7B4A1E", bg: "#F2F2EC" },
 ];
 
-// 自定义分类颜色池（按顺序循环使用）
-const CUSTOM_CAT_COLORS = [
-  { color: "#DC2626", bg: "#FEE2E2" },
-  { color: "#0891B2", bg: "#CFFAFE" },
-  { color: "#CA8A04", bg: "#FEF9C3" },
-  { color: "#9333EA", bg: "#F3E8FF" },
-  { color: "#16A34A", bg: "#DCFCE7" },
-  { color: "#DB2777", bg: "#FCE7F3" },
-  { color: "#4F46E5", bg: "#E0E7FF" },
-  { color: "#65A30D", bg: "#ECFCCB" },
+// 共享 8 色池：自定义组件分类 与 产品家族 共用（原先两张表有 7 组完全重复）
+const PALETTE_8 = [
+  { color: "#B0442F", bg: "#FFFFFF" },
+  { color: "#2F5D50", bg: "#FFFFFF" },
+  { color: "#9A7B2E", bg: "#FFFFFF" },
+  { color: "#3B4E8C", bg: "#FFFFFF" },
+  { color: "#6E3E6B", bg: "#FFFFFF" },
+  { color: "#4E7591", bg: "#FFFFFF" },
+  { color: "#7B4A1E", bg: "#FFFFFF" },
+  { color: "#2F7F7A", bg: "#FFFFFF" },
 ];
+const CUSTOM_CAT_COLORS = PALETTE_8;
 
 // 全局变量，由 App 组件注入
 let _customCompCats = [];
@@ -330,21 +403,23 @@ const getCompCat = (id) => getAllCompCats().find(c => c.id === id) || COMPONENT_
 // 🏷 风味标签分类系统（用于组件研发管理）
 // ═══════════════════════════════════════════════════════════════
 const FLAVOR_FAMILIES = [
-  { id: "fruit_red",    emoji: "🍓", zh: "红果类",   ja: "赤果実",   color: "#DC2626", bg: "#FEE2E2", flavors: ["草莓", "覆盆子", "樱桃", "红醋栗"] },
-  { id: "fruit_black",  emoji: "🫐", zh: "黑浆果",   ja: "黒ベリー", color: "#6B21A8", bg: "#F3E8FF", flavors: ["黑莓", "蓝莓", "黑醋栗"] },
-  { id: "fruit_citrus", emoji: "🍊", zh: "柑橘类",   ja: "柑橘",     color: "#EA580C", bg: "#FFEDD5", flavors: ["柠檬", "橙子", "柚子", "葡萄柚", "佛手柑"] },
-  { id: "fruit_stone",  emoji: "🍑", zh: "核果类",   ja: "核果",     color: "#F59E0B", bg: "#FEF3C7", flavors: ["白桃", "杏", "李子", "樱桃"] },
-  { id: "fruit_tropical",emoji:"🥭", zh: "热带水果", ja: "トロピカル", color:"#CA8A04", bg:"#FEF9C3", flavors: ["芒果", "百香果", "菠萝", "椰子", "荔枝", "香蕉"] },
-  { id: "fruit_other",  emoji: "🍎", zh: "其他水果", ja: "その他果物", color:"#047857",bg:"#D1FAE5", flavors: ["苹果", "梨", "葡萄", "无花果"] },
-  { id: "nut",          emoji: "🌰", zh: "坚果类",   ja: "ナッツ",   color: "#92400E", bg: "#FED7AA", flavors: ["开心果", "杏仁", "榛子", "核桃", "松子", "碧根果"] },
-  { id: "chocolate",    emoji: "🍫", zh: "巧克力",   ja: "チョコ",   color: "#78350F", bg: "#FED7AA", flavors: ["黑巧", "牛奶巧", "白巧", "金巧 Dulcey", "Ruby"] },
-  { id: "floral",       emoji: "🌸", zh: "花香类",   ja: "花",       color: "#DB2777", bg: "#FCE7F3", flavors: ["玫瑰", "紫罗兰", "橙花", "茉莉", "薰衣草"] },
-  { id: "tea",          emoji: "🍵", zh: "茶类",     ja: "茶",       color: "#065F46", bg: "#D1FAE5", flavors: ["抹茶", "焙茶", "煎茶", "伯爵", "乌龙", "红茶", "白茶"] },
-  { id: "dairy",        emoji: "🧈", zh: "乳脂糖类", ja: "乳脂・糖", color: "#B45309", bg: "#FEF3C7", flavors: ["香草", "焦糖", "蜂蜜", "奶酪", "酸奶油", "枫糖"] },
-  { id: "coffee",       emoji: "☕", zh: "咖啡可可", ja: "コーヒー", color: "#44403C", bg: "#E7E5E4", flavors: ["咖啡", "摩卡", "瑰夏", "耶加雪菲", "可可果"] },
-  { id: "spice",        emoji: "🌿", zh: "香料药草", ja: "スパイス", color: "#166534", bg: "#DCFCE7", flavors: ["肉桂", "豆蔻", "茴香", "薄荷", "罗勒", "黑胡椒", "柠檬草"] },
-  { id: "vegetable",    emoji: "🥕", zh: "蔬菜类",   ja: "野菜",     color: "#B91C1C", bg: "#FEE2E2", flavors: ["甜菜根", "胡萝卜", "南瓜", "红薯", "玉米"] },
-  { id: "other",        emoji: "🔸", zh: "其他",     ja: "その他",   color: "#64748B", bg: "#F1F5F9", flavors: [] },
+  // 15 族按色相环顺时针排布，相邻两族至少差 22° 色相；饱和度统一压在 45–70%，
+  // 所以 15 个摆在一起不吵。用在圆点和 1px 描边上，标签底色永远是 surface(白)。
+  { id: "fruit_red",    emoji: "🍓", zh: "红果类",   ja: "赤果実",   color: "#A6363F", bg: "#FFFFFF", flavors: ["草莓", "覆盆子", "樱桃", "红醋栗"] },
+  { id: "fruit_black",  emoji: "🫐", zh: "黑浆果",   ja: "黒ベリー", color: "#8F3F72", bg: "#FFFFFF", flavors: ["黑莓", "蓝莓", "黑醋栗"] },
+  { id: "fruit_citrus", emoji: "🍊", zh: "柑橘类",   ja: "柑橘",     color: "#C97A17", bg: "#FFFFFF", flavors: ["柠檬", "橙子", "柚子", "葡萄柚", "佛手柑"] },
+  { id: "fruit_stone",  emoji: "🍑", zh: "核果类",   ja: "核果",     color: "#C1583D", bg: "#FFFFFF", flavors: ["白桃", "杏", "李子", "樱桃"] },
+  { id: "fruit_tropical",emoji:"🥭", zh: "热带水果", ja: "トロピカル", color:"#C9A020", bg:"#FFFFFF", flavors: ["芒果", "百香果", "菠萝", "椰子", "荔枝", "香蕉"] },
+  { id: "fruit_other",  emoji: "🍎", zh: "其他水果", ja: "その他果物", color:"#5F7F35",bg:"#FFFFFF", flavors: ["苹果", "梨", "葡萄", "无花果"] },
+  { id: "nut",          emoji: "🌰", zh: "坚果类",   ja: "ナッツ",   color: "#857A45", bg: "#FFFFFF", flavors: ["开心果", "杏仁", "榛子", "核桃", "松子", "碧根果"] },
+  { id: "chocolate",    emoji: "🍫", zh: "巧克力",   ja: "チョコ",   color: "#5C3A2C", bg: "#FFFFFF", flavors: ["黑巧", "牛奶巧", "白巧", "金巧 Dulcey", "Ruby"] },
+  { id: "floral",       emoji: "🌸", zh: "花香类",   ja: "花",       color: "#7A4E9C", bg: "#FFFFFF", flavors: ["玫瑰", "紫罗兰", "橙花", "茉莉", "薰衣草"] },
+  { id: "tea",          emoji: "🍵", zh: "茶类",     ja: "茶",       color: "#35785C", bg: "#FFFFFF", flavors: ["抹茶", "焙茶", "煎茶", "伯爵", "乌龙", "红茶", "白茶"] },
+  { id: "dairy",        emoji: "🧈", zh: "乳脂糖类", ja: "乳脂・糖", color: "#9C7128", bg: "#FFFFFF", flavors: ["香草", "焦糖", "蜂蜜", "奶酪", "酸奶油", "枫糖"] },
+  { id: "coffee",       emoji: "☕", zh: "咖啡可可", ja: "コーヒー", color: "#7B4A1E", bg: "#FFFFFF", flavors: ["咖啡", "摩卡", "瑰夏", "耶加雪菲", "可可果"] },
+  { id: "spice",        emoji: "🌿", zh: "香料药草", ja: "スパイス", color: "#2F7F7A", bg: "#FFFFFF", flavors: ["肉桂", "豆蔻", "茴香", "薄荷", "罗勒", "黑胡椒", "柠檬草"] },
+  { id: "vegetable",    emoji: "🥕", zh: "蔬菜类",   ja: "野菜",     color: "#4A5A9B", bg: "#FFFFFF", flavors: ["甜菜根", "胡萝卜", "南瓜", "红薯", "玉米"] },
+  { id: "other",        emoji: "🔸", zh: "其他",     ja: "その他",   color: "#77776E", bg: "#FFFFFF", flavors: [] },
 ];
 
 const getFlavorFamily = (id) => FLAVOR_FAMILIES.find(f => f.id === id) || FLAVOR_FAMILIES[FLAVOR_FAMILIES.length - 1];
@@ -1330,18 +1405,19 @@ const getMaterialCat = (id) => MATERIAL_CATEGORIES.find(c => c.id === id) || MAT
 
 // ───────────── 知识库标签（用于知识点分类和筛选）─────────────
 const KNOWLEDGE_TAGS = [
-  { id: "temperature",   zh: "温度",          ja: "温度",         color: "#DC2626", bg: "#FEE2E2" },
-  { id: "material",      zh: "材料",          ja: "材料",         color: "#D97706", bg: "#FEF3C7" },
-  { id: "technique",     zh: "技术要点",       ja: "技術ポイント",  color: "#059669", bg: "#D1FAE5" },
-  { id: "process",       zh: "工程・时间管理",  ja: "工程・時間管理", color: "#2563EB", bg: "#DBEAFE" },
-  { id: "philosophy",    zh: "シェフ哲学",     ja: "シェフ哲学",    color: "#7C3AED", bg: "#EDE9FE" },
-  { id: "science",       zh: "科学原理",       ja: "科学原理",     color: "#4B5563", bg: "#F3F4F6" },
-  { id: "emulsification", zh: "乳化",         ja: "乳化",         color: "#BE185D", bg: "#FCE7F3" },
-  { id: "chocolate",     zh: "巧克力",         ja: "ショコラ",     color: "#92400E", bg: "#FEF3C7" },
-  { id: "gelatin",       zh: "ゼラチン",       ja: "ゼラチン",     color: "#0891B2", bg: "#CFFAFE" },
+  // 语义标签型：语义色描边 + 白底。色相按 2a §03 的知识标签盘就近取。
+  { id: "temperature",   zh: "温度",          ja: "温度",         color: "#B0442F", bg: "#FFFFFF" },
+  { id: "material",      zh: "材料",          ja: "材料",         color: "#C97A17", bg: "#FFFFFF" },
+  { id: "technique",     zh: "技术要点",       ja: "技術ポイント",  color: "#35785C", bg: "#FFFFFF" },
+  { id: "process",       zh: "工程・时间管理",  ja: "工程・時間管理", color: "#4A5A9B", bg: "#FFFFFF" },
+  { id: "philosophy",    zh: "主厨哲学",       ja: "シェフ哲学",    color: "#6E3E6B", bg: "#FFFFFF" },
+  { id: "science",       zh: "科学原理",       ja: "科学原理",     color: "#77776E", bg: "#FFFFFF" },
+  { id: "emulsification", zh: "乳化",         ja: "乳化",         color: "#4E7591", bg: "#FFFFFF" },
+  { id: "chocolate",     zh: "巧克力",         ja: "ショコラ",     color: "#5C3A2C", bg: "#FFFFFF" },
+  { id: "gelatin",       zh: "吉利丁",         ja: "ゼラチン",     color: "#2F7F7A", bg: "#FFFFFF" },
 ];
 
-const getKnowledgeTag = (id) => KNOWLEDGE_TAGS.find(t => t.id === id) || { id, zh: id, ja: id, color: "#6B7280", bg: "#F3F4F6" };
+const getKnowledgeTag = (id) => KNOWLEDGE_TAGS.find(t => t.id === id) || { id, zh: id, ja: id, color: "#77776E", bg: "#FFFFFF" };
 
 // ───────────── 预置知识点 ─────────────
 const DEFAULT_KNOWLEDGE = [
@@ -2724,32 +2800,173 @@ function parsePackSizeToGrams(ps) {
 }
 
 // ─── UI primitives ───────────────────────────────────────────────
-function Btn({ children, onClick, variant = "default", size = "md", style: s }) {
-  const base = { display: "inline-flex", alignItems: "center", gap: 5, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", cursor: "pointer", fontFamily: "system-ui, sans-serif", transition: "opacity 0.12s" };
-  const sizes = { sm: { padding: "5px 10px", fontSize: 12 }, md: { padding: "7px 14px", fontSize: 13 } };
-  const variants = {
-    default: {},
-    primary: { background: "#111111", color: "#FFFFFF", borderColor: "#111111" },
-    danger: { color: "#A32D2D", borderColor: "transparent", background: "none" },
-    success: { background: "#E1F5EE", color: "#085041", borderColor: "#9FE1CB" },
+// ═══════════════════════════════════════════════════════════════
+// 全局样式注入块
+// 本 app 通体 inline style，写不了伪类 / 媒体查询 / @page。凡是这三类规则
+// 一律放这里，用语义 class 挂到元素上。T 里不放这些。
+// 过渡统一 .15s cubic-bezier(.2,0,.2,1)，只过渡 background / border-color / color / opacity，
+// 不过渡 transform 和尺寸。
+// ═══════════════════════════════════════════════════════════════
+const GLOBAL_CSS = `
+/* 中日文字体按当前语言切换（App 里的 useEffect 往 <html> 写 data-lang）。
+   默认(含未设置时)走中文栈 —— 这个 app 是中文优先的。 */
+:root {
+  color-scheme: light;
+  --k-cjk: "Noto Sans SC", "Zen Kaku Gothic New", -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+:root[data-lang="ja"] {
+  --k-cjk: "Zen Kaku Gothic New", "Noto Sans SC", -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+}
+.k-ease { transition: background .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1), color .15s cubic-bezier(.2,0,.2,1), opacity .15s cubic-bezier(.2,0,.2,1); }
+
+/* ── 按钮四型三态 ── */
+.k-btn { transition: background .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1), color .15s cubic-bezier(.2,0,.2,1), opacity .15s cubic-bezier(.2,0,.2,1); }
+.k-btn:focus { outline: none; }
+.k-btn:focus-visible { outline: 2px solid ${T.info}; outline-offset: 2px; }
+.k-btn-default:hover:not(:disabled) { border-color: ${T.ink} !important; background: ${T.sunken} !important; }
+.k-btn-default:active:not(:disabled) { background: ${T.line} !important; }
+.k-btn-primary:hover:not(:disabled) { background: ${T.strong} !important; border-color: ${T.strong} !important; }
+.k-btn-primary:active:not(:disabled) { background: #000000 !important; border-color: #000000 !important; }
+.k-btn-ghost:hover:not(:disabled) { background: ${T.sunken} !important; color: ${T.ink} !important; }
+.k-btn-danger:hover:not(:disabled) { background: ${T.danger} !important; color: #FFFFFF !important; }
+.k-btn-danger:focus-visible { outline-color: ${T.danger}; }
+.k-btn-success:hover:not(:disabled) { background: ${T.success} !important; color: #FFFFFF !important; }
+.k-btn:disabled { background: transparent !important; border-color: ${T.line} !important; color: ${T.disabled} !important; cursor: not-allowed; }
+.k-btn-primary:disabled { background: ${T.disabled} !important; border-color: ${T.disabled} !important; color: ${T.paper} !important; }
+
+/* ── 表格 / 列表行 ── */
+.k-row { transition: background .12s cubic-bezier(.2,0,.2,1); }
+.k-row:hover { background: ${T.sunken}; }
+/* 行内操作默认隐藏，hover 时在行尾淡入 —— 静止时一行只剩四个落点 */
+.k-row .k-rowact { opacity: 0; transition: opacity .15s cubic-bezier(.2,0,.2,1); }
+.k-row:hover .k-rowact, .k-row:focus-within .k-rowact { opacity: 1; }
+
+/* ── 表单：标签在上方，focus 是描边转黑 + 3px 群青光晕，不做位移 ── */
+.k-input { transition: border-color .15s cubic-bezier(.2,0,.2,1), box-shadow .15s cubic-bezier(.2,0,.2,1); }
+.k-input:hover:not(:disabled) { border-color: ${T.muted}; }
+.k-input:focus, .k-input:focus-visible { outline: none; border-color: ${T.ink}; box-shadow: 0 0 0 3px rgba(59,78,140,0.14); }
+.k-input:disabled { background: ${T.sunken}; color: ${T.disabled}; }
+.k-input::placeholder { color: ${T.muted}; opacity: 1; }
+input, textarea, select, button { font-family: inherit; }
+
+/* ── 顶部 tab：下划线式 ── */
+.k-tab { transition: color .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1); }
+.k-tab:hover { color: ${T.ink}; }
+.k-tab:focus-visible { outline: 2px solid ${T.info}; outline-offset: 2px; }
+
+/* ── 折叠标签「+N」的悬浮展开 ── */
+.k-more { position: relative; }
+.k-more > .k-more-pop { display: none; position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: ${T.z.popover};
+  background: ${T.surface}; border: 1px solid ${T.border}; box-shadow: ${T.sh.popover}; padding: 8px; white-space: nowrap; }
+.k-more:hover > .k-more-pop, .k-more:focus-within > .k-more-pop { display: flex; gap: 6px; }
+
+/* ── 容器与断点 ── */
+.rc-container { max-width: 1180px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+.k-mobile-only { display: none; }
+/* 底栏和「更多」抽屉只在手机出现 */
+.k-bottomnav, .k-drawer { display: none !important; }
+@media (max-width: 1023px) {
+  .rc-container { padding-left: 24px; padding-right: 24px; }
+}
+@media (max-width: 1023px) {
+  /* 平板：配料表去掉品牌列 */
+  .rc-ing-head, .rc-ing-row, .rc-ing-total { grid-template-columns: 1fr 110px 88px !important; }
+}
+@media (max-width: 599px) {
+  .rc-container { padding-left: 16px; padding-right: 16px; }
+  .k-desktop-only { display: none !important; }
+  .k-mobile-only { display: block; }
+  /* 顶部 10 tab 横滚条换成底部 5 tab 固定栏 */
+  .k-topnav { display: none !important; }
+  .k-bottomnav { display: grid !important; }
+  .k-drawer { display: flex !important; }
+  /* 内容区给底栏让出空间 */
+  .k-main { padding-bottom: 96px !important; }
+  /* 底栏在拇指区，所有可点元素 ≥ 44px */
+  .k-bottomnav button { min-height: 52px; }
+  /* 手机：配料行改「左名右量」两栏，行高 ≥ 60，盆色竖条加粗到 4px */
+  .rc-ing-head { display: none !important; }
+  .rc-ing-row, .rc-ing-total { grid-template-columns: 1fr auto !important; min-height: 60px; align-items: center !important; border-left-width: 4px !important; }
+  .rc-ing-row { padding: 13px 0 !important; }
+  /* 名称占满左侧两行，用量在右上、成本在右下，行高才齐 */
+  .rc-ing-row > *:first-child { grid-row: 1 / span 2; align-self: center; }
+  .rc-ing-row > *:nth-child(2) { grid-column: 2; align-self: end; }
+  .rc-ing-row > *:last-child { grid-column: 2; align-self: start; }
+  .rc-recipe-row { grid-template-columns: 1fr auto !important; gap: 12px !important; }
+  /* 标题块单列 */
+  .rc-title { grid-template-columns: 1fr !important; gap: 20px !important; }
+  .rc-title > div:last-child { text-align: left !important; }
+}
+
+/* ── 中日切换后同一标题可能长 3 倍：一律允许换行，绝不固定宽度或 nowrap ── */
+.k-fluid { min-width: 0; overflow-wrap: anywhere; }
+`;
+
+// 按钮四型三态。hover / focus-visible / disabled 由全局 <style> 里的 .k-btn 规则接管
+// （inline style 写不了伪类），所以这里只给静止态。
+function Btn({ children, onClick, variant = "default", size = "md", style: s, disabled, title, type }) {
+  const base = {
+    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
+    border: `1px solid ${T.border}`, borderRadius: T.radius,
+    background: "transparent", color: T.ink,
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontFamily: T.fontSans, fontWeight: 400, whiteSpace: "nowrap",
   };
-  return <button onClick={onClick} style={{ ...base, ...sizes[size], ...variants[variant], ...s }}>{children}</button>;
+  // sm 高 28 · md 高 32 · lg 高 44（手机端与主 CTA，满足 44px 触控）
+  const sizes = {
+    sm: { padding: "5px 12px", fontSize: 11 },
+    md: { padding: "7px 14px", fontSize: 12 },
+    lg: { padding: "12px 20px", fontSize: 14 },
+  };
+  const variants = {
+    default: {},                                                        // = secondary
+    primary: { background: T.ink, color: T.paper, borderColor: T.ink },
+    ghost:   { border: "1px solid transparent", color: T.body },
+    danger:  { color: T.danger, borderColor: T.danger, background: "transparent" }, // 危险动作描边起手，实心只在 hover
+    success: { color: T.success, borderColor: T.success, background: "transparent" },
+  };
+  return (
+    <button
+      type={type} title={title} disabled={disabled} onClick={disabled ? undefined : onClick}
+      className={`k-btn k-btn-${variants[variant] ? variant : "default"}`}
+      style={{ ...base, ...sizes[size], ...(variants[variant] || {}), ...s }}
+    >{children}</button>
+  );
 }
 
 // ─── 自定义确认对话框（替代 window.confirm，确保在所有环境都能工作）────
-function ConfirmDialog({ message, onConfirm, onCancel, confirmText = "确定", cancelText = "取消", danger = true }) {
+// 2a §09 · 只在「不可撤销 + 影响到别的数据」时才拦（其余破坏性操作走「先做 + 撤销 toast」）。
+// 标题直接写要删的东西的名字，不写「确认操作」；必须列出受影响的引用方。
+// Esc 关闭，默认焦点在「取消」。
+function ConfirmDialog({ message, onConfirm, onCancel, confirmText = "确定", cancelText = "取消", danger = true, kicker, title, refs = [] }) {
+  const cancelRef = useRef(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (e) => { if (e.key === "Escape") onCancel?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#FFFFFF", borderRadius: "12px", padding: "1.5rem", maxWidth: 400, width: "100%", boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
-        <div style={{ fontSize: 15, lineHeight: 1.7, color: "#111111", marginBottom: "1.25rem", whiteSpace: "pre-wrap" }}>{message}</div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Btn onClick={onCancel}>{cancelText}</Btn>
-          <Btn
-            onClick={onConfirm}
-            style={danger
-              ? { background: "#A32D2D", color: "#FFFFFF", borderColor: "#A32D2D" }
-              : { background: "#111111", color: "#FFFFFF", borderColor: "#111111" }}
-          >{confirmText}</Btn>
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.confirm, display: "flex", alignItems: "center", justifyContent: "center", padding: T.sp.xl }}>
+      <div role="dialog" aria-modal="true"
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 420, width: "100%", boxShadow: T.sh.overlay }}>
+        <div style={{ padding: "24px 24px 20px" }}>
+          {kicker && <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{kicker}</div>}
+          {title && <div style={{ ...T.fs.titleS, marginTop: T.sp.m, color: T.ink, fontFamily: T.fontSans }}>{title}</div>}
+          <div style={{ ...T.fs.small, color: T.body, marginTop: title ? 10 : 0, whiteSpace: "pre-wrap", fontFamily: T.fontSans, lineHeight: 1.65 }}>{message}</div>
+          {refs.length > 0 && (
+            <div style={{ marginTop: 14, borderLeft: `3px solid ${T.warning}`, paddingLeft: T.sp.m, ...T.fs.caption, color: T.body, lineHeight: 1.6 }}>
+              {refs.map((x, i) => <div key={i}>{x}</div>)}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: T.sp.s, padding: "14px 24px", borderTop: `1px solid ${T.line}` }}>
+          <button ref={cancelRef} onClick={onCancel} className="k-btn k-btn-ghost"
+            style={{ ...T.fs.caption, padding: "7px 14px", color: T.body, background: "transparent", border: "1px solid transparent", borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans }}>
+            {cancelText}
+          </button>
+          <Btn variant={danger ? "danger" : "primary"} onClick={onConfirm}>{confirmText}</Btn>
         </div>
       </div>
     </div>
@@ -3435,22 +3652,144 @@ function applyUnlinkedToCats(ings, cats, selectedIdxs) {
   return { ings: newIngs, cats: newCats };
 }
 
-function Badge({ children, color = "gray" }) {
-  const colors = { green: { bg: "#E1F5EE", fg: "#085041" }, amber: { bg: "#FAEEDA", fg: "#633806" }, red: { bg: "#FCEBEB", fg: "#791F1F" }, gray: { bg: "#F5F5F5", fg: "#666666" } };
-  const c = colors[color] || colors.gray;
-  return <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 9px", borderRadius: 20, fontSize: 12, fontWeight: 500, background: c.bg, color: c.fg }}>{children}</span>;
+// ─── kororā 字标 ────────────────────────────────────────────────
+// 临时占位版：Zen Kaku Gothic New 300 · 字距 0.30em · 全小写 · ā 不可省。
+// LuLu 的自绘字标定稿后，只需要改这一个组件（以及换掉 fontFamily / 换成 <svg>）。
+function Wordmark({ size = 22, inverse = false, sub = true }) {
+  const small = size <= 18;
+  return (
+    <div style={{ lineHeight: 1 }}>
+      {/* 用 Jost（拉丁面）。ā 必须单独一个 span 且不吃字距 ——
+          浏览器排版时会把 U+0101 拆成 a + 组合长音符，letter-spacing 会插进这两者中间，
+          长音符就飘到字的右上角去了。把它拎出来单独渲染就不会被拆。 */}
+      <div style={{
+        fontFamily: '"Jost", sans-serif', fontSize: size, fontWeight: 300,
+        lineHeight: 1, color: inverse ? T.paper : T.ink,
+      }}>
+        <span style={{ letterSpacing: small ? "0.26em" : "0.30em" }}>koror</span>
+        <span style={{ letterSpacing: "normal" }}>ā</span>
+      </div>
+      {sub && !small && (
+        <div style={{
+          fontFamily: T.fontSerif, fontSize: Math.max(8, Math.round(size * 0.38)),
+          letterSpacing: "0.24em", textTransform: "uppercase",
+          color: T.subtle, marginTop: 6,
+        }}>Boulangerie • Pâtisserie • Café</div>
+      )}
+    </div>
+  );
 }
 
+// ─── 2a §09 状态与反馈 ──────────────────────────────────────────
+// Toast · 左下角固定，最宽 420，5 秒消失，hover 暂停计时。
+// 破坏性操作一律「先做 + 给撤销」，不拦确认框 —— 只有不可撤销且影响别的数据才用 ConfirmDialog。
+function ToastItem({ t, onDone }) {
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    if (paused) return;
+    const id = setTimeout(onDone, t.ms);
+    return () => clearTimeout(id);
+  }, [paused, t.ms, t.id]);
+  return (
+    <div
+      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
+      style={{
+        background: T.ink, color: T.paper, padding: "12px 16px", maxWidth: 420,
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: T.sp.xl,
+        boxShadow: T.sh.overlay, borderRadius: T.radius, pointerEvents: "auto",
+      }}>
+      <span style={{ ...T.fs.small, fontFamily: T.fontSans }}>{t.msg}</span>
+      {t.undo && (
+        <button onClick={() => { t.undo(); onDone(); }}
+          style={{ ...T.fs.caption, letterSpacing: "0.1em", color: T.paper, background: "none", border: "none",
+            borderBottom: `1px solid ${T.paper}`, paddingBottom: 1, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 }}>
+          撤销
+        </button>
+      )}
+    </div>
+  );
+}
+
+// 自动保存指示 · 三态。放在页面右上、按钮组左侧。失败态不自动消失。
+function SaveStatus({ state, lang, onRetry }) {
+  if (!state || state.status === "idle") return null;
+  const dot = (c) => <span style={{ width: 6, height: 6, borderRadius: "50%", background: c, display: "block", flexShrink: 0 }} />;
+  const wrap = (c, node) => (
+    <div style={{ display: "flex", alignItems: "center", gap: T.sp.s, ...T.fs.caption, color: c, fontFamily: T.fontSans, whiteSpace: "nowrap" }}>{node}</div>
+  );
+  if (state.status === "saving") return wrap(T.subtle, <>{dot(T.disabled)}{lang === "zh" ? "保存中…" : "保存中…"}</>);
+  if (state.status === "saved") {
+    const hh = state.at ? `${String(state.at.getHours()).padStart(2, "0")}:${String(state.at.getMinutes()).padStart(2, "0")}` : "";
+    return wrap(T.success, <>{dot(T.success)}{lang === "zh" ? "已保存" : "保存済み"} {hh}</>);
+  }
+  return wrap(T.danger, <>{dot(T.danger)}{state.msg || (lang === "zh" ? "保存失败" : "保存失敗")}
+    <button onClick={onRetry} style={{ background: "none", border: "none", borderBottom: `1px solid ${T.danger}`, color: T.danger, cursor: "pointer", padding: 0, font: "inherit" }}>
+      {lang === "zh" ? "重试" : "再試行"}
+    </button></>);
+}
+
+// 空态 · 两型。空态永远给下一步动作，不写「暂无数据」了事。
+//   variant="first"  首次为空 —— 40px 方框占位 + 主副文案 + 1~2 个动作
+//   variant="filter" 筛选无结果 —— 摆出生效条件、能一个个摘掉，不给「新建」按钮
+function EmptyState({ variant = "first", title, hint, actions = [], chips = [], onClearAll, lang }) {
+  return (
+    <div style={{ padding: "40px 24px", textAlign: "center" }}>
+      {variant === "first" && <div style={{ width: 40, height: 40, border: `1px solid ${T.border}`, margin: "0 auto" }} />}
+      <div style={{ ...T.fs.body, marginTop: variant === "first" ? T.sp.xl : 0, color: T.ink }}>{title}</div>
+      {hint && <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 6, lineHeight: 1.6 }}>{hint}</div>}
+      {variant === "filter" && chips.length > 0 && (
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 14, flexWrap: "wrap" }}>
+          {chips.map((c, i) => (
+            <button key={i} onClick={c.onRemove} className="k-btn"
+              style={{ ...T.fs.label, padding: "3px 8px", background: T.sunken, color: T.body, border: "none", borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans, letterSpacing: 0 }}>
+              {c.label} ✕
+            </button>
+          ))}
+        </div>
+      )}
+      {variant === "filter" && onClearAll && (
+        <button onClick={onClearAll} className="k-btn"
+          style={{ ...T.fs.caption, color: T.info, marginTop: 18, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans }}>
+          {lang === "zh" ? "清除全部筛选" : "フィルタをすべて解除"}
+        </button>
+      )}
+      {variant === "first" && actions.length > 0 && (
+        <div style={{ display: "flex", gap: T.sp.s, justifyContent: "center", marginTop: 18, flexWrap: "wrap" }}>
+          {actions.map((a, i) => (
+            <Btn key={i} variant={i === 0 ? "primary" : "default"} onClick={a.onClick}>{a.label}</Btn>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 局部错误 · 就地长在算不出来的那块旁边，不弹全局提示。永远说清「哪几项」和「怎么修」。
+function InlineError({ title, detail, actionLabel, onAction }) {
+  return (
+    <div style={{ border: `1px solid ${T.danger}`, padding: "14px 16px", borderRadius: T.radius }}>
+      <div style={{ ...T.fs.small, color: T.danger, fontFamily: T.fontSans }}>{title}</div>
+      {detail && <div style={{ ...T.fs.caption, color: T.body, marginTop: 5, lineHeight: 1.6 }}>{detail}</div>}
+      {actionLabel && (
+        <div style={{ marginTop: T.sp.m }}>
+          <Btn size="sm" variant="danger" onClick={onAction}>{actionLabel}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 分组标签（盆）· 语义标签型：语义色描边 + 白底
 function GroupPill({ gk, lang }) {
   const g = GROUPS[gk];
   if (!g || gk === "none" || !g.label) return null;
   const label = lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr;
   return (
     <span style={{
-      display: "inline-flex", alignItems: "center", gap: 5,
-      padding: "3px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500,
-      border: `1.5px solid ${g.labelBorder}`, color: g.labelColor,
-      background: "transparent"
+      display: "inline-flex", alignItems: "center", gap: 6,
+      padding: "4px 10px", borderRadius: T.radius, ...T.fs.caption,
+      border: `1px solid ${g.labelBorder}`, color: g.labelColor,
+      background: T.surface, fontFamily: T.fontSans,
     }}>
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block", flexShrink: 0 }} />
       {label}
@@ -3458,13 +3797,25 @@ function GroupPill({ gk, lang }) {
   );
 }
 
+// 语言切换 · 1px ink 描边 + 中间竖线的两格
 function LangToggle({ lang, onChange }) {
-  const btn = (l, label) => (
-    <button onClick={() => onChange(l)} style={{ padding: "5px 12px", borderRadius: "6px", cursor: "pointer", fontSize: 12, background: lang === l ? "#FFFFFF" : "none", color: lang === l ? "#111111" : "#666666", fontWeight: lang === l ? 500 : 400, border: lang === l ? "0.5px solid #E5E5E5" : "none" }}>{label}</button>
+  const btn = (l, label, first) => (
+    <button
+      onClick={() => onChange(l)}
+      className="k-btn"
+      style={{
+        padding: "6px 14px", cursor: "pointer", ...T.fs.label,
+        fontFamily: T.fontSans, border: "none",
+        borderLeft: first ? "none" : `1px solid ${T.ink}`,
+        background: lang === l ? T.ink : "transparent",
+        color: lang === l ? T.paper : T.body,
+        minWidth: 44,
+      }}
+    >{label}</button>
   );
   return (
-    <div style={{ display: "flex", gap: 2, background: "#F5F5F5", borderRadius: "6px", padding: 3 }}>
-      {btn("zh", "中文")}{btn("ja", "日本語")}
+    <div style={{ display: "flex", border: `1px solid ${T.ink}`, borderRadius: T.radius, overflow: "hidden", flexShrink: 0 }}>
+      {btn("zh", "中文", true)}{btn("ja", "日本語", false)}
     </div>
   );
 }
@@ -3472,32 +3823,31 @@ function LangToggle({ lang, onChange }) {
 // ─── 浮动保存栏 (sticky bottom bar) ──────────────────────────
 function StickySaveBar({ onSave, label = "保存" }) {
   return (
-    <div style={{
+    <div className="k-savebar" style={{
       position: "fixed",
       bottom: 0,
       left: 0,
       right: 0,
-      background: "rgba(255, 255, 255, 0.96)",
+      background: "rgba(250, 250, 248, 0.96)",
       backdropFilter: "blur(8px)",
       WebkitBackdropFilter: "blur(8px)",
-      borderTop: "0.5px solid #E5E5E5",
-      boxShadow: "0 -2px 10px rgba(0, 0, 0, 0.04)",
-      padding: "10px 20px",
-      zIndex: 500,
+      borderTop: `1px solid ${T.ink}`,
+      padding: `${T.sp.m}px ${T.sp.xl}px`,
+      zIndex: T.z.bar,
       display: "flex",
       justifyContent: "flex-end",
     }}>
-      <button onClick={onSave} style={{
-        background: "#111111",
-        color: "#FFFFFF",
-        border: "none",
-        borderRadius: "8px",
-        padding: "10px 28px",
+      <button onClick={onSave} className="k-btn k-btn-primary" style={{
+        background: T.ink,
+        color: T.paper,
+        border: `1px solid ${T.ink}`,
+        borderRadius: T.radius,
+        padding: "12px 28px",
         fontSize: 14,
-        fontWeight: 500,
+        fontWeight: 400,
         cursor: "pointer",
-        fontFamily: "system-ui, sans-serif",
-        letterSpacing: "0.3px",
+        fontFamily: T.fontSans,
+        letterSpacing: "0.02em",
       }}>{label}</button>
     </div>
   );
@@ -3543,8 +3893,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 36, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
           {lang === "zh" ? "配方详情" : "レシピ詳細"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -3586,144 +3936,123 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
               </Btn>
             );
           })()}
-          {onPrint && <Btn size="sm" onClick={onPrint}>{lang === "zh" ? "🖨 打印" : "🖨 印刷"}</Btn>}
-          <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          {onPrint && <Btn size="sm" onClick={onPrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
+          <Btn size="sm" variant="primary" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
+          <Btn size="sm" variant="ghost" onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
-      {/* Header card - RURU 风格 */}
-      <div style={{
-        background: T.bgCard,
-        border: `0.5px solid ${T.border}`,
-        borderRadius: T.radiusLg,
-        padding: "1.75rem",
-        marginBottom: "1rem",
-        display: "flex",
-        gap: 18,
-        alignItems: "flex-start",
+      {/* 标题块：左边名字阶梯，右边售价 —— 无卡片，底部压一条 1px ink 线 */}
+      <div className="rc-title" style={{
+        display: "grid", gridTemplateColumns: "1fr auto", gap: T.sp.block,
+        alignItems: "end", paddingBottom: 28, borderBottom: `1px solid ${T.ink}`,
       }}>
-        {/* 大圆形首字母徽章 */}
-        <div style={{
-          width: 64, height: 64, borderRadius: "50%",
-          background: T.bgSoft, color: T.accent,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontFamily: T.fontSerif, fontSize: 28, fontStyle: "italic", fontWeight: 500,
-          flexShrink: 0,
-        }}>
-          {(r.nameFr || name || "?").charAt(0).toUpperCase()}
-        </div>
-
-        {/* 主信息 */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {/* 标题 */}
+        <div className="k-fluid">
           {r.nameFr ? (
             <>
-              <div style={{ fontFamily: T.fontSerif, fontSize: 26, fontWeight: 500, color: T.textPrimary, lineHeight: 1.2, letterSpacing: "-0.3px" }}>
-                {r.nameFr}
-              </div>
-              <div style={{ fontSize: 14, color: T.textSecondary, marginTop: 4 }}>
-                {name}{nameOther && nameOther !== name ? ` · ${nameOther}` : ""}
-              </div>
+              <h2 style={{ fontFamily: T.fontSerif, ...T.fs.display, color: T.ink, margin: "0 0 10px" }}>{r.nameFr}</h2>
+              <div style={{ ...T.fs.strong, color: T.ink }}>{name}</div>
+              {nameOther && nameOther !== name && (
+                <div style={{ ...T.fs.small, color: T.secondary, marginTop: 3 }}>{nameOther}</div>
+              )}
             </>
           ) : (
             <>
-              <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.textPrimary, lineHeight: 1.3 }}>
-                {name}
-              </div>
+              <h2 style={{ fontFamily: T.fontSerif, ...T.fs.displayS, color: T.ink, margin: "0 0 8px" }}>{name}</h2>
               {nameOther && nameOther !== name && (
-                <div style={{ fontSize: 13, color: T.textSecondary, marginTop: 3, fontStyle: "italic" }}>{nameOther}</div>
+                <div style={{ ...T.fs.small, color: T.secondary }}>{nameOther}</div>
               )}
             </>
           )}
-
-          {/* 规格点分隔 */}
-          <div style={{ display: "flex", gap: 8, fontSize: 12, color: T.textTertiary, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
-            {[
-              r.mold,
-              r.yield ? `${r.yield}${r.unit || "個"}` : null,
-              r.temp,
-              r.baketime,
-              r.category,
-            ].filter(Boolean).map((t, i, arr) => (
-              <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span>{t}</span>
-                {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
-              </span>
-            ))}
+          <div style={{ ...T.fs.label, color: T.subtle, marginTop: T.sp.l }}>
+            {[r.mold, r.yield ? `${r.yield}${r.unit || "個"}` : null, r.temp, r.baketime, r.category].filter(Boolean).join("  ·  ")}
           </div>
-
-          {/* 毛利率 + 售价 */}
-          {r.price > 0 && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
-              <span style={{
-                background: liveMargin >= 50 ? T.successBg : liveMargin >= 30 ? T.warningBg : T.dangerBg,
-                color: liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger,
-                padding: "4px 12px",
-                borderRadius: T.radiusPill,
-                fontSize: 11,
-                fontWeight: 500,
-              }}>
-                {lang === "zh" ? "利润率" : "利益率"} {liveMargin.toFixed(1)}%
-              </span>
-              <span style={{ fontFamily: T.fontSerif, fontSize: 15, color: T.textPrimary, fontWeight: 500 }}>
-                ¥{r.price}
-              </span>
-              <span style={{ fontSize: 11, color: T.textTertiary }}>/ {r.unit || "個"}</span>
-            </div>
-          )}
         </div>
+
+        {r.price > 0 && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
+              {lang === "zh" ? `售价 / ${r.unit || "個"}` : `売価 / ${r.unit || "個"}`}
+            </div>
+            <div style={{ fontFamily: T.fontSerif, fontSize: 38, fontWeight: 300, letterSpacing: "-0.02em", marginTop: 4, ...T.num, color: T.ink, lineHeight: 1.1 }}>
+              ¥{Number(r.price).toLocaleString()}
+            </div>
+            <div style={{ ...T.fs.caption, marginTop: 6, color: liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger }}>
+              {lang === "zh" ? "利润率" : "利益率"} {liveMargin.toFixed(1)}%
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 🔢 缩放计算器 - RURU 风格 */}
+      {/* 🔢 缩放计算 —— 压成一行，底部一条发丝线 */}
       {originalYield > 0 && (r.ingredients || []).length > 0 && (
-        <div style={{ background: T.bgMuted, border: `0.5px solid ${T.borderSoft}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 11, color: T.accent, fontWeight: 500, letterSpacing: "1px", textTransform: "uppercase" }}>
-              {lang === "zh" ? "✦ 缩放计算" : "✦ スケール計算"}
-            </div>
-            <div style={{ fontSize: 12, color: T.textSecondary }}>
-              {lang === "zh" ? "原" : "原"}：<span style={{ fontFamily: T.fontSerif, fontWeight: 500 }}>{originalYield}{r.unit || "個"}</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12, color: T.textSecondary }}>{lang === "zh" ? "目标" : "目標"}：</span>
-              <input
-                type="number"
-                value={targetYield}
-                onChange={e => setTargetYield(e.target.value)}
-                placeholder={originalYield}
-                style={{ width: 80, padding: "5px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans }}
-              />
-              <span style={{ fontSize: 12, color: T.textSecondary }}>{r.unit || "個"}</span>
-            </div>
-            {target > 0 && (
-              <div style={{ fontSize: 12, color: T.accent, fontWeight: 500, background: T.bgCard, padding: "4px 14px", borderRadius: T.radiusPill, fontFamily: T.fontSerif, fontStyle: "italic", border: `0.5px solid ${T.accentSoft}` }}>
-                × {scale.toFixed(3)}
-              </div>
-            )}
-            {target > 0 && (
-              <button onClick={() => setTargetYield("")} style={{ fontSize: 11, color: T.textTertiary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans }}>
-                {lang === "zh" ? "重置" : "リセット"}
-              </button>
-            )}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, padding: `${T.sp.l}px 0`, borderBottom: `1px solid ${T.line}`, flexWrap: "wrap", ...T.fs.caption, color: T.body }}>
+          <span style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
+            {lang === "zh" ? "缩放计算" : "スケール計算"}
+          </span>
+          <span>{lang === "zh" ? "原" : "原"} {originalYield}{r.unit || "個"}</span>
+          <span style={{ color: T.disabled }}>→</span>
+          <div style={{ display: "flex", alignItems: "center", border: `1px solid ${T.border}`, background: T.surface, borderRadius: T.radius }}>
+            <input
+              type="number" className="k-input"
+              value={targetYield}
+              onChange={e => setTargetYield(e.target.value)}
+              placeholder={originalYield}
+              style={{ width: 62, border: 0, padding: "5px 8px", ...T.fs.small, fontFamily: "inherit", textAlign: "right", outline: "none", background: "transparent", ...T.num, color: T.ink }}
+            />
+            <span style={{ padding: "5px 8px 5px 0", color: T.subtle, ...T.fs.label }}>{r.unit || "個"}</span>
           </div>
           {target > 0 && (
-            <div style={{ marginTop: 8, fontSize: 11, color: T.textTertiary, fontStyle: "italic" }}>
-              {lang === "zh" ? "下方原料已按比例缩放" : "下記材料は比率で計算されました"}
-            </div>
+            <span style={{ fontFamily: T.fontSerif, ...T.num, color: T.accent }}>× {scale.toFixed(3)}</span>
+          )}
+          {target > 0 && (
+            <button onClick={() => setTargetYield("")} className="k-btn k-btn-ghost" style={{ ...T.fs.label, color: T.secondary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, padding: "4px 8px" }}>
+              {lang === "zh" ? "重置" : "リセット"}
+            </button>
           )}
         </div>
       )}
 
-      {/* Ingredients */}
-      <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", overflow: "hidden", marginBottom: "1rem" }}>
-        {/* Column headers */}
-        <div style={{ display: "grid", gridTemplateColumns: "2.5fr 70px 50px 1fr 70px", gap: 0, padding: "6px 12px", background: "#F5F5F5", borderBottom: "0.5px solid #E5E5E5" }}>
-          <div style={{ fontSize: 11, color: "#666666" }}>{lang === "zh" ? "原料名称" : "原材料"}{scale !== 1 && <span style={{ color: "#6D28D9", marginLeft: 4 }}>(×{scale.toFixed(2)})</span>}</div>
-          <div style={{ fontSize: 11, color: "#666666", textAlign: "right" }}>用量</div>
-          <div style={{ fontSize: 11, color: "#666666" }}>単位</div>
-          <div style={{ fontSize: 11, color: "#666666" }}>{lang === "zh" ? "品牌" : "ブランド"}</div>
-          <div style={{ fontSize: 11, color: "#666666", textAlign: "right" }}>{lang === "zh" ? "成本" : "コスト"}</div>
+      {/* ═══ 配料表 ═══
+          四列 grid（名称 / 用量 / 品牌 / 成本）。列宽只在 ING_COLS 定义一次，表头和数据行共用。
+          行间只有 1px 发丝线，无竖线、无斑马纹；分组标题不是一行数据，而是一个「呼吸位」。 */}
+      <div style={{ marginTop: T.sp.block, marginBottom: T.sp.gap }}>
+        {/* 空态：配方还没录配料 */}
+        {(r.ingredients || []).length === 0 && (
+          <EmptyState
+            variant="first" lang={lang}
+            title={lang === "zh" ? "还没有配料" : "まだ材料がありません"}
+            hint={lang === "zh" ? "去编辑页添加，或从材料百科挑" : "編集画面で追加、または材料事典から選べます"}
+            actions={[{ label: lang === "zh" ? "＋ 添加配料" : "＋ 材料を追加", onClick: onEdit }]}
+          />
+        )}
+
+        {/* 局部错误：成本算不出来时，就地说清「哪几项」和「怎么修」，不弹全局提示 */}
+        {(() => {
+          const missing = (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none");
+          if (missing.length === 0 || (r.ingredients || []).length === 0) return null;
+          const names = missing.map(ing => pickLang(ing, "name", lang)).join(" · ");
+          return (
+            <div style={{ marginBottom: T.sp.xxl }}>
+              <InlineError
+                title={lang === "zh" ? "成本算不全" : "原価が出せません"}
+                detail={lang === "zh" ? `${missing.length} 项原料没有单价：${names}` : `${missing.length} 件に単価がありません：${names}`}
+                actionLabel={lang === "zh" ? "去补单价" : "単価を入力"}
+                onAction={onEdit}
+              />
+            </div>
+          );
+        })()}
+
+        {/* 表头：10px 全大写微标签，下面压一条 1px ink 实线 */}
+        <div className="rc-ing-head" style={{ display: "grid", gridTemplateColumns: ING_COLS, ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+          <div style={{ paddingLeft: T.sp.xl }}>
+            {lang === "zh" ? "原料名称" : "原材料"}
+            {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
+          </div>
+          <div style={{ textAlign: "right" }}>{lang === "zh" ? "用量" : "分量"}</div>
+          <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl }}>{lang === "zh" ? "品牌" : "ブランド"}</div>
+          <div style={{ textAlign: "right" }}>{lang === "zh" ? "成本" : "原価"}</div>
         </div>
 
         {GROUP_ORDER.map(gk => {
@@ -3731,9 +4060,15 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
           const g = GROUPS[gk];
           return (
             <div key={gk}>
+              {/* 分组标题 = 22px 上留白 + 色点 + 标签 + 发丝线 + 条数 */}
               {gk !== "none" && (
-                <div style={{ padding: "5px 12px", background: "#F5F5F5", borderBottom: "0.5px solid #E5E5E5", borderTop: "0.5px solid #E5E5E5" }}>
-                  <GroupPill gk={gk} lang={lang} />
+                <div style={{ display: "flex", alignItems: "center", gap: 9, padding: `22px 0 9px ${T.sp.xl}px` }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, flexShrink: 0 }} />
+                  <span style={{ ...T.fs.label, letterSpacing: "0.16em", color: T.body }}>
+                    {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
+                  </span>
+                  <span style={{ flex: 1, height: 1, background: T.line }} />
+                  <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{arr.length}</span>
                 </div>
               )}
               {arr.map((ing, i) => {
@@ -3744,53 +4079,55 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
                 // 🔗 材料百科关联
                 const linkedMat = ing.materialId ? materials.find(x => x.id === ing.materialId) : null;
                 const canJump = linkedMat && onNavigateToMaterial;
+                // 属性徽章 · 9px 描边无底色，只标事实。一行最多 2 个，第 3 个起折叠成「+N」
+                const src = getIngPriceSource(ing, materials);
+                const badges = [];
+                if (src === "shop") badges.push({ t: lang === "zh" ? "本店" : "仕入", c: T.success, tip: lang === "zh" ? "本店采购价" : "仕入れ価" });
+                else if (src === "ref") badges.push({ t: lang === "zh" ? "参考" : "参考", c: T.secondary, tip: lang === "zh" ? "百科参考价" : "百科参考価" });
+                else if (src === "manual") badges.push({ t: lang === "zh" ? "手写" : "手入", c: T.info, tip: lang === "zh" ? "手写单价" : "手入力" });
+                else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? "无价格信息" : "価格情報なし" });
+                if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
+                const shown = badges.slice(0, 2), rest = badges.slice(2);
                 return (
-                  <div key={i} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "2.5fr 70px 50px 1fr 70px", gap: 0 }}>
-                      <div
-                        style={{
-                          padding: "8px 12px",
-                          cursor: canJump ? "pointer" : "default",
-                          transition: "background 0.1s",
-                        }}
-                        onClick={canJump ? () => onNavigateToMaterial(linkedMat.id) : undefined}
-                        onMouseEnter={canJump ? (e) => e.currentTarget.style.background = "#F5F5F5" : undefined}
-                        onMouseLeave={canJump ? (e) => e.currentTarget.style.background = "transparent" : undefined}
-                        title={canJump ? (lang === "zh" ? `点击跳转百科:${linkedMat.nameZh || linkedMat.nameJa}` : `事典へ跳ぶ`) : ""}
-                      >
-                        <div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          {linkedMat && (
-                            <span style={{
-                              fontSize: 10, color: "#FFFFFF", background: "#059669",
-                              padding: "1px 4px", borderRadius: 3, fontWeight: 500,
-                              display: "inline-flex", alignItems: "center", gap: 2,
-                            }} title={lang === "zh" ? "已关联百科" : "事典連動"}>
-                              🔗
+                  <div
+                    key={i}
+                    className="k-row rc-ing-row"
+                    style={{
+                      display: "grid", gridTemplateColumns: ING_COLS, alignItems: "baseline",
+                      padding: "11px 0", borderBottom: `1px solid ${T.lineFaint}`,
+                      borderLeft: `3px solid ${g.border}`,
+                      cursor: canJump ? "pointer" : "default",
+                    }}
+                    onClick={canJump ? () => onNavigateToMaterial(linkedMat.id) : undefined}
+                    title={canJump ? (lang === "zh" ? `点击跳转百科：${linkedMat.nameZh || linkedMat.nameJa}` : "事典へ跳ぶ") : ""}
+                  >
+                    <div className="k-fluid" style={{ paddingLeft: T.sp.xl }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.s, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 16, fontWeight: 500, letterSpacing: "0.01em", color: T.ink }}>{n}</span>
+                        {sub && sub !== n && <span style={{ ...T.fs.caption, color: T.subtle }}>{sub}</span>}
+                        {shown.map((b, bi) => (
+                          <span key={bi} title={b.tip} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}</span>
+                        ))}
+                        {rest.length > 0 && (
+                          <span className="k-more" style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${T.border}`, color: T.secondary, cursor: "default" }} tabIndex={0}>
+                            +{rest.length}
+                            <span className="k-more-pop">
+                              {rest.map((b, bi) => (
+                                <span key={bi} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}</span>
+                              ))}
                             </span>
-                          )}
-                          {(() => {
-                            const src = getIngPriceSource(ing, materials);
-                            const base = { fontSize: 10, padding: "1px 5px", borderRadius: 3, fontWeight: 500 };
-                            if (src === "shop") return <span style={{ ...base, color: "#FFFFFF", background: "#059669" }} title={lang === "zh" ? "本店采购价" : "仕入れ価"}>🏷️{lang === "zh" ? "本店" : "仕入"}</span>;
-                            if (src === "ref") return <span style={{ ...base, color: "#6B7280", background: "#F3F4F6" }} title={lang === "zh" ? "百科参考价" : "百科参考価"}>📖{lang === "zh" ? "参考" : "参考"}</span>;
-                            if (src === "manual") return <span style={{ ...base, color: "#6B7280", background: "#F3F4F6" }} title={lang === "zh" ? "手写单价" : "手入力"}>✏️{lang === "zh" ? "手写" : "手入"}</span>;
-                            return <span style={{ ...base, color: "#D97706", background: "#FEF3C7" }} title={lang === "zh" ? "无价格信息" : "価格情報なし"}>⚠️{lang === "zh" ? "无价" : "価格なし"}</span>;
-                          })()}
-                          {n}
-                        </div>
-                        {sub && sub !== n && <div style={{ fontSize: 11, color: "#666666" }}>{sub}</div>}
-                        {ing.nameFr && <div style={{ fontSize: 10, color: "#666666", fontStyle: "italic", opacity: 0.7 }}>{ing.nameFr}</div>}
+                          </span>
+                        )}
                       </div>
-                      <div style={{ padding: "8px 6px", textAlign: "right", fontWeight: 500, fontSize: 15, color: scale !== 1 ? "#6D28D9" : "#111111" }}>{scale === 1 ? ing.qty : scaledQty.toFixed(1)}</div>
-                      <div style={{ padding: "8px 6px", color: "#666666", fontSize: 13 }}>{ing.unit}</div>
-                      <div style={{ padding: "8px 6px", color: "#666666", fontSize: 12 }}>{ing.brand}</div>
-                      <div style={{ padding: "8px 12px", textAlign: "right", color: "#666666", fontSize: 12 }}>{scaledCost > 0 ? `¥${scaledCost.toFixed(0)}` : ""}</div>
+                      {ing.nameFr && <div className="k-desktop-only" style={{ ...T.fs.label, color: T.muted, fontStyle: "italic", marginTop: 2, letterSpacing: 0 }}>{ing.nameFr}</div>}
+                      {ing.note && <div style={{ ...T.fs.label, color: T.danger, marginTop: 4, lineHeight: 1.5, letterSpacing: 0 }}>{ing.note}</div>}
                     </div>
-                    {ing.note && (
-                      <div style={{ padding: "0 12px 8px 12px", fontSize: 11, color: "#666666", lineHeight: 1.6, borderTop: "0.5px dashed #E5E5E5", paddingTop: 6 }}>
-                        📌 {ing.note}
-                      </div>
-                    )}
+                    <div style={{ textAlign: "right", fontSize: 17, fontWeight: 400, ...T.num, color: scale !== 1 ? T.accent : T.ink, whiteSpace: "nowrap" }}>
+                      {scale === 1 ? ing.qty : scaledQty.toFixed(1)}
+                      <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
+                    </div>
+                    <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
+                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{scaledCost > 0 ? `¥${scaledCost.toFixed(0)}` : ""}</div>
                   </div>
                 );
               })}
@@ -3798,14 +4135,19 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
           );
         })}
 
+        {/* 汇总条：顶部 1px ink，微标签 + 大数字 */}
         {liveTotalCost > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, padding: "1rem", background: "#F5F5F5" }}>
-            {[["原料总成本", "原料総コスト", `¥${liveTotalCost.toFixed(0)}`, "default"], ["单个成本", "単個コスト", `¥${liveUnitCost.toFixed(1)}`, "default"], ["利润率", "利益率", _priceNum > 0 && liveUnitCost > 0 ? liveMargin.toFixed(1) + "%" : "—", mc]].map(([zh, ja, val, c], i) => (
-              <div key={i} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 11, color: "#666666", marginBottom: 3 }}>{lang === "zh" ? zh : ja}</div>
-                <div style={{ fontSize: 18, fontWeight: 500, color: c === "green" ? "#0F6E56" : c === "amber" ? "#854F0B" : c === "red" ? "#A32D2D" : "#111111" }}>{val}</div>
-              </div>
-            ))}
+          <div className="rc-ing-total" style={{ display: "grid", gridTemplateColumns: ING_COLS, padding: "18px 0 0", borderTop: `1px solid ${T.ink}`, marginTop: 2, alignItems: "baseline" }}>
+            <div style={{ paddingLeft: T.sp.xl, ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
+              {lang === "zh" ? "原料总成本" : "材料原価合計"}
+            </div>
+            <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted, ...T.num }}>
+              {_priceNum > 0 && liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
+            </div>
+            <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.secondary, ...T.num }}>
+              {lang === "zh" ? "单个成本" : "単個原価"} ¥{liveUnitCost.toFixed(1)}
+            </div>
+            <div style={{ textAlign: "right", fontSize: 22, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>¥{liveTotalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
           </div>
         )}
       </div>
@@ -3814,24 +4156,26 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
       {(() => {
         const displaySteps = pickSteps(r, lang);
         return displaySteps && displaySteps.length > 0 && (
-          <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-            <div style={{ fontWeight: 500, marginBottom: 10 }}>{lang === "zh" ? "制作流程" : "製法"}</div>
-            <ol style={{ listStyle: "none", padding: 0 }}>
+          <div style={{ marginBottom: T.sp.gap }}>
+            <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+              {lang === "zh" ? "制作流程" : "製法"}
+            </div>
+            <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
               {displaySteps.map((s, i) => {
                 // 把【①】【②】【③】替换成彩色标签
                 const bowlMap = { "①": "bowl1", "②": "bowl2", "③": "bowl3", "④": "bowl4", "⑤": "bowl5" };
                 const parts = s.split(/(【[①②③④⑤]】)/g);
                 return (
-                  <li key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: i < displaySteps.length - 1 ? "0.5px solid #E5E5E5" : "none" }}>
-                    <div style={{ minWidth: 24, height: 24, borderRadius: "50%", background: "#F5F5F5", border: "0.5px solid #CCCCCC", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 500, flexShrink: 0, marginTop: 1 }}>{i + 1}</div>
-                    <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+                  <li key={i} className="k-row" style={{ display: "grid", gridTemplateColumns: "44px 1fr", padding: "12px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+                    <div style={{ ...T.fs.caption, color: T.muted, ...T.num, paddingTop: 2, fontFamily: T.fontSerif }}>{String(i + 1).padStart(2, "0")}</div>
+                    <div className="k-fluid" style={{ ...T.fs.body, color: T.ink }}>
                       {parts.map((part, pi) => {
                         const match = part.match(/【([①②③④⑤])】/);
                         if (match) {
                           const gk = bowlMap[match[1]];
                           const g = GROUPS[gk];
                           return (
-                            <span key={pi} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor, marginRight: 4, verticalAlign: "middle" }}>
+                            <span key={pi} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "1px 8px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${g.labelBorder}`, color: g.labelColor, marginRight: 5, verticalAlign: "middle" }}>
                               <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, display: "inline-block" }} />
                               {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
                             </span>
@@ -3851,14 +4195,17 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
       {(() => {
         const displayNotes = pickLang(r, "notes", lang) || r.notes;
         return (r.storage || r.allergens || displayNotes) && (
-          <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", padding: "1.25rem" }}>
+          <div style={{ marginBottom: T.sp.gap }}>
+            <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+              {lang === "zh" ? "备注" : "メモ"}
+            </div>
             {(r.storage || r.allergens) && (
-              <div style={{ fontSize: 12, color: "#666666", display: "flex", gap: 16, marginBottom: displayNotes ? 8 : 0 }}>
+              <div style={{ ...T.fs.caption, color: T.body, display: "flex", gap: T.sp.xxl, flexWrap: "wrap", padding: "12px 0", borderBottom: displayNotes ? `1px solid ${T.lineFaint}` : "none" }}>
                 {r.storage && <span>{lang === "zh" ? "保存：" : "保存方法："}{r.storage}</span>}
                 {r.allergens && <span>{lang === "zh" ? "过敏原：" : "アレルゲン："}{r.allergens}</span>}
               </div>
             )}
-            {displayNotes && <div style={{ fontSize: 13, color: "#333333", lineHeight: 1.7, whiteSpace: "pre-wrap", fontFamily: "system-ui, sans-serif" }}>{displayNotes}</div>}
+            {displayNotes && <div style={{ ...T.fs.body, color: T.body, whiteSpace: "pre-wrap", fontFamily: T.fontSans, paddingTop: 12 }}>{displayNotes}</div>}
           </div>
         );
       })()}
@@ -3868,16 +4215,19 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
 
       {/* 关联知识点（反向跳转） */}
       {relatedKnowledge.length > 0 && (
-        <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", padding: "1.25rem", marginTop: "1rem" }}>
-          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📚 相关知识点（点击跳转）</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ marginBottom: T.sp.gap }}>
+          <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+            {lang === "zh" ? "相关知识点" : "関連ナレッジ"}
+          </div>
+          <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", paddingTop: 12 }}>
             {relatedKnowledge.map(k => {
               const kTitle = pickLang(k, "title", lang);
               return (
                 <button
                   key={k.id}
+                  className="k-btn"
                   onClick={() => onNavigateToKnowledge && onNavigateToKnowledge(k.id)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#EDE9FE", color: "#5B21B6", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", fontFamily: "system-ui, sans-serif" }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.surface, color: T.info, padding: "4px 10px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${T.info}`, cursor: "pointer", fontFamily: T.fontSans }}
                 >
                   {kTitle} <span style={{ fontSize: 10, opacity: 0.7 }}>→</span>
                 </button>
@@ -5519,17 +5869,8 @@ function P3ImportReportDialog({ report, canUndo, onUndo, onClose }) {
 // 🏷 产品家族（Product Family）模块
 // ═══════════════════════════════════════════════════════════════
 
-// 家族颜色池
-const FAMILY_COLORS = [
-  { color: "#DC2626", bg: "#FEE2E2" },  // 红
-  { color: "#0891B2", bg: "#CFFAFE" },  // 青
-  { color: "#CA8A04", bg: "#FEF9C3" },  // 黄
-  { color: "#9333EA", bg: "#F3E8FF" },  // 紫
-  { color: "#16A34A", bg: "#DCFCE7" },  // 绿
-  { color: "#DB2777", bg: "#FCE7F3" },  // 粉
-  { color: "#4F46E5", bg: "#E0E7FF" },  // 靛
-  { color: "#EA580C", bg: "#FFEDD5" },  // 橙
-];
+// 家族颜色池 —— 与自定义组件分类共用同一张 8 色盘（原先两张表有 7 组完全重复）
+const FAMILY_COLORS = PALETTE_8;
 
 // ─── 家族编辑表单 ─────────────
 function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
@@ -5941,11 +6282,11 @@ function PrintModal({ onClose, onConfirm, itemType }) {
 function PrintView({ item, itemType, template, lang, sections, printSettings, onClose, onUpdateSettings }) {
   const [showLogoUpload, setShowLogoUpload] = useState(false);
   const [logoUrlInput, setLogoUrlInput] = useState(printSettings.logoUrl || "");
-  const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "RURU");
+  const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "kororā");
   const [subtitleInput, setSubtitleInput] = useState(printSettings.brandSubtitle || "PATISSERIE");
 
   const logoSrc = printSettings.logoUrl || LOGO_DATA_URI;
-  const brandName = printSettings.brandName || "RURU";
+  const brandName = printSettings.brandName || "kororā";
   const brandSubtitle = printSettings.brandSubtitle || "PATISSERIE";
 
   const doPrint = () => {
@@ -5953,19 +6294,22 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
   };
 
   const saveLogo = () => {
-    onUpdateSettings({ logoUrl: logoUrlInput.trim(), brandName: brandNameInput.trim() || "RURU", brandSubtitle: subtitleInput.trim() || "PATISSERIE" });
+    onUpdateSettings({ logoUrl: logoUrlInput.trim(), brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() || "Boulangerie • Pâtisserie • Café" });
     setShowLogoUpload(false);
   };
 
   const resetLogo = () => {
     setLogoUrlInput("");
-    onUpdateSettings({ logoUrl: "", brandName: brandNameInput.trim() || "RURU", brandSubtitle: subtitleInput.trim() || "PATISSERIE" });
+    onUpdateSettings({ logoUrl: "", brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() || "Boulangerie • Pâtisserie • Café" });
     setShowLogoUpload(false);
   };
 
   return (
     <>
-      {/* 打印CSS - 只在打印时生效 */}
+      {/* 打印 CSS · 只在打印时生效 —— 按设计稿 2c「A4 黑白」规范
+          纯黑白：所有底色转白、所有描边转 1px 实黑，盆改用粗体编号不用颜色，
+          灰度打印或复印都不丢信息。正文最小 10pt，配料名 14pt 粗、用量 17pt 粗，
+          站在操作台一臂远(约 60cm)能看清。 */}
       <style>{`
         @media print {
           @page { size: A4; margin: 15mm; }
@@ -5973,16 +6317,39 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           .print-area, .print-area * { visibility: visible; }
           .print-area { position: absolute; left: 0; top: 0; width: 100%; }
           .no-print { display: none !important; }
+          /* 一行不跨页 */
+          .print-area tr, .print-area li, .print-area .p-row { break-inside: avoid; page-break-inside: avoid; }
+          /* 底色转白、描边转实黑 */
+          .print-area * { background: transparent !important; box-shadow: none !important; }
+          .print-area .p-hide-print { display: none !important; }
         }
         .print-area {
           background: white;
-          color: #1a1a1a;
-          font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "游ゴシック", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-          line-height: 1.6;
+          color: #000;
+          font-family: "Zen Kaku Gothic New", "Noto Sans JP", "Hiragino Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+          line-height: 1.5;
           box-sizing: border-box;
         }
-        .print-area h1, .print-area h2, .print-area h3 { font-family: "Hiragino Mincho ProN", "游明朝", "PingFang SC", serif; margin: 0; }
+        .print-area h1, .print-area h2, .print-area h3 { font-family: inherit; margin: 0; }
         .print-area table { border-collapse: collapse; width: 100%; }
+        /* 盆列：不用颜色，用粗体编号 */
+        .print-area .p-bowl { font-size: 14pt; font-weight: 700; width: 42px; vertical-align: top; }
+        /* 配料名 14pt 粗 · 日文名 11pt · 备注 10pt 粗 */
+        .print-area .p-name { font-size: 14pt; font-weight: 700; line-height: 1.3; }
+        .print-area .p-sub  { font-size: 11pt; line-height: 1.4; }
+        .print-area .p-note { font-size: 10pt; font-weight: 700; margin-top: 2px; }
+        /* 用量 17pt 粗，一臂远能看清 */
+        .print-area .p-qty  { font-size: 17pt; font-weight: 700; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        /* 每行右侧一个 22px 空格子，投一样勾一样 */
+        .print-area .p-check { display: block; width: 22px; height: 22px; border: 1.5px solid #000; }
+        .print-area .p-th { text-align: left; font-size: 10pt; font-weight: 400; letter-spacing: 0.14em; padding: 6px 0; border-bottom: 1px solid #000; }
+        .print-area .p-td { padding: 9px 0; border-bottom: 1px solid #D8D8D8; vertical-align: top; }
+        /* 步骤两栏排，13 步刚好一页装下 */
+        .print-area .p-steps { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; }
+        .print-area .p-step { display: grid; grid-template-columns: 26px 1fr; padding: 5px 0; border-bottom: 1px solid #E4E4E4; }
+        .print-area .p-step-n { font-size: 11pt; font-weight: 700; }
+        .print-area .p-step-t { font-size: 12pt; line-height: 1.45; }
+        .print-area .p-total { margin-top: 20px; border: 2px solid #000; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
         .print-area .watermark {
           position: fixed;
           top: 50%;
@@ -5990,8 +6357,7 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           transform: translate(-50%, -50%) rotate(-30deg);
           font-size: 120px;
           color: rgba(0, 0, 0, 0.04);
-          font-family: Georgia, serif;
-          font-style: italic;
+          font-family: "Jost", Georgia, serif;
           pointer-events: none;
           z-index: 0;
           letter-spacing: 10px;
@@ -6023,7 +6389,7 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
                 {lang === "zh" ? "品牌名" : "ブランド名"}
               </div>
-              <input value={brandNameInput} onChange={e => setBrandNameInput(e.target.value)} placeholder="RURU" style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
+              <input value={brandNameInput} onChange={e => setBrandNameInput(e.target.value)} placeholder="kororā" style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
             </div>
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
@@ -6092,88 +6458,89 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
-      {/* 顶部：LOGO + 标题 */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "1.5px solid #2D1B0E", paddingBottom: "8mm", marginBottom: "8mm" }}>
+      {/* 抬头：店名 + 配方名 / 右侧关键参数 */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "2px solid #000", paddingBottom: "12px" }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: "Georgia, serif", fontSize: "26pt", fontWeight: 500, marginBottom: "2mm", lineHeight: 1.15, color: "#2D1B0E", letterSpacing: "-0.3pt" }}>{name}</div>
-          {item.nameFr && <div style={{ fontFamily: "Georgia, serif", fontSize: "12pt", fontStyle: "italic", color: "#7A5F4A" }}>{item.nameFr}</div>}
-          {/* 关键参数 - 一行高亮 */}
-          <div style={{ marginTop: "5mm", display: "flex", gap: "6mm", flexWrap: "wrap", fontSize: "11pt", color: "#555" }}>
-            {item.yield && <div><strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{item.yield}</strong>{item.unit || "個"}</div>}
-            {item.temp && <div>🌡 <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{item.temp}</strong></div>}
-            {item.baketime && <div>⏱ <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{item.baketime}</strong></div>}
-            {item.mold && <div>🍰 {item.mold}</div>}
-          </div>
+          <div style={{ fontSize: "11pt", letterSpacing: "0.26em", fontWeight: 400 }}>{brandName}</div>
+          <div style={{ fontSize: "24pt", fontWeight: 700, marginTop: "8px", lineHeight: 1.1 }}>{name}</div>
+          {item.nameFr && <div style={{ fontSize: "13pt", marginTop: "4px" }}>{item.nameFr}</div>}
         </div>
-        <div style={{ textAlign: "center", marginLeft: "8mm", flexShrink: 0 }}>
-          <img src={logoSrc} style={{ width: "20mm", height: "20mm" }} alt="LOGO" />
-          <div style={{ fontFamily: "Georgia, serif", fontSize: "8pt", letterSpacing: "2pt", marginTop: "1mm", color: "#7A5F4A" }}>{brandName}</div>
+        <div style={{ textAlign: "right", fontSize: "12pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 0 }}>
+          {item.yield && <div style={{ fontSize: "20pt", fontWeight: 700 }}>{item.yield} {item.unit || "個"}</div>}
+          {item.mold && <div>{item.mold}</div>}
+          {(item.temp || item.baketime) && <div style={{ fontWeight: 700 }}>{[item.temp, item.baketime].filter(Boolean).join(" / ")}</div>}
         </div>
       </div>
 
-      {/* 原料表 */}
+      {/* 原料表：盆用粗体编号(不用颜色) · 用量 17pt 粗 · 每行右侧一个勾选格 */}
       {sections.ingredients && item.ingredients && item.ingredients.length > 0 && (
-        <div style={{ marginBottom: "6mm" }}>
-          <div style={{ fontSize: "13pt", fontWeight: 500, marginBottom: "2mm", borderLeft: "4px solid #1a1a1a", paddingLeft: "3mm" }}>
-            {lang === "ja" ? "材料" : lang === "zh" ? "原料" : "原料 / 材料"}
-          </div>
-          <table style={{ fontSize: "11pt" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #1a1a1a" }}>
-                <th style={{ textAlign: "left", padding: "2mm 1mm", fontWeight: 400, fontSize: "9pt" }}>{lang === "ja" ? "材料名" : "名称"}</th>
-                <th style={{ textAlign: "right", padding: "2mm 1mm", fontWeight: 400, fontSize: "9pt", width: "15mm" }}>{lang === "ja" ? "量" : "用量"}</th>
-                <th style={{ textAlign: "left", padding: "2mm 1mm", fontWeight: 400, fontSize: "9pt", width: "6mm" }}></th>
-                <th style={{ textAlign: "left", padding: "2mm 1mm", fontWeight: 400, fontSize: "9pt", width: "30mm" }}>{lang === "ja" ? "ブランド" : "品牌"}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {item.ingredients.map((ing, i) => {
-                const ingName = getName(ing);
-                const showGroup = ing.group && ing.group !== "none";
-                const groupInfo = showGroup ? GROUPS[ing.group] : null;
+        <table style={{ marginTop: "20px" }}>
+          <thead>
+            <tr>
+              <th className="p-th" style={{ width: "42px" }}>{lang === "ja" ? "ボウル" : "盆"}</th>
+              <th className="p-th">{lang === "ja" ? "材料" : "原料"}</th>
+              <th className="p-th" style={{ textAlign: "right", width: "110px" }}>{lang === "ja" ? "分量" : "用量"}</th>
+              <th className="p-th" style={{ paddingLeft: "16px", width: "60px" }}>✓</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(() => {
+              // 按盆分组后依次输出；每组只有第一行显示 ①②③ 编号
+              const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
+              let lastGroup = null;
+              return item.ingredients.map((ing, i) => {
+                const gk = ing.group && ing.group !== "none" ? ing.group : null;
+                const first = gk && gk !== lastGroup;
+                lastGroup = gk;
+                const zh = ing.nameZh || ing.nameJa || "";
+                const ja = ing.nameJa || "";
                 return (
-                  <tr key={i} style={{ borderBottom: "0.5px solid #DDD" }}>
-                    <td style={{ padding: "2mm 1mm", fontWeight: 500 }}>
-                      {groupInfo && <span style={{ display: "inline-block", marginRight: 4, fontSize: "9pt", color: groupInfo.labelColor, fontWeight: 700 }}>{groupInfo.label}</span>}
-                      {ingName}
+                  <tr key={i}>
+                    <td className="p-td p-bowl">{first ? marks[gk] : ""}</td>
+                    <td className="p-td">
+                      <div className="p-name">{lang === "ja" ? (ja || zh) : zh}</div>
+                      {lang !== "ja" && ja && ja !== zh && <div className="p-sub">{ja}</div>}
+                      {ing.note && <div className="p-note">{ing.note}</div>}
                     </td>
-                    <td style={{ padding: "2mm 1mm", textAlign: "right", fontWeight: 500 }}>{ing.qty}</td>
-                    <td style={{ padding: "2mm 1mm", color: "#666", fontSize: "10pt" }}>{ing.unit || "g"}</td>
-                    <td style={{ padding: "2mm 1mm", color: "#666", fontSize: "10pt" }}>{ing.brand || ""}</td>
+                    <td className="p-td p-qty">{ing.qty} {ing.unit || "g"}</td>
+                    <td className="p-td" style={{ paddingLeft: "16px" }}><span className="p-check" /></td>
                   </tr>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              });
+            })()}
+          </tbody>
+        </table>
       )}
 
-      {/* 步骤 - 紧凑排版 */}
+      {/* 步骤：两栏排，13 步刚好一页装下 */}
       {sections.steps && steps.length > 0 && (
-        <div style={{ marginBottom: "6mm" }}>
-          <div style={{ fontSize: "13pt", fontWeight: 500, marginBottom: "2mm", borderLeft: "4px solid #1a1a1a", paddingLeft: "3mm" }}>
-            {lang === "ja" ? "作り方" : "制作流程"}
+        <div style={{ marginTop: "24px", borderTop: "2px solid #000", paddingTop: "12px" }}>
+          <div style={{ fontSize: "11pt", letterSpacing: "0.14em" }}>
+            {lang === "ja" ? "作り方" : lang === "zh" ? "制作流程" : "制作流程 · 作り方"}
           </div>
-          <ol style={{ paddingLeft: "6mm", margin: 0, fontSize: "10.5pt", lineHeight: 1.7 }}>
+          <div className="p-steps" style={{ marginTop: "8px" }}>
             {steps.map((s, i) => (
-              <li key={i} style={{ marginBottom: "1.5mm" }}>{s}</li>
+              <div key={i} className="p-step">
+                <div className="p-step-n">{String(i + 1).padStart(2, "0")}</div>
+                <div className="p-step-t">{s}</div>
+              </div>
             ))}
-          </ol>
+          </div>
         </div>
       )}
 
       {/* 注意事项 */}
       {sections.notes && notesText && (
-        <div style={{ marginBottom: "4mm", background: "#FFF9E6", padding: "4mm 6mm", borderLeft: "4px solid #F59E0B", fontSize: "10pt", lineHeight: 1.6 }}>
-          <div style={{ fontSize: "10pt", fontWeight: 500, marginBottom: "1mm" }}>⚠ {lang === "ja" ? "注意" : "注意事项"}</div>
+        <div style={{ marginTop: "16px", border: "1px solid #000", padding: "10px 14px", fontSize: "10pt", lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: "4px" }}>{lang === "ja" ? "注意" : "注意事项"}</div>
           <div style={{ whiteSpace: "pre-wrap" }}>{notesText}</div>
         </div>
       )}
 
       {/* 底部 */}
-      <div style={{ marginTop: "10mm", paddingTop: "3mm", borderTop: "0.5px solid #999", display: "flex", justifyContent: "space-between", fontSize: "8pt", color: "#666" }}>
-        <div>{brandName} · {brandSubtitle}</div>
-        <div>{new Date().toLocaleDateString("zh-CN")}</div>
+      <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
+        <div>{brandName} · {brandSubtitle} · {new Date().toLocaleDateString("zh-CN")}</div>
+        <div>{lang === "ja" ? "ボウル ① → ⑤ の順に投入" : "盆序 ① → ⑤ 依次投料"}</div>
       </div>
     </div>
   );
@@ -8208,17 +8575,30 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
         })()}
       </div>
 
+      {/* 2a §09 两种空态必须长得不一样：
+          「首次为空」给下一步动作；「筛选无结果」把生效条件摆出来能一个个摘掉，且不给「新建」按钮 */}
       {filtered.length === 0 && (
-        <div style={{ textAlign: "center", padding: "3rem", color: "#666666", fontSize: 13, lineHeight: 1.8 }}>
-          {knowledge.length === 0 ? (
-            <>
-              还没有知识点。<br />
-              <span style={{ fontSize: 12, color: "#999999" }}>
-                这里存放学过的技术要点，可以搜索、按标签筛选、与配方关联。
-              </span>
-            </>
-          ) : "没有匹配的知识点"}
-        </div>
+        knowledge.length === 0 ? (
+          <EmptyState
+            variant="first" lang={lang}
+            title={lang === "zh" ? "还没有知识点" : "まだナレッジがありません"}
+            hint={lang === "zh" ? "这里存放学过的技术要点，可以搜索、按标签筛选、与配方关联" : "学んだ技術ポイントを貯める場所です。検索・タグ絞り込み・レシピ連携ができます"}
+            actions={[{ label: lang === "zh" ? "＋ 新增知识点" : "＋ ナレッジ追加", onClick: () => setEditTarget("new") }]}
+          />
+        ) : (
+          <EmptyState
+            variant="filter" lang={lang}
+            title={lang === "zh" ? "没有匹配的知识点" : "一致するナレッジがありません"}
+            hint={lang === "zh"
+              ? `当前生效 ${[filterTag !== "all", !!searchQuery].filter(Boolean).length} 个条件`
+              : `絞り込み ${[filterTag !== "all", !!searchQuery].filter(Boolean).length} 件`}
+            chips={[
+              ...(filterTag !== "all" ? [{ label: (getKnowledgeTag(filterTag)[lang === "zh" ? "zh" : "ja"]) || filterTag, onRemove: () => setFilterTag("all") }] : []),
+              ...(searchQuery ? [{ label: `“${searchQuery}”`, onRemove: () => setSearchQuery("") }] : []),
+            ]}
+            onClearAll={() => { setFilterTag("all"); setSearchQuery(""); }}
+          />
+        )
       )}
 
       <div style={{ display: "grid", gap: 10 }}>
@@ -9040,10 +9420,15 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
             </div>
           )}
 
+          {/* 2a §09 筛选无结果：把生效条件摆出来能摘掉，不给「新建」按钮 —— 东西是有的，只是被筛掉了 */}
           {searchResults.brands.length === 0 && searchResults.materials.length === 0 && (
-            <div style={{ color: T.textTertiary, fontSize: 12, padding: "20px 0", textAlign: "center" }}>
-              {lang === "zh" ? "未找到匹配项" : "一致なし"}
-            </div>
+            <EmptyState
+              variant="filter" lang={lang}
+              title={lang === "zh" ? "没有匹配的材料" : "一致する材料がありません"}
+              hint={lang === "zh" ? `在 ${materials.length} 种材料 / ${brands.length} 个品牌里都没找到` : `材料 ${materials.length} 件 / ブランド ${brands.length} 件から見つかりません`}
+              chips={[{ label: `“${searchQ}”`, onRemove: () => setSearchQ("") }]}
+              onClearAll={() => setSearchQ("")}
+            />
           )}
 
           <div style={{ borderBottom: `0.5px solid ${T.border}`, marginTop: "1.25rem" }} />
@@ -10733,9 +11118,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         />
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新増配方" : "编辑配方"}</div>
+        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新建配方" : "レシピ新規") : (lang === "zh" ? "编辑配方" : "レシピ編集")}</div>
         <div style={{ display: "flex", gap: 8 }}>
-          {!isNew && <Btn variant="danger" onClick={onDelete}>削除</Btn>}
+          {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
@@ -12420,27 +12805,27 @@ function PasswordGate({ onUnlock }) {
     }
   };
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#FCFAF6", padding: 20, fontFamily: '"Hiragino Sans", "Yu Gothic", "Microsoft YaHei", system-ui, sans-serif', colorScheme: "light" }}>
-      <form onSubmit={submit} style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: 12, padding: "36px 32px", maxWidth: 380, width: "100%", textAlign: "center", boxShadow: "0 2px 16px rgba(0,0,0,0.05)" }}>
-        <div style={{ fontSize: 24, fontWeight: 500, color: "#5B21B6", fontFamily: "Georgia, 'Hiragino Mincho Pro', serif", marginBottom: 6, fontStyle: "italic" }}>RURU</div>
-        <div style={{ fontSize: 11, color: "#999", letterSpacing: "2px", textTransform: "uppercase", marginBottom: 28 }}>パティスリー管理 · v1 内部テスト</div>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 18, lineHeight: 1.7 }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.paper, padding: 20, fontFamily: T.fontSans, colorScheme: "light" }}>
+      <style>{GLOBAL_CSS}</style>
+      <form onSubmit={submit} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: "40px 32px", maxWidth: 380, width: "100%", textAlign: "center" }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 28 }}><Wordmark size={26} /></div>
+        <div style={{ ...T.fs.micro, color: T.subtle, marginBottom: 24, fontFamily: T.fontSerif }}>パティスリー管理 · v1 内部テスト</div>
+        <div style={{ ...T.fs.small, color: T.body, marginBottom: 18, lineHeight: 1.7 }}>
           このアプリは内部テスト中です<br/>
-          このアプリは正在内部测试中
+          这个 app 正在内部测试中
         </div>
         <input
           type="password"
+          className="k-input"
           value={input}
           onChange={e => { setInput(e.target.value); setError(""); }}
           placeholder="パスワード / 密码"
           autoFocus
-          style={{ width: "100%", padding: "10px 14px", fontSize: 14, border: "1px solid #E5E5E5", borderRadius: 6, marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }}
-          onFocus={e => e.target.style.borderColor = "#5B21B6"}
-          onBlur={e => e.target.style.borderColor = "#E5E5E5"}
+          style={{ width: "100%", padding: "10px 14px", fontSize: 14, border: `1px solid ${T.border}`, borderRadius: T.radius, marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box", outline: "none", background: T.surface, color: T.ink }}
         />
-        {error && <div style={{ fontSize: 12, color: "#DC2626", marginBottom: 8 }}>{error}</div>}
-        <button type="submit" style={{ width: "100%", padding: "10px 14px", background: "#111111", color: "#FFFFFF", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 500, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>入る / 进入</button>
-        <div style={{ fontSize: 11, color: "#999", marginTop: 22, lineHeight: 1.7 }}>
+        {error && <div style={{ ...T.fs.caption, color: T.danger, marginBottom: 8 }}>{error}</div>}
+        <button type="submit" className="k-btn k-btn-primary" style={{ width: "100%", padding: "12px 14px", background: T.ink, color: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontSize: 14, fontWeight: 400, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>入る / 进入</button>
+        <div style={{ ...T.fs.label, color: T.muted, marginTop: 22, lineHeight: 1.7 }}>
           パスワードは LuLu からお伝えします<br/>
           一度入力すれば次回は不要です
         </div>
@@ -12495,7 +12880,13 @@ function App() {
   const [materialReturnTo, setMaterialReturnTo] = useState(null);
   const [materialEditTarget, setMaterialEditTarget] = useState(null);
   // 🖨 打印设置（可用户自定义LOGO）
-  const [printSettings, setPrintSettings] = useState(stored?.printSettings || { logoUrl: "", brandName: "RURU", brandSubtitle: "PATISSERIE" });
+  const [printSettings, setPrintSettings] = useState(() => {
+    const ps = stored?.printSettings || { logoUrl: "", brandName: "kororā", brandSubtitle: "Boulangerie • Pâtisserie • Café" };
+    // 店名从 RURU 改成 kororā：只在用户没自定义过(还是旧默认值)时自动升级，改过的不动
+    if (ps.brandName === "RURU") ps.brandName = "kororā";
+    if (ps.brandSubtitle === "PATISSERIE") ps.brandSubtitle = "Boulangerie • Pâtisserie • Café";
+    return ps;
+  });
   // 📁 自定义组件分类
   const [customCompCats, setCustomCompCats] = useState(stored?.customCompCats || []);
   // 同步给全局查找函数
@@ -12511,6 +12902,12 @@ function App() {
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
   const [tab, setTab] = useState("list");
   const [lang, setLang] = useState("zh"); // v17 中文优先: 默认中文启动 (LuLu 主要国内中文录入)
+  const [moreOpen, setMoreOpen] = useState(false); // 手机端「更多」抽屉
+  // 把当前语言写到 <html> 上，驱动 GLOBAL_CSS 里的 --k-cjk 切换中文/日文字体
+  useEffect(() => {
+    document.documentElement.setAttribute("data-lang", lang);
+    document.documentElement.lang = lang === "ja" ? "ja" : "zh-CN";
+  }, [lang]);
   const [viewId, setViewId] = useState(null);
   const [editTarget, setEditTarget] = useState(null); // null=new, recipe obj=edit
   // 组件库 & 组合蛋糕 & 知识库 状态
@@ -12520,34 +12917,43 @@ function App() {
   const [creationEditTarget, setCreationEditTarget] = useState(null);
   const [knowledgeViewId, setKnowledgeViewId] = useState(null);
   const [knowledgeEditTarget, setKnowledgeEditTarget] = useState(null);
-  const [toast, setToast] = useState("");
-  const [saved, setSaved] = useState(false);
+  // Toast 队列（2a §09）：左下角、最多堆 3 条、5 秒消失、hover 暂停计时、可带「撤销」
+  const [toasts, setToasts] = useState([]); // [{ id, msg, undo?, ttl }]
+  const toastSeq = useRef(0);
+  // 自动保存三态（2a §09）：idle / saving / saved(带时间) / error
+  const [saveState, setSaveState] = useState({ status: "idle", at: null });
+  const saved = saveState.status === "saved"; // 旧代码里的 saved 布尔仍在用，保持兼容
   // 自定义确认对话框状态（替代 window.confirm）
-  const [confirmState, setConfirmState] = useState(null); // { message, onConfirm, confirmText?, danger? }
+  const [confirmState, setConfirmState] = useState(null); // { message, onConfirm, confirmText?, danger?, title?, kicker?, refs? }
 
   // v56: 自动保存 debounce 800ms + 失败时 toast 提示
   // 之前:每次任意字段变更都立即全量 stringify(1-2MB),手机卡顿
   // 现在:停止输入 800ms 后才保存一次
+  const doSave = () => saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers);
+
   useEffect(() => {
+    setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
     const t = setTimeout(() => {
-      const res = saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers);
+      const res = doSave();
       if (res && res.ok) {
-        setSaved(true);
-        const tt = setTimeout(() => setSaved(false), 2000);
-        return () => clearTimeout(tt);
+        // 数据只存在浏览器本地，所以「已保存」必须显式给出时间 —— 老板要能确信东西没丢
+        setSaveState({ status: "saved", at: new Date() });
       } else {
-        // 保存失败:localStorage 超容量或被禁用
         const msg = (res && res.error && res.error.includes("uota"))
-          ? (lang === "zh" ? "⚠️ 保存失败:本地空间不足,请在设置→清理旧数据" : "⚠️ 保存失敗:容量不足,設定→古いデータ削除")
-          : (lang === "zh" ? "⚠️ 保存失败,请截图给开发者" : "⚠️ 保存失敗,スクショを開発者へ");
-        setToast(msg);
-        setTimeout(() => setToast(""), 5000);
+          ? (lang === "zh" ? "保存失败：本地空间不足，去「数据」页清理旧数据" : "保存失敗：容量不足。データ画面で整理してください")
+          : (lang === "zh" ? "保存失败，请截图给开发者" : "保存失敗。スクショを開発者へ");
+        setSaveState({ status: "error", at: null, msg });
       }
     }, 800);
     return () => clearTimeout(t);
   }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers]);
 
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2500); };
+  // showToast(msg) 保持旧签名可用；第二个参数可给 { undo, ms } 走「先做 + 给撤销」
+  const showToast = (msg, opts = {}) => {
+    const id = ++toastSeq.current;
+    setToasts(prev => [...prev.slice(-2), { id, msg, undo: opts.undo, ms: opts.ms || (opts.undo ? 5000 : 2500) }]);
+  };
+  const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
 
   // 🔄 cats → materials 迁移
   const migrateCatsToMaterials = () => {
@@ -12783,6 +13189,7 @@ function App() {
   };
 
   // 统一的确认对话框函数，替代 window.confirm
+  // opts 可给 { title, kicker, refs: [...], confirmText, cancelText, danger }
   const confirmDialog = (message, onConfirm, opts = {}) => {
     setConfirmState({ message, onConfirm, ...opts });
   };
@@ -12797,19 +13204,79 @@ function App() {
 
   const handleDeleteRecipe = () => {
     if (!editTarget) return;
-    confirmDialog("删除这个配方吗？", () => {
-      setRecipes(prev => prev.filter(x => x.id !== editTarget.id));
-      showToast("已删除");
+    const rName = pickLang(editTarget, "name", lang) || editTarget.nameFr || "";
+    // 2a §09：必须列出受影响的引用方 —— 商品可能挂着这条配方，家族可能靠它成组
+    const usedByProducts = products.filter(p => (p.items || []).some(it => it && it.linkedType === "recipe" && String(it.linkedId) === String(editTarget.id)));
+    const fam = productFamilies.find(f => f.id === editTarget.familyId);
+    const famSiblings = fam ? recipes.filter(x => x.familyId === fam.id && x.id !== editTarget.id) : [];
+    const refs = [
+      ...usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa}`),
+      ...(famSiblings.length > 0 ? [`${lang === "zh" ? "家族" : "ファミリー"}：${fam.nameZh || fam.nameJa}（${lang === "zh" ? `还有 ${famSiblings.length} 个变体` : `他に ${famSiblings.length} 件`}）`] : []),
+    ];
+    const doDelete = () => {
+      const snapshot = editTarget;
+      setRecipes(prev => prev.filter(x => x.id !== snapshot.id));
       setTab("list");
-    });
+      // 破坏性操作「先做 + 给撤销」
+      showToast(lang === "zh" ? `已删除「${rName}」` : `「${rName}」を削除しました`, {
+        undo: () => setRecipes(prev => prev.find(x => x.id === snapshot.id) ? prev : [...prev, snapshot]),
+      });
+    };
+    if (refs.length > 0) {
+      // 影响到别的数据 → 拦一下，并把引用方摆出来
+      confirmDialog(
+        lang === "zh"
+          ? "删除后下面这些地方会缺东西。此操作不可撤销。"
+          : "削除すると以下に影響します。この操作は取り消せません。",
+        doDelete,
+        {
+          kicker: lang === "zh" ? "删除配方" : "レシピを削除",
+          title: lang === "zh" ? `删除「${rName}」？` : `「${rName}」を削除？`,
+          refs,
+          confirmText: lang === "zh" ? "仍然删除" : "削除する",
+        }
+      );
+    } else {
+      // 没有引用方 → 不拦，直接删 + 给撤销
+      doDelete();
+    }
   };
 
-  const navBtn = (t, label, badge) => (
-    <button onClick={() => setTab(t)} style={{ position: "relative", flex: "1 0 auto", padding: "9px 12px", background: tab === t ? T.bgCard : "transparent", color: tab === t ? T.brand : T.textSecondary, borderRadius: T.radius, cursor: "pointer", fontSize: 13, fontWeight: tab === t ? 500 : 400, border: tab === t ? `0.5px solid ${T.border}` : "0.5px solid transparent", whiteSpace: "nowrap", minWidth: 0, fontFamily: T.fontSans, letterSpacing: "0.3px", transition: "all 0.15s" }}>
-      {label}
-      {badge > 0 && <span style={{ position: "absolute", top: 2, right: 2, background: "#DC2626", color: "#FFFFFF", fontSize: 10, fontWeight: 600, minWidth: 16, height: 16, padding: "0 4px", borderRadius: 8, display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 0 0 1.5px #FFFFFF" }}>{badge}</span>}
-    </button>
-  );
+  // 顶部 tab：下划线式（active = 2px ink 底边），不再是白胶囊
+  const navBtn = (t, label, badge) => {
+    const on = tab === t;
+    return (
+      <button
+        key={t} onClick={() => setTab(t)} className="k-tab"
+        style={{
+          position: "relative", padding: "0 0 12px", background: "transparent",
+          color: on ? T.ink : T.secondary, border: "none",
+          borderBottom: on ? `2px solid ${T.ink}` : "2px solid transparent",
+          marginBottom: -1, cursor: "pointer", fontSize: 13, fontWeight: on ? 500 : 400,
+          whiteSpace: "nowrap", fontFamily: T.fontSans, display: "flex", gap: 5, alignItems: "baseline",
+        }}
+      >
+        {label}
+        {badge > 0 && <span style={{ fontFamily: T.fontSerif, fontSize: 9, color: T.danger, ...T.num }}>{badge}</span>}
+      </button>
+    );
+  };
+
+  // 10 个 tab 的配置（数据化：桌面顶栏 / 手机底栏 / 「更多」抽屉复用同一份）
+  // mZh / mJa 是手机底栏用的短标签（底栏只有 5 格，塞不下「材料百科」四个字）
+  const NAV = [
+    { id: "products", zh: "商品", ja: "商品", mZh: "商品", mJa: "商品", badge: () => products.filter(p => (p.currentStock || 0) <= (p.threshold || 0)).length },
+    { id: "purchase", zh: "采购", ja: "仕入" },
+    { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
+    { id: "components", zh: "组件仓库", ja: "コンポーネント", mZh: "组件", mJa: "パーツ" },
+    { id: "creations", zh: "组合蛋糕", ja: "組立ケーキ" },
+    { id: "knowledge", zh: "知识库", ja: "ナレッジ" },
+    { id: "shopMaterials", zh: "本店原料", ja: "仕入れ原料" },
+    { id: "suppliers", zh: "供货商", ja: "仕入先" },
+    // v11: "价格表"(cats) 已被"本店原料"+"材料百科"取代,隐藏入口;代码仍保留做向后兼容
+    { id: "materialsPedia", zh: "材料百科", ja: "材料事典", mZh: "材料", mJa: "材料" },
+    { id: "data", zh: "数据", ja: "データ" },
+  ];
 
   const exportData = () => {
     const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, exportedAt: new Date().toISOString(), version: 16 }, null, 2)], { type: "application/json" });
@@ -13479,8 +13946,14 @@ function App() {
   const viewingRecipe = recipes.find(r => r.id === viewId);
 
   return (
-    <div style={{ padding: "0.5rem 0 2rem", fontFamily: T.fontSans, color: T.textPrimary, fontSize: 14, position: "relative", background: T.bgApp, minHeight: "100vh", colorScheme: "light" }}>
-      {toast && <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", background: T.brand, color: T.bgApp, padding: "10px 20px", borderRadius: T.radius, fontSize: 13, zIndex: 999, pointerEvents: "none", fontWeight: 500 }}>{toast}</div>}
+    <div style={{ fontFamily: T.fontSans, color: T.textPrimary, fontSize: 14, position: "relative", background: T.bgApp, minHeight: "100vh", colorScheme: "light" }}>
+      <style>{GLOBAL_CSS}</style>
+      {/* Toast 队列 · 左下角，最多堆 3 条 */}
+      {toasts.length > 0 && (
+        <div style={{ position: "fixed", bottom: 24, left: 24, right: 24, maxWidth: 420, zIndex: T.z.toast, display: "flex", flexDirection: "column", gap: T.sp.s, pointerEvents: "none" }}>
+          {toasts.map(t => <ToastItem key={t.id} t={t} onDone={() => dismissToast(t.id)} />)}
+        </div>
+      )}
 
       {/* 🖨 打印设置弹窗 */}
       {printTarget && printTarget.stage === "settings" && (
@@ -13511,6 +13984,9 @@ function App() {
       {confirmState && (
         <ConfirmDialog
           message={confirmState.message}
+          title={confirmState.title}
+          kicker={confirmState.kicker}
+          refs={confirmState.refs || []}
           confirmText={confirmState.confirmText || "确定"}
           cancelText={confirmState.cancelText || "取消"}
           danger={confirmState.danger !== false}
@@ -13761,189 +14237,194 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         );
       })()}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: 2, background: T.bgMuted, borderRadius: T.radiusLg, padding: 5, overflowX: "auto", flexWrap: "nowrap", border: `0.5px solid ${T.borderSoft}`, flex: "1 1 auto", minWidth: 0 }}>
-          {navBtn("products", lang === "zh" ? "🍰商品" : "🍰商品", products.filter(p => (p.currentStock||0) <= (p.threshold||0)).length)}
-          {navBtn("purchase", lang === "zh" ? "📦采购" : "📦仕入")}
-          {navBtn("list", lang === "zh" ? "配方一览" : "レシピ一覧")}
-          {navBtn("components", lang === "zh" ? "组件仓库" : "コンポーネント")}
-          {navBtn("creations", lang === "zh" ? "组合蛋糕" : "組立ケーキ")}
-          {navBtn("knowledge", lang === "zh" ? "知识库" : "ナレッジ")}
-          {navBtn("shopMaterials", lang === "zh" ? "🏷️本店原料" : "🏷️仕入れ原料")}
-          {navBtn("suppliers", lang === "zh" ? "🚚供货商" : "🚚仕入先")}
-          {/* v11: "价格表"(cats) 已被"本店原料"+"材料百科"取代,隐藏入口;代码仍保留做向后兼容 */}
-          {navBtn("materialsPedia", lang === "zh" ? "📚材料百科" : "📚材料百科")}
-          {navBtn("data", lang === "zh" ? "数据" : "データ")}
+      {/* ═══ 顶部导航：字标 + 语言切换 / 下划线式 tab ═══ */}
+      <div style={{ borderBottom: `1px solid ${T.ink}`, marginBottom: T.sp.block }}>
+        <div className="rc-container" style={{ paddingTop: T.sp.xl, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: T.sp.l }}>
+          <Wordmark size={22} />
+          {/* 保存指示在按钮组左侧 —— 数据只在本地，老板要能确信东西没丢 */}
+          <div style={{ display: "flex", alignItems: "center", gap: T.sp.l, flexShrink: 0 }}>
+            <SaveStatus state={saveState} lang={lang} onRetry={() => {
+              const res = doSave();
+              setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
+            }} />
+            <LangToggle lang={lang} onChange={setLang} />
+          </div>
         </div>
-        <div style={{ flexShrink: 0 }}>
-          <LangToggle lang={lang} onChange={setLang} />
+        <div className="rc-container k-topnav" style={{ paddingTop: 18, display: "flex", gap: 28, overflowX: "auto", flexWrap: "nowrap" }}>
+          {NAV.map(n => navBtn(n.id, lang === "zh" ? n.zh : n.ja, n.badge ? n.badge() : 0))}
         </div>
       </div>
+
+      {/* ═══ 手机端底部导航：5 个高频 tab 固定在拇指区，其余 5 个收进「更多」全屏抽屉 ═══ */}
+      <div className="k-bottomnav" style={{
+        position: "fixed", bottom: 0, left: 0, right: 0, zIndex: T.z.bar,
+        background: T.paper, borderTop: `1px solid ${T.ink}`,
+        display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+      }}>
+        {MOBILE_NAV.map(id => {
+          const n = NAV.find(x => x.id === id);
+          const on = tab === id;
+          const badge = n.badge ? n.badge() : 0;
+          return (
+            <button key={id} onClick={() => { setTab(id); setMoreOpen(false); }}
+              style={{
+                padding: "12px 2px 16px", textAlign: "center", cursor: "pointer", background: "transparent",
+                border: "none", borderTop: on && !moreOpen ? `2px solid ${T.ink}` : "2px solid transparent", marginTop: -1,
+                color: on && !moreOpen ? T.ink : T.subtle, fontWeight: on && !moreOpen ? 500 : 400,
+                fontSize: 12, fontFamily: T.fontSans, position: "relative",
+              }}>
+              {lang === "zh" ? n.mZh : n.mJa}
+              {badge > 0 && <span style={{ fontFamily: T.fontSerif, fontSize: 9, color: T.danger, marginLeft: 3, ...T.num }}>{badge}</span>}
+            </button>
+          );
+        })}
+        <button onClick={() => setMoreOpen(v => !v)}
+          style={{
+            padding: "12px 2px 16px", textAlign: "center", cursor: "pointer", background: "transparent",
+            border: "none", borderTop: moreOpen ? `2px solid ${T.ink}` : "2px solid transparent", marginTop: -1,
+            color: moreOpen ? T.ink : T.subtle, fontWeight: moreOpen ? 500 : 400,
+            fontSize: 12, fontFamily: T.fontSans,
+          }}>
+          {lang === "zh" ? "更多" : "その他"}
+        </button>
+      </div>
+
+      {/* 「更多」全屏抽屉 */}
+      {moreOpen && (
+        <div className="k-drawer" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: `1px solid ${T.ink}` }}>
+            <Wordmark size={15} sub={false} />
+            <Btn size="lg" variant="ghost" onClick={() => setMoreOpen(false)}>✕</Btn>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+            {NAV.filter(n => !MOBILE_NAV.includes(n.id)).map(n => (
+              <button key={n.id} onClick={() => { setTab(n.id); setMoreOpen(false); }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+                  minHeight: 56, padding: "0 16px", background: "transparent", cursor: "pointer",
+                  border: "none", borderBottom: `1px solid ${T.lineFaint}`,
+                  borderLeft: tab === n.id ? `3px solid ${T.ink}` : "3px solid transparent",
+                  color: tab === n.id ? T.ink : T.body, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
+                }}>
+                <span>{lang === "zh" ? n.zh : n.ja}</span>
+                <span style={{ color: T.muted }}>→</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="rc-container k-main" style={{ paddingBottom: T.sp.gap }}>
 
       {/* LIST */}
       {tab === "list" && (
         <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `全部配方（${recipes.length}）` : `全レシピ（${recipes.length}）`}</div>
-              {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
+          {/* 页头：微标签 + 大数字 + 主 CTA，底下压一条 1px ink 线 */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingBottom: T.sp.xl, borderBottom: `1px solid ${T.ink}`, flexWrap: "wrap", gap: T.sp.m }}>
+            <div>
+              <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "zh" ? "配方一览" : "レシピ一覧"}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.m, marginTop: T.sp.s }}>
+                <div style={{ ...T.fs.titleL, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>{recipes.length}</div>
+                {saved && <span style={{ ...T.fs.caption, color: T.success }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Btn variant="primary" onClick={() => { setEditTarget(null); setTab("edit"); }}>{lang === "zh" ? "+ 新建配方" : "+ レシピ新規"}</Btn>
+            <div style={{ display: "flex", gap: T.sp.s, alignItems: "center" }}>
+              <Btn variant="primary" onClick={() => { setEditTarget(null); setTab("edit"); }}>{lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規"}</Btn>
             </div>
           </div>
 
           {/* 🏷 模式切换：平铺 vs 家族 */}
-          <div style={{ display: "flex", gap: 3, marginBottom: "1rem", background: T.bgMuted, padding: 4, borderRadius: T.radius, alignItems: "center", flexWrap: "wrap", border: `0.5px solid ${T.borderSoft}` }}>
-            <div style={{ fontSize: 11, color: T.textTertiary, marginLeft: 8, marginRight: 4, letterSpacing: "0.5px" }}>
-              {lang === "zh" ? "视图" : "表示"}
-            </div>
-            <button
-              onClick={() => setFamilyViewMode("flat")}
-              style={{
-                padding: "6px 14px", fontSize: 12, border: "none",
-                background: familyViewMode === "flat" ? T.brand : "transparent",
-                color: familyViewMode === "flat" ? T.bgApp : T.textSecondary,
-                borderRadius: T.radiusSm,
-                cursor: "pointer",
-                fontWeight: familyViewMode === "flat" ? 500 : 400,
-                transition: "all 0.15s",
-              }}
-            >{lang === "zh" ? "📋 全部配方" : "📋 全レシピ"}</button>
-            <button
-              onClick={() => setFamilyViewMode("family")}
-              style={{
-                padding: "6px 14px", fontSize: 12, border: "none",
-                background: familyViewMode === "family" ? T.brand : "transparent",
-                color: familyViewMode === "family" ? T.bgApp : T.textSecondary,
-                borderRadius: T.radiusSm,
-                cursor: "pointer",
-                fontWeight: familyViewMode === "family" ? 500 : 400,
-                transition: "all 0.15s",
-              }}
-            >{lang === "zh" ? "🏷 家族模式" : "🏷 ファミリー表示"}</button>
+          <div style={{ display: "flex", gap: T.sp.xxl, marginTop: T.sp.l, marginBottom: T.sp.xxl, alignItems: "center", flexWrap: "wrap" }}>
+            {[["flat", lang === "zh" ? "全部配方" : "全レシピ"], ["family", lang === "zh" ? "家族模式" : "ファミリー表示"]].map(([m, label]) => (
+              <button
+                key={m} className="k-tab" onClick={() => setFamilyViewMode(m)}
+                style={{
+                  padding: "0 0 6px", ...T.fs.caption, border: "none", background: "transparent",
+                  borderBottom: familyViewMode === m ? `1px solid ${T.ink}` : "1px solid transparent",
+                  color: familyViewMode === m ? T.ink : T.secondary,
+                  fontWeight: familyViewMode === m ? 500 : 400, cursor: "pointer", fontFamily: T.fontSans,
+                }}
+              >{label}</button>
+            ))}
             {familyViewMode === "family" && (
-              <Btn size="sm" variant="primary" onClick={() => setFamilyEditTarget("new")} style={{ marginLeft: "auto" }}>{lang === "zh" ? "+ 新建家族" : "+ ファミリー新規"}</Btn>
+              <Btn size="sm" onClick={() => setFamilyEditTarget("new")} style={{ marginLeft: "auto" }}>{lang === "zh" ? "＋ 新建家族" : "＋ ファミリー新規"}</Btn>
             )}
           </div>
 
-          {recipes.length === 0 && <div style={{ textAlign: "center", padding: "3rem", color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "暂无配方" : "レシピがありません"}</div>}
+          {recipes.length === 0 && (
+            <EmptyState
+              variant="first" lang={lang}
+              title={lang === "zh" ? "还没有配方" : "まだレシピがありません"}
+              hint={lang === "zh" ? "新建一条，或去「数据」页导入已有的配方包" : "新規作成するか、データ画面からインポートできます"}
+              actions={[
+                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => { setEditTarget(null); setTab("edit"); } },
+                { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
+              ]}
+            />
+          )}
 
-          {/* 📋 平铺模式 */}
+          {/* 📋 平铺模式 —— 无卡片、无圆角、无阴影；行间只有 1px 发丝线，家族色 3px 左竖条 */}
           {familyViewMode === "flat" && (
-            <div style={{ display: "grid", gap: 10 }}>
+            <div>
               {recipes.map(r => {
                 const name = pickLang(r, "name", lang);
                 const nameSub = lang === "zh" ? (r.nameJa || "") : (r.nameZh || "");
-                const mc = r.margin >= 50 ? "green" : r.margin >= 30 ? "amber" : "red";
                 const family = productFamilies.find(fm => fm.id === r.familyId);
                 const famColor = family ? FAMILY_COLORS[family.colorIdx || 0] : null;
-                const avatarLetter = (r.nameFr || name || "?").charAt(0).toUpperCase();
-                const avatarBg = famColor ? famColor.bg : T.bgSoft;
-                const avatarColor = famColor ? famColor.color : T.accent;
+                // 利润率与详情页统一用实时计算，不再读会过期的 r.margin 快照
+                const liveCost = (r.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
+                const yieldN = parseFloat(r.yield) || 0;
+                const unitCost = yieldN > 0 ? liveCost / yieldN : 0;
+                const priceN = parseFloat(r.price) || 0;
+                const margin = priceN > 0 && unitCost > 0 ? ((priceN - unitCost) / priceN) * 100 : 0;
                 return (
                   <div
                     key={r.id}
+                    className="k-row rc-recipe-row"
                     onClick={() => { setViewId(r.id); setTab("view"); }}
                     style={{
-                      background: T.bgCard,
-                      border: `0.5px solid ${T.border}`,
-                      borderRadius: T.radiusLg,
-                      padding: "16px 20px",
+                      display: "grid", gridTemplateColumns: "1fr 130px 110px",
+                      alignItems: "center", gap: T.sp.xl,
+                      padding: `18px 0 18px ${T.sp.xl}px`,
+                      borderBottom: `1px solid ${T.lineFaint}`,
+                      borderLeft: `3px solid ${famColor ? famColor.color : "transparent"}`,
                       cursor: "pointer",
-                      borderLeft: famColor ? `3px solid ${famColor.color}` : `0.5px solid ${T.border}`,
-                      transition: "border-color 0.15s, transform 0.12s",
-                      display: "flex",
-                      gap: 14,
-                      alignItems: "center",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
                   >
-                    {/* 首字母圆形徽章 */}
-                    <div style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: "50%",
-                      background: avatarBg,
-                      color: avatarColor,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontFamily: T.fontSerif,
-                      fontSize: 18,
-                      fontStyle: "italic",
-                      fontWeight: 500,
-                      flexShrink: 0,
-                    }}>{avatarLetter}</div>
-
-                    {/* 中间内容 */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {/* 标题行：法文 + 中/日 */}
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                    <div className="k-fluid">
+                      {/* 标题行：法文 20px / 主名 14px 500 / 副名 12px muted，同一 baseline */}
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                         {r.nameFr && (
-                          <span style={{ fontFamily: T.fontSerif, fontSize: 17, color: T.textPrimary, fontWeight: 500 }}>
-                            {r.nameFr}
-                          </span>
+                          <span style={{ fontFamily: T.fontSerif, ...T.fs.titleS, color: T.ink, fontWeight: 400 }}>{r.nameFr}</span>
                         )}
-                        <span style={{ fontSize: 14, color: r.nameFr ? T.textSecondary : T.textPrimary, fontWeight: r.nameFr ? 400 : 500 }}>
-                          {r.nameFr ? "· " : ""}{name}
-                        </span>
+                        <span style={{ fontSize: 14, fontWeight: 500, color: T.ink }}>{name}</span>
                         {nameSub && nameSub !== name && (
-                          <span style={{ fontSize: 12, color: T.textTertiary }}>· {nameSub}</span>
+                          <span style={{ ...T.fs.caption, color: T.subtle }}>{nameSub}</span>
+                        )}
+                        {family && (
+                          <span style={{ ...T.fs.micro, color: famColor.color, border: `1px solid ${famColor.color}`, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>
+                            {lang === "zh" ? (family.nameZh || family.nameJa) : (family.nameJa || family.nameZh)}
+                          </span>
+                        )}
+                        {r.variantLabel && (
+                          <span style={{ ...T.fs.micro, color: T.secondary, background: T.sunken, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>{r.variantLabel}</span>
                         )}
                       </div>
-
-                      {/* 规格行 · 优雅分隔 */}
-                      <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                        {[r.mold, r.yield ? `${r.yield} ${r.unit || "個"}` : null, r.temp, r.baketime ? `${r.baketime}` : (r.time ? `${r.time}分` : null)].filter(Boolean).map((t, i, arr) => (
-                          <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span>{t}</span>
-                            {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
-                          </span>
-                        ))}
+                      {/* 规格行 */}
+                      <div style={{ ...T.fs.label, color: T.muted, marginTop: 5, letterSpacing: "0.04em" }}>
+                        {[r.mold, r.yield ? `${r.yield} ${r.unit || "個"}` : null, r.temp, r.baketime ? `${r.baketime}` : (r.time ? `${r.time}分` : null)].filter(Boolean).join("  ·  ")}
                       </div>
-
-                      {/* 家族/变体标签 */}
-                      {(family || r.variantLabel) && (
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                          {family && (
-                            <span style={{ background: famColor.bg, color: famColor.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 10, fontWeight: 500 }}>
-                              🏷 {lang === "zh" ? (family.nameZh || family.nameJa) : (family.nameJa || family.nameZh)}
-                            </span>
-                          )}
-                          {r.variantLabel && (
-                            <span style={{ background: T.bgMuted, color: T.textSecondary, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 10 }}>
-                              {r.variantLabel}
-                            </span>
-                          )}
-                        </div>
-                      )}
                     </div>
 
-                    {/* 右侧：利润率 + 价格 */}
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      {r.price > 0 ? (
-                        <>
-                          <span style={{
-                            background: r.margin >= 50 ? T.successBg : r.margin >= 30 ? T.warningBg : T.dangerBg,
-                            color: r.margin >= 50 ? T.success : r.margin >= 30 ? T.warning : T.danger,
-                            padding: "3px 10px",
-                            borderRadius: T.radiusPill,
-                            fontSize: 11,
-                            fontWeight: 500,
-                          }}>
-                            {r.margin.toFixed(1)}%
-                          </span>
-                          <div style={{ fontSize: 13, color: T.textPrimary, marginTop: 5, fontFamily: T.fontSerif, fontWeight: 500 }}>
-                            ¥{r.price}
-                          </div>
-                        </>
-                      ) : (
-                        <span style={{ fontSize: 10, color: T.textTertiary, letterSpacing: 1 }}>
-                          {lang === "zh" ? "未定价" : "未設定"}
-                        </span>
-                      )}
+                    {/* 利润率 */}
+                    <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: margin >= 50 ? T.success : margin >= 30 ? T.warning : T.danger }}>
+                      {priceN > 0 ? `${margin.toFixed(1)}%` : ""}
+                    </div>
+                    {/* 售价 */}
+                    <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
+                      {priceN > 0
+                        ? <span style={{ fontSize: 18 }}>¥{r.price.toLocaleString()}</span>
+                        : <span style={{ ...T.fs.micro, color: T.muted }}>{lang === "zh" ? "未定价" : "未設定"}</span>}
                     </div>
                   </div>
                 );
@@ -13953,12 +14434,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
           {/* 🏷 家族模式 */}
           {familyViewMode === "family" && (
-            <div style={{ display: "grid", gap: 10 }}>
+            <div>
               {productFamilies.length === 0 && (
-                <div style={{ background: "#F9FAFB", border: "1px dashed #CCC", borderRadius: 8, padding: "2rem", textAlign: "center", color: "#666", fontSize: 13 }}>
-                  还没有建立任何产品家族。<br />
-                  点击上方「+ 新建家族」创建第一个家族。<br /><br />
-                  <span style={{ fontSize: 12, color: "#999" }}>例如：巴斯克家族、费南雪家族、戚风家族...</span>
+                <div style={{ background: T.sunken, border: `1px dashed ${T.border}`, borderRadius: T.radius, padding: "2rem", textAlign: "center", color: T.body, ...T.fs.small }}>
+                  {lang === "zh" ? "还没有建立任何产品家族。" : "まだプロダクトファミリーがありません。"}<br />
+                  {lang === "zh" ? "点击上方「＋ 新建家族」创建第一个家族。" : "上の「＋ ファミリー新規」から作成できます。"}<br /><br />
+                  <span style={{ ...T.fs.caption, color: T.muted }}>{lang === "zh" ? "例如：巴斯克家族、费南雪家族、戚风家族…" : "例：バスク / フィナンシェ / シフォン…"}</span>
                 </div>
               )}
               {productFamilies.map(fm => {
@@ -13968,44 +14449,40 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 return (
                   <div
                     key={fm.id}
+                    className="k-row"
                     onClick={() => setFamilyViewId(fm.id)}
                     style={{
-                      background: T.bgCard,
-                      border: `0.5px solid ${T.border}`,
-                      borderRadius: T.radiusLg,
-                      padding: "16px 20px",
+                      padding: `18px 0 18px ${T.sp.xl}px`,
                       cursor: "pointer",
+                      borderBottom: `1px solid ${T.lineFaint}`,
                       borderLeft: `3px solid ${color.color}`,
-                      transition: "border-color 0.15s, transform 0.12s",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-                      <div style={{ fontFamily: T.fontSerif, fontSize: 18, fontWeight: 500, color: color.color }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6 }}>
+                      <div style={{ fontFamily: T.fontSerif, ...T.fs.titleS, color: color.color }}>
                         {famName}
                       </div>
-                      <span style={{ background: color.bg, color: color.color, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
+                      <span style={{ ...T.fs.label, color: T.muted, ...T.num }}>
                         {famRecipes.length} {lang === "zh" ? "个变体" : "バリエーション"}
                       </span>
                     </div>
                     {fm.description && (
-                      <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 10, lineHeight: 1.6, fontStyle: "italic" }}>
+                      <div style={{ ...T.fs.caption, color: T.body, marginTop: 6, lineHeight: 1.6 }}>
                         {fm.description.slice(0, 80)}{fm.description.length > 80 ? "..." : ""}
                       </div>
                     )}
                     {famRecipes.length > 0 && (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: T.sp.s }}>
                         {famRecipes.slice(0, 5).map(r => {
                           const rn = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
                           return (
-                            <span key={r.id} style={{ background: T.bgMuted, color: T.textSecondary, padding: "3px 11px", borderRadius: T.radiusPill, fontSize: 11 }}>
+                            <span key={r.id} style={{ background: T.sunken, color: T.body, padding: "3px 10px", borderRadius: T.radius, ...T.fs.label }}>
                               {r.variantLabel || rn}
                             </span>
                           );
                         })}
                         {famRecipes.length > 5 && (
-                          <span style={{ fontSize: 11, color: T.textTertiary, padding: "3px 6px" }}>
+                          <span style={{ ...T.fs.label, color: T.muted, padding: "3px 6px" }}>
                             +{famRecipes.length - 5}
                           </span>
                         )}
@@ -14020,15 +14497,19 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 const orphanRecipes = recipes.filter(r => !r.familyId);
                 if (orphanRecipes.length === 0) return null;
                 return (
-                  <div style={{ marginTop: 14 }}>
-                    <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 10, fontWeight: 500, letterSpacing: "1.5px", textTransform: "uppercase" }}>
-                      {lang === "zh" ? `📦 未归属家族 · ${orphanRecipes.length}` : `📦 独立 · ${orphanRecipes.length}`}
+                  <div style={{ marginTop: T.sp.block }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9, paddingBottom: 9 }}>
+                      <span style={{ ...T.fs.label, color: T.body, letterSpacing: "0.16em" }}>
+                        {lang === "zh" ? "未归属家族" : "独立"}
+                      </span>
+                      <span style={{ flex: 1, height: 1, background: T.line }} />
+                      <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{orphanRecipes.length}</span>
                     </div>
-                    <div style={{ display: "grid", gap: 6 }}>
+                    <div>
                       {orphanRecipes.map(r => {
                         const name = pickLang(r, "name", lang);
                         return (
-                          <div key={r.id} onClick={() => { setViewId(r.id); setTab("view"); }} style={{ background: T.bgCard, border: `0.5px dashed ${T.border}`, borderRadius: T.radius, padding: "10px 14px", cursor: "pointer", fontSize: 13, color: T.textSecondary, transition: "border-color 0.12s" }}>
+                          <div key={r.id} className="k-row" onClick={() => { setViewId(r.id); setTab("view"); }} style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
                             {name}
                           </div>
                         );
@@ -14508,13 +14989,14 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               {(cats || []).length > 0 && <><br />{lang === "zh" ? "老价格表（已废弃）" : "旧価格表（廃止）"}：<strong>{cats.length}</strong> {lang === "zh" ? "种" : "件"}</>}
             </div>
           </div>
-          <div style={{ background: "#FCEBEB", border: "0.5px solid #F7C1C1", borderRadius: "12px", padding: "1.25rem" }}>
-            <div style={{ fontWeight: 500, fontSize: 13, color: "#791F1F", marginBottom: 6 }}>危险操作</div>
-            <p style={{ fontSize: 12, color: "#A32D2D", marginBottom: 10 }}>清除所有数据，不可撤销。请先导出备份。</p>
-            <Btn variant="danger" style={{ borderColor: "#F7C1C1", background: "#FFFFFF" }} onClick={() => confirmDialog("确认清除全部数据？此操作无法撤销！", () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]); showToast("已清除"); })}>清除全部数据</Btn>
+          <div style={{ background: T.surface, border: `1px solid ${T.danger}`, borderRadius: T.radiusLg, padding: "1.25rem" }}>
+            <div style={{ fontWeight: 500, fontSize: 13, color: T.danger, marginBottom: 6 }}>危险操作</div>
+            <p style={{ fontSize: 12, color: T.body, marginBottom: 10 }}>清除所有数据，不可撤销。请先导出备份。</p>
+            <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？此操作无法撤销！", () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]); showToast("已清除"); })}>清除全部数据</Btn>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -17,12 +17,12 @@ export default defineConfig({
         image: 'public/logo.svg',   // 从这张源图生成 192/512/maskable/apple-touch 等图标
       },
       manifest: {
-        name: 'RURU 配方管理',
-        short_name: '配方',
-        description: 'RURU Patisserie 配方 / 材料 / 库存管理(纯本地,离线可用)',
+        name: 'kororā 配方管理',
+        short_name: 'kororā',
+        description: 'kororā Boulangerie · Pâtisserie · Café 配方 / 材料 / 库存管理(纯本地,离线可用)',
         lang: 'zh-CN',
-        theme_color: '#FFFFFF',
-        background_color: '#FFFFFF',
+        theme_color: '#FAFAF8',
+        background_color: '#FAFAF8',
         display: 'standalone',
         start_url: '/',
         scope: '/',
