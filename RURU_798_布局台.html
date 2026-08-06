@@ -1,0 +1,373 @@
+<title>798 厨房布局台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --paper:#FAFAF8; --surface:#FFFFFF; --sunken:#F2F2EC; --line:#EAEAE2;
+    --border:#DEDED6; --muted:#A8A89E; --subtle:#8A8A82; --secondary:#77776E;
+    --body:#55554E; --strong:#3A3A32; --ink:#16160F;
+    --accent:#B0442F; --info:#3B4E8C; --warning:#9A7B2E; --success:#2F5D50;
+    --cjk:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;
+  }
+  html{color-scheme:light}
+  body{margin:0;background:var(--paper);color:var(--body);font-family:var(--cjk);
+    font-size:15px;line-height:1.6;-webkit-tap-highlight-color:transparent;
+    display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+  .micro{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--subtle)}
+  .num{font-variant-numeric:tabular-nums}
+
+  header{display:flex;align-items:baseline;gap:14px;padding:10px 16px 8px;
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:17px;font-weight:500;color:var(--ink);margin:0;letter-spacing:.01em}
+  header .roomdim{font-size:12px;color:var(--secondary)}
+  header .save{margin-left:auto;font-size:11px;color:var(--muted);letter-spacing:.12em}
+
+  .toolbar{display:flex;gap:8px;padding:8px 16px;border-bottom:1px solid var(--line);
+    align-items:center;flex-wrap:wrap;background:var(--surface)}
+  button{font-family:var(--cjk);font-size:13px;color:var(--strong);background:var(--surface);
+    border:1px solid var(--border);border-radius:2px;padding:7px 14px;min-height:38px;cursor:pointer}
+  button:active{background:var(--sunken)}
+  button:focus-visible{outline:2px solid var(--info);outline-offset:1px}
+  button.on{border-color:var(--ink);color:var(--ink);background:var(--sunken)}
+  button.danger2{border-color:var(--accent);color:var(--accent)}
+
+  #stage{flex:1;overflow:auto;padding:8px 12px 4px;-webkit-overflow-scrolling:touch}
+  #plan{display:block;width:100%;max-width:1200px;margin:0 auto;touch-action:none;
+    background:var(--paper)}
+
+  /* 选中条 */
+  #selbar{display:none;gap:10px;align-items:center;flex-wrap:wrap;
+    padding:8px 16px;border-top:1px solid var(--line);background:var(--surface)}
+  #selbar.show{display:flex}
+  #selbar .selname{font-size:15px;font-weight:500;color:var(--ink)}
+  #selbar .seldims{font-size:12px;color:var(--secondary)}
+  #selbar .dist{font-size:12px;color:var(--info)}
+  #selbar input{width:64px;font-size:14px;padding:6px;border:1px solid var(--border);
+    border-radius:2px;font-family:var(--cjk);color:var(--strong)}
+  #selbar label{font-size:12px;color:var(--secondary)}
+
+  /* 设备抽屉 */
+  #drawer{border-top:1px solid var(--line);background:var(--surface);padding:8px 16px 14px}
+  #drawer .grp{margin-top:6px}
+  #drawer .grp .micro{display:block;margin:4px 0 6px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-size:13px;padding:8px 12px;min-height:38px;border:1px solid var(--border);
+    border-radius:2px;background:var(--surface);color:var(--strong);cursor:pointer}
+  .chip small{display:block;font-size:10px;color:var(--muted);letter-spacing:.04em}
+  .chip.plan{border-style:dashed;color:var(--secondary)}
+  .chip:active{background:var(--sunken)}
+
+  footer{padding:6px 16px 12px;font-size:11px;color:var(--muted);letter-spacing:.02em}
+
+  /* SVG 内部 */
+  .wall{fill:var(--ink)}
+  .grid5{stroke:#EEEEE6;stroke-width:6}
+  .grid10{stroke:#E2E2D8;stroke-width:8}
+  .dimline{stroke:var(--subtle);stroke-width:8}
+  .dimtext{fill:var(--secondary);font-size:170px;font-family:var(--cjk)}
+  .opening-label{fill:var(--subtle);font-size:150px;font-family:var(--cjk)}
+  .win{stroke:var(--subtle);stroke-width:14;fill:none}
+
+  .item .body{fill:var(--surface);stroke:var(--ink);stroke-width:18}
+  .item.tabletop .body{fill:var(--sunken)}
+  .item.planned .body{fill:#FDFCF8;stroke:var(--warning);stroke-dasharray:70 50}
+  .item.marker .body{fill:var(--sunken);stroke:var(--subtle);stroke-width:12}
+  .item.selected .body{stroke:var(--accent);stroke-width:30}
+  .item.overlap .body{fill:#F7E8E3}
+  .item .nm{fill:var(--ink);font-size:150px;font-weight:500;font-family:var(--cjk)}
+  .item .dm{fill:var(--subtle);font-size:110px;font-family:var(--cjk)}
+  .op-zone{fill:var(--info);opacity:.09}
+  .op-edge{stroke:var(--info);stroke-width:10;stroke-dasharray:60 60;fill:none;opacity:.5}
+  .zones-off .op-zone,.zones-off .op-edge{display:none}
+</style>
+
+<header>
+  <h1>798 厨房布局台</h1>
+  <span class="roomdim num">内净 8475 × 4660 mm · 网格 500</span>
+  <span class="save" id="savemsg">自动保存</span>
+</header>
+
+<div class="toolbar">
+  <button id="btnZones" class="on">净空:显示</button>
+  <button id="btnCopy">复制布局文字</button>
+  <button id="btnReset">重置为初始摆法</button>
+</div>
+
+<div id="stage"><svg id="plan"></svg></div>
+
+<div id="selbar">
+  <span class="selname" id="selName"></span>
+  <span class="seldims num" id="selDims"></span>
+  <span class="dist num" id="selDist"></span>
+  <label id="szBox" style="display:none">宽 <input id="inW" type="number" step="50" min="100" max="8000" inputmode="numeric">
+    深 <input id="inD" type="number" step="50" min="100" max="4000" inputmode="numeric"></label>
+  <button id="btnRot">旋转 90°</button>
+  <button id="btnDup">复制一台</button>
+  <button id="btnDel" class="danger2">移除</button>
+</div>
+
+<div id="drawer">
+  <div class="grp"><span class="micro">已购设备 — 点一下放入图中</span>
+    <div class="chips" id="chipsOwned"></div></div>
+  <div class="grp"><span class="micro">未购 / 规划块(虚线,可改尺寸)</span>
+    <div class="chips" id="chipsPlan"></div></div>
+</div>
+
+<footer>尺寸按 v2 明细(官方规格书,2026-08-06)。蓝色斜区 = 开门/作业净空(⚠️ 部分为估值)。重叠的块会变红。墙上开口位置按图纸目测,若有出入告诉我改。</footer>
+
+<script>
+(() => {
+"use strict";
+const ROOM_W = 8475, ROOM_D = 4660, WALL = 200, M = 620; // 外边留白(含墙+标注)
+// 顶墙开口 [起点x, 宽]
+const OPENINGS = [[600,1000,"入口 1000"],[7275,1000,"通前场 1000"]];
+
+// 设备定义: w×d 机身(mm), op 前方净空, est=净空是估值, top=台式, plan=未购
+const DEFS = {
+  proofer:{n:"醒发箱", w:810, d:1190, op:720, note:"高2055"},
+  u10:{n:"UNOX 10盘", w:860, d:1018, op:900, est:1, note:"高1219"},
+  u5:{n:"UNOX 5盘", w:860, d:1018, op:900, est:1, note:"高789·可叠"},
+  irinox:{n:"急冷机", w:790, d:780, op:770, est:1, note:"高870"},
+  hl600:{n:"HL600", w:728, d:1033, op:900, note:"411kg·摆缸1226"},
+  ufm:{n:"UF-M 洗碗机", w:775, d:870, op:425, note:"开门高2000"},
+  sheeter:{n:"起酥机(展开)", w:2420, d:1072, op:800, est:1, top:1, note:"需台架"},
+  hl120:{n:"HL120", w:486, d:581, op:400, est:1, top:1},
+  blixer:{n:"Blixer 4", w:242, d:325, op:0, top:1},
+  coldtable:{n:"冷藏工作台", w:1800, d:750, op:500, plan:1},
+  freezer:{n:"立式冷冻柜", w:740, d:830, op:700, plan:1},
+  fridge:{n:"立式冷藏柜", w:740, d:830, op:700, plan:1},
+  display:{n:"蛋糕展示柜", w:1200, d:700, op:500, plan:1},
+  ice:{n:"制冰机", w:500, d:600, op:0, plan:1},
+  wtable:{n:"不锈钢工作台", w:1500, d:750, op:0, plan:1},
+  sink3:{n:"三槽水槽", w:1800, d:700, op:0, plan:1},
+  hsink:{n:"洗手池", w:500, d:450, op:0, plan:1},
+  shelf:{n:"层架", w:1200, d:450, op:0, plan:1},
+  custom:{n:"自定义块", w:1000, d:600, op:0, plan:1},
+  mark:{n:"图上符号", w:200, d:200, op:0, marker:1, plan:1},
+};
+
+const DEFAULT_ITEMS = [
+  {id:1, t:"proofer", x:100, y:60, r:0},
+  {id:2, t:"u10", x:1110, y:60, r:0},
+  {id:3, t:"u5", x:2170, y:60, r:0},
+  {id:4, t:"irinox", x:3230, y:60, r:0},
+  {id:5, t:"hl600", x:4220, y:60, r:0},
+  {id:6, t:"ufm", x:5150, y:60, r:0},
+  {id:7, t:"sheeter", x:120, y:3488, r:180},
+  {id:8, t:"hl120", x:2800, y:3979, r:180},
+  {id:9, t:"blixer", x:3520, y:4235, r:180},
+  {id:10, t:"mark", x:2450, y:2250, r:0},
+  {id:11, t:"mark", x:3100, y:2250, r:0},
+];
+
+const LS_KEY = "ruru798_layout_v1";
+let items, nextId, sel = null, zones = true;
+try { const s = JSON.parse(localStorage.getItem(LS_KEY));
+  items = s.items; nextId = s.nextId; if(!Array.isArray(items)||!items.length) throw 0;
+} catch(e){ items = JSON.parse(JSON.stringify(DEFAULT_ITEMS)); nextId = 100; }
+
+const svg = document.getElementById("plan");
+svg.setAttribute("viewBox", `${-M} ${-M} ${ROOM_W+2*M} ${ROOM_D+2*M+200}`);
+
+const fw = it => { const D = dims(it); return it.r%180 ? D.d : D.w; };
+const fd = it => { const D = dims(it); return it.r%180 ? D.w : D.d; };
+const dims = it => ({ w: it.w || DEFS[it.t].w, d: it.d || DEFS[it.t].d });
+
+function zoneRect(it){
+  const op = DEFS[it.t].op; if(!op) return null;
+  const W = fw(it), D = fd(it);
+  if(it.r===0)   return {x:0, y:D, w:W, h:op, ex:[0,D+op,W,D+op]};
+  if(it.r===180) return {x:0, y:-op, w:W, h:op, ex:[0,-op,W,-op]};
+  if(it.r===90)  return {x:-op, y:0, w:op, h:D, ex:[-op,0,-op,D]};
+  return {x:W, y:0, w:op, h:D, ex:[W+op,0,W+op,D]};
+}
+
+function staticLayer(){
+  let s = "";
+  for(let x=500;x<ROOM_W;x+=500) s += `<line class="${x%1000?'grid5':'grid10'}" x1="${x}" y1="0" x2="${x}" y2="${ROOM_D}"/>`;
+  for(let y=500;y<ROOM_D;y+=500) s += `<line class="${y%1000?'grid5':'grid10'}" x1="0" y1="${y}" x2="${ROOM_W}" y2="${y}"/>`;
+  // 墙:左右 + 底(窗带) + 顶(留开口)
+  s += `<rect class="wall" x="${-WALL}" y="${-WALL}" width="${WALL}" height="${ROOM_D+2*WALL}"/>`;
+  s += `<rect class="wall" x="${ROOM_W}" y="${-WALL}" width="${WALL}" height="${ROOM_D+2*WALL}"/>`;
+  let px = -WALL;
+  for(const [ox,ow,label] of OPENINGS){
+    s += `<rect class="wall" x="${px}" y="${-WALL}" width="${ox-px}" height="${WALL}"/>`;
+    s += `<text class="opening-label" x="${ox+ow/2}" y="${-WALL-90}" text-anchor="middle">${label}</text>`;
+    px = ox+ow;
+  }
+  s += `<rect class="wall" x="${px}" y="${-WALL}" width="${ROOM_W+WALL-px}" height="${WALL}"/>`;
+  // 底部窗带:细双线 + 竖梃
+  s += `<rect x="0" y="${ROOM_D}" width="${ROOM_W}" height="120" class="win" />`;
+  for(let x=0;x<=ROOM_W;x+=847) s += `<line class="win" x1="${x}" y1="${ROOM_D}" x2="${x}" y2="${ROOM_D+120}"/>`;
+  s += `<text class="opening-label" x="${ROOM_W/2}" y="${ROOM_D+420}" text-anchor="middle">窗带(按图,落地窗待确认)</text>`;
+  // 总尺寸标注
+  s += `<line class="dimline" x1="0" y1="${-M+240}" x2="${ROOM_W}" y2="${-M+240}"/>
+    <text class="dimtext num" x="${ROOM_W/2}" y="${-M+180}" text-anchor="middle">8475</text>
+    <line class="dimline" x1="${ROOM_W+M-240}" y1="0" x2="${ROOM_W+M-240}" y2="${ROOM_D}"/>
+    <text class="dimtext num" x="${ROOM_W+M-300}" y="${ROOM_D/2}" text-anchor="middle" transform="rotate(-90 ${ROOM_W+M-300} ${ROOM_D/2})">4660</text>`;
+  return s;
+}
+
+function overlaps(a,b){
+  return a.x < b.x+fw(b) && b.x < a.x+fw(a) && a.y < b.y+fd(b) && b.y < a.y+fd(a);
+}
+
+function render(){
+  let s = `<g>${staticLayer()}</g>`;
+  const bad = new Set();
+  for(let i=0;i<items.length;i++) for(let j=i+1;j<items.length;j++)
+    if(!DEFS[items[i].t].marker && !DEFS[items[j].t].marker && overlaps(items[i],items[j])){
+      bad.add(items[i].id); bad.add(items[j].id); }
+  for(const it of items){
+    const D = DEFS[it.t], W = fw(it), Dp = fd(it), z = zoneRect(it);
+    const cls = ["item", D.top?"tabletop":"", D.plan?"planned":"", D.marker?"marker":"",
+      it.id===sel?"selected":"", bad.has(it.id)?"overlap":""].join(" ");
+    let g = `<g class="${cls}" data-id="${it.id}" transform="translate(${it.x} ${it.y})">`;
+    if(z) g += `<rect class="op-zone" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}"/>
+      <line class="op-edge" x1="${z.ex[0]}" y1="${z.ex[1]}" x2="${z.ex[2]}" y2="${z.ex[3]}"/>`;
+    if(D.marker){
+      g += `<circle class="body" cx="100" cy="100" r="120"/>
+        <text class="dm" x="240" y="150">图上符号(待确认)</text>`;
+    } else {
+      const dd = dims(it);
+      g += `<rect class="body" x="0" y="0" width="${W}" height="${Dp}"/>`;
+      const cx = W/2;
+      if(W >= 640){
+        g += `<text class="nm" x="${cx}" y="${Dp/2-20}" text-anchor="middle">${D.n}</text>
+          <text class="dm num" x="${cx}" y="${Dp/2+150}" text-anchor="middle">${dd.w}×${dd.d}</text>`;
+      } else {
+        g += `<text class="nm" x="${cx}" y="${Dp/2+50}" text-anchor="middle">${D.n}</text>`;
+      }
+    }
+    s += g + "</g>";
+  }
+  svg.innerHTML = s;
+  svg.classList.toggle("zones-off", !zones);
+  updateSelbar();
+}
+
+function save(){
+  localStorage.setItem(LS_KEY, JSON.stringify({items, nextId}));
+  const m = document.getElementById("savemsg");
+  m.textContent = "✓ 已保存 " + new Date().toTimeString().slice(0,5);
+}
+
+function selItem(){ return items.find(i=>i.id===sel) || null; }
+
+function updateSelbar(){
+  const bar = document.getElementById("selbar"), it = selItem();
+  bar.classList.toggle("show", !!it);
+  if(!it) return;
+  const D = DEFS[it.t], dd = dims(it);
+  document.getElementById("selName").textContent = D.n + (D.top?" · 台式":"") + (D.plan&&!D.marker?" · 未购":"");
+  document.getElementById("selDims").textContent =
+    `${dd.w}×${dd.d}` + (D.op?` · 净空${D.op}${D.est?"⚠️":""}`:"") + (D.note?` · ${D.note}`:"");
+  document.getElementById("selDist").textContent =
+    `距左 ${Math.round(it.x)} · 距上 ${Math.round(it.y)} · 距右 ${Math.round(ROOM_W-it.x-fw(it))} · 距下 ${Math.round(ROOM_D-it.y-fd(it))}`;
+  const szBox = document.getElementById("szBox");
+  szBox.style.display = (D.plan && !D.marker) ? "" : "none";
+  if(D.plan){ document.getElementById("inW").value = dd.w; document.getElementById("inD").value = dd.d; }
+}
+
+// ---- 指针拖动 ----
+let drag = null;
+const toMM = ev => {
+  const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  return [p.x, p.y];
+};
+svg.addEventListener("pointerdown", ev => {
+  const g = ev.target.closest("g[data-id]");
+  if(!g){ sel = null; render(); return; }
+  sel = +g.dataset.id;
+  const it = selItem(), [mx,my] = toMM(ev);
+  drag = {it, dx: mx-it.x, dy: my-it.y, moved:false};
+  svg.setPointerCapture(ev.pointerId);
+  render();
+});
+svg.addEventListener("pointermove", ev => {
+  if(!drag) return;
+  const [mx,my] = toMM(ev), it = drag.it;
+  it.x = Math.max(0, Math.min(ROOM_W - fw(it), Math.round((mx-drag.dx)/25)*25));
+  it.y = Math.max(0, Math.min(ROOM_D - fd(it), Math.round((my-drag.dy)/25)*25));
+  drag.moved = true;
+  const g = svg.querySelector(`g[data-id="${it.id}"]`);
+  if(g) g.setAttribute("transform", `translate(${it.x} ${it.y})`);
+  updateSelbar();
+});
+const endDrag = () => { if(drag){ if(drag.moved) save(); drag=null; render(); } };
+svg.addEventListener("pointerup", endDrag);
+svg.addEventListener("pointercancel", endDrag);
+
+// ---- 选中操作 ----
+document.getElementById("btnRot").onclick = () => {
+  const it = selItem(); if(!it) return;
+  const cx = it.x+fw(it)/2, cy = it.y+fd(it)/2;
+  it.r = (it.r+90)%360;
+  it.x = Math.max(0, Math.min(ROOM_W-fw(it), Math.round((cx-fw(it)/2)/25)*25));
+  it.y = Math.max(0, Math.min(ROOM_D-fd(it), Math.round((cy-fd(it)/2)/25)*25));
+  save(); render();
+};
+document.getElementById("btnDel").onclick = () => {
+  items = items.filter(i=>i.id!==sel); sel=null; save(); render();
+};
+document.getElementById("btnDup").onclick = () => {
+  const it = selItem(); if(!it) return;
+  const c = {...it, id:nextId++, x:Math.min(it.x+300, ROOM_W-fw(it)), y:Math.min(it.y+300, ROOM_D-fd(it))};
+  items.push(c); sel = c.id; save(); render();
+};
+const onSz = () => {
+  const it = selItem(); if(!it || !DEFS[it.t].plan) return;
+  const w = +document.getElementById("inW").value, d = +document.getElementById("inD").value;
+  if(w>=100 && w<=8000) it.w = w;
+  if(d>=100 && d<=4000) it.d = d;
+  it.x = Math.min(it.x, ROOM_W-fw(it)); it.y = Math.min(it.y, ROOM_D-fd(it));
+  save(); render();
+};
+document.getElementById("inW").addEventListener("change", onSz);
+document.getElementById("inD").addEventListener("change", onSz);
+
+// ---- 工具条 ----
+document.getElementById("btnZones").onclick = ev => {
+  zones = !zones;
+  ev.target.textContent = "净空:" + (zones?"显示":"隐藏");
+  ev.target.classList.toggle("on", zones);
+  svg.classList.toggle("zones-off", !zones);
+};
+document.getElementById("btnCopy").onclick = async ev => {
+  const dirs = {0:"门朝下",90:"门朝左",180:"门朝上",270:"门朝右"};
+  const txt = "798 厨房布局(距离单位 mm,原点=左上内墙角)\n" + items
+    .filter(i=>!DEFS[i.t].marker)
+    .map(i=>{const dd=dims(i);return `${DEFS[i.t].n}: 距左${i.x} 距上${i.y} ${dd.w}×${dd.d} ${dirs[i.r]}`;})
+    .join("\n");
+  try { await navigator.clipboard.writeText(txt); ev.target.textContent="✓ 已复制"; }
+  catch(e){ prompt("手动复制:", txt); }
+  setTimeout(()=>ev.target.textContent="复制布局文字", 2000);
+};
+let resetArmed = false;
+document.getElementById("btnReset").onclick = ev => {
+  if(!resetArmed){ resetArmed=true; ev.target.textContent="再点一次确认重置"; ev.target.classList.add("danger2");
+    setTimeout(()=>{resetArmed=false; ev.target.textContent="重置为初始摆法"; ev.target.classList.remove("danger2");}, 3000);
+    return; }
+  items = JSON.parse(JSON.stringify(DEFAULT_ITEMS)); nextId=100; sel=null; resetArmed=false;
+  ev.target.textContent="重置为初始摆法"; ev.target.classList.remove("danger2");
+  save(); render();
+};
+
+// ---- 抽屉 ----
+const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
+const planned = ["coldtable","freezer","fridge","display","ice","wtable","sink3","hsink","shelf","custom","mark"];
+function chip(key){
+  const D = DEFS[key], b = document.createElement("button");
+  b.className = "chip" + (D.plan?" plan":"");
+  b.innerHTML = `${D.n}<small class="num">${D.w}×${D.d}</small>`;
+  b.onclick = () => {
+    const it = {id:nextId++, t:key, x:Math.round((ROOM_W-D.w)/2/25)*25, y:Math.round((ROOM_D-D.d)/2/25)*25, r:0};
+    items.push(it); sel = it.id; save(); render();
+  };
+  return b;
+}
+owned.forEach(k=>document.getElementById("chipsOwned").appendChild(chip(k)));
+planned.forEach(k=>document.getElementById("chipsPlan").appendChild(chip(k)));
+
+render();
+})();
+</script>
