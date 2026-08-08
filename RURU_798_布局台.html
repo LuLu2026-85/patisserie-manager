@@ -76,6 +76,8 @@
   .item.overlap .body{fill:#F7E8E3}
   .item .nm{fill:var(--ink);font-size:150px;font-weight:500;font-family:var(--cjk)}
   .item .dm{fill:var(--subtle);font-size:110px;font-family:var(--cjk)}
+  .item.stacked .body{fill-opacity:.7;stroke-dasharray:46 32}
+  .item.stacked .nm,.item.stacked .dm{paint-order:stroke;stroke:#FFFFFF;stroke-width:40;stroke-linejoin:round}
   .op-zone{fill:var(--info);opacity:.09}
   .op-edge{stroke:var(--info);stroke-width:10;stroke-dasharray:60 60;fill:none;opacity:.5}
   .zones-off .op-zone,.zones-off .op-edge{display:none}
@@ -116,7 +118,7 @@
     <div class="chips" id="chipsPlan"></div></div>
 </div>
 
-<footer>带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色斜区=开门/作业净空。重叠变红。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
+<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色斜区=开门/作业净空。重叠变红。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
 
 <script>
 (() => {
@@ -128,22 +130,24 @@ const T_W = F_X + F_W;           // 全局宽
 const DOOR_Y = [250, 1250];      // 厨房↔前厅 门洞(估)
 const OPENINGS = [[600,1000,"入口 1000"]]; // 厨房顶墙
 
-// w×d 机身(mm), op 前方净空, est 净空估值, top 台式, surf 台面, plan 未购, marker 记号
+// w×d 机身(mm), h 高, op 前方净空, est 净空估值, top 台式(要放台面),
+// stack 可叠在底座上(烤箱), base 可当底座, surf 台面, plan 未购, marker 记号
 const DEFS = {
-  proofer:{n:"醒发箱", w:810, d:1190, op:720, note:"高2055"},
-  u10:{n:"UNOX 10盘", w:860, d:1018, op:900, est:1, note:"高1219"},
-  u5:{n:"UNOX 5盘", w:860, d:1018, op:900, est:1, note:"高789·可叠"},
-  irinox:{n:"急冷机", w:790, d:780, op:770, est:1, note:"高870"},
-  hl600:{n:"HL600", w:728, d:1033, op:900, note:"411kg·摆缸1226"},
-  ufm:{n:"UF-M 洗碗机", w:775, d:870, op:425, note:"开门高2000"},
-  sheeter:{n:"起酥机", w:2420, d:1072, op:800, est:1, top:1, note:"台式·展开2420"},
-  hl120:{n:"HL120", w:486, d:581, op:400, est:1, top:1, note:"台式·85kg"},
-  blixer:{n:"Blixer 4", w:242, d:325, op:0, top:1, note:"台式"},
+  proofer:{n:"醒发箱", w:810, d:1190, h:2055, op:720},
+  u10:{n:"UNOX 10盘", w:860, d:1018, h:1219, op:900, est:1, stack:1, base:1, note:"可叠在底柜/急冷上"},
+  u5:{n:"UNOX 5盘", w:860, d:1018, h:789, op:900, est:1, stack:1, base:1, note:"可叠在底柜/急冷/10盘上"},
+  irinox:{n:"急冷机", w:790, d:780, h:890, op:770, est:1, base:1, note:"上面可叠烤箱"},
+  hl600:{n:"HL600", w:728, d:1033, h:1557, op:900, note:"411kg·摆缸1226"},
+  ufm:{n:"UF-M 洗碗机", w:775, d:870, h:1720, op:425, note:"开门高2000"},
+  sheeter:{n:"起酥机", w:2420, d:1072, h:535, op:800, est:1, top:1, note:"台式·展开2420"},
+  hl120:{n:"HL120", w:486, d:581, h:737, op:400, est:1, top:1, note:"台式·85kg"},
+  blixer:{n:"Blixer 4", w:242, d:325, h:479, op:0, top:1, note:"台式"},
+  stand:{n:"烤箱底柜/支架", w:860, d:1018, h:700, op:0, plan:1, base:1, note:"UNOX配套⚠️高度按订货"},
   // 星崎(官方目录尺寸)
-  rt188:{n:"冷藏台 RT-188MC", w:1800, d:750, op:500, plan:1, surf:1, note:"高800·台面可用"},
-  rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, op:500, plan:1, surf:1, note:"高800·台面可用"},
-  rt128:{n:"冷藏台 RT-128MC", w:1200, d:750, op:500, plan:1, surf:1, note:"高800·台面可用"},
-  ft158:{n:"冷冻台 FT-158MC", w:1500, d:750, op:500, plan:1, surf:1, note:"高800·台面可用"},
+  rt188:{n:"冷藏台 RT-188MC", w:1800, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
+  rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
+  rt128:{n:"冷藏台 RT-128MC", w:1200, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
+  ft158:{n:"冷冻台 FT-158MC", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
   hr128:{n:"立式冷藏 HR-128MC", w:1200, d:850, op:700, plan:1, note:"高1990"},
   hr78:{n:"立式冷藏 HR-78MC", w:700, d:850, op:700, plan:1, note:"高1990"},
   hf128:{n:"立式冷冻 HF-128MC", w:1200, d:850, op:700, plan:1, note:"高1990"},
@@ -155,7 +159,7 @@ const DEFS = {
   im100:{n:"制冰机 IM-100BZ", w:660, d:590, op:0, plan:1, note:"高1290+脚90"},
   // 其他规划块
   display:{n:"蛋糕展示柜", w:1200, d:700, op:500, plan:1},
-  wtable:{n:"不锈钢工作台", w:1500, d:750, op:0, plan:1, surf:1},
+  wtable:{n:"不锈钢工作台", w:1500, d:750, h:800, op:0, plan:1, surf:1},
   sink3:{n:"三槽水槽", w:1800, d:700, op:0, plan:1},
   hsink:{n:"洗手池", w:500, d:450, op:0, plan:1},
   shelf:{n:"层架", w:1200, d:450, op:0, plan:1},
@@ -260,15 +264,23 @@ function staticLayer(){
 function overlaps(a,b){
   return a.x < b.x+fw(b) && b.x < a.x+fw(a) && a.y < b.y+fd(b) && b.y < a.y+fd(a);
 }
-function pairOk(a,b){ // 台式设备放在台面上不算冲突
+function pairOk(a,b){ // 台式放台面 / 烤箱叠底座 不算冲突
   const A = DEFS[a.t], B = DEFS[b.t];
-  return (A.top && B.surf) || (B.top && A.surf);
+  return (A.top && B.surf) || (B.top && A.surf)
+      || (A.stack && (B.base||B.surf) && b.id!==a.id) || (B.stack && (A.base||A.surf));
 }
-function onTable(it){
-  if(!DEFS[it.t].top) return false;
+function carrier(it){ // 找到它压在谁上面(中心点判定)
+  const D = DEFS[it.t];
+  if(!D.top && !D.stack) return null;
   const cx = it.x+fw(it)/2, cy = it.y+fd(it)/2;
-  return items.some(o => o!==it && DEFS[o.t].surf &&
-    cx>o.x && cx<o.x+fw(o) && cy>o.y && cy<o.y+fd(o));
+  return items.find(o => o.id!==it.id && (DEFS[o.t].surf||DEFS[o.t].base) &&
+    cx>o.x && cx<o.x+fw(o) && cy>o.y && cy<o.y+fd(o)) || null;
+}
+function onTable(it){ return !!carrier(it); }
+function stackHeight(it){ // 叠放总高(最多追 3 层)
+  let h = DEFS[it.t].h||0, cur = it;
+  for(let k=0;k<3;k++){ const c = carrier(cur); if(!c) break; h += DEFS[c.t].h||0; cur = c; }
+  return h;
 }
 
 function render(){
@@ -279,12 +291,16 @@ function render(){
     if(DEFS[a.t].marker || DEFS[b.t].marker) continue;
     if(overlaps(a,b) && !pairOk(a,b)){ bad.add(a.id); bad.add(b.id); }
   }
-  const sorted = [...items].sort((a,b) =>
-    (DEFS[a.t].surf?0:DEFS[a.t].top?2:1) - (DEFS[b.t].surf?0:DEFS[b.t].top?2:1));
+  const carr = new Map();  // id -> 它压着的底座
+  const covered = new Set(); // 被压住的底座 id
+  for(const it of items){ const c = carrier(it); if(c){ carr.set(it.id, c); covered.add(c.id); } }
+  const lay = t => (DEFS[t].surf||DEFS[t].base) && !DEFS[t].stack ? 0 : DEFS[t].top ? 3 : DEFS[t].stack ? 2 : 1;
+  const sorted = [...items].sort((a,b) => lay(a.t) - lay(b.t));
   for(const it of sorted){
     const D = DEFS[it.t], W = fw(it), Dp = fd(it), z = zoneRect(it);
     const cls = ["item", D.surf?"surf":"", D.top?"tabletop":"", D.plan?"planned":"",
-      D.marker?"marker":"", it.id===sel?"selected":"", bad.has(it.id)?"overlap":""].join(" ");
+      D.marker?"marker":"", carr.has(it.id)?"stacked":"",
+      it.id===sel?"selected":"", bad.has(it.id)?"overlap":""].join(" ");
     let g = `<g class="${cls}" data-id="${it.id}" transform="translate(${it.x} ${it.y})">`;
     if(z) g += `<rect class="op-zone" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}"/>
       <line class="op-edge" x1="${z.ex[0]}" y1="${z.ex[1]}" x2="${z.ex[2]}" y2="${z.ex[3]}"/>`;
@@ -294,8 +310,10 @@ function render(){
     } else {
       const dd = dims(it);
       g += `<rect class="body" x="0" y="0" width="${W}" height="${Dp}"/>`;
-      const cx = W/2, name = D.n + (onTable(it) ? "·台上" : "");
-      if(W >= 640){
+      const cx = W/2, name = D.n + (carr.has(it.id) ? (D.stack?"·叠放":"·台上") : "");
+      if(covered.has(it.id)){
+        g += `<text class="nm" x="${cx}" y="${Dp-60}" text-anchor="middle">▼${D.n}(下层)</text>`;
+      } else if(W >= 640){
         g += `<text class="nm" x="${cx}" y="${Dp/2-20}" text-anchor="middle">${name}</text>
           <text class="dm num" x="${cx}" y="${Dp/2+150}" text-anchor="middle">${dd.w}×${dd.d}</text>`;
       } else {
@@ -326,8 +344,10 @@ function updateSelbar(){
   bar.classList.toggle("show", !!it);
   if(!it) return;
   const D = DEFS[it.t], dd = dims(it), R = roomRef(it);
+  const car = carrier(it);
   document.getElementById("selName").textContent =
-    D.n + (D.top?" · 台式":"") + (D.plan&&!D.marker?" · 未购":"") + (onTable(it)?" · 已在台上":"");
+    D.n + (D.top?" · 台式":"") + (D.plan&&!D.marker?" · 未购":"")
+    + (car ? (D.stack?` · 叠在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`:" · 已在台上") : "");
   document.getElementById("selDims").textContent =
     `${dd.w}×${dd.d}` + (D.op?` · 净空${D.op}${D.est?"⚠️":""}`:"") + (D.note?` · ${D.note}`:"");
   document.getElementById("selDist").textContent =
@@ -345,8 +365,10 @@ const toMM = ev => {
 svg.addEventListener("pointerdown", ev => {
   const g = ev.target.closest("g[data-id]");
   if(!g){ sel = null; render(); return; }
-  sel = +g.dataset.id;
-  const it = selItem(), [mx,my] = toMM(ev);
+  let id = +g.dataset.id, it = items.find(i=>i.id===id);
+  if(sel === id){ const c = carrier(it); if(c){ id = c.id; it = c; } } // 原地再点一下 → 选下层
+  sel = id;
+  const [mx,my] = toMM(ev);
   drag = {it, dx: mx-it.x, dy: my-it.y, moved:false};
   svg.setPointerCapture(ev.pointerId);
   render();
@@ -426,7 +448,7 @@ document.getElementById("btnReset").onclick = ev => {
 
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
 const hoshi = ["rt188","rt158","rt128","ft158","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
-const planned = ["display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const planned = ["stand","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan?" plan":"");
