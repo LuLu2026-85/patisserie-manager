@@ -78,6 +78,9 @@
   .item .dm{fill:var(--subtle);font-size:110px;font-family:var(--cjk)}
   .item.stacked .body{fill-opacity:.7;stroke-dasharray:46 32}
   .item.stacked .nm,.item.stacked .dm{paint-order:stroke;stroke:#FFFFFF;stroke-width:40;stroke-linejoin:round}
+  .door{fill:var(--info);fill-opacity:.05;stroke:var(--info);stroke-width:10;
+    stroke-dasharray:50 40;opacity:.65}
+  .zones-off .door{display:none}
   .op-zone{fill:var(--info);opacity:.09}
   .op-edge{stroke:var(--info);stroke-width:10;stroke-dasharray:60 60;fill:none;opacity:.5}
   .zones-off .op-zone,.zones-off .op-edge{display:none}
@@ -118,7 +121,7 @@
     <div class="chips" id="chipsPlan"></div></div>
 </div>
 
-<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色斜区=开门/作业净空。重叠变红。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
+<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色扇形弧=门扇实际扫过的轨迹(带方向:UNOX右铰、急冷左铰、星崎门可现场改向),浅蓝矩形=站人作业净空。重叠变红。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
 
 <script>
 (() => {
@@ -133,12 +136,12 @@ const OPENINGS = [[600,1000,"入口 1000"]]; // 厨房顶墙
 // w×d 机身(mm), h 高, op 前方净空, est 净空估值, top 台式(要放台面),
 // stack 可叠在底座上(烤箱), base 可当底座, surf 台面, plan 未购, marker 记号
 const DEFS = {
-  proofer:{n:"醒发箱", w:810, d:1190, h:2055, op:720},
-  u10:{n:"UNOX 10盘", w:860, d:1018, h:1219, op:900, est:1, stack:1, base:1, note:"可叠在底柜/急冷上"},
-  u5:{n:"UNOX 5盘", w:860, d:1018, h:789, op:900, est:1, stack:1, base:1, note:"可叠在底柜/急冷/10盘上"},
-  irinox:{n:"急冷机", w:790, d:780, h:890, op:770, est:1, base:1, note:"上面可叠烤箱"},
-  hl600:{n:"HL600", w:728, d:1033, h:1557, op:900, note:"411kg·摆缸1226"},
-  ufm:{n:"UF-M 洗碗机", w:775, d:870, h:1720, op:425, note:"开门高2000"},
+  proofer:{n:"醒发箱", w:810, d:1190, h:2055, op:720, note:"开门总深1910(型录)·铰向⚠️收货确认"},
+  u10:{n:"UNOX 10盘", w:860, d:1018, h:1219, op:900, est:1, stack:1, base:1, door:{side:"R",w:830,est:1}, note:"右铰门(RS官方)·开门深约+830⚠️"},
+  u5:{n:"UNOX 5盘", w:860, d:1018, h:789, op:900, est:1, stack:1, base:1, door:{side:"R",w:830,est:1}, note:"右铰门(RS官方)·可叠放"},
+  irinox:{n:"急冷机", w:790, d:780, h:890, op:770, est:1, base:1, door:{side:"L",w:750,est:1}, note:"左铰门(官方)·上面可叠烤箱"},
+  hl600:{n:"HL600", w:728, d:1033, h:1557, op:900, note:"无门·摆缸向前+193(官方1226)·作业位900"},
+  ufm:{n:"UF-M 洗碗机", w:775, d:870, h:1720, op:425, note:"下翻门·开门深1295/高2000(官方)"},
   sheeter:{n:"起酥机", w:2420, d:1072, h:535, op:800, est:1, top:1, note:"台式·展开2420"},
   hl120:{n:"HL120", w:486, d:581, h:737, op:400, est:1, top:1, note:"台式·85kg"},
   blixer:{n:"Blixer 4", w:242, d:325, h:479, op:0, top:1, note:"台式"},
@@ -149,15 +152,15 @@ const DEFS = {
   rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
   rt128:{n:"冷藏台 RT-128MC", w:1200, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
   ft158:{n:"冷冻台 FT-158MC", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
-  hr128:{n:"立式冷藏 HR-128MC", w:1200, d:850, op:700, plan:1, note:"高1990"},
-  hr78:{n:"立式冷藏 HR-78MC", w:700, d:850, op:700, plan:1, note:"高1990"},
-  hf128:{n:"立式冷冻 HF-128MC", w:1200, d:850, op:700, plan:1, note:"高1990"},
-  hf78:{n:"立式冷冻 HF-78MC", w:700, d:850, op:700, plan:1, note:"高1990"},
-  hrb78:{n:"插盘冷藏 HR-78MC-B", w:700, d:850, op:700, plan:1, note:"22盘400×600"},
-  hfb78:{n:"插盘冷冻 HF-78MC-B", w:700, d:850, op:700, plan:1, note:"22盘400×600·接急冷"},
-  hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, op:700, plan:1, note:"高1990"},
-  im45:{n:"制冰机 IM-45CBZ", w:660, d:589, op:0, plan:1, note:"高785+脚90"},
-  im100:{n:"制冰机 IM-100BZ", w:660, d:590, op:0, plan:1, note:"高1290+脚90"},
+  hr128:{n:"立式冷藏 HR-128MC", w:1200, d:850, h:1990, op:700, plan:1, door:{side:"D",w:580}, note:"对开双门·可现场改铰向(官方)"},
+  hr78:{n:"立式冷藏 HR-78MC", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"单门·可现场改铰向(官方)"},
+  hf128:{n:"立式冷冻 HF-128MC", w:1200, d:850, h:1990, op:700, plan:1, door:{side:"D",w:580}, note:"对开双门·可现场改铰向(官方)"},
+  hf78:{n:"立式冷冻 HF-78MC", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"单门·可现场改铰向(官方)"},
+  hrb78:{n:"插盘冷藏 HR-78MC-B", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"22盘400×600·单门可改铰向"},
+  hfb78:{n:"插盘冷冻 HF-78MC-B", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"22盘400×600·接急冷·可改铰向"},
+  hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, h:1990, op:700, plan:1, door:{side:"D",w:580}, note:"对开双门·可现场改铰向(官方)"},
+  im45:{n:"制冰机 IM-45CBZ", w:660, d:589, h:875, op:400, est:1, plan:1, note:"前开储冰门·前留约400⚠️"},
+  im100:{n:"制冰机 IM-100BZ", w:660, d:590, h:1380, op:400, est:1, plan:1, note:"前开储冰门·前留约400⚠️"},
   // 其他规划块
   display:{n:"蛋糕展示柜", w:1200, d:700, op:500, plan:1},
   wtable:{n:"不锈钢工作台", w:1500, d:750, h:800, op:0, plan:1, surf:1},
@@ -212,6 +215,30 @@ const dims = it => ({ w: it.w || DEFS[it.t].w, d: it.d || DEFS[it.t].d });
 const fw = it => { const D = dims(it); return it.r%180 ? D.d : D.w; };
 const fd = it => { const D = dims(it); return it.r%180 ? D.w : D.d; };
 
+function doorPaths(it){ // 门扇 90° 轨迹弧(随旋转换到前沿)
+  const D = DEFS[it.t]; if(!D.door) return "";
+  const W = fw(it), Dp = fd(it), r = it.r;
+  let A,B,N; // 前沿 A→B 与外法线
+  if(r===0){A=[0,Dp];B=[W,Dp];N=[0,1];}
+  else if(r===180){A=[W,0];B=[0,0];N=[0,-1];}
+  else if(r===90){A=[0,0];B=[0,Dp];N=[-1,0];}
+  else {A=[W,Dp];B=[W,0];N=[1,0];}
+  const L = Math.hypot(B[0]-A[0],B[1]-A[1]);
+  const U = [(B[0]-A[0])/L,(B[1]-A[1])/L];
+  const one = (H,dir,dw) => {
+    const S = [H[0]+dir[0]*dw, H[1]+dir[1]*dw];
+    const E = [H[0]+N[0]*dw, H[1]+N[1]*dw];
+    const cross = (S[0]-H[0])*(E[1]-H[1]) - (S[1]-H[1])*(E[0]-H[0]);
+    return `M ${S[0]} ${S[1]} A ${dw} ${dw} 0 0 ${cross>0?1:0} ${E[0]} ${E[1]} L ${H[0]} ${H[1]} Z`;
+  };
+  const dw = Math.min(D.door.w, L);
+  let d = "";
+  if(D.door.side==="R") d = one(B, [-U[0],-U[1]], dw);
+  else if(D.door.side==="L") d = one(A, U, dw);
+  else if(D.door.side==="D"){ const half = Math.min(D.door.w, L/2);
+    d = one(A, U, half) + " " + one(B, [-U[0],-U[1]], half); }
+  return `<path class="door" d="${d}"/>`;
+}
 function zoneRect(it){
   const op = DEFS[it.t].op; if(!op) return null;
   const W = fw(it), D = fd(it);
@@ -305,6 +332,7 @@ function render(){
     let g = `<g class="${cls}" data-id="${it.id}" transform="translate(${it.x} ${it.y})">`;
     if(z) g += `<rect class="op-zone" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}"/>
       <line class="op-edge" x1="${z.ex[0]}" y1="${z.ex[1]}" x2="${z.ex[2]}" y2="${z.ex[3]}"/>`;
+    g += doorPaths(it);
     if(D.marker){
       g += `<circle class="body" cx="100" cy="100" r="120"/>
         <text class="dm" x="240" y="150">图上符号(待确认)</text>`;
