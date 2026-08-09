@@ -149,6 +149,7 @@ const DEFS = {
   blixer:{n:"Blixer 4", w:242, d:325, h:479, op:0, top:1, note:"台式"},
   stand:{n:"烤箱底柜/支架", w:860, d:1018, h:700, op:0, plan:1, base:1, note:"UNOX配套⚠️高度按订货"},
   trolley:{n:"烤盘台车", w:480, d:630, h:1700, op:0, plan:1, note:"插400×600盘·15~18层·可推⚠️尺寸按常规"},
+  molder:{n:"モルダー整形机", w:500, d:860, h:1010, op:600, plan:1, note:"按愛工舎ミニモルダーDX⚠️选定后改准·100V经变压器"},
   // 星崎(官方目录尺寸)
   rt188:{n:"冷藏台 RT-188MC", w:1800, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
   rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"高800·台面可用"},
@@ -497,7 +498,7 @@ document.getElementById("btnReset").onclick = ev => {
 
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
 const hoshi = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
-const planned = ["pillar","colc","colr","stand","trolley","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const planned = ["pillar","colc","colr","stand","trolley","molder","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan?" plan":"");
