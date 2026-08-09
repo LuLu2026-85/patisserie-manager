@@ -159,7 +159,7 @@ const DEFS = {
   hrb78:{n:"插盘冷藏 HR-78MC-B", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"22盘400×600·单门可改铰向"},
   hfb78:{n:"插盘冷冻 HF-78MC-B", w:700, d:850, h:1990, op:700, plan:1, door:{side:"R",w:660}, note:"22盘400×600·接急冷·可改铰向"},
   hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, h:1990, op:700, plan:1, door:{side:"D",w:580}, note:"对开双门·可现场改铰向(官方)"},
-  ct120:{n:"恒温高湿台 CT-120SDCG", w:1200, d:750, h:800, op:500, plan:1, surf:1, note:"生果子用·湿度85%无风·100V需变压器(日本机)"},
+  ct150:{n:"恒温高湿台 CT-150SDJ-R", w:1500, d:750, h:800, op:500, plan:1, surf:1, note:"生果子用·85%湿度无风·396L·右机组·100V经变压器"},
   im45:{n:"制冰机 IM-45CBZ", w:660, d:589, h:875, op:400, est:1, plan:1, note:"前开储冰门·前留约400⚠️"},
   im100:{n:"制冰机 IM-100BZ", w:660, d:590, h:1380, op:400, est:1, plan:1, note:"前开储冰门·前留约400⚠️"},
   // 其他规划块
@@ -477,7 +477,7 @@ document.getElementById("btnReset").onclick = ev => {
 };
 
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
-const hoshi = ["rt188","rt158","rt128","ft158","ct120","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
+const hoshi = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
 const planned = ["stand","trolley","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
