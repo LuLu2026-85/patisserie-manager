@@ -131,7 +131,7 @@ const F_X = K_W + WALL;          // 前厅左内墙 x
 const F_W = 4830;                // ⚠️ 前厅宽按图目测
 const T_W = F_X + F_W;           // 全局宽
 const DOOR_Y = [250, 1250];      // 厨房↔前厅 门洞(估)
-const OPENINGS = [[600,1000,"入口 1000"]]; // 厨房顶墙
+const OPENINGS = [[300,1000,"入口 1000"]]; // 厨房顶墙(按新图:紧挨左上角)
 
 // w×d 机身(mm), h 高, op 前方净空, est 净空估值, top 台式(要放台面),
 // stack 可叠在底座上(烤箱), base 可当底座, surf 台面, plan 未购, marker 记号
@@ -172,6 +172,7 @@ const DEFS = {
   island:{n:"前厅中岛", w:2400, d:1145, op:0, plan:1, surf:1, note:"⚠️按图目测"},
   custom:{n:"自定义块", w:1000, d:600, op:0, plan:1, surf:1},
   mark:{n:"图上符号", w:200, d:200, op:0, marker:1, plan:1},
+  pillar:{n:"柱/设备箱(按图⚠️)", w:250, d:750, op:0, plan:1},
   // 旧版兼容(不再进抽屉)
   coldtable:{n:"冷藏工作台", w:1800, d:750, op:500, plan:1, surf:1},
   freezer:{n:"立式冷冻柜", w:740, d:830, op:700, plan:1},
@@ -189,8 +190,10 @@ const DEFAULT_ITEMS = [
   {id:7, t:"sheeter", x:120, y:3488, r:180},
   {id:8, t:"hl120", x:2800, y:3979, r:180},
   {id:9, t:"blixer", x:3520, y:4235, r:180},
-  {id:10, t:"mark", x:2450, y:2250, r:0},
-  {id:11, t:"mark", x:3100, y:2250, r:0},
+  {id:10, t:"mark", x:4000, y:2600, r:0},
+  {id:11, t:"mark", x:5300, y:2600, r:0},
+  {id:12, t:"pillar", x:0, y:3250, r:0},
+  {id:13, t:"pillar", x:0, y:4160, r:0, w:300, d:500},
   {id:20, t:"bar", x:F_X+300, y:200, r:0},
   {id:21, t:"island", x:F_X+1100, y:2300, r:0},
 ];
@@ -203,6 +206,14 @@ try { const s = JSON.parse(localStorage.getItem(LS_KEY));
   // 老存档补前厅家具
   if(!items.some(i=>i.t==="bar")) items.push({id:nextId++, t:"bar", x:F_X+300, y:200, r:0});
   if(!items.some(i=>i.t==="island")) items.push({id:nextId++, t:"island", x:F_X+1100, y:2300, r:0});
+  for(const it of items){ // 按 8/9 新图校正符号位
+    if(it.t==="mark" && it.x===2450 && it.y===2250){ it.x=4000; it.y=2600; }
+    if(it.t==="mark" && it.x===3100 && it.y===2250){ it.x=5300; it.y=2600; }
+  }
+  if(!items.some(i=>i.t==="pillar")){
+    items.push({id:nextId++, t:"pillar", x:0, y:3250, r:0});
+    items.push({id:nextId++, t:"pillar", x:0, y:4160, r:0, w:300, d:500});
+  }
 } catch(e){ items = JSON.parse(JSON.stringify(DEFAULT_ITEMS)); nextId = 100; }
 
 const svg = document.getElementById("plan");
@@ -478,7 +489,7 @@ document.getElementById("btnReset").onclick = ev => {
 
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
 const hoshi = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
-const planned = ["stand","trolley","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const planned = ["pillar","stand","trolley","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan?" plan":"");
