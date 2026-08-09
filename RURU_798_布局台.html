@@ -326,12 +326,21 @@ function pairOk(a,b){ // 台式放台面 / 烤箱叠底座 不算冲突
   return (A.top && B.surf) || (B.top && A.surf)
       || (A.stack && (B.base||B.surf) && b.id!==a.id) || (B.stack && (A.base||A.surf));
 }
-function carrier(it){ // 找到它压在谁上面(中心点判定)
+function carrier(it){ // 找到它压在谁上面(中心点判定;落在中孔里不算)
   const D = DEFS[it.t];
   if(!D.top && !D.stack) return null;
   const cx = it.x+fw(it)/2, cy = it.y+fd(it)/2;
-  return items.find(o => o.id!==it.id && (DEFS[o.t].surf||DEFS[o.t].base) &&
-    cx>o.x && cx<o.x+fw(o) && cy>o.y && cy<o.y+fd(o)) || null;
+  return items.find(o => {
+    if(o.id===it.id) return false;
+    const OD = DEFS[o.t];
+    if(!OD.surf && !OD.base) return false;
+    if(!(cx>o.x && cx<o.x+fw(o) && cy>o.y && cy<o.y+fd(o))) return false;
+    if(OD.hole){ // 中孔是空的,东西会掉下去
+      const ox = o.x+fw(o)/2, oy = o.y+fd(o)/2;
+      if(Math.hypot(cx-ox, cy-oy) < OD.hole/2) return false;
+    }
+    return true;
+  }) || null;
 }
 function onTable(it){ return !!carrier(it); }
 function stackHeight(it){ // 叠放总高(最多追 3 层)
@@ -414,7 +423,9 @@ function updateSelbar(){
   const car = carrier(it);
   document.getElementById("selName").textContent =
     D.n + (D.top?" · 台式":"") + (D.plan&&!D.marker?" · 未购":"")
-    + (car ? (D.stack?` · 叠在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`:" · 已在台上") : "");
+    + (car ? (D.stack?` · 叠在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`
+              : ` · 放在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`)
+           : (D.top ? " · ⚠️ 还没放到台面上" : ""));
   document.getElementById("selDims").textContent =
     `${dd.w}×${dd.d}` + (D.op?` · 净空${D.op}${D.est?"⚠️":""}`:"") + (D.note?` · ${D.note}`:"");
   document.getElementById("selDist").textContent =
