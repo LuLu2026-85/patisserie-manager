@@ -119,11 +119,13 @@
     <div class="chips" id="chipsOwned"></div></div>
   <div class="grp"><span class="micro">星崎冷柜(未购,尺寸按官方目录)</span>
     <div class="chips" id="chipsHoshi"></div></div>
+  <div class="grp"><span class="micro">管道雕塑区(前厅)</span>
+    <div class="chips" id="chipsArt"></div></div>
   <div class="grp"><span class="micro">其他规划块(虚线,可改尺寸)</span>
     <div class="chips" id="chipsPlan"></div></div>
 </div>
 
-<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色扇形弧=门扇实际扫过的轨迹(实机确认:5盘右开、10盘左开、醒发箱向右开;急冷左铰;星崎门可现场改向),浅蓝矩形=站人作业净空。重叠变红。灰色实体块=结构柱(设备不能压,尺寸按图估)。厨房与前厅之间现状敞开,灰墙为拟建示意。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
+<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色扇形弧=门扇实际扫过的轨迹(实机确认:5盘右开、10盘左开、醒发箱向右开;急冷左铰;星崎门可现场改向),浅蓝矩形=站人作业净空。重叠变红。灰色实体块=结构柱和管道雕塑群(设备不能压)。环绕岛台中间的红色虚线圈=让管子穿出来的中孔,把雕塑群拖进去对齐即可。厨房与前厅之间现状敞开,灰墙为拟建示意。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
 
 <script>
 (() => {
@@ -178,6 +180,13 @@ const DEFS = {
   pillar:{n:"柱/设备箱(按图⚠️)", w:250, d:750, op:0, plan:1},
   colc:{n:"柱", w:250, d:600, op:0, colm:1, note:"结构柱⚠️尺寸按图估,收货量实际"},
   colr:{n:"圆柱", w:400, d:400, op:0, colm:1, note:"结构柱⚠️尺寸按图估,量实际"},
+  pipeart:{n:"管道雕塑群", w:900, d:900, op:0, colm:1, art:1, note:"⚠️占地按图估·不可受力·实测后改"},
+  ringtable:{n:"环绕岛台 Ø2000", w:2000, d:2000, h:1050, op:600, plan:1, surf:1, round:1, hole:1100,
+    note:"围着管道雕塑·中孔让管子长出来·吧台高1050"},
+  ringtable18:{n:"环绕岛台 Ø1800", w:1800, d:1800, h:750, op:600, plan:1, surf:1, round:1, hole:1100,
+    note:"座席高750·配高凳则做1050"},
+  halfring:{n:"半环台(C形)", w:2200, d:1300, h:1050, op:700, plan:1, surf:1, hole:1000,
+    note:"开口朝一侧·背对窗或墙·比整环省料好施工"},
   // 旧版兼容(不再进抽屉)
   coldtable:{n:"冷藏工作台", w:1800, d:750, op:500, plan:1, surf:1},
   freezer:{n:"立式冷冻柜", w:740, d:830, op:700, plan:1},
@@ -358,8 +367,16 @@ function render(){
         <text class="dm" x="240" y="150">图上符号(待确认)</text>`;
     } else {
       const dd = dims(it);
-      if(D.colm && W===Dp) g += `<circle class="body" cx="${W/2}" cy="${Dp/2}" r="${W/2}"/>`;
+      if((D.colm || D.round) && W===Dp) g += `<circle class="body" cx="${W/2}" cy="${Dp/2}" r="${W/2}"/>`;
       else g += `<rect class="body" x="0" y="0" width="${W}" height="${Dp}"/>`;
+      if(D.hole) g += `<circle cx="${W/2}" cy="${Dp/2}" r="${D.hole/2}" fill="var(--paper)"
+        stroke="var(--accent)" stroke-width="14" stroke-dasharray="60 40"/>`;
+      if(D.art){ // 雕塑群:画几根粗细不一的立管
+        g += `<circle cx="${W*0.36}" cy="${Dp*0.38}" r="${W*0.17}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+              <circle cx="${W*0.62}" cy="${Dp*0.32}" r="${W*0.14}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+              <circle cx="${W*0.52}" cy="${Dp*0.64}" r="${W*0.19}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+              <circle cx="${W*0.78}" cy="${Dp*0.60}" r="${W*0.11}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>`;
+      }
       const cx = W/2, name = D.n + (carr.has(it.id) ? (D.stack?"·叠放":"·台上") : "");
       if(covered.has(it.id)){
         g += `<text class="nm" x="${cx}" y="${Dp-60}" text-anchor="middle">▼${D.n}(下层)</text>`;
@@ -498,6 +515,7 @@ document.getElementById("btnReset").onclick = ev => {
 
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
 const hoshi = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
+const artgrp = ["pipeart","ringtable","ringtable18","halfring"];
 const planned = ["pillar","colc","colr","stand","trolley","molder","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
@@ -509,6 +527,7 @@ function chip(key){
   };
   return b;
 }
+artgrp.forEach(k=>document.getElementById("chipsArt").appendChild(chip(k)));
 owned.forEach(k=>document.getElementById("chipsOwned").appendChild(chip(k)));
 hoshi.forEach(k=>document.getElementById("chipsHoshi").appendChild(chip(k)));
 planned.forEach(k=>document.getElementById("chipsPlan").appendChild(chip(k)));
