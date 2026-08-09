@@ -125,7 +125,7 @@
     <div class="chips" id="chipsPlan"></div></div>
 </div>
 
-<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色扇形弧=门扇实际扫过的轨迹(实机确认:5盘右开、10盘左开、醒发箱向右开;急冷左铰;星崎门可现场改向),浅蓝矩形=站人作业净空。重叠变红。灰色实体块=结构柱和管道雕塑群(设备不能压)。环绕岛台中间的红色虚线圈=让管子穿出来的中孔,把雕塑群拖进去对齐即可。厨房与前厅之间现状敞开,灰墙为拟建示意。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
+<footer>叠放的设备显示为半透明+虚线,下层设备的名字会带「▼(下层)」标在下边缘;选中上层后在原地再点一下,就会切换选中下层的底座。带「台」角标的浅色块是台面(工作台/冷藏台),台式设备(起酥机·HL120·Blixer)拖到台面上不算冲突,名字会显示「·台上」。蓝色扇形弧=门扇实际扫过的轨迹(实机确认:5盘右开、10盘左开、醒发箱向右开;急冷左铰;星崎门可现场改向),浅蓝矩形=站人作业净空。重叠变红。灰色实体块=管道雕塑群(设备不能压)。环绕岛台中间的红色虚线圈=让管子穿出来的中孔,把雕塑群拖进去对齐即可。厨房与前厅之间现状敞开,灰墙为拟建示意。前厅墙线和吧台位置按图纸目测,量了实际尺寸告诉我改。</footer>
 
 <script>
 (() => {
@@ -178,8 +178,6 @@ const DEFS = {
   custom:{n:"自定义块", w:1000, d:600, op:0, plan:1, surf:1},
   mark:{n:"图上符号", w:200, d:200, op:0, marker:1, plan:1},
   pillar:{n:"柱/设备箱(按图⚠️)", w:250, d:750, op:0, plan:1},
-  colc:{n:"柱", w:250, d:600, op:0, colm:1, note:"结构柱⚠️尺寸按图估,收货量实际"},
-  colr:{n:"圆柱", w:400, d:400, op:0, colm:1, note:"结构柱⚠️尺寸按图估,量实际"},
   pipeart:{n:"管道雕塑群", w:900, d:900, op:0, colm:1, art:1, note:"⚠️占地按图估·不可受力·实测后改"},
   ringtable:{n:"环绕岛台 Ø2000", w:2000, d:2000, h:1050, op:600, plan:1, surf:1, round:1, hole:1100,
     note:"围着管道雕塑·中孔让管子长出来·吧台高1050"},
@@ -204,8 +202,6 @@ const DEFAULT_ITEMS = [
   {id:7, t:"sheeter", x:120, y:3488, r:180},
   {id:8, t:"hl120", x:2800, y:3979, r:180},
   {id:9, t:"blixer", x:3520, y:4235, r:180},
-  {id:10, t:"colc", x:3950, y:2350, r:0},
-  {id:11, t:"colr", x:5150, y:2450, r:0},
   {id:12, t:"pillar", x:0, y:3250, r:0},
   {id:13, t:"pillar", x:0, y:4160, r:0, w:300, d:500},
   {id:20, t:"bar", x:F_X+300, y:200, r:0},
@@ -220,13 +216,6 @@ try { const s = JSON.parse(localStorage.getItem(LS_KEY));
   // 老存档补前厅家具
   if(!items.some(i=>i.t==="bar")) items.push({id:nextId++, t:"bar", x:F_X+300, y:200, r:0});
   if(!items.some(i=>i.t==="island")) items.push({id:nextId++, t:"island", x:F_X+1100, y:2300, r:0});
-  let mi = 0; // 按 8/9 新图:图上两符号确认为结构柱
-  for(const it of items){
-    if(it.t==="mark" && ((it.x===2450&&it.y===2250)||(it.x===4000&&it.y===2600))){ it.t="colc"; it.x=3950; it.y=2350; mi++; }
-    else if(it.t==="mark" && ((it.x===3100&&it.y===2250)||(it.x===5300&&it.y===2600))){ it.t="colr"; it.x=5150; it.y=2450; mi++; }
-  }
-  if(!items.some(i=>i.t==="colc")) items.push({id:nextId++, t:"colc", x:3950, y:2350, r:0});
-  if(!items.some(i=>i.t==="colr")) items.push({id:nextId++, t:"colr", x:5150, y:2450, r:0});
   if(!items.some(i=>i.t==="pillar")){
     items.push({id:nextId++, t:"pillar", x:0, y:3250, r:0});
     items.push({id:nextId++, t:"pillar", x:0, y:4160, r:0, w:300, d:500});
@@ -527,7 +516,7 @@ document.getElementById("btnReset").onclick = ev => {
 const owned = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
 const hoshi = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
 const artgrp = ["pipeart","ringtable","ringtable18","halfring"];
-const planned = ["pillar","colc","colr","stand","trolley","molder","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const planned = ["pillar","stand","trolley","molder","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan?" plan":"");
