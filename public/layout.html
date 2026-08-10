@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <title>798 厨房布局台</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 加到 iPad 主屏幕用。图标路径写相对的 —— 单个 html 拷到桌面离线用也不会报错。
+     注:iOS 的 apple-touch-icon 不认 data URI,必须是真文件。 -->
+<link rel="apple-touch-icon" sizes="180x180" href="layout-icon.png">
+<link rel="icon" href="layout-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="798 布局台">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FAFAF8">
 <style>
 /* ══════════════════════════════════════════════════════════════════
    798 厨房布局台 · 样式
@@ -91,7 +99,8 @@
   .grp .micro{display:block;margin:4px 0 6px}
   .chips{display:flex;gap:7px;flex-wrap:wrap}
   .chip{font-size:13px;padding:7px 11px;min-height:36px;border:1px solid var(--border);
-    border-radius:2px;background:var(--surface);color:var(--strong);cursor:pointer;text-align:left}
+    border-radius:2px;background:var(--surface);color:var(--strong);cursor:pointer;text-align:left;
+    display:inline-flex;flex-direction:column;justify-content:center;font-family:var(--cjk)}
   .chip small{display:block;font-size:10px;color:var(--muted);letter-spacing:.04em}
   .chip.plan{border-style:dashed;color:var(--secondary)}
   .chip:active{background:var(--sunken)}
@@ -326,14 +335,27 @@
   <div class="pane" data-p="points"><div id="ptList"></div></div>
 
   <div class="pane" data-p="store">
-    <p class="hint">这份文字就是你的备份。换设备/换浏览器之前,把它整段复制发给自己存一份。</p>
-    <div class="chips" style="margin:8px 0">
-      <button class="chip" id="btnDump">生成备份文字</button>
-      <button class="chip" id="btnCopy">复制布局文字(给我看)</button>
-      <button class="chip" id="btnRestoreV1">恢复升级前的老摆法</button>
-      <button class="chip" id="btnReset">重置为初始摆法</button>
-    </div>
-    <textarea class="dump" id="dumpBox" readonly placeholder="点上面的按钮生成"></textarea>
+    <p class="hint"><b>iPad 和电脑上的方案不会自动同步</b> —— 各存各的。要把一边的摆法搬到另一边,
+      就在这边「下载备份文件」或「生成备份文字」,发到另一边再导入。<b>导入只会新增方案,不会覆盖你现在的。</b></p>
+    <div class="grp"><span class="micro">导出 · 从这台机器拿出去</span>
+      <div class="chips">
+        <button class="chip" id="btnDownload">⬇ 下载备份文件</button>
+        <button class="chip" id="btnDump">生成备份文字</button>
+        <button class="chip" id="btnCopy">复制布局文字(给我看)</button>
+      </div></div>
+    <div class="grp"><span class="micro">导入 · 从另一台机器搬进来</span>
+      <div class="chips">
+        <label class="chip" for="fileIn">📂 从文件导入</label>
+        <input id="fileIn" type="file" accept=".json,.txt,application/json,text/plain" style="display:none">
+        <button class="chip" id="btnImportText">从下面的文字导入</button>
+      </div></div>
+    <textarea class="dump" id="dumpBox"
+      placeholder="点上面「生成备份文字」会把备份写在这里;或者把另一台设备生成的备份整段粘进来,再点「从下面的文字导入」"></textarea>
+    <div class="grp"><span class="micro">其他</span>
+      <div class="chips">
+        <button class="chip" id="btnRestoreV1">恢复升级前的老摆法</button>
+        <button class="chip" id="btnReset">重置为初始摆法</button>
+      </div></div>
   </div>
 </div>
 
@@ -1818,8 +1840,88 @@ $("btnSchemeDel").onclick = () => {
   }, 8000);
 };
 
-// 存档页
+// ── 存档页:导出 / 导入 ──────────────────────────────────────────────
+// iPad、电脑桌面文件、Claude 链接是三个互不相通的存储,只能靠这里搬。
+// 校验沿用主 app 的写法:成功返回数据,失败返回一句中文原因(src/App.jsx validateImportSchema)。
+function parseBackup(text){
+  let d;
+  try { d = JSON.parse(String(text).trim()); }
+  catch(e){ return {err:"这段不是完整的备份 —— 要从第一个 { 复制到最后一个 },中间不能断。"}; }
+  if(!d || typeof d !== "object" || Array.isArray(d)) return {err:"备份内容不对,不是一份布局台的备份。"};
+  let raw;
+  if(Array.isArray(d.schemes)) raw = d.schemes;                               // 完整存档
+  else if(Array.isArray(d.items)) raw = [{name:d.name, items:d.items}];       // 单个方案 / 老版存档
+  else return {err:"这份备份里没有方案。你确定复制的是布局台的备份,不是别的东西?"};
+  const out = [];
+  for(const s of raw){
+    if(!s || !Array.isArray(s.items)) continue;
+    const its = s.items.filter(i => i && DEFS[i.t] && isFinite(+i.x) && isFinite(+i.y));
+    out.push({name:String(s.name || "导入的方案"), items:its, dropped:s.items.length - its.length});
+  }
+  if(!out.length) return {err:"备份里的方案都是空的,没有能导入的东西。"};
+  return {schemes:out, site:(d.site && typeof d.site === "object") ? d.site : null};
+}
+function importSchemes(p){
+  const prevActive = store.activeId, added = [];
+  p.schemes.forEach((s, k) => {
+    const nid = Math.max(100, ...s.items.map(i => (+i.id || 0) + 1));
+    const ns = mkScheme("s" + (Date.now() % 1e7) + "_" + k, s.name + "(导入)", clone(s.items), nid);
+    store.schemes.push(ns); added.push(ns);
+  });
+  // 对方量过天花、这边还没量,就把这个数捎带过来
+  let tookSite = false;
+  if(p.site && p.site.ceilMeasured && !store.site.ceilMeasured){
+    store.site.ceil = +p.site.ceil || store.site.ceil;
+    if(p.site.hood) store.site.hood = +p.site.hood;
+    store.site.ceilMeasured = true; tookSite = true;
+    $("inCeil").value = store.site.ceil; $("inHood").value = store.site.hood;
+  }
+  const last = added[added.length - 1];
+  store.activeId = last.id; items = last.items; sel = null;
+  hist = []; future = []; syncHistBtn();
+  save(); syncSchemeBar(); render();
+  const dropped = p.schemes.reduce((a, s) => a + (s.dropped || 0), 0);
+  showToast(`已导入 ${added.length} 个方案` +
+    (dropped ? `(有 ${dropped} 个认不出的块跳过了)` : "") +
+    (tookSite ? ",天花净高也一起带过来了" : ""),
+    () => {   // 撤销:把刚加的几个方案摘掉,原来的一个字没动
+      store.schemes = store.schemes.filter(s => added.indexOf(s) < 0);
+      store.activeId = prevActive; items = scheme().items; sel = null;
+      save(); syncSchemeBar(); render();
+    }, 8000);
+}
+
 $("btnDump").onclick = () => { $("dumpBox").value = JSON.stringify(store); };
+$("btnDownload").onclick = () => {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(store)], {type:"application/json"}));
+  a.download = `798布局_备份_${stamp}.json`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+  showToast("备份文件已存下,发到另一台设备再点「从文件导入」");
+};
+$("btnImportText").onclick = () => {
+  const t = $("dumpBox").value.trim();
+  if(!t){ showToast("先把另一台设备的备份文字粘到下面那个框里"); return; }
+  const p = parseBackup(t);
+  if(p.err){ showToast("⚠️ 导入失败:" + p.err, null, 6000); return; }
+  importSchemes(p);
+};
+$("fileIn").addEventListener("change", ev => {
+  const f = ev.target.files && ev.target.files[0];
+  ev.target.value = "";                       // 同一个文件再选一次也要能触发
+  if(!f) return;
+  const rd = new FileReader();
+  rd.onload = e => {
+    const p = parseBackup(e.target.result);
+    if(p.err){ showToast("⚠️ 导入失败:" + p.err, null, 6000); return; }
+    importSchemes(p);
+  };
+  rd.onerror = () => showToast("⚠️ 这个文件读不出来,换一份试试");
+  rd.readAsText(f);
+});
 $("btnCopy").onclick = async ev => {
   const dirs = {0:"门朝下", 90:"门朝左", 180:"门朝上", 270:"门朝右"};
   const txt = `798 布局 · ${scheme().name}(单位mm,距离=所在房间内到墙)\n` + items

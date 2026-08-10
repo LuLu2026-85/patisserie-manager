@@ -67,6 +67,18 @@ self.addEventListener('fetch', (event) => {
   if (req.mode === 'navigate') {
     event.respondWith(
       (async () => {
+        // 同源里真实存在的独立页面(如 /layout.html 厨房布局台)要按自己的路径取,
+        // 不能套用 SPA 的 index.html 兜底 —— 否则会被配方 app 的壳「吃掉」。
+        const url = new URL(req.url);
+        if (url.origin === self.location.origin && url.pathname.endsWith('.html')) {
+          const page = await caches.match(url.pathname);
+          if (page) return page;
+          try {
+            return await fetch(req);
+          } catch {
+            // 离线且没缓存过这一页 → 落到下面的 app 壳兜底
+          }
+        }
         const shell = (await caches.match('/index.html')) || (await caches.match('/'));
         if (shell) return shell;
         try {

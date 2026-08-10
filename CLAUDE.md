@@ -198,6 +198,25 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
 
+## `public/layout.html` — 798 厨房布局台(独立工具,不属于主 app)
+
+单文件、无构建、纯离线的厨房设备摆放工具(约 1900 行,内联 SVG,毫米坐标)。
+放在 `public/` 是因为 Vite 会把这个目录原样拷进 `dist/`,于是上线后有一个独立地址
+`/layout.html`,LuLu 可以在 iPad 上「添加到主屏幕」当 App 用;同一个文件拷到桌面
+双击(`file://`)也照样能跑、能存(实测 `localStorage` 在 `file://` 下可用)。
+
+三件事改之前必须知道:
+
+1. **它和主 app 共用一套设计 token,但没有共用代码。** 顶部 `:root` 的 15 个颜色值是从
+   `src/App.jsx` 的 `N`/`T` 逐值抄来的,改主 app 的色板时要顺手同步这里。
+2. **`src/sw.js` 的 navigate 分支有一条为它而设的例外。** 那个 Service Worker 原本对所有导航
+   都返回缓存的 `/index.html`,会把这一页整个吃掉。删那段例外 = 上线后 `/layout.html` 打开的是配方 app。
+3. **必须保持完全自包含**:不许有 `<script src>` / `<link href>` 到外部、不许 `fetch`。
+   唯一允许出现的 http 字符串是 SVG 命名空间(那是标识符,不发请求)。字体只用系统栈。
+
+存档 key 是 `ruru798_layout_v2`(多方案);`ruru798_layout_v1` 是升级前的原件,**只读不写、永不删除**。
+设备尺寸的权威来源是 `RURU_798_已采购设备明细_v2.md`,净空规则在文件里的 `TUNE` 常量集中定义。
+
 ## README
 
 The user-facing README is Chinese-only and describes the product, not the code:
