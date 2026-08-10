@@ -1,0 +1,2016 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>798 厨房布局台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 加到 iPad 主屏幕用。图标路径写相对的 —— 单个 html 拷到桌面离线用也不会报错。
+     注:iOS 的 apple-touch-icon 不认 data URI,必须是真文件。 -->
+<link rel="apple-touch-icon" sizes="180x180" href="layout-icon.png">
+<link rel="icon" href="layout-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="798 布局台">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FAFAF8">
+<style>
+/* ══════════════════════════════════════════════════════════════════
+   798 厨房布局台 · 样式
+   颜色全部取自 kororā 设计系统(与 src/App.jsx 的 N/T 逐值一致,勿改)
+   ══════════════════════════════════════════════════════════════════ */
+  :root{
+    --paper:#FAFAF8; --surface:#FFFFFF; --sunken:#F2F2EC; --lineFaint:#F0F0EA;
+    --line:#EAEAE2; --border:#DEDED6; --disabled:#C9C9C0; --muted:#A8A89E;
+    --subtle:#8A8A82; --secondary:#77776E; --body:#55554E; --strong:#3A3A32;
+    --ink:#16160F;
+    --accent:#B0442F; --info:#3B4E8C; --warning:#9A7B2E; --success:#2F5D50;
+    --cjk:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;
+    --k:15;               /* 每 CSS px 多少 mm — 由 applyCam() 实时写入 */
+  }
+  html{color-scheme:light}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--body);font-family:var(--cjk);
+    font-size:15px;line-height:1.6;-webkit-tap-highlight-color:transparent;
+    overscroll-behavior:none;
+    display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+  .micro{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--subtle)}
+  .num{font-variant-numeric:tabular-nums}
+
+  header{display:flex;align-items:baseline;gap:12px;padding:8px 14px 6px;
+    border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none}
+  header h1{font-size:17px;font-weight:500;color:var(--ink);margin:0;letter-spacing:.01em}
+  header .roomdim{font-size:12px;color:var(--secondary)}
+  header .save{margin-left:auto;font-size:11px;color:var(--muted);letter-spacing:.12em}
+
+  /* ── 方案条 ── */
+  #schemebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:none;
+    padding:6px 14px;border-bottom:1px solid var(--line);background:var(--sunken)}
+  #schemebar select,#schemebar input{font-family:var(--cjk);font-size:13px;
+    padding:6px 8px;min-height:34px;border:1px solid var(--border);border-radius:2px;
+    background:var(--surface);color:var(--strong);max-width:44vw}
+  #schemebar .lb{font-size:11px;letter-spacing:.12em;color:var(--subtle)}
+
+  .toolbar{display:flex;gap:6px;padding:6px 14px;border-bottom:1px solid var(--line);
+    align-items:center;flex-wrap:wrap;background:var(--surface);flex:none}
+  .toolbar .sep{width:1px;height:22px;background:var(--border);margin:0 2px}
+  button{font-family:var(--cjk);font-size:13px;color:var(--strong);background:var(--surface);
+    border:1px solid var(--border);border-radius:2px;padding:6px 11px;min-height:36px;cursor:pointer}
+  button:active{background:var(--sunken)}
+  button:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+  button.on{border-color:var(--ink);color:var(--ink);background:var(--sunken)}
+  button.danger2{border-color:var(--accent);color:var(--accent)}
+  button[disabled]{color:var(--disabled);border-color:var(--lineFaint);cursor:default}
+  button.icon{min-width:40px;font-size:15px;padding:6px 8px}
+
+  #stage{flex:1;position:relative;overflow:hidden;min-height:0}
+  #plan{display:block;width:100%;height:100%;touch-action:none;background:var(--paper);
+    -webkit-user-select:none;user-select:none}
+  #zoomtag{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--muted);
+    background:rgba(250,250,248,.86);padding:2px 7px;border-radius:2px;pointer-events:none}
+
+  #selbar{display:none;gap:9px;align-items:center;flex-wrap:wrap;flex:none;
+    padding:7px 14px;border-top:1px solid var(--line);background:var(--surface)}
+  #selbar.show{display:flex}
+  #selbar .selname{font-size:15px;font-weight:500;color:var(--ink)}
+  #selbar .seldims{font-size:12px;color:var(--secondary)}
+  #selbar .dist{font-size:12px;color:var(--info)}
+  #selbar input{width:64px;font-size:14px;padding:6px;border:1px solid var(--border);
+    border-radius:2px;font-family:var(--cjk);color:var(--strong)}
+  #selbar label{font-size:12px;color:var(--secondary)}
+
+  /* ── 底部面板 + 标签页 ── */
+  #panel{border-top:1px solid var(--line);background:var(--surface);flex:none;
+    display:flex;flex-direction:column;max-height:34vh}
+  #panel.fold .pane{display:none}
+  #tabs{display:flex;gap:0;border-bottom:1px solid var(--line);flex:none;overflow-x:auto;
+    align-items:center}
+  #tabs #btnFold{margin-left:auto;border:0;background:none;color:var(--subtle);
+    min-height:40px;padding:8px 14px;border-radius:0}
+  #tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;
+    min-height:40px;padding:8px 14px;color:var(--secondary);white-space:nowrap;background:none}
+  #tabs button.on{color:var(--ink);border-bottom-color:var(--accent);background:none}
+  #tabs .cnt{font-size:11px;margin-left:4px;padding:1px 5px;border-radius:2px;
+    background:var(--sunken);color:var(--secondary)}
+  #tabs .cnt.err{background:var(--accent);color:#fff}
+  #tabs .cnt.warn{background:var(--warning);color:#fff}
+  .pane{display:none;padding:8px 14px 14px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .pane.on{display:block}
+
+  .grp{margin-top:6px}
+  .grp .micro{display:block;margin:4px 0 6px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap}
+  .chip{font-size:13px;padding:7px 11px;min-height:36px;border:1px solid var(--border);
+    border-radius:2px;background:var(--surface);color:var(--strong);cursor:pointer;text-align:left;
+    display:inline-flex;flex-direction:column;justify-content:center;font-family:var(--cjk)}
+  .chip small{display:block;font-size:10px;color:var(--muted);letter-spacing:.04em}
+  .chip.plan{border-style:dashed;color:var(--secondary)}
+  .chip:active{background:var(--sunken)}
+
+  /* ── 检查清单 ── */
+  .find{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--lineFaint);
+    border-radius:0;padding:9px 4px 9px 0;background:none;min-height:0;line-height:1.55}
+  .find:last-child{border-bottom:0}
+  .find .tag{display:inline-block;font-size:10px;letter-spacing:.1em;padding:1px 6px;
+    border-radius:2px;margin-right:7px;vertical-align:1px;border:1px solid currentColor}
+  .find.err .tag{color:var(--accent)} .find.warn .tag{color:var(--warning)}
+  .find.todo .tag{color:var(--info)} .find.ok .tag{color:var(--success)}
+  .find b{color:var(--ink);font-weight:600}
+  .find .fix{display:block;font-size:12px;color:var(--secondary);margin-top:2px}
+  .allok{padding:16px 4px;color:var(--success);font-size:14px}
+
+  table.rep{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:4px}
+  table.rep th,table.rep td{text-align:left;padding:5px 8px 5px 0;border-bottom:1px solid var(--lineFaint);
+    vertical-align:top}
+  table.rep th{font-size:10px;letter-spacing:.12em;color:var(--subtle);font-weight:400;
+    text-transform:uppercase;border-bottom:1px solid var(--border)}
+  table.rep td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sect{margin-top:14px;font-size:13px;font-weight:600;color:var(--ink)}
+  .sect:first-child{margin-top:2px}
+  .hint{font-size:12px;color:var(--secondary);margin:4px 0 0}
+  .bad{color:var(--accent)} .good{color:var(--success)} .warnc{color:var(--warning)}
+  .siteinp{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:6px 0 2px}
+  .siteinp input{width:76px;font-size:14px;padding:6px;border:1px solid var(--border);
+    border-radius:2px;font-family:var(--cjk);color:var(--strong)}
+  .siteinp label{font-size:12px;color:var(--secondary)}
+  textarea.dump{width:100%;height:110px;font-family:ui-monospace,Menlo,monospace;font-size:11px;
+    border:1px solid var(--border);border-radius:2px;padding:8px;color:var(--body);background:var(--sunken)}
+
+  /* ── toast:先做 + 给撤销 ── */
+  #toasts{position:fixed;left:12px;bottom:12px;display:flex;flex-direction:column;gap:8px;
+    z-index:900;max-width:min(92vw,420px)}
+  .toast{background:var(--ink);color:var(--paper);padding:10px 12px;border-radius:2px;
+    font-size:13px;display:flex;gap:12px;align-items:center;
+    box-shadow:0 12px 40px rgba(22,22,15,.16),0 2px 6px rgba(22,22,15,.08)}
+  .toast button{background:none;border:0;color:var(--paper);text-decoration:underline;
+    font-size:13px;padding:2px 0;min-height:0;margin-left:auto}
+  #lsbanner{display:none;padding:8px 14px;background:#FBF0ED;color:var(--accent);
+    font-size:12.5px;border-bottom:1px solid var(--border);flex:none}
+  #lsbanner.show{display:block}
+
+  footer{padding:6px 14px 10px;font-size:11px;color:var(--muted);letter-spacing:.02em;flex:none}
+
+  /* ══ SVG ══ 机身/墙的线宽用 mm(代表真实厚度);字号与虚线用 --k 换算,保证屏幕上恒定 ══ */
+  .wall{fill:var(--ink)}
+  .wall2{fill:#B9B9B0}
+  .wall.hot,.wall2.hot{fill:var(--accent)}
+  .item.column .body{fill:#D8D8D0;stroke:var(--ink);stroke-width:16}
+  .grid5{stroke:#EEEEE6;stroke-width:6}
+  .grid10{stroke:#E2E2D8;stroke-width:8}
+  .dimline{stroke:var(--subtle);stroke-width:8}
+  .dimtext{fill:var(--secondary);font-family:var(--cjk);font-size:clamp(80px,calc(var(--k)*11px),400px)}
+  .opening-label{fill:var(--subtle);font-family:var(--cjk);font-size:clamp(70px,calc(var(--k)*9.5px),340px)}
+  .roomtag{fill:var(--muted);letter-spacing:.3em;font-family:var(--cjk);
+    font-size:clamp(120px,calc(var(--k)*15px),600px)}
+  .win{stroke:var(--subtle);stroke-width:14;fill:none}
+
+  .item .body{fill:var(--surface);stroke:var(--ink);stroke-width:18}
+  .item.surf .body{fill:#F6F5EF}
+  .item.tabletop .body{fill:var(--sunken)}
+  .item.planned .body{fill:#FDFCF8;stroke:var(--warning);stroke-dasharray:70 50}
+  .item.planned.surf .body{fill:#F8F6EC}
+  .item.marker .body{fill:var(--sunken);stroke:var(--subtle);stroke-width:12}
+  .item.ceil .body{fill:none;stroke:var(--info);stroke-width:14;stroke-dasharray:120 60 30 60}
+  .item.selected .body{stroke:var(--accent);stroke-width:calc(var(--k)*2.4px)}
+  .item.overlap .body{fill:#F7E8E3}
+  .item .nm{fill:var(--ink);font-weight:500;font-family:var(--cjk);
+    font-size:clamp(70px,calc(var(--k)*11px),420px)}
+  .item .dm{fill:var(--subtle);font-family:var(--cjk);
+    font-size:clamp(55px,calc(var(--k)*9px),340px)}
+  .item.stacked .body{fill-opacity:.7;stroke-dasharray:46 32}
+  .item.stacked .nm,.item.stacked .dm{paint-order:stroke;stroke:#FFFFFF;stroke-width:40;stroke-linejoin:round}
+
+  .proj{fill:var(--ink);fill-opacity:.05;stroke:var(--ink);stroke-width:10;
+    stroke-dasharray:calc(var(--k)*4px) calc(var(--k)*3px);opacity:.55}
+  .door{fill:var(--info);fill-opacity:.05;stroke:var(--info);stroke-width:10;
+    stroke-dasharray:calc(var(--k)*4px) calc(var(--k)*3px);opacity:.65}
+  .op-zone{fill:var(--info);opacity:.09}
+  .op-edge{stroke:var(--info);stroke-width:10;fill:none;opacity:.5;
+    stroke-dasharray:calc(var(--k)*5px) calc(var(--k)*5px)}
+  .side-zone{fill:var(--warning);opacity:.07}
+  .zones-off .door,.zones-off .op-zone,.zones-off .op-edge,
+  .zones-off .side-zone,.zones-off .proj{display:none}
+
+  .badge{fill:var(--info);font-family:var(--cjk);font-weight:500;
+    font-size:clamp(60px,calc(var(--k)*8px),240px)}
+  .badgebox{fill:var(--surface);stroke:var(--info);stroke-width:8}
+  .conn{fill:var(--info);stroke:var(--surface);stroke-width:8}
+  .badges-off .badge,.badges-off .badgebox,.badges-off .conn{display:none}
+
+  .ghost .body{fill:none;stroke:var(--info);stroke-width:12;opacity:.45;
+    stroke-dasharray:calc(var(--k)*6px) calc(var(--k)*5px)}
+  .guide{stroke:var(--accent);stroke-width:calc(var(--k)*1.1px);fill:none;
+    stroke-dasharray:calc(var(--k)*6px) calc(var(--k)*4px)}
+  .guidetag{fill:var(--accent);font-family:var(--cjk);
+    font-size:clamp(60px,calc(var(--k)*9px),300px)}
+  .aisle{stroke:var(--accent);stroke-width:calc(var(--k)*1.2px);fill:none}
+  .aisletext{fill:var(--accent);font-family:var(--cjk);font-weight:500;
+    font-size:clamp(60px,calc(var(--k)*9.5px),320px)}
+  .flash{fill:none;stroke:var(--accent);stroke-width:calc(var(--k)*3px);
+    animation:fl 1.4s ease-out forwards}
+  @keyframes fl{0%{opacity:1}100%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.flash{animation:none;opacity:.6}}
+
+  /* ══ §9 打印 ══ 沿用 src/App.jsx 的房子写法:先全隐藏,再显 .print-area ══ */
+  #printarea{display:none}
+  @media print{
+    body *{visibility:hidden}
+    #printarea,#printarea *{visibility:visible}
+    #printarea{display:block;position:absolute;left:0;top:0;width:100%}
+    .no-print{display:none!important}
+    #printarea tr,#printarea .pblock{break-inside:avoid;page-break-inside:avoid}
+    #printarea .pagebreak{break-before:page;page-break-before:always}
+    /* 黑白:底色转白、描边转实黑,灰度复印不丢信息 */
+    #printarea .item .body{fill:#fff!important;stroke:#000!important;stroke-width:14!important}
+    #printarea .item.planned .body{stroke-dasharray:70 50!important}
+    #printarea .item .nm,#printarea .item .dm,#printarea .roomtag,
+    #printarea .dimtext,#printarea .opening-label{fill:#000!important}
+    #printarea .op-zone{fill:url(#hatchWork)!important;opacity:1!important}
+    #printarea .side-zone{fill:url(#hatchSide)!important;opacity:1!important}
+    #printarea .door,#printarea .proj{fill:none!important;stroke:#000!important;opacity:1!important}
+    #printarea .op-edge,#printarea .aisle{stroke:#000!important}
+    #printarea .badge,#printarea .aisletext,#printarea .conn{fill:#000!important}
+    #printarea .badgebox{stroke:#000!important;fill:#fff!important}
+    #printarea .grid5,#printarea .grid10{stroke:#E8E8E8!important}
+  }
+  #printarea{background:#fff;color:#000;font-family:var(--cjk);line-height:1.5}
+  #printarea h2{font-size:14pt;margin:0 0 2mm}
+  #printarea .meta{font-size:9pt;color:#333;margin-bottom:3mm}
+  #printarea table{border-collapse:collapse;width:100%;font-size:9pt}
+  #printarea th,#printarea td{text-align:left;padding:1.6mm 2mm 1.6mm 0;
+    border-bottom:.4pt solid #BBB;vertical-align:top}
+  #printarea th{font-size:8pt;border-bottom:.8pt solid #000;font-weight:700}
+  #printarea td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+  #printarea .legend{font-size:8.5pt;margin-top:2mm;color:#222}
+  #printarea .hard{border:1pt solid #000;padding:3mm;margin-top:4mm;font-size:9pt}
+  #printarea svg{width:100%;height:auto;display:block}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>798 厨房布局台</h1>
+  <span class="roomdim num">厨房 8475×4660 · 前厅约 4830 宽(⚠️按图目测) · 网格 500</span>
+  <span class="save" id="savemsg">自动保存</span>
+</header>
+
+<div id="lsbanner">⚠️ 这个环境存不下东西(浏览器不让写本地存储)。现在的摆法**关掉页面就没了**,请用文件版打开,或先用「存档」页把文字复制出来。</div>
+
+<div id="schemebar" class="no-print">
+  <span class="lb">方案</span>
+  <select id="schemeSel" aria-label="选择方案"></select>
+  <input id="schemeName" style="display:none" aria-label="方案名">
+  <button id="btnSchemeNew">＋ 复制当前</button>
+  <button id="btnSchemeRename">改名</button>
+  <button id="btnSchemeDel" class="danger2">删除</button>
+  <span class="lb" style="margin-left:6px">叠影对比</span>
+  <select id="ghostSel" aria-label="叠影对比"></select>
+</div>
+
+<div class="toolbar no-print">
+  <button id="btnZoomOut" class="icon" aria-label="缩小">－</button>
+  <button id="btnZoomIn" class="icon" aria-label="放大">＋</button>
+  <button id="btnFitK">只看厨房</button>
+  <button id="btnFitAll">看全场</button>
+  <span class="sep"></span>
+  <button id="btnSnap" class="on">吸附:开</button>
+  <button id="btnZones" class="on">净空:显示</button>
+  <button id="btnBadges">点位:隐藏</button>
+  <span class="sep"></span>
+  <button id="btnUndo" disabled>↶ 撤销</button>
+  <button id="btnRedo" disabled>↷ 重做</button>
+  <span class="sep"></span>
+  <button id="btnPrintPlan">打印平面图</button>
+  <button id="btnPrintTbl">打印点位表</button>
+</div>
+
+<div id="stage">
+  <svg id="plan" role="img" aria-label="厨房平面布局"></svg>
+  <div id="zoomtag" class="num"></div>
+</div>
+
+<div id="selbar" class="no-print">
+  <span class="selname" id="selName"></span>
+  <span class="seldims num" id="selDims"></span>
+  <span class="dist num" id="selDist"></span>
+  <label id="szBox" style="display:none">宽 <input id="inW" type="number" step="50" min="100" max="8000" inputmode="numeric">
+    深 <input id="inD" type="number" step="50" min="100" max="4000" inputmode="numeric"></label>
+  <button id="btnSwap" style="display:none">换成新型号</button>
+  <button id="btnRot">旋转 90°</button>
+  <button id="btnDup">复制一台</button>
+  <button id="btnDel" class="danger2">移除</button>
+</div>
+
+<div id="panel" class="no-print">
+  <div id="tabs">
+    <button data-p="chips" class="on">设备</button>
+    <button data-p="check">检查<span class="cnt" id="cntCheck">0</span></button>
+    <button data-p="list">清单<span class="cnt" id="cntList">0</span></button>
+    <button data-p="points">点位表</button>
+    <button data-p="store">存档</button>
+    <button id="btnFold" aria-label="收起下面的面板">▼ 收起</button>
+  </div>
+
+  <div class="pane on" data-p="chips">
+    <div class="grp"><span class="micro">已购设备 — 点一下放入图中</span>
+      <div class="chips" id="chipsOwned"></div></div>
+    <div class="grp"><span class="micro">必配件(水电相关,别漏)</span>
+      <div class="chips" id="chipsAux"></div></div>
+    <div class="grp"><span class="micro">星崎冷柜(未购,尺寸按官方目录)</span>
+      <div class="chips" id="chipsHoshi"></div></div>
+    <div class="grp"><span class="micro">管道雕塑区(前厅)</span>
+      <div class="chips" id="chipsArt"></div></div>
+    <div class="grp"><span class="micro">其他规划块(虚线,可改尺寸)</span>
+      <div class="chips" id="chipsPlan"></div></div>
+  </div>
+
+  <div class="pane" data-p="check">
+    <div class="siteinp">
+      <label>天花净高 <input id="inCeil" type="number" step="50" min="1500" max="6000" inputmode="numeric"></label>
+      <label>烟罩下沿 <input id="inHood" type="number" step="50" min="1500" max="4000" inputmode="numeric"></label>
+      <span class="hint" id="ceilHint"></span>
+    </div>
+    <div id="findList"></div>
+  </div>
+
+  <div class="pane" data-p="list"><div id="invList"></div></div>
+  <div class="pane" data-p="points"><div id="ptList"></div></div>
+
+  <div class="pane" data-p="store">
+    <p class="hint"><b>iPad 和电脑上的方案不会自动同步</b> —— 各存各的。要把一边的摆法搬到另一边,
+      就在这边「下载备份文件」或「生成备份文字」,发到另一边再导入。<b>导入只会新增方案,不会覆盖你现在的。</b></p>
+    <div class="grp"><span class="micro">导出 · 从这台机器拿出去</span>
+      <div class="chips">
+        <button class="chip" id="btnDownload">⬇ 下载备份文件</button>
+        <button class="chip" id="btnDump">生成备份文字</button>
+        <button class="chip" id="btnCopy">复制布局文字(给我看)</button>
+      </div></div>
+    <div class="grp"><span class="micro">导入 · 从另一台机器搬进来</span>
+      <div class="chips">
+        <label class="chip" for="fileIn">📂 从文件导入</label>
+        <input id="fileIn" type="file" accept=".json,.txt,application/json,text/plain" style="display:none">
+        <button class="chip" id="btnImportText">从下面的文字导入</button>
+      </div></div>
+    <textarea class="dump" id="dumpBox"
+      placeholder="点上面「生成备份文字」会把备份写在这里;或者把另一台设备生成的备份整段粘进来,再点「从下面的文字导入」"></textarea>
+    <div class="grp"><span class="micro">其他</span>
+      <div class="chips">
+        <button class="chip" id="btnRestoreV1">恢复升级前的老摆法</button>
+        <button class="chip" id="btnReset">重置为初始摆法</button>
+      </div></div>
+  </div>
+</div>
+
+<footer>
+  蓝色扇形=门扇扫过的轨迹;<b>灰色虚线框=机器自己伸出来的部分</b>(HL600 摆缸 193、洗碗机下翻门 425)——这块跟机身一样,不能站人也不能放东西;浅蓝=站人作业位;浅黄=侧向散热/检修位。带⚠️的是推算值,施工前实测。
+</footer>
+
+<div id="toasts" class="no-print"></div>
+<div id="printarea"></div>
+
+<script>
+(() => {
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════════
+   目录 —— 搜 §数字 可跳转
+   §0 常量与可调参数        §5 校验:碰撞/过道/竖向
+   §1 设备库 DEFS(改数据只动这里)  §6 渲染
+   §2 存档:多方案 + 迁移     §7 交互:相机/手势/吸附/撤销
+   §3 相机与坐标            §8 面板:检查/清单/点位表/存档
+   §4 几何:旋转/净空/门扇     §9 出图:打印
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ═══ §0 常量与可调参数 ═══════════════════════════════════════════════ */
+const K_W = 8475, K_D = 4660, WALL = 200;
+const F_X = K_W + WALL;               // 前厅左内墙 x
+const F_W = 4830;                     // ⚠️ 前厅宽按图目测
+const T_W = F_X + F_W;                // 全局宽
+const DOOR_Y = [250, 1250];           // 厨房↔前厅 门洞(估)
+const OPENINGS = [[300, 1000, "入口 1000"]];   // 厨房顶墙开口
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// 所有可调阈值集中在这里。来源:RURU_798_已采购设备明细_v2.md §二「通用留缝」
+const TUNE = {
+  gapMain:   900,   // 主通道(推台车)
+  gapSub:    750,   // 次通道(单人)
+  gapWall:    50,   // 设备背后离墙(散热/管线)
+  gapNeigh:   30,   // 相邻设备间
+  // 「通道」和「缝」的区别不是宽度,是能不能走人过去。
+  // 两台烤箱并排贴着上墙、中间留 200 —— 那是缝,不是过道,报它只会让人不再信这些红字。
+  aisleMinW:  300,  // 窄于这个就是缝,不当通道看
+  aisleMinLen:1500, // 通道要够长才叫通道(走得过去),否则只是两台设备之间的槽
+  seamMinLen:  200, // 判「贴太近」时两台要有这么长的正对面才算数
+  snapTolPx:  14,   // 吸附容差(屏幕 px,再换算成 mm)
+  snapMinMM:  25, snapMaxMM: 150,
+  grid:       25,   // 自由摆放的网格
+  kMin:      1.5,   // 放到最大时 1 CSS px = 1.5mm
+  histMax:    40,
+  ceilDefault: 2800, hoodDefault: 2200,
+};
+
+/* ═══ §1 设备库 ═══════════════════════════════════════════════════════
+   只改数字请改这里,别处不用动。
+
+   w,d,h   机身 宽×深×高(mm)。h 含脚,是落地到顶面的实高。
+   proj    机器作业时自己伸出去的部分 {f,l,r,b}(摆缸/下翻门)。
+           ★ 算碰撞时当机身用,画成灰虚线。站人位从它外沿起算。
+   door    铰链门扇 90° 扫过的扇形 {side:"L"|"R"|"D"|"F", w:门宽}
+           side 以 r=0(前沿朝下)时的屏幕左右为准;F=下翻门,画成矩形。
+   cl.front 站人作业位。实体压进去=错;两台的作业位互相重叠=允许。
+   cl.side  侧/背向净空 {l,r,b}。散热/检修/通风,实体压进去=错。
+   cl.over  上方净空 {clear:操作要留的净高, noCeil:该机位上方N内禁吊柜, why:""}
+            平面画不出来,只进检查清单。
+   util    水电排烟 {pw, kw, kg, water, drain, exhaust, softener, trafo, conn}
+            conn = r=0 时接口在机身内的局部坐标,缺省取机背中点(⚠️估)。
+   est     本条里的数字是推算值,界面上带 ⚠️
+   标志    top 台式 / stack 可叠 / base 可当底座 / surf 台面 / plan 未购
+           marker 记号 / ceil 吊顶件(不与地面设备碰撞) / round 圆 / hole 中孔
+           colm 实体柱样式 / art 雕塑 / legacy 旧存档兼容(不进抽屉)
+   ═════════════════════════════════════════════════════════════════════ */
+const DEFS = {
+  // ── 已购 9 台 ──────────────────────────────────────────────────────
+  proofer:{n:"醒发箱", w:810, d:1190, h:2055,
+    door:{side:"R", w:720},
+    cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:2.2, kg:238},
+    note:"把手左·向右开(实机)·门扇投影720、门前另留700走人·高2055核对天花·卸车前拍照录像"},
+
+  u10:{n:"UNOX 10盘", w:860, d:1018, h:1219, stack:1, base:1, est:1,
+    door:{side:"L", w:860},
+    cl:{front:900, side:{l:500, b:TUNE.gapWall}, sideSoft:["l"],
+        sideWhy:{l:"检修位 —— 明细写的是「建议留500」,不是硬要求"}},
+    util:{pw:"380V三相", kw:21.0, kg:178, exhaust:1, water:"进水口(净水机身内置)"},
+    note:"向左开(实机)·门宽≈860⚠️·左侧留500检修位·排烟必配·与5盘并排时10盘放左侧,两门朝两边开"},
+
+  u5:{n:"UNOX 5盘", w:860, d:1018, h:789, stack:1, base:1, est:1,
+    door:{side:"R", w:860},
+    cl:{front:900, side:{b:TUNE.gapWall}},
+    util:{pw:"380V三相", kw:11.6, kg:100, exhaust:1, water:"进水口(净水机身内置)"},
+    note:"向右开(实机)·叠在10盘上总高≈2008,核对烟罩下沿·两台错峰预热降电峰"},
+
+  irinox:{n:"急冷机", w:790, d:780, h:890, base:1, est:1,
+    door:{side:"L", w:790},
+    cl:{front:600, side:{l:50, r:50, b:50}},
+    util:{pw:"230V单相", kw:1.2, kg:115},
+    note:"左铰(官方)·门宽≈满宽790·四周留50通风·h890=机身870+可调脚(三份资料870/888/890不一,收货实测)·上面可叠烤箱·前600为站人推算⚠️"},
+
+  hl600:{n:"HL600", w:728, d:1033, h:1557,
+    proj:{f:193},
+    cl:{front:900, side:{b:TUNE.gapWall}},
+    util:{pw:"380V三相", kw:2.01, kg:411},
+    note:"无门·摆缸外伸193(官方作业深1226)·过道按 193+900=1093 留,不是按机身深·411kg!搬入路径最窄≥800、地面找平"},
+
+  ufm:{n:"UF-M 洗碗机", w:775, d:870, h:1720, hAlt:1910,
+    proj:{f:425},
+    cl:{front:600, side:{b:TUNE.gapWall},
+        over:{noCeil:2000, why:"开门瞬间顶到2000,机位上方禁吊柜/管线"}},
+    util:{pw:"380V三相", kw:8.7, kg:190, water:"热水≤60℃", drain:1, softener:1},
+    note:"下翻门外伸425(开门总深1295)·篮筐612×672,400×600天板可平放✓·必配前置软水器·收货看铭牌是否Energy版(机身1910)"},
+
+  sheeter:{n:"起酥机", w:2420, d:1072, h:535, top:1, est:1,
+    cl:{front:800},
+    util:{pw:"380V三相", kw:0.7, kg:95}, needBench:2500,
+    note:"台式·展开2420·需≥2.5m连续台面/台架·操作位在长边·两翼能否折叠收货确认"},
+
+  hl120:{n:"HL120", w:486, d:581, h:737, top:1,
+    cl:{front:400},
+    util:{pw:"220V单相", kw:0.37, kg:85},
+    note:"台式·台面需承85kg+震动,勿放悬挑板·前留400换缸"},
+
+  blixer:{n:"Blixer 4", w:242, d:325, h:479, top:1,
+    cl:{front:0, over:{clear:300, why:"抬盖"}},
+    util:{pw:"220V单相", kw:1.1},
+    note:"台式·抬盖上方留300"},
+
+  // ── 必配件(水电相关,原来完全没有) ────────────────────────────────
+  softener:{n:"前置软水器", w:300, d:500, h:600, plan:1, est:1, req:"ufm",
+    cl:{front:400},
+    util:{water:1},
+    note:"UF-M 必配·北京自来水7~18°dH,厂家要求≤3°dH·前方要能加盐·⚠️尺寸按选型"},
+
+  trafo:{n:"变压器 2kVA", w:300, d:250, h:300, plan:1, est:1, req:"ct150",
+    cl:{front:300, side:{l:150, r:150, b:150}, over:{clear:200, why:"散热"}},
+    util:{pw:"220V单相", trafo:1},
+    note:"220→100V,给 CT-150SDJ / モルダー·会发热,不能封在柜子里·⚠️尺寸按选型"},
+
+  hood:{n:"UNOX 烟罩(吊顶)", w:2000, d:1300, h:0, plan:1, ceil:1, est:1, req:"u10",
+    util:{exhaust:1},
+    note:"吊顶件·图上画的是地面投影·必须罩住两台烤箱·下沿高度要大于叠放总高·⚠️尺寸待厂家方案"},
+
+  drain:{n:"地漏", w:180, d:180, plan:1, marker:1, req:"ufm",
+    util:{drain:1}, note:"UF-M 排水用"},
+
+  // ── 配套/规划 ──────────────────────────────────────────────────────
+  stand:{n:"烤箱底柜/支架", w:860, d:1018, h:700, plan:1, base:1, est:1,
+    note:"UNOX配套·⚠️高度按订货确认"},
+  trolley:{n:"烤盘台车", w:480, d:630, h:1700, plan:1, est:1,
+    cl:{front:TUNE.gapSub},
+    note:"插400×600盘15~18层⚠️·推行通道≥750·烤箱/急冷/醒发箱旁各停1台"},
+  molder:{n:"モルダー整形机", w:500, d:860, h:1010, plan:1, est:1,
+    cl:{front:600},
+    util:{pw:"100V经变压器", trafo:1},
+    note:"按愛工舎ミニモルダーDX⚠️选定后改准·100V需变压器"},
+
+  // ── 星崎(官方目录尺寸) ────────────────────────────────────────────
+  rt188:{n:"冷藏台 RT-188MC", w:1800, d:750, h:800, plan:1, surf:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32},
+    note:"高800·台面可用·动线核心·前开门可现场改铰向"},
+  rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, h:800, plan:1, surf:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用"},
+  rt128:{n:"冷藏台 RT-128MC", w:1200, d:750, h:800, plan:1, surf:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用"},
+  ft158:{n:"冷冻台 FT-158MC", w:1500, d:750, h:800, plan:1, surf:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用·-25~-7℃"},
+  ct150:{n:"恒温高湿台 CT-150SDJ-R", w:1500, d:750, h:800, plan:1, surf:1, est:1,
+    cl:{front:500, side:{r:150, b:TUNE.gapWall}},
+    util:{pw:"100V经变压器", kw:0.17, trafo:1},
+    note:"生果子专用·85%湿度无风·396L·右机组,右侧留散热⚠️·需一路220V插座+2kVA变压器位"},
+  hr128:{n:"立式冷藏 HR-128MC", w:1200, d:850, h:1990, plan:1,
+    door:{side:"D", w:580}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.40}, note:"948L·对开双门·可现场改铰向(官方)"},
+  hr78:{n:"立式冷藏 HR-78MC", w:700, d:850, h:1990, plan:1,
+    door:{side:"R", w:660}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.40}, note:"单门·可现场改铰向(官方)"},
+  hf128:{n:"立式冷冻 HF-128MC", w:1200, d:850, h:1990, plan:1,
+    door:{side:"D", w:580}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.71}, note:"对开双门·可现场改铰向(官方)"},
+  hf78:{n:"立式冷冻 HF-78MC", w:700, d:850, h:1990, plan:1,
+    door:{side:"R", w:660}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.71}, note:"单门·可现场改铰向(官方)"},
+  hrb78:{n:"插盘冷藏 HR-78MC-B", w:700, d:850, h:1990, plan:1,
+    door:{side:"R", w:660}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.40}, note:"22盘400×600·单门可改铰向"},
+  hfb78:{n:"插盘冷冻 HF-78MC-B", w:700, d:850, h:1990, plan:1,
+    door:{side:"R", w:660}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.71}, note:"直插22盘400×600·接急冷机出品连盘转移,强烈推荐"},
+  hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, h:1990, plan:1,
+    door:{side:"D", w:580}, cl:{front:700, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.40}, note:"对开双门·可现场改铰向(官方)"},
+  im45:{n:"制冰机 IM-45CBZ", w:660, d:589, h:875, plan:1, est:1,
+    cl:{front:400, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.31, water:1, drain:1},
+    note:"前开储冰门·前留约400⚠️·日产47kg/储15kg·要给水+排水"},
+  im100:{n:"制冰机 IM-100BZ", w:660, d:590, h:1380, plan:1, est:1,
+    cl:{front:400, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.68, water:1, drain:1},
+    note:"前开储冰门·前留约400⚠️·日产99kg/储52kg·要给水+排水"},
+
+  // ── 其他规划块 ─────────────────────────────────────────────────────
+  display:{n:"蛋糕展示柜", w:1200, d:700, h:1200, plan:1, est:1,
+    cl:{front:700, side:{b:700}}, util:{pw:"220V单相"},
+    note:"⚠️尺寸为占位估,选型后改·顾客侧和操作侧都要留身位·前厅门面"},
+  wtable:{n:"不锈钢工作台", w:1500, d:750, h:800, plan:1, surf:1, note:"标准高800深750"},
+  sink3:{n:"三槽水槽", w:1800, d:700, h:800, plan:1, cl:{front:700},
+    util:{water:1, drain:1}, note:"要给水+排水"},
+  hsink:{n:"洗手池", w:500, d:450, h:800, plan:1, cl:{front:600},
+    util:{water:1, drain:1}, note:"要给水+排水"},
+  shelf:{n:"层架", w:1200, d:450, h:1800, plan:1},
+  bar:{n:"前厅吧台", w:4000, d:600, h:1050, plan:1, surf:1, est:1,
+    cl:{front:900}, note:"⚠️按图目测"},
+  island:{n:"前厅中岛", w:2400, d:1145, h:900, plan:1, surf:1, est:1, note:"⚠️按图目测"},
+  custom:{n:"自定义块", w:1000, d:600, h:800, plan:1, surf:1},
+  mark:{n:"图上符号", w:200, d:200, plan:1, marker:1},
+  pillar:{n:"柱/设备箱(按图⚠️)", w:250, d:750, h:2500, plan:1, est:1},
+
+  pipeart:{n:"管道雕塑群", w:900, d:900, h:1500, plan:1, colm:1, art:1, est:1,
+    note:"⚠️占地按图估·不可受力·实测后改"},
+  ringtable:{n:"环绕岛台 Ø2000", w:2000, d:2000, h:1050, plan:1, surf:1, round:1, hole:1100, est:1,
+    cl:{front:600}, note:"围着管道雕塑·中孔让管子长出来·吧台高1050·⚠️整环装不进去,必须现场分段拼装"},
+  ringtable18:{n:"环绕岛台 Ø1800", w:1800, d:1800, h:750, plan:1, surf:1, round:1, hole:1100, est:1,
+    cl:{front:600}, note:"座席高750·配高凳则做1050·⚠️整环装不进去,必须现场分段拼装"},
+  halfring:{n:"半环台(C形)", w:2200, d:1300, h:1050, plan:1, surf:1, hole:1000, est:1,
+    cl:{front:700}, note:"开口朝一侧·背对窗或墙·比整环省料好施工,也是唯一装得进去的做法"},
+
+  // ── 旧存档兼容:绝不能删,删了老存档里的东西会凭空消失 ────────────
+  coldtable:{n:"冷藏工作台(旧块)", w:1800, d:750, h:800, plan:1, surf:1, legacy:1, swap:"rt188"},
+  freezer:{n:"立式冷冻柜(旧块)", w:740, d:830, h:1900, plan:1, legacy:1, swap:"hf78"},
+  fridge:{n:"立式冷藏柜(旧块)", w:740, d:830, h:1900, plan:1, legacy:1, swap:"hr78"},
+  ice:{n:"制冰机(旧块)", w:500, d:600, h:800, plan:1, legacy:1, swap:"im45"},
+};
+
+const DEFAULT_ITEMS = [
+  {id:1, t:"proofer", x:100, y:60, r:0},
+  {id:2, t:"u10", x:1110, y:60, r:0},
+  {id:3, t:"u5", x:2170, y:60, r:0},
+  {id:4, t:"irinox", x:3230, y:60, r:0},
+  {id:5, t:"hl600", x:4220, y:60, r:0},
+  {id:6, t:"ufm", x:5150, y:60, r:0},
+  {id:7, t:"sheeter", x:120, y:3488, r:180},
+  {id:8, t:"hl120", x:2800, y:3979, r:180},
+  {id:9, t:"blixer", x:3520, y:4235, r:180},
+  {id:12, t:"pillar", x:0, y:3250, r:0},
+  {id:13, t:"pillar", x:0, y:4160, r:0, w:300, d:500},
+  {id:20, t:"bar", x:F_X+300, y:200, r:0},
+  {id:21, t:"island", x:F_X+1100, y:2300, r:0},
+];
+
+const OWNED = ["proofer","u10","u5","irinox","hl600","ufm","sheeter","hl120","blixer"];
+
+/* ═══ §2 存档:多方案 + 迁移 ═══════════════════════════════════════════
+   规则:v1 的 key 从此只读不写、永不删除 —— 它是升级前那份原件的备份。
+   ═════════════════════════════════════════════════════════════════════ */
+const LS_V1 = "ruru798_layout_v1";
+const LS_V2 = "ruru798_layout_v2";
+let lsOK = true;
+const lsGet = k => { try { return localStorage.getItem(k); } catch(e){ lsOK = false; return null; } };
+const lsSet = (k,v) => { try { localStorage.setItem(k,v); return true; }
+                         catch(e){ lsOK = false; return false; } };
+const clone = o => JSON.parse(JSON.stringify(o));
+
+function mkScheme(id, name, its, nid){
+  return {id, name, items:its, nextId:nid||100, todos:{}, cam:null};
+}
+function normalize(st){
+  st.schemes = (st.schemes||[]).filter(s => s && Array.isArray(s.items));
+  if(!st.schemes.length) st.schemes = [mkScheme("s1","方案 A", clone(DEFAULT_ITEMS), 100)];
+  for(const s of st.schemes){
+    s.items = s.items.filter(i => i && DEFS[i.t]);   // legacy key 都还在 DEFS,不会误删
+    for(const i of s.items){
+      i.r = [0,90,180,270].includes(+i.r) ? +i.r : 0;
+      i.x = +i.x || 0; i.y = +i.y || 0;
+    }
+    s.nextId = Math.max(s.nextId||100, 100, ...s.items.map(i=>(+i.id||0)+1));
+    s.todos = s.todos || {};
+    s.name = String(s.name || "方案");
+  }
+  if(!st.schemes.some(s=>s.id===st.activeId)) st.activeId = st.schemes[0].id;
+  st.site = Object.assign({ceil:TUNE.ceilDefault, ceilMeasured:false, hood:TUNE.hoodDefault}, st.site||{});
+  st.ui   = Object.assign({zones:true, snap:true, badges:false, ghostId:null, pane:"chips", fold:false}, st.ui||{});
+  st.v = 2;
+  return st;
+}
+function loadStore(){
+  try {
+    const s = JSON.parse(lsGet(LS_V2));
+    if(s && s.v===2 && Array.isArray(s.schemes) && s.schemes.length) return normalize(s);
+  } catch(e){}
+  // v1 → v2:整包搬进「方案 A(原来的摆法)」,并做一次性的前厅家具补件
+  try {
+    const old = JSON.parse(lsGet(LS_V1));
+    if(old && Array.isArray(old.items) && old.items.length){
+      const its = old.items.filter(i => i && DEFS[i.t]);
+      let nid = Math.max(old.nextId||100, 100, ...its.map(i=>(+i.id||0)+1));
+      // ★ 这段过去每次加载都跑,导致「删了吧台一刷新又回来」。现在只在迁移时跑一次。
+      if(!its.some(i=>i.t==="bar"))    its.push({id:nid++, t:"bar", x:F_X+300, y:200, r:0});
+      if(!its.some(i=>i.t==="island")) its.push({id:nid++, t:"island", x:F_X+1100, y:2300, r:0});
+      return normalize({v:2, activeId:"s1",
+        schemes:[mkScheme("s1","方案 A(原来的摆法)", its, nid)]});
+    }
+  } catch(e){}
+  return normalize({v:2, activeId:"s1",
+    schemes:[mkScheme("s1","方案 A", clone(DEFAULT_ITEMS), 100)]});
+}
+
+let store = loadStore();
+const scheme = () => store.schemes.find(s => s.id === store.activeId) || store.schemes[0];
+let items = scheme().items;
+let sel = null;
+// ★ 必须在任何一次 save() 之前抓住存档里的镜头位置 —— save() 会用当前(还没算过的)
+//   镜头覆盖它,那样每次开页面都会停在默认视野而不是上次看的地方。
+const storedCam = scheme().cam && scheme().cam.k ? Object.assign({}, scheme().cam) : null;
+
+function save(){
+  const s = scheme(); s.items = items; s.updatedAt = Date.now(); s.cam = {cx:cam.cx, cy:cam.cy, k:cam.k};
+  const ok = lsSet(LS_V2, JSON.stringify(store));
+  document.getElementById("savemsg").textContent =
+    ok ? "✓ 已保存 " + new Date().toTimeString().slice(0,5) : "⚠️ 存不下(见上方提示)";
+  document.getElementById("lsbanner").classList.toggle("show", !lsOK);
+}
+
+/* ═══ §3 相机与坐标 ═══════════════════════════════════════════════════ */
+const svg = document.getElementById("plan");
+const stage = document.getElementById("stage");
+const clampN = (v,a,b) => Math.max(a, Math.min(b, v));
+let cam = {cx:(T_W)/2, cy:K_D/2, k:15};
+let _inv = null;
+const camDirty = () => { _inv = null; };
+
+function fitK(w, h){
+  const r = svg.getBoundingClientRect();
+  if(!r.width || !r.height) return 15;
+  return Math.max(w / r.width, h / r.height);
+}
+function kMax(){ return fitK(T_W + 1600, K_D + 1600) * 1.25; }
+function applyCam(){
+  const r = svg.getBoundingClientRect();
+  cam.k = clampN(cam.k, TUNE.kMin, kMax());
+  const vw = r.width * cam.k, vh = r.height * cam.k;
+  svg.setAttribute("viewBox", `${cam.cx - vw/2} ${cam.cy - vh/2} ${vw} ${vh}`);
+  svg.style.setProperty("--k", cam.k.toFixed(2));
+  camDirty();
+  document.getElementById("zoomtag").textContent = `1格=500mm · 屏幕1px≈${cam.k.toFixed(1)}mm`;
+}
+function fitTo(x0, y0, x1, y1, pad){
+  pad = pad == null ? 500 : pad;
+  cam.k = clampN(fitK(x1-x0 + 2*pad, y1-y0 + 2*pad), TUNE.kMin, kMax());
+  cam.cx = (x0+x1)/2; cam.cy = (y0+y1)/2;
+  applyCam();
+}
+const fitKitchen = () => fitTo(0, 0, K_W, K_D);
+const fitAll     = () => fitTo(-WALL, -WALL, T_W + WALL, K_D + 500);
+
+const invCTM = () => (_inv || (_inv = svg.getScreenCTM().inverse()));
+const toMM = (cx, cy) => {
+  const p = new DOMPoint(cx, cy).matrixTransform(invCTM());
+  return [p.x, p.y];
+};
+// factor > 1 = 放大(k 变小 = 每像素代表的毫米数变少)
+function zoomAbout(cx, cy, factor){
+  const [ax, ay] = toMM(cx, cy);
+  cam.k = clampN(cam.k / factor, TUNE.kMin, kMax());
+  applyCam();
+  const [bx, by] = toMM(cx, cy);
+  cam.cx += ax - bx; cam.cy += ay - by;
+  applyCam();
+}
+
+/* ═══ §4 几何:旋转 / 净空 / 门扇 ═════════════════════════════════════ */
+const dims = it => ({ w: it.w || DEFS[it.t].w, d: it.d || DEFS[it.t].d });
+const fw = it => { const D = dims(it); return it.r % 180 ? D.d : D.w; };
+const fd = it => { const D = dims(it); return it.r % 180 ? D.w : D.d; };
+
+// 每台设备的净空取值(带缓存)。旧字段 op 仍兜底,漏改的条目不会炸。
+function CLR(t){
+  const D = DEFS[t];
+  if(!D._c) D._c = {
+    front: (D.cl && D.cl.front) != null ? D.cl.front : (D.op || 0),
+    side:  (D.cl && D.cl.side)  || {},
+    soft:  (D.cl && D.cl.sideSoft) || [],   // 这几个方向只是「建议」,报注意不报必改
+    why:   (D.cl && D.cl.sideWhy)  || {},
+    over:  (D.cl && D.cl.over)  || null,
+    proj:  D.proj || {},
+  };
+  return D._c;
+}
+// 旋转后四个朝向的单位向量(与原 zoneRect/doorPaths 的约定一致,已逐档核对)
+const DIRS = {
+  0:  {f:[0,1],  l:[-1,0], r:[1,0],  b:[0,-1]},
+  90: {f:[-1,0], l:[0,-1], r:[0,1],  b:[1,0]},
+  180:{f:[0,-1], l:[1,0],  r:[-1,0], b:[0,1]},
+  270:{f:[1,0],  l:[0,1],  r:[0,-1], b:[-1,0]},
+};
+// 唯一的净空矩形原语:沿 dir,从机身表面 from 到 to(局部坐标)
+function bandRect(it, dir, from, to){
+  if(!(to > from)) return null;
+  const W = fw(it), D = fd(it), v = DIRS[it.r][dir], t = to - from;
+  if(v[0] ===  1) return {x:W + from, y:0, w:t, h:D};
+  if(v[0] === -1) return {x:-to,      y:0, w:t, h:D};
+  if(v[1] ===  1) return {x:0, y:D + from, w:W, h:t};
+  return                 {x:0, y:-to,      w:W, h:t};
+}
+const abs = (it, r) => r && ({x:it.x + r.x, y:it.y + r.y, w:r.w, h:r.h});
+const projRects = it => ["f","l","r","b"]
+  .map(d => bandRect(it, d, 0, CLR(it.t).proj[d] || 0)).filter(Boolean);
+const frontRect = it => {
+  const c = CLR(it.t), p = c.proj.f || 0;
+  return bandRect(it, "f", p, p + c.front);      // ★ 站人位从机身外扩的外沿起算
+};
+const sideRects = it => ["l","r","b"]
+  .map(d => ({dir:d, r:bandRect(it, d, 0, CLR(it.t).side[d] || 0)}))
+  .filter(o => o.r);
+
+// 机身包围盒(含机身外扩),用于过道扫描与碰撞
+function bodyBox(it){
+  let x0 = it.x, y0 = it.y, x1 = it.x + fw(it), y1 = it.y + fd(it);
+  for(const r of projRects(it)){
+    const a = abs(it, r);
+    x0 = Math.min(x0, a.x); y0 = Math.min(y0, a.y);
+    x1 = Math.max(x1, a.x + a.w); y1 = Math.max(y1, a.y + a.h);
+  }
+  return {x:x0, y:y0, w:x1-x0, h:y1-y0};
+}
+const rectHit = (a, b) => a && b &&
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+function rectOverlapArea(a, b){
+  const w = Math.min(a.x+a.w, b.x+b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y+a.h, b.y+b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w*h : 0;
+}
+
+// 门扇:返回扇形几何(绝对坐标)。side F = 下翻门,返回矩形。
+function frontEdge(it){
+  const W = fw(it), D = fd(it), x = it.x, y = it.y;
+  if(it.r === 0)   return {A:[x, y+D],   B:[x+W, y+D], N:[0,1]};
+  if(it.r === 180) return {A:[x+W, y],   B:[x, y],     N:[0,-1]};
+  if(it.r === 90)  return {A:[x, y],     B:[x, y+D],   N:[-1,0]};
+  return                  {A:[x+W, y+D], B:[x+W, y],   N:[1,0]};
+}
+function doorGeom(it){
+  const D = DEFS[it.t];
+  if(!D.door) return [];
+  const {A, B, N} = frontEdge(it);
+  const L = Math.hypot(B[0]-A[0], B[1]-A[1]);
+  const U = [(B[0]-A[0])/L, (B[1]-A[1])/L];
+  const dw = Math.min(D.door.w, L);
+  // 注:下翻门(洗碗机)不走这里 —— 它是机身自己伸出来的,用 proj 表示,见 §1 ufm
+  const mk = (H, dir, w) => ({type:"arc", H, d1:dir, d2:N, r:w});
+  if(D.door.side === "R") return [mk(B, [-U[0],-U[1]], dw)];
+  if(D.door.side === "L") return [mk(A, U, dw)];
+  const half = Math.min(D.door.w, L/2);         // 对开双门
+  return [mk(A, U, half), mk(B, [-U[0],-U[1]], half)];
+}
+// 扇形 ∩ 轴对齐矩形:先把矩形裁到扇形所在的象限,再比最近点距离。轴对齐时是精确解。
+function sectorHitRect(s, R){
+  let x0 = R.x, x1 = R.x + R.w, y0 = R.y, y1 = R.y + R.h;
+  for(const d of [s.d1, s.d2]){
+    if(d[0] ===  1) x0 = Math.max(x0, s.H[0]);
+    if(d[0] === -1) x1 = Math.min(x1, s.H[0]);
+    if(d[1] ===  1) y0 = Math.max(y0, s.H[1]);
+    if(d[1] === -1) y1 = Math.min(y1, s.H[1]);
+  }
+  if(x1 <= x0 || y1 <= y0) return false;
+  const dx = Math.max(x0 - s.H[0], 0, s.H[0] - x1);
+  const dy = Math.max(y0 - s.H[1], 0, s.H[1] - y1);
+  return Math.hypot(dx, dy) < s.r;
+}
+// 画门扇弧。ox/oy 是要减掉的偏移(画在 item 的 <g> 里就传 it.x/it.y)
+function doorPath(s, ox, oy){
+  const H = [s.H[0] - (ox||0), s.H[1] - (oy||0)];
+  const S = [H[0] + s.d1[0]*s.r, H[1] + s.d1[1]*s.r];
+  const E = [H[0] + s.d2[0]*s.r, H[1] + s.d2[1]*s.r];
+  const cross = (S[0]-H[0])*(E[1]-H[1]) - (S[1]-H[1])*(E[0]-H[0]);
+  return `<path class="door" d="M ${S[0]} ${S[1]} A ${s.r} ${s.r} 0 0 ${cross>0?1:0} ${E[0]} ${E[1]} L ${H[0]} ${H[1]} Z"/>`;
+}
+
+// 墙体矩形(与 staticLayer 画的一致),门扇撞墙 / 设备压墙都靠它
+const WALLS = (() => {
+  const w = [];
+  w.push({x:-WALL, y:-WALL, w:WALL, h:K_D + 2*WALL, n:"左外墙"});
+  w.push({x:T_W,   y:-WALL, w:WALL, h:K_D + 2*WALL, n:"右外墙"});
+  w.push({x:K_W, y:-WALL, w:WALL, h:DOOR_Y[0] + WALL, n:"厨房↔前厅隔墙"});
+  w.push({x:K_W, y:DOOR_Y[1], w:WALL, h:K_D - DOOR_Y[1], n:"厨房↔前厅隔墙"});
+  let px = -WALL;
+  for(const [ox, ow] of OPENINGS){ w.push({x:px, y:-WALL, w:ox-px, h:WALL, n:"上墙"}); px = ox+ow; }
+  w.push({x:px, y:-WALL, w:K_W-px, h:WALL, n:"上墙"});
+  w.push({x:F_X-WALL, y:-WALL, w:F_W + 2*WALL, h:WALL, n:"前厅上墙"});
+  return w;
+})();
+
+/* ═══ §5 校验 ════════════════════════════════════════════════════════ */
+const solidsOf = () => items.filter(i => !DEFS[i.t].marker && !DEFS[i.t].ceil);
+
+function carrier(it){                    // 它压在谁上面(中心点判定;落在中孔里不算)
+  const D = DEFS[it.t];
+  if(!D.top && !D.stack) return null;
+  const cx = it.x + fw(it)/2, cy = it.y + fd(it)/2;
+  return items.find(o => {
+    if(o.id === it.id) return false;
+    const OD = DEFS[o.t];
+    if(!OD.surf && !OD.base) return false;
+    if(!(cx > o.x && cx < o.x + fw(o) && cy > o.y && cy < o.y + fd(o))) return false;
+    if(OD.hole){
+      const ox = o.x + fw(o)/2, oy = o.y + fd(o)/2;
+      if(Math.hypot(cx-ox, cy-oy) < OD.hole/2) return false;
+    }
+    return true;
+  }) || null;
+}
+function carrierMap(){
+  const m = new Map();
+  for(const it of items){ const c = carrier(it); if(c) m.set(it.id, c); }
+  return m;
+}
+function stackHeight(it, carr){
+  let h = DEFS[it.t].h || 0, cur = it;
+  for(let k = 0; k < 3; k++){
+    const c = carr ? carr.get(cur.id) : carrier(cur);
+    if(!c) break;
+    h += DEFS[c.t].h || 0; cur = c;
+  }
+  return h;
+}
+// 同型号有好几台时给名字加编号,不然检查清单里两条一模一样的话看不出说的是哪台
+function nm(it){
+  const same = items.filter(o => o.t === it.t);
+  if(same.length < 2) return DEFS[it.t].n;
+  return `${DEFS[it.t].n} #${same.findIndex(o => o.id === it.id) + 1}`;
+}
+const roomOf = it => (it.x + fw(it)/2 >= F_X ? "前厅" : "厨房");
+
+// ── 过道扫描:轴对齐矩形用边界扫描线是精确的 ──────────────────────────
+function aisleScan(){
+  const raw = [];
+  const boxes = solidsOf().map(i => Object.assign(bodyBox(i), {n:nm(i)}));
+  const scan = (axis) => {
+    const horiz = axis === "x";                 // 横向空隙 → 扫 y
+    const lo = 0, hi = horiz ? K_W : K_D;       // 只查厨房内
+    const cross = horiz ? K_D : K_W;
+    const cuts = [...new Set([0, cross].concat(
+      boxes.map(b => horiz ? b.y : b.x)).concat(
+      boxes.map(b => horiz ? b.y+b.h : b.x+b.w)))]
+      .filter(v => v >= 0 && v <= cross).sort((a,b) => a-b);
+    for(let i = 0; i < cuts.length-1; i++){
+      const c0 = cuts[i], c1 = cuts[i+1];
+      if(c1 - c0 < 80) continue;
+      const mid = (c0 + c1)/2;
+      const sp = boxes.filter(b => horiz
+          ? (b.y < mid && mid < b.y+b.h && b.x < K_W)
+          : (b.x < mid && mid < b.x+b.w && b.y < K_D))
+        .map(b => horiz ? {a:b.x, b:b.x+b.w, n:b.n} : {a:b.y, b:b.y+b.h, n:b.n})
+        .sort((p,q) => p.a - q.a);
+      let cur = lo, prev = horiz ? "左墙" : "上墙";
+      for(const s of sp){
+        if(s.a > cur) raw.push({axis, gap:s.a-cur, a:cur, b:s.a, c0, c1, left:prev, right:s.n});
+        if(s.b > cur){ cur = s.b; prev = s.n; }
+      }
+      if(cur < hi) raw.push({axis, gap:hi-cur, a:cur, b:hi, c0, c1, left:prev,
+                             right: horiz ? "右墙" : "下墙(窗)"});
+    }
+  };
+  scan("x"); scan("y");
+  // 相邻扫描带上同一条空隙合并成一条
+  const key = g => `${g.axis}|${Math.round(g.a)}|${Math.round(g.b)}|${g.left}|${g.right}`;
+  const merged = new Map();
+  for(const g of raw){
+    const k = key(g), m = merged.get(k);
+    if(m){ m.c0 = Math.min(m.c0, g.c0); m.c1 = Math.max(m.c1, g.c1); }
+    else merged.set(k, Object.assign({}, g));
+  }
+  return [...merged.values()]
+    .map(g => Object.assign(g, {len:g.c1 - g.c0}))
+    .filter(g => g.len >= TUNE.seamMinLen);
+}
+
+// ── 主校验 ────────────────────────────────────────────────────────────
+function validate(){
+  const F = [];
+  const add = (sev, cat, msg, fix, ids, focus) =>
+    F.push({sev, cat, msg, fix, ids:ids||[], focus});
+  const boxOf = it => ({x:it.x, y:it.y, w:fw(it), h:fd(it)});
+  const carr = carrierMap();
+  const sol = solidsOf();
+
+  // 1) 机身重叠
+  for(let i = 0; i < sol.length; i++) for(let j = i+1; j < sol.length; j++){
+    const a = sol[i], b = sol[j];
+    const ca = carr.get(a.id), cb = carr.get(b.id);
+    if((ca && ca.id === b.id) || (cb && cb.id === a.id)) continue;   // 真的叠放才豁免
+    if(rectHit(bodyBox(a), bodyBox(b)))
+      add("err", "重叠", `「${nm(a)}」和「${nm(b)}」压在一起了。`,
+          "把其中一台拖开。", [a.id, b.id], bodyBox(a));
+  }
+  // 叠放但压得太靠边
+  for(const it of items){
+    const c = carr.get(it.id); if(!c) continue;
+    const ov = rectOverlapArea(boxOf(it), boxOf(c)) / (fw(it)*fd(it));
+    if(ov < 0.8)
+      add("warn", "叠放", `「${nm(it)}」只有 ${Math.round(ov*100)}% 压在「${nm(c)}」上,叠得太靠边。`,
+          "往里挪,至少压住八成。", [it.id], boxOf(it));
+  }
+  // 2) 门扇
+  for(const it of items){
+    for(const g of doorGeom(it)){
+      for(const o of sol){
+        if(o.id === it.id) continue;
+        if(sectorHitRect(g, bodyBox(o)))
+          add("err", "门", `「${nm(it)}」的门打不开:会撞到「${nm(o)}」。`,
+              "把挡住的那台挪开,或给这台换个方向(旋转90°)。", [it.id, o.id], bodyBox(it));
+      }
+      for(const w of WALLS)
+        if(sectorHitRect(g, w))
+          add("err", "门", `「${nm(it)}」的门打不开:会撞到${w.n}。`,
+              "离墙远一点,或换个开门方向。", [it.id], bodyBox(it));
+    }
+  }
+  // 3) 站人作业位 / 侧向净空
+  for(const it of items){
+    const c = CLR(it.t), est = DEFS[it.t].est ? "⚠️" : "";
+    const fr = abs(it, frontRect(it));
+    if(fr){
+      for(const o of sol){
+        if(o.id === it.id) continue;
+        if(carr.get(o.id) && carr.get(o.id).id === it.id) continue;
+        if(rectHit(fr, bodyBox(o)))
+          add("err", "作业位", `「${nm(it)}」前面要站人,「${nm(o)}」占住了。`,
+              `这台前方要留 ${c.front}${est}mm${c.proj.f?`(其中 ${c.proj.f} 是机器自己伸出来的)`:""}。`,
+              [it.id, o.id], fr);
+      }
+      for(const w of WALLS) if(rectHit(fr, w))
+        add("err", "作业位", `「${nm(it)}」的作业位顶到${w.n},人站不下。`,
+            `前方要留 ${c.front}${est}mm。`, [it.id], fr);
+    }
+    for(const {dir, r} of sideRects(it)){
+      const sr = abs(it, r);
+      const soft = c.soft.includes(dir);
+      const why = c.why[dir] || (dir === "b" ? "背后走管线/散热" : "散热/通风");
+      for(const o of sol){
+        if(o.id === it.id) continue;
+        if(rectHit(sr, bodyBox(o)))
+          add(soft ? "warn" : "err", "散热",
+              `「${nm(it)}」侧面要留 ${c.side[dir]}mm(${why}),被「${nm(o)}」占了。`,
+              soft ? "这条是「建议」,挤一挤能用,但以后修机器会很难受。" : "挪开,不然散热不出去、也修不了。",
+              [it.id, o.id], sr);
+      }
+    }
+  }
+  // 4) 跨墙 / 出界
+  for(const it of items){
+    const b = bodyBox(it);
+    if(b.x < K_W && b.x + b.w > K_W)
+      add("err", "越界", `「${nm(it)}」跨在厨房和前厅的隔墙上。`,
+          "整台挪进厨房或整台挪进前厅。", [it.id], b);
+    for(const w of WALLS) if(rectHit(b, w))
+      add("err", "越界", `「${nm(it)}」压在${w.n}上。`, "往里挪。", [it.id], b);
+  }
+  // 5) 过道 / 留缝
+  for(const g of aisleScan()){
+    const horiz = g.axis === "x";
+    const focus = horiz ? {x:g.a, y:g.c0, w:g.gap, h:g.c1-g.c0}
+                        : {x:g.c0, y:g.a, w:g.c1-g.c0, h:g.gap};
+    const between = `「${g.left}」和「${g.right}」之间`;
+    const isWall = /墙/.test(g.left) || /墙/.test(g.right);
+    if(g.gap < TUNE.gapNeigh && !isWall)
+      add("warn", "留缝", `${between}只有 ${Math.round(g.gap)}mm,太挤了。`,
+          `相邻设备之间要留 ≥${TUNE.gapNeigh}mm。`, [], focus);
+    else if(g.gap < TUNE.gapWall && isWall)
+      add("warn", "留缝", `${between}只有 ${Math.round(g.gap)}mm,背后走不了管线。`,
+          `设备背后离墙要 ≥${TUNE.gapWall}mm(散热/管线)。`, [], focus);
+    // 够宽够长才当通道看 —— 否则两台设备之间的槽会被误报成「过道太窄」
+    else if(g.gap >= TUNE.aisleMinW && g.len >= TUNE.aisleMinLen && g.gap < TUNE.gapSub)
+      add("err", "过道", `${between}的过道只有 ${Math.round(g.gap)}mm,人侧身都难过。`,
+          `次通道要 ≥${TUNE.gapSub}mm,主通道要 ≥${TUNE.gapMain}mm。`, [], focus);
+    else if(g.gap >= TUNE.gapSub && g.len >= TUNE.aisleMinLen && g.gap < TUNE.gapMain)
+      add("warn", "过道", `${between}的过道 ${Math.round(g.gap)}mm,人过得去,推台车过不去。`,
+          `推台车要 ≥${TUNE.gapMain}mm。如果这条不推车,可以接受。`, [], focus);
+  }
+  // 6) 竖向(平面画不出,只能列)
+  const ceil = store.site.ceil, hood = store.site.hood;
+  const ceilTag = store.site.ceilMeasured ? "" : "⚠️(还没实测)";
+  for(const it of items){
+    const D = DEFS[it.t], c = CLR(it.t);
+    const tot = stackHeight(it, carr);
+    if(tot && ceil && tot > ceil - 100)
+      add("err", "高度", `「${nm(it)}」${carr.get(it.id)?"叠起来":""}总高 ${tot}mm,你填的天花是 ${ceil}mm${ceilTag},装不下(顶上还要留 100)。`,
+          "换个位置,或不叠放。", [it.id], bodyBox(it));
+    if(D.util && D.util.exhaust && tot && hood && tot > hood)
+      add("err", "高度", `「${nm(it)}」总高 ${tot}mm,超过烟罩下沿 ${hood}mm。`,
+          "抬高烟罩,或别把烤箱叠这么高。", [it.id], bodyBox(it));
+    if(c.over && c.over.clear){
+      const top = tot || D.h || 0;
+      if(ceil && top + c.over.clear > ceil)
+        add("warn", "高度", `「${nm(it)}」${c.over.why}要留 ${c.over.clear}mm 净高,顶面已到 ${top}mm。`,
+            `天花 ${ceil}mm${ceilTag},核一下。`, [it.id], bodyBox(it));
+    }
+    if(c.over && c.over.noCeil)
+      add("todo", "沟通", `「${nm(it)}」上方 ${c.over.noCeil}mm 内不能有吊柜或管线 —— ${c.over.why}`,
+          "这条图上画不出来,当面告诉 JIN,并在图纸上手写标注。", [it.id], bodyBox(it));
+  }
+  // 7) 缺件 / 配套
+  const has = t => items.some(i => i.t === t);
+  const placed = OWNED.filter(has);
+  for(const t of OWNED) if(!has(t))
+    add("warn", "缺件", `已购的「${DEFS[t].n}」还没放进图里。`,
+        "在「设备」页点一下就能放进来。", []);
+  if(has("ufm")){
+    if(!has("softener")) add("err", "缺件", "洗碗机 UF-M 没配前置软水器。",
+      "北京自来水 7~18°dH,厂家要求 ≤3°dH,不配会结垢损坏且不保修。点「设备」页的「前置软水器」放进来。", []);
+    if(!has("drain")) add("warn", "缺件", "洗碗机 UF-M 旁边没标地漏。",
+      "排水要地漏,现在标上,装修才会留。", []);
+  }
+  if((has("ct150") || has("molder")) && !has("trafo"))
+    add("err", "缺件", "有 100V 的机器,但图上没有变压器位。",
+        "CT-150SDJ 是日本 100V,要 2kVA 变压器,还得通风。放进来占个位。", []);
+  if((has("u10") || has("u5")) && !has("hood"))
+    add("warn", "缺件", "两台 UNOX 没画烟罩。",
+        "排烟是硬约束,烟罩投影要罩住两台炉,现在画上才好核净高。", []);
+  if(has("hood")){
+    const hd = items.find(i => i.t === "hood");
+    const ovens = items.filter(i => i.t === "u10" || i.t === "u5");
+    const bad = ovens.filter(o => rectOverlapArea(boxOf(o), boxOf(hd)) / (fw(o)*fd(o)) < 0.9);
+    if(bad.length) add("warn", "排烟", `烟罩没有完全罩住${bad.map(nm).map(s=>`「${s}」`).join("、")}。`,
+      "把烟罩挪过去盖住,或换更大的罩。", [hd.id], boxOf(hd));
+  }
+  // 8) 提示
+  const sh = items.find(i => i.t === "sheeter");
+  if(sh) add("todo", "沟通", "起酥机展开 2420mm,需要 ≥2500mm 连续台面/台架。",
+    "确认那面墙线够长,并让 JIN 把台面按整段做。", [sh.id], boxOf(sh));
+  if(has("hl600")) add("todo", "沟通", "HL600 411kg —— 搬入路径最窄处要 ≥800mm,地面要找平。",
+    "这条图上算不出来,现场量一次门洞/走廊/电梯。", []);
+  for(const it of items) if(DEFS[it.t].legacy)
+    add("warn", "旧块", `「${nm(it)}」是老存档里的旧块,尺寸和星崎官方值对不上。`,
+        `建议换成「${DEFS[DEFS[it.t].swap].n}」—— 选中它,在下面点「换成新型号」。`, [it.id], boxOf(it));
+
+  const order = {err:0, warn:1, todo:2};
+  F.sort((a,b) => order[a.sev] - order[b.sev]);
+  return F;
+}
+
+/* ═══ §6 渲染 ════════════════════════════════════════════════════════ */
+function staticLayer(){
+  let s = "";
+  for(let x = 500; x < T_W; x += 500){
+    if(x > K_W && x < F_X) continue;
+    s += `<line class="${x%1000?'grid5':'grid10'}" x1="${x}" y1="0" x2="${x}" y2="${K_D}"/>`;
+  }
+  for(let y = 500; y < K_D; y += 500){
+    s += `<line class="${y%1000?'grid5':'grid10'}" x1="0" y1="${y}" x2="${K_W}" y2="${y}"/>`;
+    s += `<line class="${y%1000?'grid5':'grid10'}" x1="${F_X}" y1="${y}" x2="${T_W}" y2="${y}"/>`;
+  }
+  s += `<rect class="wall" x="${-WALL}" y="${-WALL}" width="${WALL}" height="${K_D+2*WALL}"/>`;
+  s += `<rect class="wall" x="${T_W}" y="${-WALL}" width="${WALL}" height="${K_D+2*WALL}"/>`;
+  s += `<rect class="wall2" x="${K_W}" y="${-WALL}" width="${WALL}" height="${DOOR_Y[0]+WALL}"/>`;
+  s += `<rect class="wall2" x="${K_W}" y="${DOOR_Y[1]}" width="${WALL}" height="${K_D-DOOR_Y[1]}"/>`;
+  s += `<text class="opening-label" x="${K_W+WALL/2}" y="${DOOR_Y[0]-80}" text-anchor="middle">拟建墙+门洞1000⚠️现状敞开</text>`;
+  let px = -WALL;
+  for(const [ox, ow, label] of OPENINGS){
+    s += `<rect class="wall" x="${px}" y="${-WALL}" width="${ox-px}" height="${WALL}"/>`;
+    s += `<text class="opening-label" x="${ox+ow/2}" y="${-WALL-90}" text-anchor="middle">${label}</text>`;
+    px = ox + ow;
+  }
+  s += `<rect class="wall" x="${px}" y="${-WALL}" width="${K_W-px}" height="${WALL}"/>`;
+  s += `<rect class="wall" x="${F_X-WALL}" y="${-WALL}" width="${F_W+2*WALL}" height="${WALL}"/>`;
+  s += `<rect x="0" y="${K_D}" width="${K_W}" height="120" class="win"/>`;
+  s += `<rect x="${F_X}" y="${K_D}" width="${F_W}" height="120" class="win"/>`;
+  for(let x = 0; x <= K_W; x += 847) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
+  for(let x = F_X; x <= T_W; x += 805) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
+  s += `<text class="opening-label" x="${K_W/2}" y="${K_D+420}" text-anchor="middle">窗带(按图,待确认)</text>`;
+  s += `<text class="roomtag" x="${K_W/2}" y="${K_D-160}" text-anchor="middle">厨 房</text>`;
+  s += `<text class="roomtag" x="${F_X+F_W/2}" y="${K_D-160}" text-anchor="middle">前 厅</text>`;
+  const M = 620;
+  s += `<line class="dimline" x1="0" y1="${-M+240}" x2="${K_W}" y2="${-M+240}"/>
+    <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">8475</text>
+    <line class="dimline" x1="${F_X}" y1="${-M+240}" x2="${T_W}" y2="${-M+240}"/>
+    <text class="dimtext num" x="${F_X+F_W/2}" y="${-M+180}" text-anchor="middle">约4830⚠️</text>
+    <line class="dimline" x1="${T_W+M-240}" y1="0" x2="${T_W+M-240}" y2="${K_D}"/>
+    <text class="dimtext num" x="${T_W+M-300}" y="${K_D/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${K_D/2})">4660</text>`;
+  return s;
+}
+
+const BADGE = [
+  ["pw", v => /三相/.test(v) ? "强" : /100V/.test(v) ? "变" : "单"],
+  ["water", () => "水"], ["drain", () => "漏"],
+  ["exhaust", () => "排"], ["softener", () => "软"],
+];
+function badgeChars(t){
+  const u = DEFS[t].util; if(!u) return [];
+  const out = [];
+  for(const [k, f] of BADGE) if(u[k]) out.push(f(u[k]));
+  return [...new Set(out)];
+}
+function connPoint(it){                      // 接口点(绝对坐标),缺省机背中点
+  const D = DEFS[it.t], dd = dims(it);
+  const p = (D.util && D.util.conn) || [dd.w/2, 0];
+  const qx = p[0] - dd.w/2, qy = p[1] - dd.d/2;
+  const r = it.r;
+  const q = r === 0 ? [qx, qy] : r === 90 ? [-qy, qx] : r === 180 ? [-qx, -qy] : [qy, -qx];
+  return [it.x + fw(it)/2 + q[0], it.y + fd(it)/2 + q[1]];
+}
+
+function itemSVG(it, opt){
+  const D = DEFS[it.t], W = fw(it), Dp = fd(it), dd = dims(it);
+  const carr = opt.carr, bad = opt.bad;
+  const cls = ["item", D.surf?"surf":"", D.top?"tabletop":"", D.plan?"planned":"",
+    D.marker?"marker":"", D.colm?"column":"", D.ceil?"ceil":"",
+    carr.has(it.id)?"stacked":"", it.id===sel?"selected":"", bad.has(it.id)?"overlap":""]
+    .filter(Boolean).join(" ");
+  let g = `<g class="${cls}" data-id="${it.id}" transform="translate(${it.x} ${it.y})">`;
+  for(const r of projRects(it))
+    g += `<rect class="proj" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"/>`;
+  for(const {r} of sideRects(it))
+    g += `<rect class="side-zone" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"/>`;
+  const fr = frontRect(it);
+  if(fr){
+    g += `<rect class="op-zone" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
+    const v = DIRS[it.r].f;
+    const ex = v[1] === 1 ? [fr.x, fr.y+fr.h, fr.x+fr.w, fr.y+fr.h]
+             : v[1] === -1 ? [fr.x, fr.y, fr.x+fr.w, fr.y]
+             : v[0] === -1 ? [fr.x, fr.y, fr.x, fr.y+fr.h]
+             : [fr.x+fr.w, fr.y, fr.x+fr.w, fr.y+fr.h];
+    g += `<line class="op-edge" x1="${ex[0]}" y1="${ex[1]}" x2="${ex[2]}" y2="${ex[3]}"/>`;
+  }
+  for(const s of doorGeom(it)) g += doorPath(s, it.x, it.y);
+  if(D.marker){
+    g += `<circle class="body" cx="${W/2}" cy="${Dp/2}" r="${Math.max(W,Dp)/2}"/>
+      <text class="dm" x="${W+90}" y="${Dp/2+40}">${D.n}</text>`;
+  } else {
+    if((D.colm || D.round) && W === Dp) g += `<circle class="body" cx="${W/2}" cy="${Dp/2}" r="${W/2}"/>`;
+    else g += `<rect class="body" x="0" y="0" width="${W}" height="${Dp}"/>`;
+    if(D.hole) g += `<circle cx="${W/2}" cy="${Dp/2}" r="${D.hole/2}" fill="var(--paper)"
+      stroke="var(--accent)" stroke-width="14" stroke-dasharray="60 40"/>`;
+    if(D.art){
+      g += `<circle cx="${W*0.36}" cy="${Dp*0.38}" r="${W*0.17}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+            <circle cx="${W*0.62}" cy="${Dp*0.32}" r="${W*0.14}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+            <circle cx="${W*0.52}" cy="${Dp*0.64}" r="${W*0.19}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>
+            <circle cx="${W*0.78}" cy="${Dp*0.60}" r="${W*0.11}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>`;
+    }
+    const cx = W/2, name = D.n + (carr.has(it.id) ? (D.stack ? "·叠放" : "·台上") : "");
+    if(opt.covered.has(it.id)){
+      g += `<text class="nm" x="${cx}" y="${Dp-60}" text-anchor="middle">▼${D.n}(下层)</text>`;
+    } else if(W >= 640){
+      g += `<text class="nm" x="${cx}" y="${Dp/2-20}" text-anchor="middle">${name}</text>
+        <text class="dm num" x="${cx}" y="${Dp/2+150}" text-anchor="middle">${dd.w}×${dd.d}</text>`;
+    } else {
+      g += `<text class="nm" x="${cx}" y="${Dp/2+50}" text-anchor="middle">${name}</text>`;
+    }
+    const chars = badgeChars(it.t);
+    if(chars.length){
+      const bs = 190, pad = 30;
+      chars.forEach((ch, i) => {
+        const bx = W - pad - (chars.length - i)*bs;
+        g += `<rect class="badgebox" x="${bx}" y="${pad}" width="${bs-16}" height="${bs-16}" rx="8"/>
+              <text class="badge" x="${bx+(bs-16)/2}" y="${pad+(bs-16)*0.72}" text-anchor="middle">${ch}</text>`;
+      });
+      const c = connPoint(it);
+      g += `<circle class="conn" cx="${c[0]-it.x}" cy="${c[1]-it.y}" r="55"/>`;
+    }
+  }
+  return g + "</g>";
+}
+
+let lastFindings = [];
+function render(){
+  const carr = carrierMap();
+  const covered = new Set([...carr.values()].map(o => o.id));
+  lastFindings = validate();
+  const bad = new Set();
+  for(const f of lastFindings) if(f.sev === "err") for(const id of f.ids) bad.add(id);
+
+  let s = `<defs>
+    <pattern id="hatchWork" width="90" height="90" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="90" stroke="#000" stroke-width="7"/></pattern>
+    <pattern id="hatchSide" width="140" height="140" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <line x1="0" y1="0" x2="0" y2="140" stroke="#000" stroke-width="6"/></pattern>
+  </defs><g>${staticLayer()}</g>`;
+
+  // 叠影对比
+  const gh = store.ui.ghostId && store.schemes.find(x => x.id === store.ui.ghostId);
+  if(gh && gh.id !== store.activeId){
+    s += `<g class="ghost">`;
+    for(const it of gh.items){
+      if(!DEFS[it.t]) continue;
+      s += `<rect class="body" x="${it.x}" y="${it.y}" width="${fw(it)}" height="${fd(it)}"/>`;
+    }
+    s += `<text class="guidetag" x="${120}" y="${K_D-120}">叠影:${esc(gh.name)}</text></g>`;
+  }
+
+  const lay = t => (DEFS[t].surf || DEFS[t].base) && !DEFS[t].stack ? 0
+                 : DEFS[t].ceil ? 4 : DEFS[t].top ? 3 : DEFS[t].stack ? 2 : 1;
+  for(const it of [...items].sort((a,b) => lay(a.t) - lay(b.t)))
+    s += itemSVG(it, {carr, covered, bad});
+
+  // 最窄的一条过道:画出来,这张图 JIN 一看就懂
+  const narrow = aisleScan()
+    .filter(g => g.gap >= TUNE.aisleMinW && g.len >= TUNE.aisleMinLen && g.gap < TUNE.gapMain)
+    .sort((a,b) => a.gap - b.gap)[0];
+  if(narrow){
+    const h = narrow.axis === "x";
+    const mid = (narrow.c0 + narrow.c1)/2;
+    const x1 = h ? narrow.a : mid, y1 = h ? mid : narrow.a;
+    const x2 = h ? narrow.b : mid, y2 = h ? mid : narrow.b;
+    s += `<line class="aisle" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>
+      <text class="aisletext num" x="${(x1+x2)/2}" y="${(y1+y2)/2 - 70}" text-anchor="middle">最窄过道 ${Math.round(narrow.gap)}</text>`;
+  }
+  s += `<g id="guides"></g><g id="flashes"></g>`;
+
+  svg.innerHTML = s;
+  svg.classList.toggle("zones-off", !store.ui.zones);
+  svg.classList.toggle("badges-off", !store.ui.badges);
+  updateSelbar();
+  renderPanels();
+}
+
+/* ═══ §7 交互:手势 / 吸附 / 撤销 ══════════════════════════════════════ */
+// ── 撤销 ──
+let hist = [], future = [];
+const snapshot = () => JSON.stringify(items);
+function pushHist(){
+  hist.push(snapshot());
+  if(hist.length > TUNE.histMax) hist.shift();
+  future.length = 0; syncHistBtn();
+}
+function restoreSnap(js){
+  items = JSON.parse(js); scheme().items = items;
+  if(!items.some(i => i.id === sel)) sel = null;
+  save(); render(); syncHistBtn();
+}
+function undo(){ if(!hist.length) return; future.push(snapshot()); restoreSnap(hist.pop()); }
+function redo(){ if(!future.length) return; hist.push(snapshot()); restoreSnap(future.pop()); }
+function syncHistBtn(){
+  document.getElementById("btnUndo").disabled = !hist.length;
+  document.getElementById("btnRedo").disabled = !future.length;
+}
+
+// ── toast:先做 + 给撤销 ──
+function showToast(msg, undoFn, ms){
+  const box = document.getElementById("toasts");
+  while(box.children.length >= 3) box.removeChild(box.firstChild);
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = `<span></span>`;
+  el.firstChild.textContent = msg;
+  let timer = null;
+  const kill = () => { clearTimeout(timer); el.remove(); };
+  if(undoFn){
+    const b = document.createElement("button");
+    b.textContent = "撤销";
+    b.onclick = () => { undoFn(); kill(); };
+    el.appendChild(b);
+  }
+  box.appendChild(el);
+  const arm = () => { timer = setTimeout(kill, ms || (undoFn ? 6000 : 2600)); };
+  el.onmouseenter = () => clearTimeout(timer);
+  el.onmouseleave = arm;
+  arm();
+}
+
+// ── 吸附 ──
+function buildSnapLines(dragged){
+  const V = [], H = [];
+  const pv = (a, v, label) => a.push({v, label});
+  const inFront = dragged.x + fw(dragged)/2 >= F_X;
+  const L = inFront ? F_X : 0, R = inFront ? T_W : K_W;
+  const rn = inFront ? "前厅" : "厨房";
+  pv(V, L, `贴${rn}左墙`);            pv(V, L + TUNE.gapWall, `离${rn}左墙${TUNE.gapWall}(散热)`);
+  pv(V, R, `贴${rn}右墙`);            pv(V, R - TUNE.gapWall, `离${rn}右墙${TUNE.gapWall}(散热)`);
+  pv(H, 0, "贴上墙");                 pv(H, TUNE.gapWall, `离上墙${TUNE.gapWall}(散热)`);
+  pv(H, K_D, "贴下墙(窗)");           pv(H, K_D - TUNE.gapWall, `离下墙${TUNE.gapWall}`);
+  pv(V, (L+R)/2, `${rn}中线`);        pv(H, K_D/2, `${rn}中线`);
+  for(const o of items){
+    if(o.id === dragged.id || DEFS[o.t].marker) continue;
+    const n = DEFS[o.t].n, l = o.x, r = o.x + fw(o), t = o.y, b = o.y + fd(o);
+    pv(V, l, `对齐「${n}」左边`);  pv(V, r, `对齐「${n}」右边`);
+    pv(V, l - TUNE.gapNeigh, `紧挨「${n}」留缝${TUNE.gapNeigh}`);
+    pv(V, r + TUNE.gapNeigh, `紧挨「${n}」留缝${TUNE.gapNeigh}`);
+    pv(V, (l+r)/2, `与「${n}」中线对齐`);
+    pv(H, t, `对齐「${n}」上边`);  pv(H, b, `对齐「${n}」下边`);
+    pv(H, t - TUNE.gapNeigh, `紧挨「${n}」留缝${TUNE.gapNeigh}`);
+    pv(H, b + TUNE.gapNeigh, `紧挨「${n}」留缝${TUNE.gapNeigh}`);
+    pv(H, (t+b)/2, `与「${n}」中线对齐`);
+  }
+  return {V, H};
+}
+function snapAxis(lines, raw, size, tol){
+  let best = null;
+  for(const L of lines) for(const off of [0, -size, -size/2]){
+    const target = L.v + off, d = Math.abs(target - raw);
+    if(d <= tol && (!best || d < best.d)) best = {d, pos:target, label:L.label, line:L.v};
+  }
+  return best;
+}
+function drawGuides(gx, gy, it){
+  const g = svg.querySelector("#guides"); if(!g) return;
+  let s = "";
+  if(gx) s += `<line class="guide" x1="${gx.line}" y1="${-WALL}" x2="${gx.line}" y2="${K_D+300}"/>`;
+  if(gy) s += `<line class="guide" x1="${-WALL}" y1="${gy.line}" x2="${T_W}" y2="${gy.line}"/>`;
+  const lab = (gx || gy);
+  if(lab) s += `<text class="guidetag" x="${it.x}" y="${it.y - 90}">${(gx?gx.label:"")}${gx&&gy?" · ":""}${gy?gy.label:""}</text>`;
+  g.innerHTML = s;
+}
+
+// ── 手势 ──
+const pts = new Map();
+let mode = null, drag = null, pan0 = null, pinch = null, snapLines = null, pendingHist = null;
+const dist2 = (a, b) => Math.hypot(a.x-b.x, a.y-b.y);
+const midOf = (a, b) => ({x:(a.x+b.x)/2, y:(a.y+b.y)/2});
+
+svg.addEventListener("pointerdown", ev => {
+  pts.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+  try { svg.setPointerCapture(ev.pointerId); } catch(e){}
+  if(pts.size === 1){
+    const g = ev.target.closest("g[data-id]");
+    if(g){
+      let id = +g.dataset.id, it = items.find(i => i.id === id);
+      if(sel === id){ const c = carrier(it); if(c){ id = c.id; it = c; } }  // 再点一下 → 选下层
+      sel = id;
+      const [mx, my] = toMM(ev.clientX, ev.clientY);
+      drag = {it, dx:mx - it.x, dy:my - it.y, x0:it.x, y0:it.y, sx:ev.clientX, sy:ev.clientY, moved:false};
+      snapLines = buildSnapLines(it);
+      pendingHist = snapshot();
+      mode = "drag";
+      render();
+    } else {
+      mode = "pan";
+      pan0 = {x:ev.clientX, y:ev.clientY, cx:cam.cx, cy:cam.cy, moved:false};
+    }
+  } else if(pts.size === 2){
+    // ★ 第二指落下 → 把刚才被第一指带偏的设备放回去,再开始缩放
+    if(mode === "drag" && drag){ drag.it.x = drag.x0; drag.it.y = drag.y0; render(); }
+    drag = null; pendingHist = null;
+    const [a, b] = [...pts.values()];
+    const m = midOf(a, b);
+    pinch = {d0:Math.max(dist2(a,b), 1), k0:cam.k, anchor:toMM(m.x, m.y)};
+    mode = "pinch";
+  }
+});
+svg.addEventListener("pointermove", ev => {
+  if(!pts.has(ev.pointerId)) return;
+  pts.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+  if(mode === "pinch" && pts.size >= 2){
+    const [a, b] = [...pts.values()];
+    const d = Math.max(dist2(a, b), 1), m = midOf(a, b);
+    cam.k = clampN(pinch.k0 * pinch.d0 / d, TUNE.kMin, kMax());
+    applyCam();
+    const [wx, wy] = toMM(m.x, m.y);          // 锚点法:每帧对齐,长时间缩放也不漂
+    cam.cx += pinch.anchor[0] - wx; cam.cy += pinch.anchor[1] - wy;
+    applyCam();
+  } else if(mode === "pan" && pan0){
+    cam.cx = pan0.cx - (ev.clientX - pan0.x) * cam.k;
+    cam.cy = pan0.cy - (ev.clientY - pan0.y) * cam.k;
+    if(Math.hypot(ev.clientX-pan0.x, ev.clientY-pan0.y) > 6) pan0.moved = true;
+    applyCam();
+  } else if(mode === "drag" && drag){
+    if(!drag.moved && Math.hypot(ev.clientX-drag.sx, ev.clientY-drag.sy) < 6) return;
+    drag.moved = true;
+    const [mx, my] = toMM(ev.clientX, ev.clientY);
+    const it = drag.it;
+    const rawX = mx - drag.dx, rawY = my - drag.dy;
+    const tol = clampN(TUNE.snapTolPx * cam.k, TUNE.snapMinMM, TUNE.snapMaxMM);
+    const gx = store.ui.snap ? snapAxis(snapLines.V, rawX, fw(it), tol) : null;
+    const gy = store.ui.snap ? snapAxis(snapLines.H, rawY, fd(it), tol) : null;
+    it.x = clampN(gx ? gx.pos : Math.round(rawX/TUNE.grid)*TUNE.grid, -WALL, T_W - fw(it));
+    it.y = clampN(gy ? gy.pos : Math.round(rawY/TUNE.grid)*TUNE.grid, -WALL, K_D - fd(it));
+    const g = svg.querySelector(`g[data-id="${it.id}"]`);
+    if(g) g.setAttribute("transform", `translate(${it.x} ${it.y})`);
+    drawGuides(gx, gy, it);
+    updateSelbar();
+  }
+});
+function endPointer(ev, cancelled){
+  pts.delete(ev.pointerId);
+  if(mode === "drag" && drag){
+    if(cancelled){ drag.it.x = drag.x0; drag.it.y = drag.y0; }     // 系统抢手势 → 不提交半截移动
+    else if(drag.moved){ if(pendingHist){ hist.push(pendingHist); if(hist.length>TUNE.histMax) hist.shift(); future.length=0; syncHistBtn(); } save(); }
+    drag = null; pendingHist = null;
+    const gu = svg.querySelector("#guides"); if(gu) gu.innerHTML = "";
+    mode = pts.size ? mode : null; render();
+  } else if(mode === "pan"){
+    if(!cancelled && !pan0.moved){ sel = null; render(); }
+    else save();
+    mode = pts.size ? mode : null;
+  } else if(mode === "pinch"){
+    if(pts.size === 1){
+      const p = [...pts.values()][0];
+      mode = "pan"; pan0 = {x:p.x, y:p.y, cx:cam.cx, cy:cam.cy, moved:true};
+    } else { mode = null; save(); }
+  }
+  if(!pts.size && mode !== "drag") mode = null;
+}
+svg.addEventListener("pointerup", ev => endPointer(ev, false));
+svg.addEventListener("pointercancel", ev => endPointer(ev, true));
+
+// iOS Safari 的双指缩放走 gesture* 事件,不 preventDefault 会连整页一起放大
+for(const t of ["gesturestart","gesturechange","gestureend"])
+  document.addEventListener(t, e => e.preventDefault(), {passive:false});
+svg.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  if(ev.ctrlKey) zoomAbout(ev.clientX, ev.clientY, 1 - clampN(ev.deltaY, -60, 60)*0.01);
+  else { cam.cx += ev.deltaX*cam.k; cam.cy += ev.deltaY*cam.k; applyCam(); }
+}, {passive:false});
+svg.addEventListener("dblclick", () => fitKitchen());
+addEventListener("resize", () => { camDirty(); applyCam(); });
+addEventListener("orientationchange", () => setTimeout(() => { camDirty(); applyCam(); }, 250));
+if(window.ResizeObserver) new ResizeObserver(() => { camDirty(); applyCam(); }).observe(stage);
+addEventListener("keydown", ev => {
+  if((ev.metaKey||ev.ctrlKey) && ev.key.toLowerCase()==="z"){ ev.preventDefault(); ev.shiftKey?redo():undo(); }
+});
+
+function flashFocus(f){
+  const g = svg.querySelector("#flashes"); if(!g || !f) return;
+  g.innerHTML = `<rect class="flash" x="${f.x-60}" y="${f.y-60}" width="${f.w+120}" height="${f.h+120}"/>`;
+  setTimeout(() => { if(g) g.innerHTML = ""; }, 1600);
+}
+function focusOn(f, id){
+  if(id != null) sel = id;
+  if(f) fitTo(f.x, f.y, f.x+f.w, f.y+f.h, 1400);
+  render(); flashFocus(f);
+}
+
+/* ═══ §8 面板 ════════════════════════════════════════════════════════ */
+function selItem(){ return items.find(i => i.id === sel) || null; }
+function roomRef(it){
+  const cx = it.x + fw(it)/2;
+  return cx >= F_X ? {x0:F_X, x1:T_W, tag:"前厅"} : {x0:0, x1:K_W, tag:"厨房"};
+}
+// 四个方向到最近的邻居/墙(净距)
+function gapsAround(it){
+  const b = bodyBox(it), out = {l:Infinity, r:Infinity, t:Infinity, b:Infinity};
+  const cand = solidsOf().filter(o => o.id !== it.id).map(bodyBox)
+    .concat(WALLS.map(w => ({x:w.x, y:w.y, w:w.w, h:w.h})));
+  for(const o of cand){
+    const yOv = Math.min(b.y+b.h, o.y+o.h) - Math.max(b.y, o.y);
+    const xOv = Math.min(b.x+b.w, o.x+o.w) - Math.max(b.x, o.x);
+    if(yOv > 0){
+      if(o.x + o.w <= b.x) out.l = Math.min(out.l, b.x - (o.x+o.w));
+      if(o.x >= b.x + b.w) out.r = Math.min(out.r, o.x - (b.x+b.w));
+    }
+    if(xOv > 0){
+      if(o.y + o.h <= b.y) out.t = Math.min(out.t, b.y - (o.y+o.h));
+      if(o.y >= b.y + b.h) out.b = Math.min(out.b, o.y - (b.y+b.h));
+    }
+  }
+  return out;
+}
+function updateSelbar(){
+  const bar = document.getElementById("selbar"), it = selItem();
+  bar.classList.toggle("show", !!it);
+  if(!it) return;
+  const D = DEFS[it.t], dd = dims(it), R = roomRef(it), c = CLR(it.t);
+  const car = carrier(it), est = D.est ? "⚠️" : "";
+  document.getElementById("selName").textContent =
+    D.n + (D.top ? " · 台式" : "") + (D.plan && !D.marker ? " · 未购" : "")
+    + (car ? ` · 放在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`
+           : (D.top ? " · ⚠️ 还没放到台面上" : ""));
+  const bits = [`${dd.w}×${dd.d}`];
+  if(D.h) bits.push(`高${D.h}`);
+  if(c.proj.f) bits.push(`机身外扩${c.proj.f}`);
+  if(c.front) bits.push(`作业位${c.front}${est}`);
+  if(D.util && D.util.pw) bits.push(D.util.pw + (D.util.kw ? ` ${D.util.kw}kW` : ""));
+  if(D.note) bits.push(D.note);
+  document.getElementById("selDims").textContent = bits.join(" · ");
+  const g = gapsAround(it), fmt = v => v === Infinity ? "—" : Math.round(v);
+  document.getElementById("selDist").textContent =
+    `${R.tag}内:距左${Math.round(it.x - R.x0)} 距上${Math.round(it.y)} · 净距 左${fmt(g.l)}/右${fmt(g.r)}/上${fmt(g.t)}/下${fmt(g.b)}`;
+  const szBox = document.getElementById("szBox");
+  szBox.style.display = (D.plan && !D.marker) ? "" : "none";
+  if(D.plan){ document.getElementById("inW").value = dd.w; document.getElementById("inD").value = dd.d; }
+  const sw = document.getElementById("btnSwap");
+  sw.style.display = D.legacy ? "" : "none";
+  if(D.legacy) sw.textContent = `换成「${DEFS[D.swap].n}」`;
+}
+
+const SEVTAG = {err:"必改", warn:"注意", todo:"待办"};
+function renderCheck(){
+  const box = document.getElementById("findList");
+  const F = lastFindings;
+  const errs = F.filter(f => f.sev === "err").length, warns = F.filter(f => f.sev === "warn").length;
+  const cnt = document.getElementById("cntCheck");
+  cnt.textContent = errs || warns || 0;
+  cnt.className = "cnt" + (errs ? " err" : warns ? " warn" : "");
+  document.getElementById("ceilHint").textContent =
+    store.site.ceilMeasured ? "已标为实测值" : "⚠️还没实测 —— 量了改这里,竖向检查才算数";
+  if(!F.length){ box.innerHTML = `<div class="allok">✓ 没查出问题。门都能开,过道够宽,高度也放得下。</div>`; return; }
+  box.innerHTML = "";
+  for(const f of F){
+    const b = document.createElement("button");
+    b.className = "find " + f.sev;
+    b.innerHTML = `<span class="tag">${SEVTAG[f.sev]}</span><b>${f.cat}</b> ${f.msg}` +
+                  (f.fix ? `<span class="fix">${f.fix}</span>` : "");
+    b.onclick = () => focusOn(f.focus, f.ids[0]);
+    box.appendChild(b);
+  }
+}
+function renderInv(){
+  const box = document.getElementById("invList");
+  const has = t => items.some(i => i.t === t);
+  const missing = OWNED.filter(t => !has(t));
+  document.getElementById("cntList").textContent = missing.length;
+  let s = `<div class="sect">已购 9 台:已放 ${9-missing.length} 台</div>`;
+  s += `<table class="rep"><tr><th>设备</th><th>尺寸</th><th>电源</th><th>功率</th><th>重量</th><th>状态</th></tr>`;
+  for(const t of OWNED){
+    const D = DEFS[t], u = D.util || {};
+    s += `<tr><td>${D.n}</td><td class="n">${D.w}×${D.d}×${D.h||"—"}</td><td>${u.pw||"—"}</td>` +
+         `<td class="n">${u.kw != null ? u.kw+" kW" : "—"}</td><td class="n">${u.kg ? u.kg+" kg" : "—"}</td>` +
+         `<td class="${has(t)?"good":"bad"}">${has(t) ? "已放" : "还没放"}</td></tr>`;
+  }
+  s += `</table>`;
+  const comp = [["softener","ufm","UF-M 的前置软水器"], ["drain","ufm","UF-M 的地漏"],
+                ["trafo","ct150","CT-150SDJ 的 220→100V 变压器"], ["hood","u10","两台 UNOX 的烟罩"]];
+  const need = comp.filter(([, p]) => has(p) || (p === "ct150" && has("molder")));
+  if(need.length){
+    s += `<div class="sect">必配件</div><table class="rep">`;
+    for(const [t, , label] of need)
+      s += `<tr><td>${label}</td><td class="${has(t)?"good":"bad"}">${has(t)?"已放":"还没放 —— 去「设备」页点一下"}</td></tr>`;
+    s += `</table>`;
+  }
+  box.innerHTML = s;
+}
+function renderPoints(){
+  const box = document.getElementById("ptList");
+  const rows = items.filter(i => DEFS[i.t].util).map(i => {
+    const D = DEFS[i.t], u = D.util, R = roomRef(i), c = connPoint(i);
+    return {i, D, u, room:R.tag, x:Math.round(c[0]-R.x0), y:Math.round(c[1]),
+            st: D.plan ? "待购" : "已购"};
+  });
+  const sum = (f) => rows.filter(f).reduce((a, r) => a + (r.u.kw || 0), 0);
+  const three = rows.filter(r => r.u.pw && /三相/.test(r.u.pw));
+  const single = rows.filter(r => r.u.pw && /220V|230V/.test(r.u.pw));
+  const lowv = rows.filter(r => r.u.pw && /100V/.test(r.u.pw));
+  const ownedKw = rows.filter(r => OWNED.includes(r.i.t)).reduce((a,r) => a + (r.u.kw||0), 0);
+  const t3 = rows.filter(r => OWNED.includes(r.i.t) && /三相/.test(r.u.pw||"")).reduce((a,r)=>a+(r.u.kw||0),0);
+  const t1 = ownedKw - t3;
+
+  const tbl = (title, list) => {
+    if(!list.length) return "";
+    let s = `<div class="sect">${title}</div><table class="rep">
+      <tr><th>设备</th><th>状态</th><th>电源</th><th>功率</th><th>房间</th><th>距左</th><th>距上</th></tr>`;
+    for(const r of list)
+      s += `<tr><td>${r.D.n}</td><td>${r.st}</td><td>${r.u.pw||"—"}</td>` +
+           `<td class="n">${r.u.kw!=null?r.u.kw.toFixed(2):"—"}</td><td>${r.room}</td>` +
+           `<td class="n">${r.x}</td><td class="n">${r.y}</td></tr>`;
+    return s + `</table>`;
+  };
+  let s = `<p class="hint">坐标 = 接口点到<b>所在房间</b>左墙/上墙的距离(mm)。接口点缺省取机身背面中点 ⚠️,现场以厂家接口位为准。</p>`;
+  s += tbl("强电 · 380V 三相", three) + tbl("单相 220 / 230V", single) + tbl("100V(经 2kVA 变压器)", lowv);
+  const okKw = Math.abs(ownedKw - 48.88) < 0.02;
+  s += `<div class="sect">配电汇总</div><table class="rep">
+    <tr><td>图上已购设备合计</td><td class="n ${okKw?"good":"bad"}">${ownedKw.toFixed(2)} kW</td>
+        <td>文件值 48.88 kW ${okKw?"✓":"✗ 对不上,查是不是有机器没放进图"}</td></tr>
+    <tr><td>其中三相 380V</td><td class="n">${t3.toFixed(2)} kW</td><td>文件值 44.01</td></tr>
+    <tr><td>其中单相 220V</td><td class="n">${t1.toFixed(2)} kW</td><td>文件值 4.87</td></tr>
+    <tr><td>场地容量</td><td class="n">50 kW</td><td>计算负荷(Kd=0.55~0.6)约 44~48 kW,贴线</td></tr></table>`;
+
+  const water = rows.filter(r => r.u.water || r.u.drain || r.u.softener);
+  if(water.length){
+    s += `<div class="sect">给排水</div><table class="rep">
+      <tr><th>设备</th><th>接口</th><th>房间</th><th>距左</th><th>距上</th><th>说明</th></tr>`;
+    for(const r of water){
+      const kinds = [r.u.water ? "给水" : "", r.u.drain ? "排水/地漏" : "", r.u.softener ? "前置软水器" : ""]
+        .filter(Boolean).join(" + ");
+      s += `<tr><td>${r.D.n}</td><td>${kinds}</td><td>${r.room}</td><td class="n">${r.x}</td>` +
+           `<td class="n">${r.y}</td><td>${typeof r.u.water === "string" ? r.u.water : ""}</td></tr>`;
+    }
+    s += `</table>`;
+  }
+  const ex = rows.filter(r => r.u.exhaust);
+  if(ex.length){
+    s += `<div class="sect">排烟</div><table class="rep">
+      <tr><th>设备</th><th>房间</th><th>距左</th><th>距上</th></tr>`;
+    for(const r of ex) s += `<tr><td>${r.D.n}</td><td>${r.room}</td><td class="n">${r.x}</td><td class="n">${r.y}</td></tr>`;
+    s += `</table>`;
+  }
+  box.innerHTML = s;
+}
+function renderPanels(){ renderCheck(); renderInv(); renderPoints(); }
+
+/* ═══ §9 出图:打印 ═══════════════════════════════════════════════════ */
+const HARD = [
+ "1. 配电:已购9台装机 48.88 kW(三相44.01 + 单相4.87);整店含冷链/空调/照明预计约80 kW,现有容量50 kW → 计算负荷约44~48 kW,勉强够但贴线,建议需量控制器 + 两台UNOX错峰预热,并预留增容通道。",
+ "2. 排烟/给水:两台UNOX需烟罩(净水机身内置一体,只需预留进水口);UF-M洗碗机需前置软水器 + 热水进水(≤60℃) + 地漏,机位旁留软水器位(约300×500)与加盐通道;UF-M机位上方2000以内不得有吊柜/管线。",
+ "3. 高度核对:醒发箱2055、立式冷柜1990、烤箱叠放总高(急冷890+10盘1219≈2110)——天花、烟罩、梁下净高按此复核。",
+];
+function printHead(sub){
+  const d = new Date();
+  const dt = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  return `<h2>kororā · 798 厨房 ${sub}</h2>
+    <div class="meta">方案:${esc(scheme().name)} · 出图日期:${dt} · 单位 mm · 天花净高 ${store.site.ceil}${store.site.ceilMeasured?"":"⚠️未实测"} · 烟罩下沿 ${store.site.hood}
+    <br>⚠️ 标 ⚠️ 的尺寸为推算值,施工前须实测。前厅未包含在本图内(尺寸尚未实测)。</div>`;
+}
+function buildPlanPage(){
+  const pad = 700, x0 = -WALL - pad, y0 = -WALL - pad - 300;
+  const w = K_W + 2*WALL + 2*pad, h = K_D + WALL + 2*pad + 600;
+  const c = svg.cloneNode(true);
+  c.removeAttribute("id");
+  c.classList.remove("zones-off", "badges-off");   // 出图一律带净空和点位角标
+  c.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+  c.style.setProperty("--k", (w / 1040).toFixed(2));   // A4 横向可用宽 ≈ 277mm ≈ 1040px
+  const gg = c.querySelector("#guides"); if(gg) gg.remove();
+  const ff = c.querySelector("#flashes"); if(ff) ff.remove();
+  // 比例尺:1m
+  const sb = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const by = K_D + 780, bx = 0;
+  sb.innerHTML = `<line x1="${bx}" y1="${by}" x2="${bx+2000}" y2="${by}" stroke="#000" stroke-width="14"/>
+    <rect x="${bx}" y="${by-40}" width="1000" height="80" fill="#000"/>
+    <rect x="${bx+1000}" y="${by-40}" width="1000" height="80" fill="none" stroke="#000" stroke-width="12"/>
+    <text class="dimtext" x="${bx}" y="${by-110}">0</text>
+    <text class="dimtext" x="${bx+930}" y="${by-110}">1m</text>
+    <text class="dimtext" x="${bx+1900}" y="${by-110}">2m</text>`;
+  c.appendChild(sb);
+  return `<div class="pblock">${printHead("设备平面图")}${c.outerHTML}
+    <div class="legend">图例:实线框=机身 · 灰虚线框=机器作业时自己伸出来的部分(不可占用) · 扇形=门扇轨迹 ·
+    斜纹=站人作业位 · 反斜纹=侧向散热/检修位 · 点划线框=吊顶烟罩投影 · 圆点=水电接口点(⚠️按机背中点估)</div></div>`;
+}
+function tableHTML(id){
+  const src = document.getElementById(id);
+  return src ? src.innerHTML : "";
+}
+function printAs(kind){
+  const css = document.getElementById("pagecss");
+  css.textContent = kind === "plan"
+    ? "@page{size:A4 landscape;margin:10mm}"
+    : "@page{size:A4 portrait;margin:14mm}";
+  const pa = document.getElementById("printarea");
+  if(kind === "plan"){
+    pa.innerHTML = buildPlanPage() +
+      `<div class="hard pblock"><b>⚡ 给设计的三条硬约束</b><br>${HARD.join("<br>")}</div>`;
+  } else {
+    renderPanels();
+    pa.innerHTML = `<div class="pblock">${printHead("水电点位表")}${tableHTML("ptList")}</div>
+      <div class="pblock pagebreak">${printHead("设备清单")}${tableHTML("invList")}</div>
+      <div class="hard pblock"><b>⚡ 给设计的三条硬约束</b><br>${HARD.join("<br>")}</div>`;
+  }
+  setTimeout(() => window.print(), 60);
+}
+{
+  const st = document.createElement("style");
+  st.id = "pagecss"; st.textContent = "@page{size:A4 landscape;margin:10mm}";
+  document.head.appendChild(st);
+}
+
+/* ═══ 按钮接线 ═══════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+const zoomCenter = f => { const r = svg.getBoundingClientRect(); zoomAbout(r.left+r.width/2, r.top+r.height/2, f); };
+$("btnZoomIn").onclick  = () => zoomCenter(1.35);
+$("btnZoomOut").onclick = () => zoomCenter(1/1.35);
+$("btnFitK").onclick = fitKitchen;
+$("btnFitAll").onclick = fitAll;
+$("btnUndo").onclick = undo;
+$("btnRedo").onclick = redo;
+$("btnPrintPlan").onclick = () => printAs("plan");
+$("btnPrintTbl").onclick  = () => printAs("table");
+$("btnSnap").onclick = ev => {
+  store.ui.snap = !store.ui.snap;
+  ev.target.textContent = "吸附:" + (store.ui.snap ? "开" : "关");
+  ev.target.classList.toggle("on", store.ui.snap); save();
+};
+$("btnZones").onclick = ev => {
+  store.ui.zones = !store.ui.zones;
+  ev.target.textContent = "净空:" + (store.ui.zones ? "显示" : "隐藏");
+  ev.target.classList.toggle("on", store.ui.zones);
+  svg.classList.toggle("zones-off", !store.ui.zones); save();
+};
+$("btnBadges").onclick = ev => {
+  store.ui.badges = !store.ui.badges;
+  ev.target.textContent = "点位:" + (store.ui.badges ? "显示" : "隐藏");
+  ev.target.classList.toggle("on", store.ui.badges);
+  svg.classList.toggle("badges-off", !store.ui.badges); save();
+};
+$("btnRot").onclick = () => {
+  const it = selItem(); if(!it) return;
+  pushHist();
+  const cx = it.x + fw(it)/2, cy = it.y + fd(it)/2;
+  it.r = (it.r + 90) % 360;
+  it.x = clampN(Math.round((cx - fw(it)/2)/TUNE.grid)*TUNE.grid, -WALL, T_W - fw(it));
+  it.y = clampN(Math.round((cy - fd(it)/2)/TUNE.grid)*TUNE.grid, -WALL, K_D - fd(it));
+  save(); render();
+};
+$("btnDel").onclick = () => {
+  const it = selItem(); if(!it) return;
+  pushHist();
+  const gone = clone(it);
+  items = items.filter(i => i.id !== sel); scheme().items = items; sel = null;
+  save(); render();
+  showToast(`已移除「${DEFS[gone.t].n}」`, () => { items.push(gone); scheme().items = items; save(); render(); });
+};
+$("btnSwap").onclick = () => {
+  const it = selItem(); if(!it || !DEFS[it.t].legacy) return;
+  pushHist();
+  const oldT = it.t, nt = DEFS[oldT].swap;
+  it.t = nt; delete it.w; delete it.d;              // 用新型号的官方尺寸
+  save(); render();
+  showToast(`已换成「${DEFS[nt].n}」`, () => { it.t = oldT; save(); render(); });
+};
+$("btnDup").onclick = () => {
+  const it = selItem(); if(!it) return;
+  pushHist();
+  const s = scheme();
+  const c = Object.assign({}, it, {id:s.nextId++, x:Math.min(it.x+300, T_W-fw(it)), y:Math.min(it.y+300, K_D-fd(it))});
+  items.push(c); sel = c.id; save(); render();
+};
+const onSz = () => {
+  const it = selItem(); if(!it || !DEFS[it.t].plan) return;
+  pushHist();
+  const w = +$("inW").value, d = +$("inD").value;
+  if(w >= 100 && w <= 8000) it.w = w;
+  if(d >= 100 && d <= 4000) it.d = d;
+  it.x = Math.min(it.x, T_W - fw(it)); it.y = Math.min(it.y, K_D - fd(it));
+  save(); render();
+};
+$("inW").addEventListener("change", onSz);
+$("inD").addEventListener("change", onSz);
+$("inCeil").addEventListener("change", ev => {
+  store.site.ceil = +ev.target.value || TUNE.ceilDefault;
+  store.site.ceilMeasured = true; save(); render();
+});
+$("inHood").addEventListener("change", ev => {
+  store.site.hood = +ev.target.value || TUNE.hoodDefault; save(); render();
+});
+
+// 标签页 + 收起
+const panel = $("panel");
+function setFold(v){
+  store.ui.fold = v;
+  panel.classList.toggle("fold", v);
+  $("btnFold").textContent = v ? "▲ 展开" : "▼ 收起";
+  camDirty(); applyCam();
+}
+$("btnFold").onclick = () => { setFold(!store.ui.fold); save(); };
+for(const b of document.querySelectorAll("#tabs button[data-p]")) b.onclick = () => {
+  for(const x of document.querySelectorAll("#tabs button[data-p]")) x.classList.toggle("on", x === b);
+  for(const p of document.querySelectorAll(".pane")) p.classList.toggle("on", p.dataset.p === b.dataset.p);
+  store.ui.pane = b.dataset.p;
+  if(store.ui.fold) setFold(false);
+  save();
+};
+
+// 方案条
+function syncSchemeBar(){
+  const sel1 = $("schemeSel"), sel2 = $("ghostSel");
+  sel1.innerHTML = store.schemes.map(s =>
+    `<option value="${esc(s.id)}"${s.id===store.activeId?" selected":""}>${esc(s.name)}</option>`).join("");
+  sel2.innerHTML = `<option value="">无</option>` + store.schemes
+    .filter(s => s.id !== store.activeId)
+    .map(s => `<option value="${esc(s.id)}"${s.id===store.ui.ghostId?" selected":""}>${esc(s.name)}</option>`).join("");
+  $("btnSchemeDel").disabled = store.schemes.length < 2;
+}
+$("schemeSel").onchange = ev => {
+  store.activeId = ev.target.value; items = scheme().items; sel = null;
+  hist = []; future = []; syncHistBtn();
+  const c = scheme().cam; if(c){ cam = Object.assign({}, c); applyCam(); }
+  store.ui.ghostId = null; save(); syncSchemeBar(); render();
+};
+$("ghostSel").onchange = ev => { store.ui.ghostId = ev.target.value || null; save(); render(); };
+$("btnSchemeNew").onclick = () => {
+  const s = scheme();
+  const ns = mkScheme("s" + (Date.now()%1e7), s.name.replace(/\s*\(副本.*$/,"") + " (副本)", clone(items), s.nextId);
+  store.schemes.push(ns); store.activeId = ns.id; items = ns.items; sel = null;
+  hist = []; future = []; syncHistBtn();
+  save(); syncSchemeBar(); render();
+  showToast(`已新建「${ns.name}」,现在改的是这一个`);
+};
+$("btnSchemeRename").onclick = () => {
+  const inp = $("schemeName"), selEl = $("schemeSel");
+  inp.value = scheme().name; inp.style.display = ""; selEl.style.display = "none";
+  inp.focus(); inp.select();
+  const done = () => {
+    const v = inp.value.trim(); if(v) scheme().name = v;
+    inp.style.display = "none"; selEl.style.display = "";
+    save(); syncSchemeBar();
+  };
+  inp.onblur = done;
+  inp.onkeydown = e => { if(e.key === "Enter") inp.blur(); if(e.key === "Escape"){ inp.value = scheme().name; inp.blur(); } };
+};
+$("btnSchemeDel").onclick = () => {
+  if(store.schemes.length < 2) return;
+  const gone = scheme(), idx = store.schemes.indexOf(gone);
+  store.schemes.splice(idx, 1);
+  store.activeId = store.schemes[Math.max(0, idx-1)].id;
+  items = scheme().items; sel = null; hist = []; future = []; syncHistBtn();
+  save(); syncSchemeBar(); render();
+  showToast(`已删除「${gone.name}」`, () => {
+    store.schemes.splice(idx, 0, gone); store.activeId = gone.id;
+    items = scheme().items; save(); syncSchemeBar(); render();
+  }, 8000);
+};
+
+// ── 存档页:导出 / 导入 ──────────────────────────────────────────────
+// iPad、电脑桌面文件、Claude 链接是三个互不相通的存储,只能靠这里搬。
+// 校验沿用主 app 的写法:成功返回数据,失败返回一句中文原因(src/App.jsx validateImportSchema)。
+function parseBackup(text){
+  let d;
+  try { d = JSON.parse(String(text).trim()); }
+  catch(e){ return {err:"这段不是完整的备份 —— 要从第一个 { 复制到最后一个 },中间不能断。"}; }
+  if(!d || typeof d !== "object" || Array.isArray(d)) return {err:"备份内容不对,不是一份布局台的备份。"};
+  let raw;
+  if(Array.isArray(d.schemes)) raw = d.schemes;                               // 完整存档
+  else if(Array.isArray(d.items)) raw = [{name:d.name, items:d.items}];       // 单个方案 / 老版存档
+  else return {err:"这份备份里没有方案。你确定复制的是布局台的备份,不是别的东西?"};
+  const out = [];
+  for(const s of raw){
+    if(!s || !Array.isArray(s.items)) continue;
+    const its = s.items.filter(i => i && DEFS[i.t] && isFinite(+i.x) && isFinite(+i.y));
+    out.push({name:String(s.name || "导入的方案"), items:its, dropped:s.items.length - its.length});
+  }
+  if(!out.length) return {err:"备份里的方案都是空的,没有能导入的东西。"};
+  return {schemes:out, site:(d.site && typeof d.site === "object") ? d.site : null};
+}
+function importSchemes(p){
+  const prevActive = store.activeId, added = [];
+  p.schemes.forEach((s, k) => {
+    const nid = Math.max(100, ...s.items.map(i => (+i.id || 0) + 1));
+    const ns = mkScheme("s" + (Date.now() % 1e7) + "_" + k, s.name + "(导入)", clone(s.items), nid);
+    store.schemes.push(ns); added.push(ns);
+  });
+  // 对方量过天花、这边还没量,就把这个数捎带过来
+  let tookSite = false;
+  if(p.site && p.site.ceilMeasured && !store.site.ceilMeasured){
+    store.site.ceil = +p.site.ceil || store.site.ceil;
+    if(p.site.hood) store.site.hood = +p.site.hood;
+    store.site.ceilMeasured = true; tookSite = true;
+    $("inCeil").value = store.site.ceil; $("inHood").value = store.site.hood;
+  }
+  const last = added[added.length - 1];
+  store.activeId = last.id; items = last.items; sel = null;
+  hist = []; future = []; syncHistBtn();
+  save(); syncSchemeBar(); render();
+  const dropped = p.schemes.reduce((a, s) => a + (s.dropped || 0), 0);
+  showToast(`已导入 ${added.length} 个方案` +
+    (dropped ? `(有 ${dropped} 个认不出的块跳过了)` : "") +
+    (tookSite ? ",天花净高也一起带过来了" : ""),
+    () => {   // 撤销:把刚加的几个方案摘掉,原来的一个字没动
+      store.schemes = store.schemes.filter(s => added.indexOf(s) < 0);
+      store.activeId = prevActive; items = scheme().items; sel = null;
+      save(); syncSchemeBar(); render();
+    }, 8000);
+}
+
+$("btnDump").onclick = () => { $("dumpBox").value = JSON.stringify(store); };
+$("btnDownload").onclick = () => {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(store)], {type:"application/json"}));
+  a.download = `798布局_备份_${stamp}.json`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+  showToast("备份文件已存下,发到另一台设备再点「从文件导入」");
+};
+$("btnImportText").onclick = () => {
+  const t = $("dumpBox").value.trim();
+  if(!t){ showToast("先把另一台设备的备份文字粘到下面那个框里"); return; }
+  const p = parseBackup(t);
+  if(p.err){ showToast("⚠️ 导入失败:" + p.err, null, 6000); return; }
+  importSchemes(p);
+};
+$("fileIn").addEventListener("change", ev => {
+  const f = ev.target.files && ev.target.files[0];
+  ev.target.value = "";                       // 同一个文件再选一次也要能触发
+  if(!f) return;
+  const rd = new FileReader();
+  rd.onload = e => {
+    const p = parseBackup(e.target.result);
+    if(p.err){ showToast("⚠️ 导入失败:" + p.err, null, 6000); return; }
+    importSchemes(p);
+  };
+  rd.onerror = () => showToast("⚠️ 这个文件读不出来,换一份试试");
+  rd.readAsText(f);
+});
+$("btnCopy").onclick = async ev => {
+  const dirs = {0:"门朝下", 90:"门朝左", 180:"门朝上", 270:"门朝右"};
+  const txt = `798 布局 · ${scheme().name}(单位mm,距离=所在房间内到墙)\n` + items
+    .filter(i => !DEFS[i.t].marker)
+    .map(i => { const dd = dims(i), R = roomRef(i);
+      return `[${R.tag}] ${DEFS[i.t].n}: 距左${i.x-R.x0} 距上${i.y} ${dd.w}×${dd.d} ${dirs[i.r]}${carrier(i)?" (台上)":""}`; })
+    .join("\n");
+  $("dumpBox").value = txt;
+  try { await navigator.clipboard.writeText(txt); showToast("已复制到剪贴板"); }
+  catch(e){ showToast("复制不了,请在下面的框里手动全选复制"); }
+};
+$("btnRestoreV1").onclick = () => {
+  let old = null;
+  try { old = JSON.parse(lsGet(LS_V1)); } catch(e){}
+  if(!old || !Array.isArray(old.items) || !old.items.length){
+    showToast("没找到升级前的老存档"); return;
+  }
+  const its = old.items.filter(i => i && DEFS[i.t]);
+  const ns = mkScheme("s" + (Date.now()%1e7), "升级前的老摆法", its,
+    Math.max(old.nextId||100, 100, ...its.map(i => (+i.id||0)+1)));
+  store.schemes.push(ns); store.activeId = ns.id; items = ns.items; sel = null;
+  hist = []; future = []; syncHistBtn();
+  save(); syncSchemeBar(); render();
+  showToast("已把升级前的摆法恢复成一个新方案");
+};
+let resetArmed = false;
+$("btnReset").onclick = ev => {
+  if(!resetArmed){
+    resetArmed = true; ev.target.textContent = "再点一次确认重置";
+    setTimeout(() => { resetArmed = false; ev.target.textContent = "重置为初始摆法"; }, 3000);
+    return;
+  }
+  pushHist();
+  resetArmed = false; ev.target.textContent = "重置为初始摆法";
+  items = clone(DEFAULT_ITEMS); scheme().items = items; scheme().nextId = 100; sel = null;
+  save(); render();
+  showToast("已重置", () => undo());
+};
+
+/* ═══ 抽屉 chips ═════════════════════════════════════════════════════ */
+const AUX    = ["softener","trafo","hood","drain","stand","trolley","molder"];
+const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
+const ARTGRP = ["pipeart","ringtable","ringtable18","halfring"];
+const PLANNED= ["pillar","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+function chip(key){
+  const D = DEFS[key], b = document.createElement("button");
+  b.className = "chip" + (D.plan ? " plan" : "");
+  b.innerHTML = `${D.n}<small class="num">${D.w}×${D.d}${D.surf?" · 台":""}${D.est?" ⚠️":""}</small>`;
+  b.onclick = () => {
+    pushHist();
+    const s = scheme();
+    const parent = D.req && items.find(i => i.t === D.req);
+    let x, y;
+    if(parent){ x = Math.min(parent.x + fw(parent) + TUNE.gapNeigh, K_W - D.w); y = parent.y; }
+    else { x = Math.round((K_W - D.w)/2/TUNE.grid)*TUNE.grid; y = Math.round((K_D - D.d)/2/TUNE.grid)*TUNE.grid; }
+    const it = {id:s.nextId++, t:key, x:Math.max(0, x), y:Math.max(0, y), r:0};
+    items.push(it); sel = it.id; save(); render();
+    if(parent) showToast(`已放到「${DEFS[parent.t].n}」旁边`);
+  };
+  return b;
+}
+OWNED.forEach(k => $("chipsOwned").appendChild(chip(k)));
+AUX.forEach(k => $("chipsAux").appendChild(chip(k)));
+HOSHI.forEach(k => $("chipsHoshi").appendChild(chip(k)));
+ARTGRP.forEach(k => $("chipsArt").appendChild(chip(k)));
+PLANNED.forEach(k => $("chipsPlan").appendChild(chip(k)));
+
+/* ═══ 启动 ═══════════════════════════════════════════════════════════ */
+$("inCeil").value = store.site.ceil;
+$("inHood").value = store.site.hood;
+$("btnSnap").textContent = "吸附:" + (store.ui.snap ? "开" : "关");
+$("btnSnap").classList.toggle("on", store.ui.snap);
+$("btnZones").textContent = "净空:" + (store.ui.zones ? "显示" : "隐藏");
+$("btnZones").classList.toggle("on", store.ui.zones);
+$("btnBadges").textContent = "点位:" + (store.ui.badges ? "显示" : "隐藏");
+$("btnBadges").classList.toggle("on", store.ui.badges);
+for(const b of document.querySelectorAll("#tabs button[data-p]")){
+  const on = b.dataset.p === store.ui.pane;
+  b.classList.toggle("on", on);
+  for(const p of document.querySelectorAll(".pane")) if(p.dataset.p === b.dataset.p) p.classList.toggle("on", on);
+}
+setFold(!!store.ui.fold);
+syncSchemeBar();
+document.getElementById("lsbanner").classList.toggle("show", !lsOK);
+requestAnimationFrame(() => {
+  if(storedCam) { cam = Object.assign({}, storedCam); applyCam(); } else fitKitchen();
+  render();
+});
+})();
+</script>
+</body>
+</html>
