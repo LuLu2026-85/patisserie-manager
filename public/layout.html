@@ -475,10 +475,12 @@ const DEFS = {
     util:{pw:"220V单相", kw:0.37, kg:85},
     note:"台式·台面需承85kg+震动,勿放悬挑板·前留400换缸"},
 
-  blixer:{n:"Blixer 4", w:242, d:325, h:479, top:1,
+  // 2026-08-10 换型:实机是 Blixer 5 V.V.G(箱单 33263 / 铭牌 1400W),不是原定的 Blixer 4。
+  // key 保持 blixer 不变 —— 改 key 会让已存的方案丢掉这台机器。
+  blixer:{n:"Blixer 5", w:280, d:365, h:540, top:1, est:1,
     cl:{front:0, over:{clear:300, why:"抬盖"}},
-    util:{pw:"220V单相", kw:1.1},
-    note:"台式·抬盖上方留300"},
+    util:{pw:"220V单相", kw:1.4, kg:22},
+    note:"台式·5.9L缸·变速300~3500rpm·带刮刀盖·220V直用不需变压器·抬盖上方留300⚠️(按Blixer4的数推,实测抬盖高度)·📐尺寸两个官方源不一致(280×365×540 / 279×351×500),收货实测"},
 
   // ── 必配件(水电相关,原来完全没有) ────────────────────────────────
   softener:{n:"前置软水器", w:300, d:500, h:600, plan:1, est:1, req:"ufm",
@@ -1599,12 +1601,12 @@ function renderPoints(){
   };
   let s = `<p class="hint">坐标 = 接口点到<b>所在房间</b>左墙/上墙的距离(mm)。接口点缺省取机身背面中点 ⚠️,现场以厂家接口位为准。</p>`;
   s += tbl("强电 · 380V 三相", three) + tbl("单相 220 / 230V", single) + tbl("100V(经 2kVA 变压器)", lowv);
-  const okKw = Math.abs(ownedKw - 48.88) < 0.02;
+  const okKw = Math.abs(ownedKw - 49.18) < 0.02;   // 明细 v2(2026-08-10 换 Blixer 5 后)
   s += `<div class="sect">配电汇总</div><table class="rep">
     <tr><td>图上已购设备合计</td><td class="n ${okKw?"good":"bad"}">${ownedKw.toFixed(2)} kW</td>
-        <td>文件值 48.88 kW ${okKw?"✓":"✗ 对不上,查是不是有机器没放进图"}</td></tr>
+        <td>文件值 49.18 kW ${okKw?"✓":"✗ 对不上,查是不是有机器没放进图"}</td></tr>
     <tr><td>其中三相 380V</td><td class="n">${t3.toFixed(2)} kW</td><td>文件值 44.01</td></tr>
-    <tr><td>其中单相 220V</td><td class="n">${t1.toFixed(2)} kW</td><td>文件值 4.87</td></tr>
+    <tr><td>其中单相 220V</td><td class="n">${t1.toFixed(2)} kW</td><td>文件值 5.17</td></tr>
     <tr><td>场地容量</td><td class="n">50 kW</td><td>计算负荷(Kd=0.55~0.6)约 44~48 kW,贴线</td></tr></table>`;
 
   const water = rows.filter(r => r.u.water || r.u.drain || r.u.softener);
@@ -1632,7 +1634,7 @@ function renderPanels(){ renderCheck(); renderInv(); renderPoints(); }
 
 /* ═══ §9 出图:打印 ═══════════════════════════════════════════════════ */
 const HARD = [
- "1. 配电:已购9台装机 48.88 kW(三相44.01 + 单相4.87);整店含冷链/空调/照明预计约80 kW,现有容量50 kW → 计算负荷约44~48 kW,勉强够但贴线,建议需量控制器 + 两台UNOX错峰预热,并预留增容通道。",
+ "1. 配电:已购9台装机 49.18 kW(三相44.01 + 单相5.17);整店含冷链/空调/照明预计约80 kW,现有容量50 kW → 计算负荷约44~48 kW,勉强够但贴线,建议需量控制器 + 两台UNOX错峰预热,并预留增容通道。",
  "2. 排烟/给水:两台UNOX需烟罩(净水机身内置一体,只需预留进水口);UF-M洗碗机需前置软水器 + 热水进水(≤60℃) + 地漏,机位旁留软水器位(约300×500)与加盐通道;UF-M机位上方2000以内不得有吊柜/管线。",
  "3. 高度核对:醒发箱2055、立式冷柜1990、烤箱叠放总高(急冷890+10盘1219≈2110)——天花、烟罩、梁下净高按此复核。",
 ];
