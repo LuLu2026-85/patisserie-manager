@@ -559,6 +559,10 @@ const DEFS = {
   display:{n:"蛋糕展示柜", w:1200, d:700, h:1200, plan:1, est:1,
     cl:{front:700, side:{b:700}}, util:{pw:"220V单相"},
     note:"⚠️尺寸为占位估,选型后改·顾客侧和操作侧都要留身位·前厅门面"},
+  espresso:{n:"辣妈双头咖啡机", w:710, d:590, h:533, top:1, plan:1, est:1,
+    cl:{front:0, over:{clear:300, why:"顶部放杯/取水箱"}},
+    util:{pw:"220V单相", kw:4.6, kg:58, water:"咖啡专用净水必配(北京水垢)", drain:1},
+    note:"La Marzocco 双头·型号待定(Classic S/PB 尺寸相近)⚠️·台式,放吧台上·220V独立回路25A·机后要走水电,吧台进深600不够,要≥700"},
   wtable:{n:"不锈钢工作台", w:1500, d:750, h:800, plan:1, surf:1, note:"标准高800深750"},
   sink3:{n:"三槽水槽", w:1800, d:700, h:800, plan:1, cl:{front:700},
     util:{water:1, drain:1}, note:"要给水+排水"},
@@ -1967,7 +1971,7 @@ $("btnReset").onclick = ev => {
 const AUX    = ["softener","trafo","hood","drain","stand","trolley","molder"];
 const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
 const ARTGRP = ["pipeart","ringtable","ringtable18","halfring"];
-const PLANNED= ["pillar","display","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const PLANNED= ["pillar","display","espresso","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan ? " plan" : "");
