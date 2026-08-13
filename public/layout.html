@@ -268,7 +268,7 @@
 
 <header>
   <h1>798 厨房布局台</h1>
-  <span class="roomdim num">厨房 8820×4660 · 前厅 7470 宽 · 按 08-13 原始平面 · 网格 500</span>
+  <span class="roomdim num">厨房 8820×4660 · 前厅右屋 6280×7270(4面玻璃) · 窗带11面 · 按 08-13 原始平面</span>
   <span class="save" id="savemsg">自动保存</span>
 </header>
 
@@ -411,10 +411,15 @@
 // 用图内操作台 3250×1500 / 冷藏台 1500×750 标定比例, 多台互验一致, 误差约 ±20mm。
 const K_W = 8820, K_D = 4660, WALL = 200;
 const F_X = K_W + WALL;               // 前厅左内墙 x
-const F_W = 7470;                     // 前厅宽(CAD 量测, 旧值 4830 是目测已作废)
+const F_W = 7330;                     // 前厅总宽(隔墙内侧→右外墙内侧, CAD 实量)
 const T_W = F_X + F_W;                // 全局宽
+const F_TOP = -2610;                  // 前厅右屋顶边:比厨房顶线高 2610(CAD 实量), 深 7270
+const F2_X = F_X + 910;               // 右屋左墙外缘:隔墙后先有 910 过渡带, 右屋正好 4 面玻璃宽
+const F2_WALL = 140;                  // 右屋左墙厚(只有上段实墙, 下方敞开)
 const DOOR_Y = [1490, K_D];           // 隔墙只有靠上墙的 1490 实段, 往下到窗全敞开(按图)
 const OPENINGS = [];                  // 新图厨房顶墙无开口, 入口动线改经前厅(旧"入口1000"作废)
+// 窗带 11 面玻璃:竖梃真实位置(CAD 逐根量取, 相对厨房左内角; 右屋左墙正压在 9965 那根上)
+const MULLIONS = [616, 2170, 3733, 5291, 6853, 8407, 9965, 11519, 13081, 14636];
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // 所有可调阈值集中在这里。来源:RURU_798_已采购设备明细_v2.md §二「通用留缝」
@@ -743,7 +748,7 @@ function fitTo(x0, y0, x1, y1, pad){
   applyCam();
 }
 const fitKitchen = () => fitTo(0, 0, K_W, K_D);
-const fitAll     = () => fitTo(-WALL, -WALL, T_W + WALL, K_D + 500);
+const fitAll     = () => fitTo(-WALL, F_TOP - WALL, T_W + WALL, K_D + 500);
 
 const invCTM = () => (_inv || (_inv = svg.getScreenCTM().inverse()));
 const toMM = (cx, cy) => {
@@ -872,13 +877,14 @@ function doorPath(s, ox, oy){
 const WALLS = (() => {
   const w = [];
   w.push({x:-WALL, y:-WALL, w:WALL, h:K_D + 2*WALL, n:"左外墙"});
-  w.push({x:T_W,   y:-WALL, w:WALL, h:K_D + 2*WALL, n:"右外墙"});
+  w.push({x:T_W,   y:F_TOP - WALL, w:WALL, h:K_D - F_TOP + 2*WALL, n:"右外墙"});
   w.push({x:K_W, y:-WALL, w:WALL, h:DOOR_Y[0] + WALL, n:"厨房↔前厅隔墙"});
   w.push({x:K_W, y:DOOR_Y[1], w:WALL, h:K_D - DOOR_Y[1], n:"厨房↔前厅隔墙"});
   let px = -WALL;
   for(const [ox, ow] of OPENINGS){ w.push({x:px, y:-WALL, w:ox-px, h:WALL, n:"上墙"}); px = ox+ow; }
   w.push({x:px, y:-WALL, w:K_W-px, h:WALL, n:"上墙"});
-  w.push({x:F_X-WALL, y:-WALL, w:F_W + 2*WALL, h:WALL, n:"前厅上墙"});
+  w.push({x:F2_X, y:F_TOP - WALL, w:T_W - F2_X + WALL, h:WALL, n:"右屋顶墙"});
+  w.push({x:F2_X, y:F_TOP, w:F2_WALL, h:-F_TOP + 150, n:"右屋左墙"});
   return w;
 })();
 
@@ -1137,14 +1143,16 @@ function staticLayer(){
   let s = "";
   for(let x = 500; x < T_W; x += 500){
     if(x > K_W && x < F_X) continue;
-    s += `<line class="${x%1000?'grid5':'grid10'}" x1="${x}" y1="0" x2="${x}" y2="${K_D}"/>`;
+    const y1 = x >= F_X ? (x >= F2_X ? F_TOP : 0) : 0;
+    s += `<line class="${x%1000?'grid5':'grid10'}" x1="${x}" y1="${y1}" x2="${x}" y2="${K_D}"/>`;
   }
-  for(let y = 500; y < K_D; y += 500){
-    s += `<line class="${y%1000?'grid5':'grid10'}" x1="0" y1="${y}" x2="${K_W}" y2="${y}"/>`;
-    s += `<line class="${y%1000?'grid5':'grid10'}" x1="${F_X}" y1="${y}" x2="${T_W}" y2="${y}"/>`;
+  for(let y = -2500; y < K_D; y += 500){
+    if(y >= 500) s += `<line class="${y%1000?'grid5':'grid10'}" x1="0" y1="${y}" x2="${K_W}" y2="${y}"/>`;
+    if(y >= 500)      s += `<line class="${y%1000?'grid5':'grid10'}" x1="${F_X}" y1="${y}" x2="${T_W}" y2="${y}"/>`;
+    else if(y > F_TOP) s += `<line class="${y%1000?'grid5':'grid10'}" x1="${F2_X}" y1="${y}" x2="${T_W}" y2="${y}"/>`;
   }
   s += `<rect class="wall" x="${-WALL}" y="${-WALL}" width="${WALL}" height="${K_D+2*WALL}"/>`;
-  s += `<rect class="wall" x="${T_W}" y="${-WALL}" width="${WALL}" height="${K_D+2*WALL}"/>`;
+  s += `<rect class="wall" x="${T_W}" y="${F_TOP-WALL}" width="${WALL}" height="${K_D-F_TOP+2*WALL}"/>`;
   s += `<rect class="wall2" x="${K_W}" y="${-WALL}" width="${WALL}" height="${DOOR_Y[0]+WALL}"/>`;
   s += `<rect class="wall2" x="${K_W}" y="${DOOR_Y[1]}" width="${WALL}" height="${K_D-DOOR_Y[1]}"/>`;
   s += `<text class="opening-label" x="${K_W+WALL/2}" y="${DOOR_Y[0]-80}" text-anchor="middle">隔墙1490+门,下方敞开(按08-13图)</text>`;
@@ -1155,21 +1163,26 @@ function staticLayer(){
     px = ox + ow;
   }
   s += `<rect class="wall" x="${px}" y="${-WALL}" width="${K_W-px}" height="${WALL}"/>`;
-  s += `<rect class="wall" x="${F_X-WALL}" y="${-WALL}" width="${F_W+2*WALL}" height="${WALL}"/>`;
+  // 右屋:顶墙上移 2610, 左墙只有上段实墙(下方敞开=进右屋的口)
+  s += `<rect class="wall" x="${F2_X}" y="${F_TOP-WALL}" width="${T_W-F2_X+WALL}" height="${WALL}"/>`;
+  s += `<rect class="wall2" x="${F2_X}" y="${F_TOP}" width="${F2_WALL}" height="${-F_TOP+150}"/>`;
+  s += `<text class="opening-label" x="${F_X+455}" y="${-300}" text-anchor="middle">↑过道/往入户门</text>`;
   s += `<rect x="0" y="${K_D}" width="${K_W}" height="120" class="win"/>`;
   s += `<rect x="${F_X}" y="${K_D}" width="${F_W}" height="120" class="win"/>`;
-  for(let x = 0; x <= K_W; x += 1500) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
-  for(let x = F_X; x <= T_W; x += 1500) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
-  s += `<text class="opening-label" x="${K_W/2}" y="${K_D+420}" text-anchor="middle">窗带(按图,待确认)</text>`;
+  for(const mx of MULLIONS){
+    if(mx <= K_W || mx >= F_X)
+      s += `<line class="win" x1="${mx}" y1="${K_D}" x2="${mx}" y2="${K_D+120}"/>`;
+  }
+  s += `<text class="opening-label" x="${K_W/2}" y="${K_D+420}" text-anchor="middle">窗带 11 面玻璃(竖梃按图)</text>`;
   s += `<text class="roomtag" x="${K_W/2}" y="${K_D-160}" text-anchor="middle">厨 房</text>`;
-  s += `<text class="roomtag" x="${F_X+F_W/2}" y="${K_D-160}" text-anchor="middle">前 厅</text>`;
+  s += `<text class="roomtag" x="${F2_X+(T_W-F2_X)/2}" y="${K_D-160}" text-anchor="middle">前 厅</text>`;
   const M = 620;
   s += `<line class="dimline" x1="0" y1="${-M+240}" x2="${K_W}" y2="${-M+240}"/>
     <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">8820</text>
-    <line class="dimline" x1="${F_X}" y1="${-M+240}" x2="${T_W}" y2="${-M+240}"/>
-    <text class="dimtext num" x="${F_X+F_W/2}" y="${-M+180}" text-anchor="middle">7470</text>
-    <line class="dimline" x1="${T_W+M-240}" y1="0" x2="${T_W+M-240}" y2="${K_D}"/>
-    <text class="dimtext num" x="${T_W+M-300}" y="${K_D/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${K_D/2})">4660</text>`;
+    <line class="dimline" x1="${F2_X+F2_WALL}" y1="${F_TOP-M+240}" x2="${T_W}" y2="${F_TOP-M+240}"/>
+    <text class="dimtext num" x="${(F2_X+T_W)/2}" y="${F_TOP-M+180}" text-anchor="middle">右屋6280 · 4面玻璃</text>
+    <line class="dimline" x1="${T_W+M-240}" y1="${F_TOP}" x2="${T_W+M-240}" y2="${K_D}"/>
+    <text class="dimtext num" x="${T_W+M-300}" y="${(F_TOP+K_D)/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${(F_TOP+K_D)/2})">7270</text>`;
   return s;
 }
 
@@ -1467,7 +1480,8 @@ svg.addEventListener("pointermove", ev => {
     const gx = store.ui.snap ? snapAxis(snapLines.V, rawX, fw(it), tol) : null;
     const gy = store.ui.snap ? snapAxis(snapLines.H, rawY, fd(it), tol) : null;
     it.x = clampN(gx ? gx.pos : Math.round(rawX/TUNE.grid)*TUNE.grid, -WALL, T_W - fw(it));
-    it.y = clampN(gy ? gy.pos : Math.round(rawY/TUNE.grid)*TUNE.grid, -WALL, K_D - fd(it));
+    const yMin = (it.x + fw(it)/2 >= F_X) ? F_TOP : -WALL;   // 前厅可以摆到上移后的右屋顶
+    it.y = clampN(gy ? gy.pos : Math.round(rawY/TUNE.grid)*TUNE.grid, yMin, K_D - fd(it));
     const g = svg.querySelector(`g[data-id="${it.id}"]`);
     if(g) g.setAttribute("transform", `translate(${it.x} ${it.y})`);
     drawGuides(gx, gy, it);
@@ -1528,7 +1542,7 @@ function focusOn(f, id){
 function selItem(){ return items.find(i => i.id === sel) || null; }
 function roomRef(it){
   const cx = it.x + fw(it)/2;
-  return cx >= F_X ? {x0:F_X, x1:T_W, tag:"前厅"} : {x0:0, x1:K_W, tag:"厨房"};
+  return cx >= F_X ? {x0:F_X, x1:T_W, y0:F_TOP, tag:"前厅"} : {x0:0, x1:K_W, y0:0, tag:"厨房"};
 }
 // 四个方向到最近的邻居/墙(净距)
 function gapsAround(it){
@@ -1569,7 +1583,7 @@ function updateSelbar(){
   document.getElementById("selDims").textContent = bits.join(" · ");
   const g = gapsAround(it), fmt = v => v === Infinity ? "—" : Math.round(v);
   document.getElementById("selDist").textContent =
-    `${R.tag}内:距左${Math.round(it.x - R.x0)} 距上${Math.round(it.y)} · 净距 左${fmt(g.l)}/右${fmt(g.r)}/上${fmt(g.t)}/下${fmt(g.b)}`;
+    `${R.tag}内:距左${Math.round(it.x - R.x0)} 距上${Math.round(it.y - R.y0)} · 净距 左${fmt(g.l)}/右${fmt(g.r)}/上${fmt(g.t)}/下${fmt(g.b)}`;
   const szBox = document.getElementById("szBox");
   szBox.style.display = (D.plan && !D.marker && !it.lock) ? "" : "none";
   if(D.plan){ document.getElementById("inW").value = dd.w; document.getElementById("inD").value = dd.d; }
@@ -1783,7 +1797,8 @@ $("btnRot").onclick = () => {
   const cx = it.x + fw(it)/2, cy = it.y + fd(it)/2;
   it.r = (it.r + 90) % 360;
   it.x = clampN(Math.round((cx - fw(it)/2)/TUNE.grid)*TUNE.grid, -WALL, T_W - fw(it));
-  it.y = clampN(Math.round((cy - fd(it)/2)/TUNE.grid)*TUNE.grid, -WALL, K_D - fd(it));
+  const yMinR = (it.x + fw(it)/2 >= F_X) ? F_TOP : -WALL;
+  it.y = clampN(Math.round((cy - fd(it)/2)/TUNE.grid)*TUNE.grid, yMinR, K_D - fd(it));
   save(); render();
 };
 $("btnDel").onclick = () => {
@@ -2000,7 +2015,7 @@ $("btnCopy").onclick = async ev => {
   const txt = `798 布局 · ${scheme().name}(单位mm,距离=所在房间内到墙)\n` + items
     .filter(i => !DEFS[i.t].marker)
     .map(i => { const dd = dims(i), R = roomRef(i);
-      return `[${R.tag}] ${DEFS[i.t].n}: 距左${i.x-R.x0} 距上${i.y} ${dd.w}×${dd.d} ${dirs[i.r]}${carrier(i)?" (台上)":""}`; })
+      return `[${R.tag}] ${DEFS[i.t].n}: 距左${i.x-R.x0} 距上${i.y-R.y0} ${dd.w}×${dd.d} ${dirs[i.r]}${carrier(i)?" (台上)":""}`; })
     .join("\n");
   $("dumpBox").value = txt;
   try { await navigator.clipboard.writeText(txt); showToast("已复制到剪贴板"); }
