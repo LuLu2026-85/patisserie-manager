@@ -167,6 +167,11 @@
   .item.tabletop .body{fill:var(--sunken)}
   .item.planned .body{fill:#FDFCF8;stroke:var(--warning);stroke-dasharray:70 50}
   .item.planned.surf .body{fill:#F8F6EC}
+  /* 自建隔墙:实体墙观感,压过 planned 的虚线 */
+  .item.uwall .body{fill:#B9B9B0;stroke:var(--ink);stroke-width:14;stroke-dasharray:none}
+  .item.locked .body{opacity:.9}
+  .item .lockic{font-size:300px}
+  #selbar button:disabled{opacity:.35;pointer-events:none}
   .item.marker .body{fill:var(--sunken);stroke:var(--subtle);stroke-width:12}
   .item.ceil .body{fill:none;stroke:var(--info);stroke-width:14;stroke-dasharray:120 60 30 60}
   .item.selected .body{stroke:var(--accent);stroke-width:calc(var(--k)*2.4px)}
@@ -221,6 +226,7 @@
     /* 黑白:底色转白、描边转实黑,灰度复印不丢信息 */
     #printarea .item .body{fill:#fff!important;stroke:#000!important;stroke-width:14!important}
     #printarea .item.planned .body{stroke-dasharray:70 50!important}
+    #printarea .item.uwall .body{stroke-dasharray:none!important;fill:#999!important}
     #printarea .item .nm,#printarea .item .dm,#printarea .roomtag,
     #printarea .dimtext,#printarea .opening-label{fill:#000!important}
     #printarea .op-zone{fill:url(#hatchWork)!important;opacity:1!important}
@@ -248,7 +254,7 @@
 
 <header>
   <h1>798 厨房布局台</h1>
-  <span class="roomdim num">厨房 8475×4660 · 前厅约 4830 宽(⚠️按图目测) · 网格 500</span>
+  <span class="roomdim num">厨房 8820×4660 · 前厅 7470 宽 · 按 08-13 原始平面 · 网格 500</span>
   <span class="save" id="savemsg">自动保存</span>
 </header>
 
@@ -274,6 +280,7 @@
   <button id="btnSnap" class="on">吸附:开</button>
   <button id="btnZones" class="on">净空:显示</button>
   <button id="btnBadges">点位:隐藏</button>
+  <button id="btnLockAll">🔒 全锁</button>
   <span class="sep"></span>
   <button id="btnUndo" disabled>↶ 撤销</button>
   <button id="btnRedo" disabled>↷ 重做</button>
@@ -294,6 +301,7 @@
   <label id="szBox" style="display:none">宽 <input id="inW" type="number" step="50" min="100" max="8000" inputmode="numeric">
     深 <input id="inD" type="number" step="50" min="100" max="4000" inputmode="numeric"></label>
   <button id="btnSwap" style="display:none">换成新型号</button>
+  <button id="btnLock">🔒 锁定</button>
   <button id="btnRot">旋转 90°</button>
   <button id="btnDup">复制一台</button>
   <button id="btnDel" class="danger2">移除</button>
@@ -320,6 +328,8 @@
       <div class="chips" id="chipsArt"></div></div>
     <div class="grp"><span class="micro">其他规划块(虚线,可改尺寸)</span>
       <div class="chips" id="chipsPlan"></div></div>
+    <div class="grp"><span class="micro">隔间(自己隔:一段段墙拼,两段之间留缝就是门洞;选中后可改长度/厚度)</span>
+      <div class="chips" id="chipsWall"></div></div>
   </div>
 
   <div class="pane" data-p="check">
@@ -379,12 +389,14 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ═══ §0 常量与可调参数 ═══════════════════════════════════════════════ */
-const K_W = 8475, K_D = 4660, WALL = 200;
+// 尺寸来源: 798 烘焙 原始平面 CAD (2026-08-13, 微信 PDF)。
+// 用图内操作台 3250×1500 / 冷藏台 1500×750 标定比例, 多台互验一致, 误差约 ±20mm。
+const K_W = 8820, K_D = 4660, WALL = 200;
 const F_X = K_W + WALL;               // 前厅左内墙 x
-const F_W = 4830;                     // ⚠️ 前厅宽按图目测
+const F_W = 7470;                     // 前厅宽(CAD 量测, 旧值 4830 是目测已作废)
 const T_W = F_X + F_W;                // 全局宽
-const DOOR_Y = [250, 1250];           // 厨房↔前厅 门洞(估)
-const OPENINGS = [[300, 1000, "入口 1000"]];   // 厨房顶墙开口
+const DOOR_Y = [1490, K_D];           // 隔墙只有靠上墙的 1490 实段, 往下到窗全敞开(按图)
+const OPENINGS = [];                  // 新图厨房顶墙无开口, 入口动线改经前厅(旧"入口1000"作废)
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // 所有可调阈值集中在这里。来源:RURU_798_已采购设备明细_v2.md §二「通用留缝」
@@ -573,6 +585,8 @@ const DEFS = {
     cl:{front:900}, note:"⚠️按图目测"},
   island:{n:"前厅中岛", w:2400, d:1145, h:900, plan:1, surf:1, est:1, note:"⚠️按图目测"},
   custom:{n:"自定义块", w:1000, d:600, h:800, plan:1, surf:1},
+  uwall:{n:"隔墙段", w:2000, d:100, h:2800, plan:1, wallish:1,
+    note:"自建隔墙:一段段拼,两段之间留缝=门洞(走人留≥800)·横墙改「宽」竖墙先旋转·拟建,装修定稿前随便改"},
   mark:{n:"图上符号", w:200, d:200, plan:1, marker:1},
   pillar:{n:"柱/设备箱(按图⚠️)", w:250, d:750, h:2500, plan:1, est:1},
 
@@ -949,6 +963,7 @@ function validate(){
     const a = sol[i], b = sol[j];
     const ca = carr.get(a.id), cb = carr.get(b.id);
     if((ca && ca.id === b.id) || (cb && cb.id === a.id)) continue;   // 真的叠放才豁免
+    if(DEFS[a.t].wallish && DEFS[b.t].wallish) continue;   // 墙段拼接角上重叠是正常拼法
     if(rectHit(bodyBox(a), bodyBox(b)))
       add("err", "重叠", `「${nm(a)}」和「${nm(b)}」压在一起了。`,
           "把其中一台拖开。", [a.id, b.id], bodyBox(a));
@@ -1114,7 +1129,7 @@ function staticLayer(){
   s += `<rect class="wall" x="${T_W}" y="${-WALL}" width="${WALL}" height="${K_D+2*WALL}"/>`;
   s += `<rect class="wall2" x="${K_W}" y="${-WALL}" width="${WALL}" height="${DOOR_Y[0]+WALL}"/>`;
   s += `<rect class="wall2" x="${K_W}" y="${DOOR_Y[1]}" width="${WALL}" height="${K_D-DOOR_Y[1]}"/>`;
-  s += `<text class="opening-label" x="${K_W+WALL/2}" y="${DOOR_Y[0]-80}" text-anchor="middle">拟建墙+门洞1000⚠️现状敞开</text>`;
+  s += `<text class="opening-label" x="${K_W+WALL/2}" y="${DOOR_Y[0]-80}" text-anchor="middle">隔墙1490+门,下方敞开(按08-13图)</text>`;
   let px = -WALL;
   for(const [ox, ow, label] of OPENINGS){
     s += `<rect class="wall" x="${px}" y="${-WALL}" width="${ox-px}" height="${WALL}"/>`;
@@ -1125,16 +1140,16 @@ function staticLayer(){
   s += `<rect class="wall" x="${F_X-WALL}" y="${-WALL}" width="${F_W+2*WALL}" height="${WALL}"/>`;
   s += `<rect x="0" y="${K_D}" width="${K_W}" height="120" class="win"/>`;
   s += `<rect x="${F_X}" y="${K_D}" width="${F_W}" height="120" class="win"/>`;
-  for(let x = 0; x <= K_W; x += 847) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
-  for(let x = F_X; x <= T_W; x += 805) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
+  for(let x = 0; x <= K_W; x += 1500) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
+  for(let x = F_X; x <= T_W; x += 1500) s += `<line class="win" x1="${x}" y1="${K_D}" x2="${x}" y2="${K_D+120}"/>`;
   s += `<text class="opening-label" x="${K_W/2}" y="${K_D+420}" text-anchor="middle">窗带(按图,待确认)</text>`;
   s += `<text class="roomtag" x="${K_W/2}" y="${K_D-160}" text-anchor="middle">厨 房</text>`;
   s += `<text class="roomtag" x="${F_X+F_W/2}" y="${K_D-160}" text-anchor="middle">前 厅</text>`;
   const M = 620;
   s += `<line class="dimline" x1="0" y1="${-M+240}" x2="${K_W}" y2="${-M+240}"/>
-    <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">8475</text>
+    <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">8820</text>
     <line class="dimline" x1="${F_X}" y1="${-M+240}" x2="${T_W}" y2="${-M+240}"/>
-    <text class="dimtext num" x="${F_X+F_W/2}" y="${-M+180}" text-anchor="middle">约4830⚠️</text>
+    <text class="dimtext num" x="${F_X+F_W/2}" y="${-M+180}" text-anchor="middle">7470</text>
     <line class="dimline" x1="${T_W+M-240}" y1="0" x2="${T_W+M-240}" y2="${K_D}"/>
     <text class="dimtext num" x="${T_W+M-300}" y="${K_D/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${K_D/2})">4660</text>`;
   return s;
@@ -1164,7 +1179,8 @@ function itemSVG(it, opt){
   const D = DEFS[it.t], W = fw(it), Dp = fd(it), dd = dims(it);
   const carr = opt.carr, bad = opt.bad;
   const cls = ["item", D.surf?"surf":"", D.top?"tabletop":"", D.plan?"planned":"",
-    D.marker?"marker":"", D.colm?"column":"", D.ceil?"ceil":"",
+    D.marker?"marker":"", D.colm?"column":"", D.ceil?"ceil":"", D.wallish?"uwall":"",
+    it.lock?"locked":"",
     carr.has(it.id)?"stacked":"", it.id===sel?"selected":"", bad.has(it.id)?"overlap":""]
     .filter(Boolean).join(" ");
   let g = `<g class="${cls}" data-id="${it.id}" transform="translate(${it.x} ${it.y})">`;
@@ -1198,7 +1214,10 @@ function itemSVG(it, opt){
             <circle cx="${W*0.78}" cy="${Dp*0.60}" r="${W*0.11}" fill="var(--sunken)" stroke="currentColor" stroke-width="12"/>`;
     }
     const cx = W/2, name = D.n + (carr.has(it.id) ? (D.stack ? "·叠放" : "·台上") : "");
-    if(opt.covered.has(it.id)){
+    if(it.lock) g += `<text class="lockic" x="60" y="${Dp/2+100}">🔒</text>`;
+    if(D.wallish){
+      g += `<text class="dm num" x="${cx}" y="${Dp/2+60}" text-anchor="middle">${dd.w}×${dd.d}</text>`;
+    } else if(opt.covered.has(it.id)){
       g += `<text class="nm" x="${cx}" y="${Dp-60}" text-anchor="middle">▼${D.n}(下层)</text>`;
     } else if(W >= 640){
       g += `<text class="nm" x="${cx}" y="${Dp/2-20}" text-anchor="middle">${name}</text>
@@ -1270,6 +1289,7 @@ function render(){
   svg.classList.toggle("zones-off", !store.ui.zones);
   svg.classList.toggle("badges-off", !store.ui.badges);
   updateSelbar();
+  syncLockAll();
   renderPanels();
 }
 
@@ -1376,6 +1396,13 @@ svg.addEventListener("pointerdown", ev => {
       let id = +g.dataset.id, it = items.find(i => i.id === id);
       if(sel === id){ const c = carrier(it); if(c){ id = c.id; it = c; } }  // 再点一下 → 选下层
       sel = id;
+      if(it.lock){
+        // 锁定的道具:能选中(好解锁),但手指拖动变成平移画布,防 iPad 误碰
+        mode = "pan";
+        pan0 = {x:ev.clientX, y:ev.clientY, cx:cam.cx, cy:cam.cy, moved:false, keepSel:true};
+        render();
+        return;
+      }
       const [mx, my] = toMM(ev.clientX, ev.clientY);
       drag = {it, dx:mx - it.x, dy:my - it.y, x0:it.x, y0:it.y, sx:ev.clientX, sy:ev.clientY, moved:false};
       snapLines = buildSnapLines(it);
@@ -1438,7 +1465,7 @@ function endPointer(ev, cancelled){
     const gu = svg.querySelector("#guides"); if(gu) gu.innerHTML = "";
     mode = pts.size ? mode : null; render();
   } else if(mode === "pan"){
-    if(!cancelled && !pan0.moved){ sel = null; render(); }
+    if(!cancelled && !pan0.moved && !pan0.keepSel){ sel = null; render(); }
     else save();
     mode = pts.size ? mode : null;
   } else if(mode === "pinch"){
@@ -1511,7 +1538,8 @@ function updateSelbar(){
   const D = DEFS[it.t], dd = dims(it), R = roomRef(it), c = CLR(it.t);
   const car = carrier(it), est = D.est ? "⚠️" : "";
   document.getElementById("selName").textContent =
-    D.n + (D.top ? " · 台式" : "") + (D.plan && !D.marker ? " · 未购" : "")
+    D.n + (D.top ? " · 台式" : "") + (D.plan && !D.marker && !D.wallish ? " · 未购" : "")
+    + (it.lock ? " · 🔒已锁定" : "")
     + (car ? ` · 放在「${DEFS[car.t].n}」上,总高${stackHeight(it)}`
            : (D.top ? " · ⚠️ 还没放到台面上" : ""));
   const bits = [`${dd.w}×${dd.d}`];
@@ -1525,11 +1553,14 @@ function updateSelbar(){
   document.getElementById("selDist").textContent =
     `${R.tag}内:距左${Math.round(it.x - R.x0)} 距上${Math.round(it.y)} · 净距 左${fmt(g.l)}/右${fmt(g.r)}/上${fmt(g.t)}/下${fmt(g.b)}`;
   const szBox = document.getElementById("szBox");
-  szBox.style.display = (D.plan && !D.marker) ? "" : "none";
+  szBox.style.display = (D.plan && !D.marker && !it.lock) ? "" : "none";
   if(D.plan){ document.getElementById("inW").value = dd.w; document.getElementById("inD").value = dd.d; }
   const sw = document.getElementById("btnSwap");
   sw.style.display = D.legacy ? "" : "none";
   if(D.legacy) sw.textContent = `换成「${DEFS[D.swap].n}」`;
+  document.getElementById("btnLock").textContent = it.lock ? "🔓 解锁" : "🔒 锁定";
+  document.getElementById("btnRot").disabled = !!it.lock;
+  document.getElementById("btnDel").disabled = !!it.lock;
 }
 
 const SEVTAG = {err:"必改", warn:"注意", todo:"待办"};
@@ -1757,9 +1788,27 @@ $("btnDup").onclick = () => {
   const it = selItem(); if(!it) return;
   pushHist();
   const s = scheme();
-  const c = Object.assign({}, it, {id:s.nextId++, x:Math.min(it.x+300, T_W-fw(it)), y:Math.min(it.y+300, K_D-fd(it))});
+  const c = Object.assign({}, it, {id:s.nextId++, lock:false,
+    x:Math.min(it.x+300, T_W-fw(it)), y:Math.min(it.y+300, K_D-fd(it))});
   items.push(c); sel = c.id; save(); render();
 };
+$("btnLock").onclick = () => {
+  const it = selItem(); if(!it) return;
+  it.lock = !it.lock; save(); render();
+  showToast(it.lock ? `已锁定「${nm(it)}」— 拖它不会动,画布照常平移` : `已解锁「${nm(it)}」`);
+};
+$("btnLockAll").onclick = () => {
+  if(!items.length) return;
+  const un = items.filter(i => !i.lock);
+  if(un.length){ un.forEach(i => i.lock = true); showToast(`已锁定全部 ${items.length} 件。要单独动某台:点它 → 解锁`); }
+  else { items.forEach(i => i.lock = false); showToast("已解除全部锁定"); }
+  save(); render();
+};
+function syncLockAll(){
+  const all = items.length && items.every(i => i.lock);
+  $("btnLockAll").textContent = all ? "🔓 全解" : "🔒 全锁";
+  $("btnLockAll").classList.toggle("on", !!all);
+}
 const onSz = () => {
   const it = selItem(); if(!it || !DEFS[it.t].plan) return;
   pushHist();
@@ -1972,6 +2021,7 @@ const AUX    = ["softener","trafo","hood","drain","stand","trolley","molder"];
 const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
 const ARTGRP = ["pipeart","ringtable","ringtable18","halfring"];
 const PLANNED= ["pillar","display","espresso","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
+const WALLGRP= ["uwall"];
 function chip(key){
   const D = DEFS[key], b = document.createElement("button");
   b.className = "chip" + (D.plan ? " plan" : "");
@@ -1994,6 +2044,7 @@ AUX.forEach(k => $("chipsAux").appendChild(chip(k)));
 HOSHI.forEach(k => $("chipsHoshi").appendChild(chip(k)));
 ARTGRP.forEach(k => $("chipsArt").appendChild(chip(k)));
 PLANNED.forEach(k => $("chipsPlan").appendChild(chip(k)));
+WALLGRP.forEach(k => $("chipsWall").appendChild(chip(k)));
 
 /* ═══ 启动 ═══════════════════════════════════════════════════════════ */
 $("inCeil").value = store.site.ceil;
