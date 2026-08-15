@@ -581,6 +581,18 @@ const DEFS = {
   hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, h:1990, plan:1,
     door:{side:"D", w:580}, cl:{front:700, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.40}, note:"对开双门·可现场改铰向(官方)"},
+  hre188:{n:"立式冷藏 6门 HRE-188SC", w:1800, d:800, h:2000, plan:1,
+    door:{side:"D", w:568},
+    cl:{front:700, side:{b:TUNE.gapWall},
+        over:{noCeil:2200, why:"机组在顶部,进出风在上方,禁吊柜/管线"}},
+    util:{pw:"220V单相", kw:0.45, kg:189},
+    note:"6门(3列×2排)·1553L·门开外扩547(总进深1347)·净重189kg·R290变频·免排水(底部强制蒸发)·脚90-120可调(总高最高2020)·耗电4.01度/24h"},
+  hfe188:{n:"立式冷冻 6门 HFE-188SC", w:1800, d:800, h:2000, plan:1,
+    door:{side:"D", w:568},
+    cl:{front:700, side:{b:TUNE.gapWall},
+        over:{noCeil:2200, why:"机组在顶部,进出风在上方,禁吊柜/管线"}},
+    util:{pw:"220V单相", kw:0.47, kg:191},
+    note:"6门(3列×2排)·1541L·门开外扩547(总进深1347)·净重191kg·R290变频·免排水·耗电8.82度/24h(冷藏款只要4.01)"},
   im45:{n:"制冰机 IM-45CBZ", w:660, d:589, h:875, plan:1, est:1,
     cl:{front:400, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.31, water:1, drain:1},
@@ -2051,7 +2063,7 @@ $("btnReset").onclick = ev => {
 
 /* ═══ 抽屉 chips ═════════════════════════════════════════════════════ */
 const AUX    = ["softener","trafo","hood","drain","stand","trolley","molder"];
-const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
+const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hre188","hfe188","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
 const ARTGRP = ["pipeart","ringtable","ringtable18","halfring"];
 const PLANNED= ["pillar","display","espresso","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 const WALLGRP= ["uwall"];
