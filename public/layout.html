@@ -1722,16 +1722,27 @@ function printHead(sub){
   const dt = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   return `<h2>kororā · 798 厨房 ${sub}</h2>
     <div class="meta">方案:${esc(scheme().name)} · 出图日期:${dt} · 单位 mm · 天花净高 ${store.site.ceil}${store.site.ceilMeasured?"":"⚠️未实测"} · 烟罩下沿 ${store.site.hood}
-    <br>⚠️ 标 ⚠️ 的尺寸为推算值,施工前须实测。前厅未包含在本图内(尺寸尚未实测)。</div>`;
+    <br>⚠️ 标 ⚠️ 的尺寸为推算值,施工前须实测。房型按 2026-08-13 原始平面(厨房 ${K_W}×${K_D}、前厅右屋 ${T_W-F2_X-F2_WALL}×${K_D-F_TOP})。</div>`;
 }
-function buildPlanPage(){
-  const pad = 700, x0 = -WALL - pad, y0 = -WALL - pad - 300;
-  const w = K_W + 2*WALL + 2*pad, h = K_D + WALL + 2*pad + 600;
+// 取景框全部由房间常量算出,改房型尺寸时打印范围自动跟着变(别再写死)
+function planExtent(scope){
+  const pad = 700;
+  const x0 = -WALL - pad;
+  const yBot = K_D + WALL + pad + 600;              // 下边:窗带 + 比例尺
+  if(scope === "all"){
+    const y0 = F_TOP - WALL - pad - 300;            // 上边:右屋顶墙(比厨房顶线高)
+    return {x0, y0, w: T_W + WALL + pad - x0, h: yBot - y0};
+  }
+  const y0 = -WALL - pad - 300;
+  return {x0, y0, w: K_W + 2*WALL + 2*pad, h: yBot - y0};
+}
+function buildPlanPage(scope){
+  const e = planExtent(scope), sub = scope === "all" ? "设备平面图(全场·含前厅)" : "设备平面图(厨房)";
   const c = svg.cloneNode(true);
   c.removeAttribute("id");
   c.classList.remove("zones-off", "badges-off");   // 出图一律带净空和点位角标
-  c.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
-  c.style.setProperty("--k", (w / 1040).toFixed(2));   // A4 横向可用宽 ≈ 277mm ≈ 1040px
+  c.setAttribute("viewBox", `${e.x0} ${e.y0} ${e.w} ${e.h}`);
+  c.style.setProperty("--k", (e.w / 1040).toFixed(2));   // A4 横向可用宽 ≈ 277mm ≈ 1040px
   const gg = c.querySelector("#guides"); if(gg) gg.remove();
   const ff = c.querySelector("#flashes"); if(ff) ff.remove();
   // 比例尺:1m
@@ -1744,7 +1755,7 @@ function buildPlanPage(){
     <text class="dimtext" x="${bx+930}" y="${by-110}">1m</text>
     <text class="dimtext" x="${bx+1900}" y="${by-110}">2m</text>`;
   c.appendChild(sb);
-  return `<div class="pblock">${printHead("设备平面图")}${c.outerHTML}
+  return `<div class="pblock${scope === "all" ? " pagebreak" : ""}">${printHead(sub)}${c.outerHTML}
     <div class="legend">图例:实线框=机身 · 灰虚线框=机器作业时自己伸出来的部分(不可占用) · 扇形=门扇轨迹 ·
     斜纹=站人作业位 · 反斜纹=侧向散热/检修位 · 点划线框=吊顶烟罩投影 · 圆点=水电接口点(⚠️按机背中点估)</div></div>`;
 }
@@ -1759,8 +1770,9 @@ function printAs(kind){
     : "@page{size:A4 portrait;margin:14mm}";
   const pa = document.getElementById("printarea");
   if(kind === "plan"){
-    pa.innerHTML = buildPlanPage() +
-      `<div class="hard pblock"><b>⚡ 给设计的三条硬约束</b><br>${HARD.join("<br>")}</div>`;
+    // 两页:厨房大比例出细节,全场一页看总关系(前厅已按 08-13 原始平面量过)
+    pa.innerHTML = buildPlanPage("kitchen") + buildPlanPage("all") +
+      `<div class="hard pblock pagebreak"><b>⚡ 给设计的三条硬约束</b><br>${HARD.join("<br>")}</div>`;
   } else {
     renderPanels();
     pa.innerHTML = `<div class="pblock">${printHead("水电点位表")}${tableHTML("ptList")}</div>
