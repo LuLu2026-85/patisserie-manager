@@ -942,13 +942,25 @@ function carrier(it){                    // 它压在谁上面(中心点判定;�
 function carrierMap(){
   const m = new Map();
   for(const it of items){ const c = carrier(it); if(c) m.set(it.id, c); }
+  // 两台都是「可叠 + 可当底座」又正好叠在一起时会互相认对方当底座,
+  // 高度就会来回累加(UNOX 10盘叠5盘 = 4016mm 那个假报警)。高的那台当底座。
+  for(const [id, c] of [...m]){
+    const back = m.get(c.id);
+    if(back && back.id === id){
+      const a = items.find(i => i.id === id);
+      const ha = DEFS[a.t].h || 0, hc = DEFS[c.t].h || 0;
+      if(ha > hc || (ha === hc && id < c.id)) m.delete(id); else m.delete(c.id);
+    }
+  }
   return m;
 }
 function stackHeight(it, carr){
   let h = DEFS[it.t].h || 0, cur = it;
+  const seen = new Set([it.id]);              // 兜底:任何情况下同一台只算一次
   for(let k = 0; k < 3; k++){
     const c = carr ? carr.get(cur.id) : carrier(cur);
-    if(!c) break;
+    if(!c || seen.has(c.id)) break;
+    seen.add(c.id);
     h += DEFS[c.t].h || 0; cur = c;
   }
   return h;
