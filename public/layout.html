@@ -153,6 +153,8 @@
   /* ══ SVG ══ 机身/墙的线宽用 mm(代表真实厚度);字号与虚线用 --k 换算,保证屏幕上恒定 ══ */
   .wall{fill:var(--ink)}
   .wall2{fill:#B9B9B0}
+  /* 建筑固有构件:承重柱/立管,永远在场且不可选中 */
+  .colfix{fill:#9A9A90;stroke:var(--ink);stroke-width:16;pointer-events:none}
   .wall.hot,.wall2.hot{fill:var(--accent)}
   .item.column .body{fill:#D8D8D0;stroke:var(--ink);stroke-width:16}
   .grid5{stroke:#EEEEE6;stroke-width:6}
@@ -241,6 +243,7 @@
     #printarea .item .body{fill:#fff!important;stroke:#000!important;stroke-width:14!important}
     #printarea .item.planned .body{stroke-dasharray:70 50!important}
     #printarea .item.uwall .body{stroke-dasharray:none!important;fill:#999!important}
+    #printarea .colfix{fill:#777!important;stroke:#000!important}
     #printarea .item .nm,#printarea .item .dm,#printarea .roomtag,
     #printarea .dimtext,#printarea .opening-label{fill:#000!important}
     #printarea .op-zone{fill:url(#hatchWork)!important;opacity:1!important}
@@ -268,7 +271,7 @@
 
 <header>
   <h1>798 厨房布局台</h1>
-  <span class="roomdim num">厨房 8820×4660 · 前厅右屋 6280×7270(4面玻璃) · 窗带11面 · 按 08-13 原始平面</span>
+  <span class="roomdim num" id="roomdim"></span>
   <span class="save" id="savemsg">自动保存</span>
 </header>
 
@@ -409,7 +412,7 @@
 /* ═══ §0 常量与可调参数 ═══════════════════════════════════════════════ */
 // 尺寸来源: 798 烘焙 原始平面 CAD (2026-08-13, 微信 PDF)。
 // 用图内操作台 3250×1500 / 冷藏台 1500×750 标定比例, 多台互验一致, 误差约 ±20mm。
-const K_W = 8820, K_D = 4660, WALL = 200;
+const K_W = 8825, K_D = 4660, WALL = 200;
 const F_X = K_W + WALL;               // 前厅左内墙 x
 const F_W = 7330;                     // 前厅总宽(隔墙内侧→右外墙内侧, CAD 实量)
 const T_W = F_X + F_W;                // 全局宽
@@ -420,6 +423,20 @@ const DOOR_Y = [1490, K_D];           // 隔墙只有靠上墙的 1490 实段, �
 const OPENINGS = [];                  // 新图厨房顶墙无开口, 入口动线改经前厅(旧"入口1000"作废)
 // 窗带 11 面玻璃:竖梃真实位置(CAD 逐根量取, 相对厨房左内角; 右屋左墙正压在 9965 那根上)
 const MULLIONS = [616, 2170, 3733, 5291, 6853, 8407, 9965, 11519, 13081, 14636];
+
+/* ═══ 建筑固有构件(不可移动) ══════════════════════════════════════════
+   来源:「原始图纸-0727-模型」。比例用图上 8825/10650/4060/1410/2370/1490/500
+   七条标注交叉校验 = 15.717 mm/pt(彼此偏差 <0.2%);原点与本工具一致
+   (厨房左内墙 × 上内墙)。同一比例下两根大柱实测 Ø299.9,取整 300 —— 反证比例正确。
+   ⚠️ 这是承重结构,只能围着它排设备,不能挪、不能删。 */
+const COLUMNS = [
+  // 大柱:x 由 4060+1410=5470(柱右缘)反推, y 由 4560-1790=2770(柱下缘)反推
+  {cx: 5320, cy:2620, d:300, n:"结构柱 Ø300", tag:1},
+  {cx:10875, cy:2620, d:300, n:"结构柱 Ø300", tag:1},   // 前厅内, 无直接标注, 按几何量取 ±10
+  // 小圆一对:左缘 x=4060、顶缘 y=2370、总高 500(均为图上直接标注)
+  {cx: 4135, cy:2445, d:150, n:"Ø150 柱/管", tag:2},
+  {cx: 4135, cy:2795, d:150, n:"Ø150 柱/管", tag:0},
+];
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // 所有可调阈值集中在这里。来源:RURU_798_已采购设备明细_v2.md §二「通用留缝」
@@ -897,6 +914,9 @@ const WALLS = (() => {
   w.push({x:px, y:-WALL, w:K_W-px, h:WALL, n:"上墙"});
   w.push({x:F2_X, y:F_TOP - WALL, w:T_W - F2_X + WALL, h:WALL, n:"右屋顶墙"});
   w.push({x:F2_X, y:F_TOP, w:F2_WALL, h:-F_TOP + 150, n:"右屋左墙"});
+  // 结构柱按外接方框进碰撞(比圆保守一点,对承重构件正合适)
+  for(const c of COLUMNS)
+    w.push({x:c.cx - c.d/2, y:c.cy - c.d/2, w:c.d, h:c.d, n:c.n});
   return w;
 })();
 
@@ -1190,11 +1210,20 @@ function staticLayer(){
   s += `<text class="roomtag" x="${F2_X+(T_W-F2_X)/2}" y="${K_D-160}" text-anchor="middle">前 厅</text>`;
   const M = 620;
   s += `<line class="dimline" x1="0" y1="${-M+240}" x2="${K_W}" y2="${-M+240}"/>
-    <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">8820</text>
+    <text class="dimtext num" x="${K_W/2}" y="${-M+180}" text-anchor="middle">${K_W}</text>
     <line class="dimline" x1="${F2_X+F2_WALL}" y1="${F_TOP-M+240}" x2="${T_W}" y2="${F_TOP-M+240}"/>
-    <text class="dimtext num" x="${(F2_X+T_W)/2}" y="${F_TOP-M+180}" text-anchor="middle">右屋6280 · 4面玻璃</text>
+    <text class="dimtext num" x="${(F2_X+T_W)/2}" y="${F_TOP-M+180}" text-anchor="middle">右屋${T_W-F2_X-F2_WALL} · 4面玻璃</text>
     <line class="dimline" x1="${T_W+M-240}" y1="${F_TOP}" x2="${T_W+M-240}" y2="${K_D}"/>
-    <text class="dimtext num" x="${T_W+M-300}" y="${(F_TOP+K_D)/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${(F_TOP+K_D)/2})">7270</text>`;
+    <text class="dimtext num" x="${T_W+M-300}" y="${(F_TOP+K_D)/2}" text-anchor="middle" transform="rotate(-90 ${T_W+M-300} ${(F_TOP+K_D)/2})">${K_D-F_TOP}</text>`;
+  return s;
+}
+// 建筑固有构件画在最上层 —— 承重结构不该被任何设备盖住
+function columnLayer(){
+  let s = "";
+  for(const c of COLUMNS){
+    s += `<circle class="colfix" cx="${c.cx}" cy="${c.cy}" r="${c.d/2}"/>`;
+    if(c.tag) s += `<text class="opening-label" x="${c.cx}" y="${c.cy - c.d/2 - 90}" text-anchor="middle">${c.n}${c.tag===2?" ×2":""}</text>`;
+  }
   return s;
 }
 
@@ -1313,6 +1342,7 @@ function render(){
                  : DEFS[t].ceil ? 4 : DEFS[t].top ? 3 : DEFS[t].stack ? 2 : 1;
   for(const it of [...items].sort((a,b) => lay(a.t) - lay(b.t)))
     s += itemSVG(it, {carr, covered, bad});
+  s += columnLayer();          // 结构柱压在所有设备之上,永远看得见
 
   // 最窄的一条过道:画出来,这张图 JIN 一看就懂
   const narrow = aisleScan()
@@ -2104,6 +2134,9 @@ PLANNED.forEach(k => $("chipsPlan").appendChild(chip(k)));
 WALLGRP.forEach(k => $("chipsWall").appendChild(chip(k)));
 
 /* ═══ 启动 ═══════════════════════════════════════════════════════════ */
+// 顶栏尺寸由常量生成,改房型不会再和图上对不上
+$("roomdim").textContent =
+  `厨房 ${K_W}×${K_D} · 前厅右屋 ${T_W-F2_X-F2_WALL}×${K_D-F_TOP} · 窗带${MULLIONS.length+1}面 · 结构柱${COLUMNS.length}根 · 按 0727 原始图纸`;
 $("inCeil").value = store.site.ceil;
 $("inHood").value = store.site.hood;
 $("btnSnap").textContent = "吸附:" + (store.ui.snap ? "开" : "关");
