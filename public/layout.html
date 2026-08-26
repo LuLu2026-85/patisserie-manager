@@ -155,6 +155,11 @@
   .wall2{fill:#B9B9B0}
   /* 建筑固有构件:承重柱/立管,永远在场且不可选中 */
   .colfix{fill:#9A9A90;stroke:var(--ink);stroke-width:16;pointer-events:none}
+  /* 场馆管道:2m 限高带,吊在半空,不参与地面碰撞但高个子设备禁入 */
+  .pipefix{fill:var(--accent);fill-opacity:.10;stroke:var(--accent);stroke-width:10;
+    stroke-dasharray:140 90;pointer-events:none}
+  .pipefix-label{fill:var(--accent);font-family:var(--cjk);
+    font-size:clamp(80px,calc(var(--k)*10px),360px);pointer-events:none}
   .wall.hot,.wall2.hot{fill:var(--accent)}
   .item.column .body{fill:#D8D8D0;stroke:var(--ink);stroke-width:16}
   .grid5{stroke:#EEEEE6;stroke-width:6}
@@ -244,6 +249,8 @@
     #printarea .item.planned .body{stroke-dasharray:70 50!important}
     #printarea .item.uwall .body{stroke-dasharray:none!important;fill:#999!important}
     #printarea .colfix{fill:#777!important;stroke:#000!important}
+    #printarea .pipefix{fill:none!important;stroke:#000!important}
+    #printarea .pipefix-label{fill:#000!important}
     #printarea .item .nm,#printarea .item .dm,#printarea .roomtag,
     #printarea .dimtext,#printarea .opening-label{fill:#000!important}
     #printarea .op-zone{fill:url(#hatchWork)!important;opacity:1!important}
@@ -437,6 +444,17 @@ const COLUMNS = [
   {cx: 4135, cy:2445, d:150, n:"Ø150 柱/管", tag:2},
   {cx: 4135, cy:2795, d:150, n:"Ø150 柱/管", tag:0},
 ];
+
+/* ═══ 场馆横穿管道(2026-08-26 标定,不可拆) ═══════════════════════════
+   两根 Ø235 水平管,管底离地 2000,纵穿全馆(含本店厨房+前厅)。
+   y 定位依据:0727 图纸那对「Ø150 柱/管」圆心 y=2445/2795,与全馆
+   一层平面截图量取的「距玻璃幕墙约 2.2m」互相吻合(4660-2445=2215),
+   判定这对圆就是管线的立管/吊点 → 管中心取 y=2445 / y=2795。
+   ⚠️ 管径/管底高为 LuLu 现场口径;精确校准=现场量「管中心到玻璃内面」
+   南北各一次,有偏差只改下面 ys 两个数,其余全自动跟着变。
+   高于 2000 的设备(冷库/立柜/醒发箱/烟罩)不得进入管带投影。 */
+const PIPES = { ys:[2445, 2795], dia:235, under:2000 };
+const PIPE_BAND = { y0: PIPES.ys[0]-PIPES.dia/2, y1: PIPES.ys[1]+PIPES.dia/2 };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 // 所有可调阈值集中在这里。来源:RURU_798_已采购设备明细_v2.md §二「通用留缝」
@@ -1130,6 +1148,13 @@ function validate(){
     if(tot && ceil && tot > ceil - 100)
       add("err", "高度", `「${nm(it)}」${carr.get(it.id)?"叠起来":""}总高 ${tot}mm,你填的天花是 ${ceil}mm${ceilTag},装不下(顶上还要留 100)。`,
           "换个位置,或不叠放。", [it.id], bodyBox(it));
+    // 2m 管道带:总高超过管底的设备,机身(含外扩)不得压进管带投影
+    if(tot && tot > PIPES.under && !D.ceil){
+      const b = bodyBox(it);
+      if(b.y < PIPE_BAND.y1 && b.y + b.h > PIPE_BAND.y0)
+        add("err", "管道", `「${nm(it)}」总高 ${tot}mm,压进了 2m 高的横穿管道带(Ø235×2,不可拆)。`,
+            "往上墙方向挪出管带,或换矮的型号。冷库/立柜/醒发箱都归这条管。", [it.id], b);
+    }
     if(D.util && D.util.exhaust && tot && hood && tot > hood)
       add("err", "高度", `「${nm(it)}」总高 ${tot}mm,超过烟罩下沿 ${hood}mm。`,
           "抬高烟罩,或别把烤箱叠这么高。", [it.id], bodyBox(it));
@@ -1233,6 +1258,10 @@ function staticLayer(){
 // 建筑固有构件画在最上层 —— 承重结构不该被任何设备盖住
 function columnLayer(){
   let s = "";
+  // 2m 限高管道带:先画带,柱子压在上面
+  for(const y of PIPES.ys)
+    s += `<rect class="pipefix" x="${-WALL}" y="${y - PIPES.dia/2}" width="${T_W + WALL*2}" height="${PIPES.dia}"/>`;
+  s += `<text class="pipefix-label" x="${K_W*0.22}" y="${PIPE_BAND.y0 - 70}">2×Ø235 管道 · 管底2000 · 高于2m禁入 ⚠️南端实测校准</text>`;
   for(const c of COLUMNS){
     s += `<circle class="colfix" cx="${c.cx}" cy="${c.cy}" r="${c.d/2}"/>`;
     if(c.tag) s += `<text class="opening-label" x="${c.cx}" y="${c.cy - c.d/2 - 90}" text-anchor="middle">${c.n}${c.tag===2?" ×2":""}</text>`;
@@ -2149,7 +2178,7 @@ WALLGRP.forEach(k => $("chipsWall").appendChild(chip(k)));
 /* ═══ 启动 ═══════════════════════════════════════════════════════════ */
 // 顶栏尺寸由常量生成,改房型不会再和图上对不上
 $("roomdim").textContent =
-  `厨房 ${K_W}×${K_D} · 前厅右屋 ${T_W-F2_X-F2_WALL}×${K_D-F_TOP} · 窗带${MULLIONS.length+1}面 · 结构柱${COLUMNS.length}根 · 按 0727 原始图纸`;
+  `厨房 ${K_W}×${K_D} · 前厅右屋 ${T_W-F2_X-F2_WALL}×${K_D-F_TOP} · 窗带${MULLIONS.length+1}面 · 结构柱${COLUMNS.length}根 · 2×Ø235管道@管底2000(y=${PIPES.ys.join("/")}) · 按 0727 原始图纸`;
 $("inCeil").value = store.site.ceil;
 $("inHood").value = store.site.hood;
 $("btnSnap").textContent = "吸附:" + (store.ui.snap ? "开" : "关");
