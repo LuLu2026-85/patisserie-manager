@@ -332,6 +332,69 @@ const CUSTOM_CAT_COLORS = PALETTE_8;
 let _customCompCats = [];
 const setCustomCompCatsForLookup = (cats) => { _customCompCats = cats || []; };
 
+// ═══════════════════════════════════════════════════════════════
+// 💱 币种与汇率 (v17)
+// 老数据(1802 条材料 / 24 条本店原料 / 52 条手写单价)实测 100% 是日元,
+// 所以「没有 currency 字段」就等于 JPY —— 不写迁移函数,不改老数据一个字节。
+// 新建的默认 CNY(店在北京 798,采购是人民币)。
+// 成本链统一在出口折成人民币:getMaterialEffectivePrice 返回的就是 CNY/g,
+// 下游 18 个调用点(配方成本 / 组件 / 商品毛利)一行都不用改。
+// 显示单价则保留原币种 + 折算参考值,见 fmtUnitPrice。
+// ═══════════════════════════════════════════════════════════════
+const DEFAULT_FX_JPY_CNY = 0.048;   // 1 日元 ≈ 多少人民币(可在数据 tab 改)
+let _fxJpyToCny = DEFAULT_FX_JPY_CNY;
+const setFxForLookup = (r) => { const n = parseFloat(r); _fxJpyToCny = (!isNaN(n) && n > 0) ? n : DEFAULT_FX_JPY_CNY; };
+const getFx = () => _fxJpyToCny;
+// 一条记录(材料 / 本店原料 / 配料)的币种;无字段 = 老数据 = 日元
+const curOf = (o) => (o && o.currency === "CNY") ? "CNY" : "JPY";
+// 把任意币种的金额折成人民币
+const toCNY = (v, currency) => {
+  const n = parseFloat(v);
+  if (isNaN(n) || n <= 0) return 0;
+  return currency === "CNY" ? n : n * _fxJpyToCny;
+};
+
+// v17: 单价显示口径 —— 存的是每克价,给人看的是每 100g。
+// 人民币下 ¥/g 全是 0.008 这种读不动的小数,×100 之后面粉 0.8 / 黄油 13 / 杏仁粉 22。
+// 人民币写「¥」、日元写「円」—— 两个符号刻意长得不一样,扫一眼列表就知道
+// 哪条还是日本老数据(待换国内货源),不用点进去看。
+const per100 = (pricePerG) => {
+  const n = parseFloat(pricePerG);
+  if (isNaN(n) || n <= 0) return "";
+  return String(Math.round(n * 100 * 100) / 100);
+};
+// 售价的币种。跟材料价同一条规矩:没字段 = 老数据 = 日元。
+// (老配方里写的 450 是东京时期定的 450 円,不是 450 元 —— 不折算的话利润率会虚高到 99%)
+const priceCurOf = (o) => (o && o.priceCurrency === "CNY") ? "CNY" : "JPY";
+// 售价显示:保留原币种原值,不折算(定价是定价,不是估算)
+const fmtSellPrice = (v, o) => {
+  const n = parseFloat(v);
+  if (isNaN(n) || n <= 0) return "";
+  return priceCurOf(o) === "CNY" ? `¥${n.toLocaleString()}` : `${n.toLocaleString()}円`;
+};
+// 售价旁边的币种切换,一个字宽
+const priceCurBtn = (obj, onToggle, lang) => (
+  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle(priceCurOf(obj) === "CNY" ? "JPY" : "CNY"); }}
+    title={lang === "zh" ? "售价的币种,点一下切换" : "販売価の通貨を切替"}
+    style={{ marginLeft: 6, padding: "0 5px", fontSize: 11, lineHeight: 1.4, cursor: "pointer", verticalAlign: "middle",
+      background: priceCurOf(obj) === "CNY" ? "transparent" : "#FEF3C7",
+      border: `0.5px solid ${priceCurOf(obj) === "CNY" ? T.border : "#F59E0B"}`, borderRadius: 3,
+      color: priceCurOf(obj) === "CNY" ? T.textSecondary : "#92400E" }}>
+    {priceCurOf(obj) === "CNY" ? "¥" : "円"}
+  </button>
+);
+
+// opts.approx: 日元时附上按当前汇率折出的人民币参考值
+const fmtUnitPrice = (pricePerG, currency, opts = {}) => {
+  const v = per100(pricePerG);
+  if (!v) return "";
+  if (curOf({ currency }) === "CNY") return `¥${v}/100g`;
+  const head = `${v}円/100g`;
+  if (!opts.approx) return head;
+  const cny = Math.round(parseFloat(v) * _fxJpyToCny * 100) / 100;
+  return cny > 0 ? `${head} ≈¥${cny}` : head;
+};
+
 // v11: 全局 shopMaterials lookup（复用 _customCompCats 的注入模式）
 // 这样所有 price helper 不用在 props 里多带一层 shopMaterials 参数
 let _shopMaterials = [];
@@ -339,23 +402,40 @@ const setShopMaterialsForLookup = (sm) => {
   _shopMaterials = Array.isArray(sm) ? sm : [];
 };
 
-// v11: 返回 material 的"有效价"(¥/g)
+// v11: 返回 material 的"有效价"
 // 优先级: ① 本店原料 shopMaterials.pricePerG → ② materials.priceRange.mid → ③ materials.pricePerG(兼容老字段)
+// v17: 出口统一折成 **人民币/g** —— 每条按自己的 currency 折,日元材料和人民币材料
+// 可以混在同一个配方里算成本。要拿原币种原值请直接读字段,别用这个函数。
 const getMaterialEffectivePrice = (m) => {
   if (!m) return 0;
   if (m.id) {
     const sm = _shopMaterials.find(s => s && s.materialId === m.id);
     if (sm && sm.pricePerG) {
-      const p = parseFloat(sm.pricePerG);
-      if (!isNaN(p) && p > 0) return p;
+      const p = toCNY(sm.pricePerG, curOf(sm));
+      if (p > 0) return p;
     }
   }
   if (m.priceRange && m.priceRange.mid) {
-    const p = parseFloat(m.priceRange.mid);
-    if (!isNaN(p) && p > 0) return p;
+    const p = toCNY(m.priceRange.mid, curOf(m));
+    if (p > 0) return p;
   }
-  const p = parseFloat(m.pricePerG);
-  return (!isNaN(p) && p > 0) ? p : 0;
+  return toCNY(m.pricePerG, curOf(m));
+};
+
+// v17: 材料的"原币种 + 原值"(¥/g),给 UI 显示单价用(不折算)
+// 返回 { price, currency, source } — source 同 getMaterialPriceSource
+const getMaterialRawPrice = (m) => {
+  if (!m) return { price: 0, currency: "JPY", source: "none" };
+  if (m.id) {
+    const sm = _shopMaterials.find(s => s && s.materialId === m.id);
+    const p = parseFloat(sm && sm.pricePerG);
+    if (!isNaN(p) && p > 0) return { price: p, currency: curOf(sm), source: "shop" };
+  }
+  const mid = parseFloat(m.priceRange && m.priceRange.mid);
+  if (!isNaN(mid) && mid > 0) return { price: mid, currency: curOf(m), source: "ref" };
+  const legacy = parseFloat(m.pricePerG);
+  if (!isNaN(legacy) && legacy > 0) return { price: legacy, currency: curOf(m), source: "ref" };
+  return { price: 0, currency: curOf(m), source: "none" };
 };
 
 // v11: 从 ingredient 维度返回价格来源,给配方视图渲染标签用
@@ -1129,9 +1209,8 @@ const getIngUnitPrice = (ing, materials, brands, cats) => {
       if (p > 0) return p;
     }
   }
-  // ② 手写 unitPrice
-  const p = parseFloat(ing.unitPrice);
-  return (!isNaN(p) && p > 0) ? p : 0;
+  // ② 手写 unitPrice(v17: 按 ing.currency 折成人民币,无字段 = 老数据 = 日元)
+  return toCNY(ing.unitPrice, curOf(ing));
 };
 
 // v11: 只读视图用的实时成本 — qty × live unit price。
@@ -1141,8 +1220,8 @@ const getIngLiveCost = (ing, materials, brands, cats) => {
   const q = parseFloat(ing.qty) || 0;
   const up = getIngUnitPrice(ing, materials, brands, cats);
   if (q > 0 && up > 0) return q * up;
-  const stored = parseFloat(ing.cost);
-  return isNaN(stored) ? 0 : stored;
+  // 存储快照也是原币种(老数据日元),同样折成人民币,免得一张表里两种钱
+  return toCNY(ing.cost, curOf(ing));
 };
 
 
@@ -2751,9 +2830,9 @@ function loadData() {
   return null;
 }
 
-function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers) {
+function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings) {
   try {
-    const payload = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, savedAt: new Date().toISOString(), version: 16 });
+    const payload = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, savedAt: new Date().toISOString(), version: 17 });
     localStorage.setItem(STORAGE_KEY, payload);
     // 自动备份到 IndexedDB (fire-and-forget,失败不影响主流程)
     addBackupSnapshot(payload);
@@ -3539,7 +3618,7 @@ function BulkMaterialLinkWizard({ recipes, components, creations, materials, bra
                                 {m === r.best && r.highConfidence ? "✨ " : ""}
                                 {lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)}
                                 {bName ? ` (${bName})` : ""}
-                                {m.pricePerG ? ` ¥${m.pricePerG}/g` : ""}
+                                {m.pricePerG ? " " + fmtUnitPrice(m.pricePerG, curOf(m)) : ""}
                                 {score !== null ? ` [${score}]` : ""}
                               </option>
                             );
@@ -3876,7 +3955,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
   const liveTotalCost = (r.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
   const _yieldNum = parseFloat(r.yield) || 0;
   const liveUnitCost = _yieldNum > 0 ? liveTotalCost / _yieldNum : 0;
-  const _priceNum = parseFloat(r.price) || 0;
+  const _priceNum = toCNY(r.price, priceCurOf(r));   // v17: 售价折人民币,才能跟已折算的成本比
   const liveMargin = _priceNum > 0 && liveUnitCost > 0 ? ((_priceNum - liveUnitCost) / _priceNum) * 100 : 0;
   const mc = liveMargin >= 50 ? "green" : liveMargin >= 30 ? "amber" : "red";
 
@@ -4945,7 +5024,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         }
         return { ...linked, _id: idx };
       })
-    : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", cost: "", catId: null, brandIdx: null }]);
+    : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", catId: null, brandIdx: null }]);
 
   // 🧪 原料自动补全数据源：从价格表 cats 取双语名称和品牌
   const autoCompleteData = useMemo(() => {
@@ -4981,7 +5060,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
-  const totalCost = ings.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const updateIng = (id, field, val) => setIngs(prev => prev.map(i => i._id === id ? { ...i, [field]: val } : i));
 
   // 未关联材料对话框 state
@@ -5188,7 +5267,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                 {lang === "zh" ? "🤖 批量关联" : "🤖 一括"}
               </Btn>
             )}
-            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
           </div>
         </div>
         <div style={{ overflowX: "auto" }}>
@@ -6959,7 +7038,7 @@ function CreationsView({ creations, setCreations, components, cats, onUpdateCats
           const totalCost = layers.reduce((s, l) => s + (l.totalCost || 0), 0);
           const servesNum = parseFloat(c.serves) || 1;
           const portionsNum = parseFloat(c.portions) || 1;
-          const priceNum = parseFloat(c.price) || 0;
+          const priceNum = toCNY(c.price, priceCurOf(c));
           const costPerPortion = totalCost / servesNum / portionsNum;
           const marginPct = priceNum > 0 && costPerPortion > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
 
@@ -7038,7 +7117,7 @@ function CreationsView({ creations, setCreations, components, cats, onUpdateCats
                   </span>
                   {priceNum > 0 && (
                     <div style={{ fontFamily: T.fontSerif, fontSize: 14, fontWeight: 500, color: T.textPrimary }}>
-                      ¥{priceNum.toFixed(0)}
+                      {fmtSellPrice(c.price, c)}
                     </div>
                   )}
                   {c.rating > 0 && (
@@ -7125,7 +7204,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
   const costPerCake = totalCostAll / servesNum;
   const portionsNum = parseFloat(c.portions) || 1;
   const costPerPortion = costPerCake / portionsNum;
-  const priceNum = parseFloat(c.price) || 0;
+  const priceNum = toCNY(c.price, priceCurOf(c));
   const marginPercent = priceNum > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
 
   // 关联知识点（通过蛋糕名字匹配）
@@ -7313,7 +7392,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
       {viewMode === "menu" && priceNum > 0 && (
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", padding: "1rem", marginBottom: "1rem", textAlign: "center" }}>
           <div style={{ fontSize: 11, color: "#999", letterSpacing: 2 }}>PRICE</div>
-          <div style={{ fontSize: 22, fontWeight: 400, marginTop: 4, color: "#111", fontFamily: "Georgia, serif" }}>¥{priceNum.toFixed(0)}</div>
+          <div style={{ fontSize: 22, fontWeight: 400, marginTop: 4, color: "#111", fontFamily: "Georgia, serif" }}>{fmtSellPrice(c.price, c)}</div>
           {c.portions && <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>/ 每份</div>}
         </div>
       )}
@@ -7552,7 +7631,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     description: "",
     chef: "", flavorTags: [],
     status: "試作",
-    price: "", prepTime: "", shelfLife: "",
+    price: "", priceCurrency: "CNY", prepTime: "", shelfLife: "",
     layers: [],
     rating: 0,
     tasting: { date: "", notes: "", feedback: "", improvement: "" },
@@ -7586,7 +7665,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const portionsNum = parseFloat(form.portions) || 1;
   const costPerPortion = costPerCake / portionsNum;
   // 毛利率
-  const priceNum = parseFloat(form.price) || 0;
+  const priceNum = toCNY(form.price, priceCurOf(form));
   const marginPercent = priceNum > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
@@ -7755,7 +7834,10 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>售价（每份 ¥）</label>
-            <input type="number" value={form.price || ""} onChange={f("price")} placeholder="780" style={inpStyle} />
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <input type="number" value={form.price || ""} onChange={f("price")} placeholder="780" style={inpStyle} />
+              {priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}
+            </div>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
@@ -7828,7 +7910,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
             <div style={{ color: "#666" }}>售价</div>
-            <div style={{ fontSize: 15, fontWeight: 500 }}>¥{priceNum > 0 ? priceNum.toFixed(0) : "—"}</div>
+            <div style={{ fontSize: 15, fontWeight: 500 }}>{priceNum > 0 ? fmtSellPrice(form.price, form) : "—"}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
             <div style={{ color: "#666" }}>毛利率</div>
@@ -8094,7 +8176,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
     return { nameZh: Array.from(zhSet).sort(), nameJa: Array.from(jaSet).sort(), brand: Array.from(brandSet).sort() };
   }, [cats]);
 
-  const totalCost = ings.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const updateIng = (id, field, val) => setIngs(prev => prev.map(i => i._id === id ? { ...i, [field]: val } : i));
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
@@ -8219,7 +8301,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                 {lang === "zh" ? "🤖 批量关联" : "🤖 一括"}
               </Btn>
             )}
-            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", cost: "" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
           </div>
         </div>
         <div style={{ overflowX: "auto" }}>
@@ -9635,7 +9717,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
                   </div>
                   <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
                     {b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : ""}
-                    {m.pricePerG ? ` · ¥${m.pricePerG}/g` : ""}
+                    {m.pricePerG ? " · " + fmtUnitPrice(m.pricePerG, curOf(m)) : ""}
                     {m.rating ? ` · ${"★".repeat(m.rating)}` : ""}
                   </div>
                 </div>
@@ -9818,7 +9900,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
                             {b && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>
                               · {lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)}
                             </span>}
-                            {m.pricePerG && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· ¥{m.pricePerG}/g</span>}
+                            {m.pricePerG && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· {fmtUnitPrice(m.pricePerG, curOf(m))}</span>}
                           </span>
                         </label>
                       );
@@ -10137,7 +10219,7 @@ function CategoryDetailView({
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto", paddingTop: 4 }}>
                 <div style={{ fontFamily: T.fontSerif, fontSize: 14, fontWeight: 500, color: m.pricePerG ? T.textPrimary : T.textTertiary }}>
-                  {m.pricePerG ? `¥${m.pricePerG}/g` : "—"}
+                  {m.pricePerG ? fmtUnitPrice(m.pricePerG, curOf(m)) : "—"}
                 </div>
                 <div style={{ color: "#F59E0B", fontSize: 11 }}>
                   {m.rating ? "★".repeat(m.rating) : ""}
@@ -10362,8 +10444,8 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
                     <div style={{ fontSize: 11, color: T.textTertiary, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       {[
                         m.packSize ? `${m.packSize}${m.casePack ? ` × ${m.casePack}` : ""}` : null,
-                        m.pricePerG ? `¥${m.pricePerG}/g` : null,
-                        casePrice > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ¥${casePrice.toFixed(0)}` : null,
+                        m.pricePerG ? fmtUnitPrice(m.pricePerG, curOf(m)) : null,
+                        casePrice > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ${getMaterialRawPrice(m).currency === "CNY" ? "" : "≈"}¥${casePrice.toFixed(0)}` : null,
                       ].filter(Boolean).map((t, i, arr) => (
                         <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span>{t}</span>
@@ -10539,7 +10621,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               return (
                 <div style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
                   <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.5px", textTransform: "uppercase" }}>📖 {lang === "zh" ? "参考价" : "参考価"}</div>
-                  <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.textPrimary, marginTop: 2 }}>¥{refPrice}/g</div>
+                  <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.textPrimary, marginTop: 2 }}>{fmtUnitPrice(refPrice, curOf(material))}</div>
                   {material.priceRange && material.priceRange.asOf && (
                     <div style={{ fontSize: 9, color: T.textTertiary, marginTop: 2 }}>{material.priceRange.asOf}</div>
                   )}
@@ -10552,14 +10634,14 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               return (
                 <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm, border: `0.5px solid ${T.success}` }}>
                   <div style={{ fontSize: 10, color: T.success, letterSpacing: "0.5px", textTransform: "uppercase" }}>🏷️ {lang === "zh" ? "本店价" : "仕入価"}</div>
-                  <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>¥{sm.pricePerG}/g</div>
+                  <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>{fmtUnitPrice(sm.pricePerG, curOf(sm))}</div>
                 </div>
               );
             })()}
             {casePrice > 0 && (
               <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm }}>
                 <div style={{ fontSize: 10, color: T.success, letterSpacing: "0.5px", textTransform: "uppercase" }}>{lang === "zh" ? "整箱约" : "1ケース合計"}</div>
-                <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>¥{casePrice.toFixed(0)}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>{getMaterialRawPrice(material).currency === "CNY" ? "" : "≈"}¥{casePrice.toFixed(0)}</div>
               </div>
             )}
           </div>
@@ -10570,7 +10652,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               return (
                 <div style={{ marginTop: 12, fontSize: 12, color: T.success, display: "flex", alignItems: "center", gap: 6 }}>
                   ✓ {lang === "zh" ? "已在本店原料" : "仕入れ原料登録済"}
-                  <span style={{ color: T.textTertiary, fontSize: 11 }}>· 🏷️ ¥{existing.pricePerG}/g</span>
+                  <span style={{ color: T.textTertiary, fontSize: 11 }}>· 🏷️ {fmtUnitPrice(existing.pricePerG, curOf(existing))}</span>
                 </div>
               );
             }
@@ -10586,7 +10668,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                     casePack: material.casePack || "",
                     note: "",
                   }]);
-                  if (typeof showToast === "function") showToast(lang === "zh" ? `✓ 已添加到本店原料 ¥${refPrice}/g` : `✓ 仕入れ原料に追加 ¥${refPrice}/g`);
+                  if (typeof showToast === "function") showToast((lang === "zh" ? "✓ 已添加到本店原料 " : "✓ 仕入れ原料に追加 ") + fmtUnitPrice(refPrice, curOf(material)));
                 }}>
                   {lang === "zh" ? "+ 添加为本店原料" : "+ 仕入れ原料に追加"}
                 </Btn>
@@ -10656,7 +10738,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               <thead>
                 <tr style={{ background: "#F5F5F5" }}>
                   <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 400, color: "#666" }}>产品</th>
-                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 400, color: "#666" }}>¥/g</th>
+                  <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 400, color: "#666" }}>{lang === "zh" ? "单价/100g" : "単価/100g"}</th>
                   <th style={{ textAlign: "center", padding: "6px 10px", fontWeight: 400, color: "#666" }}>评分</th>
                 </tr>
               </thead>
@@ -10693,6 +10775,145 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
   );
 }
 
+// ─── 💱 日元汇率设置卡(数据 tab) ─────────────
+// 材料百科的存量是日元报价,配方成本要按这个折成人民币。
+// 输入按「100 日元 = ? 元」,因为国内看汇率就是这个口径;存的是 1 日元 = ? 元。
+function FxSettingCard({ appSettings, setAppSettings, lang }) {
+  const [draft, setDraft] = useState(null);
+  const zh = lang === "zh";
+  const fx = appSettings.fxJpyToCny || DEFAULT_FX_JPY_CNY;
+  const per100 = Math.round(fx * 100 * 1000) / 1000;
+  const val = draft === null ? String(per100) : draft;
+  const commit = (v) => {
+    const n = parseFloat(v);
+    if (!isNaN(n) && n > 0) setAppSettings(prev => ({ ...prev, fxJpyToCny: n / 100, fxUpdatedAt: new Date().toISOString() }));
+  };
+  const inp = { width: 88, padding: "6px 10px", fontSize: 14, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, textAlign: "right" };
+  return (
+    <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginBottom: 4 }}>
+        {zh ? "💱 日元汇率" : "💱 為替レート"}
+      </div>
+      <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12, lineHeight: 1.7 }}>
+        {zh
+          ? "材料百科里的存量是日本原料、日元报价。算配方成本时按这个汇率折成人民币,新录的国内材料标人民币则原样计入。"
+          : "百科の在庫は日本原料・円建て。原価計算時にこのレートで人民元に換算します。"}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, color: T.textSecondary }}>{zh ? "100 日元 =" : "100 円 ="}</span>
+        <input type="number" step="0.1" value={val}
+          onChange={e => { setDraft(e.target.value); commit(e.target.value); }}
+          onBlur={() => setDraft(null)} style={inp} />
+        <span style={{ fontSize: 13, color: T.textSecondary }}>{zh ? "元" : "元"}</span>
+        {appSettings.fxUpdatedAt && (
+          <span style={{ fontSize: 11, color: T.textTertiary }}>
+            · {zh ? "上次改于" : "更新"} {String(appSettings.fxUpdatedAt).slice(0, 10)}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 10, lineHeight: 1.6 }}>
+        {zh
+          ? `举例:日本黄油 2200円/kg → 折 ¥${Math.round(2200 * fx * 100) / 100}/kg(即 ¥${Math.round(220 * fx * 100) / 100}/100g)`
+          : `例:バター 2200円/kg → ¥${Math.round(2200 * fx * 100) / 100}/kg`}
+      </div>
+    </div>
+  );
+}
+
+// ─── 规格与价格:袋价 ⇄ 箱价 ⇄ 单价 三格互算 ─────────────
+// 真值只有 pricePerG(全项目成本链只认它),袋价 / 箱价是派生值。
+// 报价单给的通常是「一袋多少钱 / 一箱多少钱」,所以三格都能输入,
+// 改哪一格就拿哪一格反算 pricePerG,另外两格跟着走。
+// anchor = 用户最后按哪个口径报的价;改单包 / 一箱时保住那个口径重算 ¥/g
+// (袋价 2200 不该因为把单包从 1000g 改成 500g 就被冲掉)。
+// draft 只在正在输入的那一格保留原始字符串,失焦归一化 ——
+// 免得 1000÷3 再×3 = 999.999999 这种来回换算的抖动。
+function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, lang, inpStyle, textSpec = false, priceLabel = null, required = false, autoFocus = false }) {
+  const [draft, setDraft] = useState(null);   // { field: "pack" | "case" | "g", value }
+  const [anchor, setAnchor] = useState("g");  // 最后编辑过的价格口径
+  const g = parsePackSizeToGrams(packSize);
+  const cp = parseFloat(casePack) || 0;
+  const ppg = parseFloat(pricePerG) || 0;
+  const money = (n) => n > 0 ? String(Math.round(n * 100) / 100) : "";
+  const r6 = (n) => String(Math.round(n * 1e6) / 1e6);
+  const cur = curOf({ currency });
+  const sym = cur === "CNY" ? "¥" : "円";
+  const p100 = ppg > 0 ? String(Math.round(ppg * 100 * 100) / 100) : "";   // 单价格按 /100g 显示
+  const packPrice = ppg > 0 && g > 0 ? ppg * g : 0;
+  const casePrice = packPrice > 0 && cp > 0 ? packPrice * cp : 0;
+
+  const show = (field, derived) => (draft && draft.field === field ? draft.value : derived);
+  const editPrice = (field, divisor) => (e) => {
+    const v = e.target.value;
+    setDraft({ field, value: v });
+    setAnchor(field);
+    if (!v.trim()) { onChange({ pricePerG: "" }); return; }
+    const n = parseFloat(v);
+    if (isNaN(n) || n < 0) return;
+    onChange({ pricePerG: divisor > 0 ? r6(n / divisor) : "" });
+  };
+  const editSpec = (key) => (e) => {
+    const v = e.target.value;
+    const ng = key === "packSize" ? parsePackSizeToGrams(v) : g;
+    const ncp = key === "casePack" ? (parseFloat(v) || 0) : cp;
+    const patch = { [key]: v };
+    const keep = anchor === "pack" ? packPrice : anchor === "case" ? casePrice : 0;
+    const div = anchor === "pack" ? ng : ng * ncp;
+    if (keep > 0 && div > 0) patch.pricePerG = r6(keep / div);
+    onChange(patch);
+  };
+
+  const zh = lang === "zh";
+  const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" };
+  const lockStyle = { ...inpStyle, background: "#F5F5F5", color: T.textTertiary };
+  const hasG = g > 0, hasCase = g > 0 && cp > 0;
+  return (
+    <>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: T.textTertiary, marginRight: 2, letterSpacing: "0.3px" }}>{zh ? "币种" : "通貨"}</span>
+        {[["CNY", zh ? "¥ 人民币" : "¥ 人民元"], ["JPY", zh ? "円 日元" : "円 日本円"]].map(([c, label]) => {
+          const on = cur === c;
+          return (
+            <button key={c} type="button" onClick={() => onChange({ currency: c })}
+              style={{ padding: "4px 12px", fontSize: 11, fontWeight: 500, cursor: "pointer", borderRadius: T.radiusPill, fontFamily: T.fontSans,
+                background: on ? T.accent : "transparent", color: on ? "#fff" : T.textSecondary, border: `0.5px solid ${on ? T.accent : T.border}` }}>
+              {label}
+            </button>
+          );
+        })}
+        {cur === "JPY" && ppg > 0 && (
+          <span style={{ fontSize: 11, color: T.textTertiary }}>
+            ≈ ¥{Math.round(ppg * 100 * getFx() * 100) / 100}/100g{zh ? "（按当前汇率）" : "（現レート）"}
+          </span>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div><label style={lab}>{zh ? "单包(g)" : "単パック(g)"}</label><input type={textSpec ? "text" : "number"} value={packSize || ""} onChange={editSpec("packSize")} placeholder={textSpec ? "450 / 1kg" : "450"} style={inpStyle} /></div>
+        <div><label style={lab}>{zh ? "一箱(包)" : "1ケース(パック)"}</label><input type={textSpec ? "text" : "number"} value={casePack || ""} onChange={editSpec("casePack")} placeholder={textSpec ? "20" : "30"} style={inpStyle} /></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <div>
+          <label style={lab}>{zh ? `袋价(${sym}/包)` : `パック価(${sym})`}</label>
+          <input type="number" step="0.01" value={show("pack", money(packPrice))} onChange={editPrice("pack", g)} onBlur={() => setDraft(null)}
+            disabled={!hasG} placeholder={hasG ? "例:2200" : (zh ? "先填单包(g)" : "先に単パック")} style={hasG ? inpStyle : lockStyle} />
+        </div>
+        <div>
+          <label style={lab}>{zh ? `箱价(${sym}/箱)` : `箱価(${sym})`}</label>
+          <input type="number" step="0.01" value={show("case", money(casePrice))} onChange={editPrice("case", g * cp)} onBlur={() => setDraft(null)}
+            disabled={!hasCase} placeholder={hasCase ? "例:26400" : (zh ? "先填单包 + 一箱" : "先に単パック+ケース")} style={hasCase ? inpStyle : lockStyle} />
+        </div>
+        <div>
+          <label style={lab}>{(priceLabel || (zh ? "单价" : "単価")) + `(${sym}/100g)` + (required ? " *" : "")}</label>
+          <input type="number" step="0.01" value={show("g", p100)} onChange={editPrice("g", 100)} onBlur={() => setDraft(null)} placeholder={cur === "CNY" ? "例:13" : "例:220"} style={inpStyle} autoFocus={autoFocus} />
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>
+        {zh ? `💡 三格填任意一格,另外两格自动算。拿到的是袋价 / 箱价就直接填,不用自己换算 ${sym}/100g。` : "💡 いずれか 1 つ入力すれば残り 2 つは自動換算。"}
+      </div>
+    </>
+  );
+}
+
 // ─── 产品编辑 ─────────────
 function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack, lang = "zh" }) {
   const isNew = !material;
@@ -10708,6 +10929,7 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
     categoryId: defaultCategory,
     subcategoryId: defaultSubcategory,
     packSize: "", casePack: "",
+    currency: "CNY",              // v17: 新录的默认人民币(店在北京);老数据无此字段 = 日元
     parameters: {},
     featuresZh: "", featuresJa: "",
     usesZh: "", usesJa: "",
@@ -10757,9 +10979,6 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
   const templateParams = MATERIAL_PARAM_TEMPLATES[form.categoryId] || [];
   const templateKeys = new Set(templateParams.map(p => p.key));
   const customKeys = Object.keys(form.parameters).filter(k => !templateKeys.has(k));
-
-  const casePrice = form.pricePerG && form.packSize && form.casePack
-    ? (parseFloat(form.pricePerG) * parsePackSizeToGrams(form.packSize) * parseFloat(form.casePack)) : 0;
 
   return (
     <div>
@@ -10820,12 +11039,8 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
       {/* 规格与价格 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与价格</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "单包(g)" : "単パック(g)"}</label><input type="number" value={form.packSize || ""} onChange={f("packSize")} placeholder="450" style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "一箱(包)" : "1ケース(パック)"}</label><input type="number" value={form.casePack || ""} onChange={f("casePack")} placeholder="30" style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "单价(¥/g)" : "単価(¥/g)"}</label><input type="number" step="0.01" value={form.pricePerG || ""} onChange={f("pricePerG")} placeholder="2.5" style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "箱价(自动)" : "箱価(自動)"}</label><div style={{ ...inpStyle, background: "#F5F5F5", color: casePrice > 0 ? "#059669" : "#999" }}>{casePrice > 0 ? `¥${casePrice.toFixed(0)}` : "—"}</div></div>
-        </div>
+        <PackPriceFields packSize={form.packSize} casePack={form.casePack} pricePerG={form.pricePerG} currency={form.currency}
+          onChange={patch => setForm(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inpStyle} />
       </div>
 
       {/* 核心参数 */}
@@ -10929,7 +11144,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 当前要选材料的 ing._id
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联弹窗
-  const empty = { nameZh: "", nameJa: "", nameFr: "", category: "焼き菓子", mold: "", yield: "", unit: "個", time: "", temp: "", baketime: "", price: "", difficulty: "★★ 普通", storage: "", allergens: "", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [], familyId: "", variantLabel: "", variantNotes: "" };
+  const empty = { nameZh: "", nameJa: "", nameFr: "", category: "焼き菓子", mold: "", yield: "", unit: "個", time: "", temp: "", baketime: "", price: "", priceCurrency: "CNY", difficulty: "★★ 普通", storage: "", allergens: "", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [], familyId: "", variantLabel: "", variantNotes: "" };
   const [form, setForm] = useState(recipe ? { familyId: "", variantLabel: "", variantNotes: "", ...recipe } : empty);
   const [ings, setIngs] = useState(recipe && recipe.ingredients && recipe.ingredients.length > 0
     ? recipe.ingredients.map((i, idx) => {
@@ -10948,7 +11163,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         }
         return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };
       })
-    : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", cost: "", group: "none", note: "", catId: null, brandIdx: null, _originalPrice: "" }]);
+    : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none", note: "", catId: null, brandIdx: null, _originalPrice: "" }]);
   // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示
   const [saveToShop, setSaveToShop] = useState(false);
 
@@ -10986,9 +11201,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
-  const totalCost = ings.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const qty = parseFloat(form.yield) || 0;
-  const price = parseFloat(form.price) || 0;
+  const price = toCNY(form.price, priceCurOf(form));   // v17: 同上,折算后再比
   const unitCost = qty > 0 ? totalCost / qty : 0;
   const margin = price > 0 ? ((price - unitCost) / price) * 100 : 0;
   const mc = margin >= 50 ? "green" : margin >= 30 ? "amber" : "red";
@@ -11134,7 +11349,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         {grid("1fr 1fr", [fld("配方名（中文）", inp("nameZh", "费南雪")), fld("配方名（日本語）", inp("nameJa", "フィナンシェ"))])}
         {grid("1fr 1fr", [fld("配方名（Français）", inp("nameFr", "Financier")), fld("分类", sel("category", ["焼き菓子","生菓子","パン・ヴィエノワズリー","ショコラ","アントルメ","タルト","その他"]))])}
         {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "SN1648 25連")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", "個")), fld("制作时间（分）", inp("time", "60", "number"))])}
-        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld("销售单价（円）", inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
+        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
         {grid("1fr 1fr", [fld("保存方法", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
       </>)}
 
@@ -11172,7 +11387,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                 {lang === "zh" ? "🤖 批量关联百科" : "🤖 一括関連"}
               </Btn>
             )}
-            <Btn size="sm" onClick={() => { setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", cost: "", group: "none" }]); }}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+            <Btn size="sm" onClick={() => { setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }]); }}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
           </div>
         </div>
 
@@ -11193,7 +11408,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
             <thead>
               <tr style={{ background: "#F5F5F5" }}>
-                {["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(円)","分组","備考",""].map((h, i) => (
+                {["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","備考",""].map((h, i) => (
                   <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -11292,7 +11507,15 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                     </td>
                     <td style={{ padding: "3px 4px", position: "relative" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <input type="number" placeholder="単価" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...iStyle, width: 52, borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined }} />
+                        <input type="number" placeholder={curOf(ing) === "CNY" ? "¥/g" : "円/g"} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...iStyle, width: 52, borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined }} />
+                        {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
+                        {!ing.materialId && (
+                          <button type="button" onClick={() => updateIng(ing._id, "currency", curOf(ing) === "CNY" ? "JPY" : "CNY")}
+                            title={lang === "zh" ? "这条单价的币种,点一下切换(人民币 / 日元)" : "この単価の通貨を切替"}
+                            style={{ padding: "2px 4px", fontSize: 11, lineHeight: 1.2, background: curOf(ing) === "CNY" ? "transparent" : "#FEF3C7", border: `0.5px solid ${curOf(ing) === "CNY" ? T.border : "#F59E0B"}`, borderRadius: 3, cursor: "pointer", color: curOf(ing) === "CNY" ? T.textSecondary : "#92400E" }}>
+                            {curOf(ing) === "CNY" ? "¥" : "円"}
+                          </button>
+                        )}
                         {ing._priceModified && (
                           <button onClick={() => revertPrice(ing._id)} title={lang === "zh" ? `撤销改价 (原 ¥${ing._originalPrice})` : `改価取消 (元 ¥${ing._originalPrice})`} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                         )}
@@ -11561,6 +11784,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
       materialId: mat.id,
       pricePerG: refPrice,
+      currency: curOf(mat),        // 价是从百科带过来的,币种跟着一起带,别把日元当人民币
       packSize: mat.packSize || "",
       casePack: mat.casePack || "",
       note: "",
@@ -11621,24 +11845,16 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
           </div>
           {refPrice && (
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 16 }}>
-              📖 {lang === "zh" ? "百科参考价" : "百科参考価"}: ¥{refPrice}/g
+              📖 {lang === "zh" ? "百科参考价" : "百科参考価"}: {fmtUnitPrice(refPrice, curOf(mat))}
             </div>
           )}
 
           <div style={{ display: "grid", gap: 12 }}>
-            <label style={{ display: "block" }}>
-              <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{lang === "zh" ? "本店价 (¥/g) *" : "仕入れ価格 (¥/g) *"}</div>
-              <input type="number" step="0.01" value={editing.pricePerG} onChange={e => setEditing({ ...editing, pricePerG: e.target.value })} style={inputStyle} autoFocus />
-            </label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <label style={{ display: "block" }}>
-                <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{lang === "zh" ? "包装规格" : "パック"}</div>
-                <input value={editing.packSize || ""} onChange={e => setEditing({ ...editing, packSize: e.target.value })} placeholder="450 / 1kg" style={inputStyle} />
-              </label>
-              <label style={{ display: "block" }}>
-                <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{lang === "zh" ? "一箱多少包" : "1ケース"}</div>
-                <input value={editing.casePack || ""} onChange={e => setEditing({ ...editing, casePack: e.target.value })} placeholder="20" style={inputStyle} />
-              </label>
+            {/* 供货商报价单给的是袋价 / 箱价,三格互算,填哪个都行 */}
+            <div>
+              <PackPriceFields packSize={editing.packSize} casePack={editing.casePack} pricePerG={editing.pricePerG} currency={editing.currency}
+                onChange={patch => setEditing(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inputStyle}
+                textSpec autoFocus required priceLabel={lang === "zh" ? "本店价" : "仕入れ価格"} />
             </div>
             {/* v13: 供货商多选。第一个是主供货商(采购清单归属) */}
             {suppliers.length > 0 && (
@@ -11717,7 +11933,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
                   <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>{mLabel(m)}</div>
                   {brand && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 2 }}>{bLabel(brand)}</div>}
                 </div>
-                {refPrice && <div style={{ fontSize: 12, color: T.textSecondary, whiteSpace: "nowrap" }}>📖 ¥{refPrice}/g</div>}
+                {refPrice && <div style={{ fontSize: 12, color: T.textSecondary, whiteSpace: "nowrap" }}>📖 {fmtUnitPrice(refPrice, curOf(mat))}</div>}
               </div>
             );
           })}
@@ -11779,7 +11995,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
                   </div>
                 </div>
                 <div style={{ textAlign: "right", minWidth: 90 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>🏷️ ¥{sm.pricePerG}/g</div>
+                  <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>🏷️ {fmtUnitPrice(sm.pricePerG, curOf(sm))}</div>
                   {refPrice && diff !== null && Math.abs(diff) > 0.005 && (
                     <div style={{ fontSize: 10, color: diff > 0 ? T.danger : T.success, marginTop: 2 }}>
                       {diff > 0 ? "↑" : "↓"} {lang === "zh" ? "参考" : "参考"} ¥{refPrice}
@@ -11913,7 +12129,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
             {(p.sellPrice || 0) > 0 && (
               <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm }}>
                 <div style={{ fontSize: 10, color: T.success, textTransform: "uppercase" }}>{lang === "zh" ? "销价" : "販売価"}</div>
-                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.success, marginTop: 2 }}>¥{p.sellPrice}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.success, marginTop: 2 }}>{fmtSellPrice(p.sellPrice, p)}</div>
               </div>
             )}
           </div>
@@ -12042,7 +12258,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                     <div style={{ fontSize: 15, fontWeight: 500, fontFamily: T.fontSerif, color: T.textPrimary }}>{mLabel(p)}</div>
                     <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>
                       {(p.items || []).length > 0 ? `${p.items.length} ${lang === "zh" ? "项组成" : "項目"}` : (lang === "zh" ? "未关联配方" : "未関連")}
-                      {p.sellPrice > 0 && ` · ¥${p.sellPrice}`}
+                      {p.sellPrice > 0 && " · " + fmtSellPrice(p.sellPrice, p)}
                     </div>
                   </div>
                   {/* v12: 快捷 -1 / +1 按钮 */}
@@ -12162,7 +12378,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
 // [B6 修复] 加 components,商品可关联组件
 function ProductEditForm({ product, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {
   // [B5 修复] note → notesZh/notesJa 双语
-  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, notesZh: "", notesJa: "" };
+  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, priceCurrency: "CNY", notesZh: "", notesJa: "" };
   // 旧数据兼容:有 note 但没 notesZh/notesJa,迁移到 notesZh
   const initial = product ? { ...empty, ...product } : empty;
   if (initial.note && !initial.notesZh && !initial.notesJa) {
@@ -12187,6 +12403,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
       threshold: parseFloat(form.threshold) || 0,
       leadTimeDays: parseFloat(form.leadTimeDays) || 0,
       sellPrice: parseFloat(form.sellPrice) || 0,
+      priceCurrency: priceCurOf(form),
       items: (form.items || []).map(it => ({ ...it, qty: parseFloat(it.qty) || 1 })),
       updatedAt: new Date().toISOString(),
     });
@@ -12280,7 +12497,10 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
           </label>
           <label>
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "销售单价(¥)" : "販売価(¥)"}</div>
-            <input type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <input type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
+              {priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}
+            </div>
           </label>
         </div>
         <label style={{ display: "block", marginTop: 12 }}>
@@ -12394,7 +12614,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, materials, bran
                 return (
                   <div key={sm.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 10px", background: T.bgMuted, borderRadius: T.radiusSm }}>
                     <span>{mat ? mLabel(mat) : sm.materialId}</span>
-                    <span style={{ color: T.textSecondary }}>¥{sm.pricePerG}/g</span>
+                    <span style={{ color: T.textSecondary }}>{fmtUnitPrice(sm.pricePerG, curOf(sm))}</span>
                   </div>
                 );
               })}
@@ -12893,10 +13113,17 @@ function App() {
   useEffect(() => { setCustomCompCatsForLookup(customCompCats); }, [customCompCats]);
   // v11: 同步 shopMaterials 到全局 lookup,让所有 getMaterialEffectivePrice 调用能读到
   useEffect(() => { setShopMaterialsForLookup(shopMaterials); }, [shopMaterials]);
+  // v17: 全局配置(目前只有日元汇率)。同样注入给成本链,让日元材料能折成人民币算成本
+  const [appSettings, setAppSettings] = useState(() => ({ fxJpyToCny: DEFAULT_FX_JPY_CNY, ...(stored?.appSettings || {}) }));
+  useEffect(() => { setFxForLookup(appSettings.fxJpyToCny); }, [appSettings.fxJpyToCny]);
   // 🏷 产品家族（Product Family）
   // v1 内测: 默认种子 = SEED_FAMILIES (family_buttercream_cake + family_pate_a_cake), 老 family_basque 已隐藏
   const [productFamilies, setProductFamilies] = useState(mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES));
-  const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family"
+  const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale"
+  // v17: 「在售中」标记。季节食材决定当季卖哪几款,标了的排到最前 + 单独一页。
+  // 只是配方上的一个布尔,跟 products(可售单元 / 库存)是两回事,不联动。
+  const toggleOnSale = (id) => setRecipes(prev => prev.map(r =>
+    r.id === id ? { ...r, onSale: !r.onSale, updatedAt: new Date().toISOString() } : r));
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
@@ -12929,7 +13156,7 @@ function App() {
   // v56: 自动保存 debounce 800ms + 失败时 toast 提示
   // 之前:每次任意字段变更都立即全量 stringify(1-2MB),手机卡顿
   // 现在:停止输入 800ms 后才保存一次
-  const doSave = () => saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers);
+  const doSave = () => saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings);
 
   useEffect(() => {
     setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
@@ -12946,7 +13173,7 @@ function App() {
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers]);
+  }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings]);
 
   // showToast(msg) 保持旧签名可用；第二个参数可给 { undo, ms } 走「先做 + 给撤销」
   const showToast = (msg, opts = {}) => {
@@ -13279,7 +13506,7 @@ function App() {
   ];
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, exportedAt: new Date().toISOString(), version: 16 }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, exportedAt: new Date().toISOString(), version: 17 }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `patisserie_${new Date().toISOString().slice(0, 10)}.json`; a.click();
     URL.revokeObjectURL(url); showToast("✓ 导出成功");
@@ -13352,6 +13579,7 @@ function App() {
           setProductionLog(Array.isArray(d.productionLog) ? d.productionLog : []);
           setSuppliers(Array.isArray(d.suppliers) ? d.suppliers : []);
           if (d.printSettings) setPrintSettings(d.printSettings);
+          if (d.appSettings) setAppSettings(prev => ({ ...prev, ...d.appSettings }));
           if (d.customCompCats) setCustomCompCats(d.customCompCats);
           if (d.productFamilies) setProductFamilies(d.productFamilies);
           showToast("✓ 数据导入成功");
@@ -14335,7 +14563,11 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
           {/* 🏷 模式切换：平铺 vs 家族 */}
           <div style={{ display: "flex", gap: T.sp.xxl, marginTop: T.sp.l, marginBottom: T.sp.xxl, alignItems: "center", flexWrap: "wrap" }}>
-            {[["flat", lang === "zh" ? "全部配方" : "全レシピ"], ["family", lang === "zh" ? "家族模式" : "ファミリー表示"]].map(([m, label]) => (
+            {[
+              ["flat", lang === "zh" ? "全部配方" : "全レシピ"],
+              ["onsale", `${lang === "zh" ? "在售中" : "販売中"}${recipes.filter(r => r.onSale).length ? " " + recipes.filter(r => r.onSale).length : ""}`],
+              ["family", lang === "zh" ? "家族模式" : "ファミリー表示"],
+            ].map(([m, label]) => (
               <button
                 key={m} className="k-tab" onClick={() => setFamilyViewMode(m)}
                 style={{
@@ -14364,9 +14596,25 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           )}
 
           {/* 📋 平铺模式 —— 无卡片、无圆角、无阴影；行间只有 1px 发丝线，家族色 3px 左竖条 */}
-          {familyViewMode === "flat" && (
+          {/* v17: 「在售中」复用同一套行渲染,只换数据源 —— 平铺是「在售的排最前」,在售页是「只看在售」 */}
+          {(familyViewMode === "flat" || familyViewMode === "onsale") && (() => {
+            const onSaleList = recipes.filter(r => r.onSale);
+            const listRecipes = familyViewMode === "onsale"
+              ? onSaleList
+              : [...recipes].sort((a, b) => (b.onSale ? 1 : 0) - (a.onSale ? 1 : 0));   // 稳定排序,同组内保持原顺序
+            if (familyViewMode === "onsale" && onSaleList.length === 0) {
+              return (
+                <EmptyState
+                  variant="first" lang={lang}
+                  title={lang === "zh" ? "还没标记在售配方" : "販売中のレシピがありません"}
+                  hint={lang === "zh" ? "去「全部配方」,点配方名左边的小圆圈就标上了。标过的会排到最前面。" : "「全レシピ」で名前の左の丸をタップすると販売中になります。"}
+                  actions={[{ label: lang === "zh" ? "去全部配方" : "全レシピへ", onClick: () => setFamilyViewMode("flat") }]}
+                />
+              );
+            }
+            return (
             <div>
-              {recipes.map(r => {
+              {listRecipes.map(r => {
                 const name = pickLang(r, "name", lang);
                 const nameSub = lang === "zh" ? (r.nameJa || "") : (r.nameZh || "");
                 const family = productFamilies.find(fm => fm.id === r.familyId);
@@ -14375,7 +14623,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 const liveCost = (r.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
                 const yieldN = parseFloat(r.yield) || 0;
                 const unitCost = yieldN > 0 ? liveCost / yieldN : 0;
-                const priceN = parseFloat(r.price) || 0;
+                const priceN = toCNY(r.price, priceCurOf(r));   // v17: 折算后算利润率
                 const margin = priceN > 0 && unitCost > 0 ? ((priceN - unitCost) / priceN) * 100 : 0;
                 return (
                   <div
@@ -14394,6 +14642,18 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     <div className="k-fluid">
                       {/* 标题行：法文 20px / 主名 14px 500 / 副名 12px muted，同一 baseline */}
                       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); toggleOnSale(r.id); }}
+                          title={r.onSale
+                            ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
+                            : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
+                          style={{
+                            width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+                            cursor: "pointer", lineHeight: 1, fontSize: 13, alignSelf: "center",
+                            color: r.onSale ? T.success : T.line,
+                          }}
+                        >{r.onSale ? "●" : "○"}</button>
                         {r.nameFr && (
                           <span style={{ fontFamily: T.fontSerif, ...T.fs.titleS, color: T.ink, fontWeight: 400 }}>{r.nameFr}</span>
                         )}
@@ -14423,14 +14683,15 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     {/* 售价 */}
                     <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
                       {priceN > 0
-                        ? <span style={{ fontSize: 18 }}>¥{r.price.toLocaleString()}</span>
+                        ? <span style={{ fontSize: 18 }}>{fmtSellPrice(r.price, r)}</span>
                         : <span style={{ ...T.fs.micro, color: T.muted }}>{lang === "zh" ? "未定价" : "未設定"}</span>}
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
+            );
+          })()}
 
           {/* 🏷 家族模式 */}
           {familyViewMode === "family" && (
@@ -14861,6 +15122,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               {lang === "zh" ? "数据管理" : "データ管理"}
             </div>
           </div>
+
+          <FxSettingCard appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
 
           {/* v57: 本地存储用量 */}
           {(() => {

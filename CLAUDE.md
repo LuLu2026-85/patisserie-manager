@@ -14,6 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 物件 / 走街 / 内見 / 周报 / 街区 / 鮮度 / 居抜き → **切去店铺创业(B)**
 - 业务整体 / 跨项目讨论 → 先读 Hub
 
+**💰 记账铁律(2026-08-26 立,所有窗口生效)**:对话中只要出现"钱动了"(LuLu 说付了/交了定金/签了合同应付),**不管当时在聊什么,立即追加一行到 `C:\Users\11508\Desktop\05_工作店铺\798_总账_2026.md`**,分类九选一(设备/装修/房租押金/材料/运营/咖啡/小道具/证照中介/其他)。报价和估价不记。LuLu 说"记账:xxx"=直接记;"拉总账"=按分类汇总对预算。规则详情在总账文件头部。
+
+**⚠️ `.claude/notes/` 存的是业务级文档,不是软件文档**。LuLu 常在这个 cwd 里聊选址 / 设备 / 原料公司这类跟代码无关的事,产出就近落在这里(选址决策、设备采购总档、厨房设计条件表、烘焙原料公司计划、Marcona 采购)。
+- **别把这些当项目文档去维护或重构**,它们的权威索引在 Hub 的「🧭 当前主线」。
+- 但**该更新时要更新** —— 比如设备又成交了一台,要写回 `.claude/notes/设备采购总档_*.md`,不能只在对话里说完就算。
+- 软件本身的文档是 `manual.md` / `progress.md` / `schema_full.md` / `handoff_*.md`,和 notes/ 不是一回事。
+
 ---
 
 ## 沟通语言
@@ -166,11 +173,36 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 - `salesLog` / `productionLog` — daily upsert by `productId`.
 - `productFamilies` — recipe groupings sharing mold / temp / time.
 
-Plus 2 configs: `printSettings` (logo / brand name) and `customCompCats` (user-defined component categories).
+Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-defined component categories)、
+`appSettings`(v17 新增,目前只装日元汇率 `fxJpyToCny`)。
+
+## 💱 币种与单价口径 (v17, 2026-08-31)
+
+店从东京改到北京 798 之后,材料库出现两种钱。**动任何跟价格有关的代码前先读这一节。**
+
+1. **没有 `currency` 字段 = 日元。** 老数据实测 100% 是日元报价(1802 条材料 / 24 条本店原料 /
+   52 条手写单价,最低 0.15 ¥/g,没有一条低到人民币量级)。所以**故意不写迁移函数** ——
+   缺省即 JPY,老数据一个字节都没动。新建的材料 / 本店原料 / 配料行显式写 `currency: "CNY"`。
+   判定统一走 `curOf(o)`,别自己写 `o.currency === ...`。
+2. **存储永远是「每克价」(`pricePerG`),只有显示和输入是「每 100g」。** 人民币下 ¥/g 全是
+   0.008 这种读不动的小数。换算只在 UI 边界发生:显示走 `fmtUnitPrice`,输入走
+   `PackPriceFields` 里 `editPrice("g", 100)` 的除法。**别把 /100g 写进任何存储字段。**
+3. **成本链只有一个折算出口:`getMaterialEffectivePrice` 返回的已经是人民币/g。**
+   18 个下游调用点(配方 / 组件 / 商品毛利)因此不需要知道币种。要拿原币种原值显示,
+   用 `getMaterialRawPrice(m)` → `{ price, currency, source }`。
+   手写单价和 `ing.cost` 快照同样按 `curOf(ing)` 折(`getIngUnitPrice` / `getIngLiveCost`)。
+   **编辑态的 `totalCost` 也折**(3 处),否则混币种会把日元和人民币直接相加。
+4. **人民币写 `¥`、日元写 `円`** —— 两个符号刻意不同,LuLu 扫一眼列表就知道哪条还是日本
+   老数据、该换国内货源。折算出来的数标 `≈`,且是否标 `≈` 要看**实际取用的那条**的币种
+   (本店价人民币 + 百科价日元时取的是本店价,那就不是约数)。
+5. 汇率在 `appSettings.fxJpyToCny`(1 日元 = 多少人民币,默认 0.048),数据 tab 的
+   `FxSettingCard` 按「100 日元 = ? 元」录入。改了要通过 `setFxForLookup` 注入全局。
+
+**LuLu 的方向是一点点把百科换成国内货源**,日元数据是待替换的存量,不是要长期维护的东西。
 
 `FINANCIER`, `AGREABLE_MOUSSE`, `DEFAULT_KNOWLEDGE`, and `DEFAULT_CATS` are bundled as seed data. On load, `mergeWithDefaults(userItems, defaultItems)` folds in any default whose `id` is missing from the user's data — user edits are never overwritten. Keep this contract when adding new seed items: give them stable string/number ids so they stay dedupable.
 
-Storage key is frozen at `patisserie_v4` for backward compatibility, but the payload's internal `version` field is currently `15`. Bump the payload `version` when adding fields; do not rename the storage key.
+Storage key is frozen at `patisserie_v4` for backward compatibility, but the payload's internal `version` field is currently `17`. Bump the payload `version` when adding fields; do not rename the storage key.
 
 Auto-save: a single `useEffect` in `App()` writes the full blob on every state change and flashes "✓ 已保存" for 2s.
 
@@ -193,6 +225,12 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 - Group colors (`GROUPS`) use a transparent background with a colored left border + pill border so they render identically in light and dark embeds.
  五个盆的色相刻意分散、明度统一压在 32~42%,**转灰度打印仍能分出 3 档以上**,红绿色觉障碍也能靠明度区分 —— 改这五个色值前先想清楚这条。
 - 配料表列宽只在模块常量 `ING_COLS` 定义一次,表头 / 数据行 / 汇总条三处共用。
+- `PackPriceFields` —— 规格与价格那一整块(币种 + 单包/一箱 + 袋价/箱价/单价三格互算)。
+  材料百科和本店原料共用一个。**供货商报价单给的是袋价或箱价,不是 ¥/g**,所以三格填任意
+  一格,另外两格自动算;`anchor` 记住用户按哪个口径报的价,改包装克数时保住那个口径重算单价。
+- `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
+  点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
+  是两回事,**不联动**。
 
 ## RURU_*.json files at repo root
 
@@ -216,6 +254,18 @@ These are user-authored import packages (recipes, components, knowledge, materia
 
 存档 key 是 `ruru798_layout_v2`(多方案);`ruru798_layout_v1` 是升级前的原件,**只读不写、永不删除**。
 设备尺寸的权威来源是 `RURU_798_已采购设备明细_v2.md`,净空规则在文件里的 `TUNE` 常量集中定义。
+
+2026-08 大版本后的几个事实(改几何前先看):
+
+- **房间几何以「原始图纸-0727」CAD 为准**,全部写在顶部常量:`K_W=8825`(厨房宽)、`K_D=4660`、
+  `WALL=200`、前厅 `F_X/F_W/F_TOP/F2_X`、玻璃分隔 `MULLIONS`。改尺寸只改常量,别在绘制代码里硬编码。
+- **`COLUMNS` 数组是 4 根建筑固有柱**(2×Ø300 + 2×150 方),从 0727 图纸标定,已"标死":
+  不可选中不可移动,同时以碰撞方块进了 `WALLS`。别当成普通道具改。
+- 打印取景框由 `planExtent(scope)` 按内容动态算(厨房页 + 全景页各一张),**不要再写死 viewBox**。
+- 道具有 `lock` 字段(iPad 防误碰):锁定后 pointerdown 直接转平移;`btnLock`/`btnLockAll` 两个入口;复制时 `lock:false`。
+- 自定义隔断用 DEFS 里的 `uwall`(隔墙段,`wallish:1` 豁免墙体重叠判定)。
+- 叠放高度 `stackHeight` 有互为载体的去重逻辑(visited set),UNOX 10盘+5盘曾因此误报 4016mm,改叠放逻辑前看 commit 989dac2。
+- 横屏(iPad landscape)有专门布局分支,竖屏/横屏断点都在 `GLOBAL_CSS` 同级的媒体查询里。
 
 ## README
 
