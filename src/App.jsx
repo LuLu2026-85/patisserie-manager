@@ -372,6 +372,18 @@ const fmtSellPrice = (v, o) => {
   if (isNaN(n) || n <= 0) return "";
   return priceCurOf(o) === "CNY" ? `¥${n.toLocaleString()}` : `${n.toLocaleString()}円`;
 };
+// v17: 一个金额换算到另一币种的显示串。日元 → 人民币用汇率乘,人民币 → 日元用汇率除。
+// 给「双币对照」行用 —— 报价单是日元,但记账和成本都要人民币,两个数得同时看见。
+const fmtOther = (v, currency) => {
+  const n = parseFloat(v);
+  if (isNaN(n) || n <= 0) return "";
+  if (curOf({ currency }) === "CNY") {
+    const jpy = _fxJpyToCny > 0 ? n / _fxJpyToCny : 0;
+    return jpy > 0 ? `${Math.round(jpy)}円` : "";
+  }
+  return `¥${Math.round(n * _fxJpyToCny * 100) / 100}`;
+};
+
 // 售价旁边的币种切换,一个字宽
 const priceCurBtn = (obj, onToggle, lang) => (
   <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle(priceCurOf(obj) === "CNY" ? "JPY" : "CNY"); }}
@@ -10622,6 +10634,9 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                 <div style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
                   <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.5px", textTransform: "uppercase" }}>📖 {lang === "zh" ? "参考价" : "参考価"}</div>
                   <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.textPrimary, marginTop: 2 }}>{fmtUnitPrice(refPrice, curOf(material))}</div>
+                  {curOf(material) === "JPY" && (
+                    <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>≈ {fmtOther(parseFloat(refPrice) * 100, "JPY")}/100g</div>
+                  )}
                   {material.priceRange && material.priceRange.asOf && (
                     <div style={{ fontSize: 9, color: T.textTertiary, marginTop: 2 }}>{material.priceRange.asOf}</div>
                   )}
@@ -10635,6 +10650,9 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                 <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm, border: `0.5px solid ${T.success}` }}>
                   <div style={{ fontSize: 10, color: T.success, letterSpacing: "0.5px", textTransform: "uppercase" }}>🏷️ {lang === "zh" ? "本店价" : "仕入価"}</div>
                   <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>{fmtUnitPrice(sm.pricePerG, curOf(sm))}</div>
+                  {curOf(sm) === "JPY" && (
+                    <div style={{ fontSize: 10, color: T.success, opacity: 0.75, marginTop: 2 }}>≈ {fmtOther(parseFloat(sm.pricePerG) * 100, "JPY")}/100g</div>
+                  )}
                 </div>
               );
             })()}
@@ -10881,9 +10899,9 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
             </button>
           );
         })}
-        {cur === "JPY" && ppg > 0 && (
+        {ppg > 0 && (
           <span style={{ fontSize: 11, color: T.textTertiary }}>
-            ≈ ¥{Math.round(ppg * 100 * getFx() * 100) / 100}/100g{zh ? "（按当前汇率）" : "（現レート）"}
+            {zh ? `当前汇率 100 日元 = ${Math.round(getFx() * 100 * 1000) / 1000} 元` : `100円 = ${Math.round(getFx() * 100 * 1000) / 1000}元`}
           </span>
         )}
       </div>
@@ -10907,6 +10925,17 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
           <input type="number" step="0.01" value={show("g", p100)} onChange={editPrice("g", 100)} onBlur={() => setDraft(null)} placeholder={cur === "CNY" ? "例:13" : "例:220"} style={inpStyle} autoFocus={autoFocus} />
         </div>
       </div>
+      {/* v17: 双币对照 —— 报价单给的是一种钱,记账和成本用另一种,两个数得同时看见 */}
+      {ppg > 0 && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: T.bgMuted, borderRadius: T.radiusSm, fontSize: 11, color: T.textSecondary, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ color: T.textTertiary }}>
+            💱 {zh ? (cur === "JPY" ? "折人民币" : "折日元") : (cur === "JPY" ? "人民元換算" : "円換算")}
+          </span>
+          {packPrice > 0 && <span>{zh ? "袋价" : "パック"} <b style={{ fontWeight: 500, color: T.textPrimary }}>{fmtOther(packPrice, cur)}</b></span>}
+          {casePrice > 0 && <span>{zh ? "箱价" : "箱"} <b style={{ fontWeight: 500, color: T.textPrimary }}>{fmtOther(casePrice, cur)}</b></span>}
+          <span>{zh ? "单价" : "単価"} <b style={{ fontWeight: 500, color: T.textPrimary }}>{fmtOther(ppg * 100, cur)}</b>/100g</span>
+        </div>
+      )}
       <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>
         {zh ? `💡 三格填任意一格,另外两格自动算。拿到的是袋价 / 箱价就直接填,不用自己换算 ${sym}/100g。` : "💡 いずれか 1 つ入力すれば残り 2 つは自動換算。"}
       </div>
@@ -11846,6 +11875,8 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
           {refPrice && (
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 16 }}>
               📖 {lang === "zh" ? "百科参考价" : "百科参考価"}: {fmtUnitPrice(refPrice, curOf(mat))}
+              {mat && mat.priceRange && mat.priceRange.asOf && <span style={{ marginLeft: 6 }}>({mat.priceRange.asOf})</span>}
+              <span style={{ marginLeft: 6, color: T.textMuted }}>{lang === "zh" ? "· 要改去「材料百科」里改" : "· 変更は材料事典から"}</span>
             </div>
           )}
 
@@ -11974,7 +12005,9 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
             const mat = materials.find(m => m.id === sm.materialId);
             const brand = mat && brands.find(b => b.id === mat.brandId);
             const refPrice = (mat && mat.priceRange && mat.priceRange.mid) || (mat && mat.pricePerG);
-            const diff = (sm.pricePerG && refPrice) ? (parseFloat(sm.pricePerG) - parseFloat(refPrice)) : null;
+            // v17: 只有同币种才比得了 —— 本店价人民币 vs 百科日元,两个数直接相减没有意义
+            const diff = (sm.pricePerG && refPrice && mat && curOf(sm) === curOf(mat))
+              ? (parseFloat(sm.pricePerG) - parseFloat(refPrice)) : null;
             return (
               <div key={sm.id} onClick={() => setEditing({ ...sm })} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -11998,7 +12031,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
                   <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>🏷️ {fmtUnitPrice(sm.pricePerG, curOf(sm))}</div>
                   {refPrice && diff !== null && Math.abs(diff) > 0.005 && (
                     <div style={{ fontSize: 10, color: diff > 0 ? T.danger : T.success, marginTop: 2 }}>
-                      {diff > 0 ? "↑" : "↓"} {lang === "zh" ? "参考" : "参考"} ¥{refPrice}
+                      {diff > 0 ? "↑" : "↓"} {lang === "zh" ? "参考" : "参考"} {fmtUnitPrice(refPrice, curOf(mat))}
                     </div>
                   )}
                 </div>
