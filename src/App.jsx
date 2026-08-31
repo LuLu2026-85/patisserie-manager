@@ -4100,7 +4100,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
               {lang === "zh" ? `售价 / ${r.unit || "個"}` : `売価 / ${r.unit || "個"}`}
             </div>
             <div style={{ fontFamily: T.fontSerif, fontSize: 38, fontWeight: 300, letterSpacing: "-0.02em", marginTop: 4, ...T.num, color: T.ink, lineHeight: 1.1 }}>
-              ¥{Number(r.price).toLocaleString()}
+              {fmtSellPrice(r.price, r)}
             </div>
             <div style={{ ...T.fs.caption, marginTop: 6, color: liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger }}>
               {lang === "zh" ? "利润率" : "利益率"} {liveMargin.toFixed(1)}%
@@ -5431,7 +5431,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                             const q = parseFloat(i.qty) || 0;
                             return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
                           }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新为此值,点击同步" : "価格表の値に更新"}>→ ¥{priceDrift}</button>
+                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新为此值,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                       )}
                     </td>
                     <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自动" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{...ist, width: 56, textAlign: "right"}} /></td>
@@ -8453,7 +8453,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                             const q = parseFloat(i.qty) || 0;
                             return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
                           }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ ¥{priceDrift}</button>
+                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                       )}
                     </td>
                     <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自动" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{...ist, width: 56, textAlign: "right"}} /></td>
@@ -10492,11 +10492,12 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
                         m.packSize ? `${m.packSize}${m.casePack ? ` × ${m.casePack}` : ""}` : null,
                         m.pricePerG ? fmtUnitPrice(m.pricePerG, curOf(m)) : null,
                         (() => {
-                          // 箱价按原币种算,再交给 fmtTotalPrice 按全局口径决定怎么显示
-                          const _rp = getMaterialRawPrice(m);
-                          const _rawCase = _rp.price > 0 && m.packSize && m.casePack
-                            ? _rp.price * parsePackSizeToGrams(m.packSize) * parseFloat(m.casePack) : 0;
-                          return _rawCase > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ${fmtTotalPrice(_rawCase, _rp.currency)}` : null;
+                          // 这一行是百科条目,拿不到本店原料的规格,所以箱价一律用
+                          // 百科价 × 百科规格 —— 混用会算出一个哪边都不是的数。
+                          const _refP = parseFloat((m.priceRange && m.priceRange.mid) || m.pricePerG);
+                          const _rawCase = _refP > 0 && m.packSize && m.casePack
+                            ? _refP * parsePackSizeToGrams(m.packSize) * parseFloat(m.casePack) : 0;
+                          return _rawCase > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ${fmtTotalPrice(_rawCase, curOf(m))}` : null;
                         })(),
                       ].filter(Boolean).map((t, i, arr) => (
                         <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -10702,8 +10703,14 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                 <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>
                   {(() => {
                     const _rp = getMaterialRawPrice(material);
-                    const _rawCase = _rp.price > 0 && material.packSize && material.casePack
-                      ? _rp.price * parsePackSizeToGrams(material.packSize) * parseFloat(material.casePack) : 0;
+                    // 价来自本店原料,规格就得用本店原料那一条的 —— 同一批货,价和规格必须配套。
+                    // 否则会拿百科的「1kg」去乘本店的 11kg 桶价,箱价差出好几倍。
+                    const _sm = _rp.source === "shop" && Array.isArray(shopMaterials)
+                      ? shopMaterials.find(x => x && x.materialId === material.id) : null;
+                    const _ps = (_sm && _sm.packSize) || material.packSize;
+                    const _cp = (_sm && _sm.casePack) || material.casePack;
+                    const _rawCase = _rp.price > 0 && _ps && _cp
+                      ? _rp.price * parsePackSizeToGrams(_ps) * parseFloat(_cp) : 0;
                     return fmtTotalPrice(_rawCase, _rp.currency);
                   })()}
                 </div>
@@ -11067,8 +11074,23 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
+    // v17: pricePerG 和 priceRange.mid 必须一起写。
+    // 编辑器改的是 pricePerG,但成本链(getMaterialEffectivePrice)和「添加为本店原料」
+    // 读的是 priceRange.mid —— v11 迁移留下的双字段。只写一个 = 改了价不生效。
+    const _mid = String(form.pricePerG == null ? "" : form.pricePerG).trim();
+    const _oldMid = String((form.priceRange && form.priceRange.mid) != null ? form.priceRange.mid : "").trim();
+    const _thisMonth = new Date().toISOString().slice(0, 7);
+    const _priceRange = _mid
+      ? {
+          ...(form.priceRange || {}),
+          mid: _mid,
+          // 价变了才动 asOf —— 它记的是「这个价是什么时候的」
+          asOf: (_mid !== _oldMid) ? _thisMonth : ((form.priceRange && form.priceRange.asOf) || _thisMonth),
+        }
+      : form.priceRange;
     onSave({
       ...form,
+      priceRange: _priceRange,
       id: material ? material.id : "mat_" + Date.now(),
       rating: parseInt(form.rating) || 0,
       updatedAt: new Date().toISOString(),
@@ -11619,7 +11641,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                           </button>
                         )}
                         {ing._priceModified && (
-                          <button onClick={() => revertPrice(ing._id)} title={lang === "zh" ? `撤销改价 (原 ¥${ing._originalPrice})` : `改価取消 (元 ¥${ing._originalPrice})`} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
+                          <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                         )}
                       </div>
                       {priceDrift !== null && (
@@ -11629,7 +11651,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                             const q = parseFloat(i.qty) || 0;
                             return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
                           }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ ¥{priceDrift}</button>
+                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                       )}
                     </td>
                     <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自動" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...iStyle, width: 56, textAlign: "right" }} /></td>
@@ -12037,7 +12059,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
                   <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>{mLabel(m)}</div>
                   {brand && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 2 }}>{bLabel(brand)}</div>}
                 </div>
-                {refPrice && <div style={{ fontSize: 12, color: T.textSecondary, whiteSpace: "nowrap" }}>📖 {fmtUnitPrice(refPrice, curOf(mat))}</div>}
+                {refPrice && <div style={{ fontSize: 12, color: T.textSecondary, whiteSpace: "nowrap" }}>📖 {fmtUnitPrice(refPrice, curOf(m))}</div>}
               </div>
             );
           })}
@@ -13218,7 +13240,9 @@ function App() {
   // 同步给全局查找函数
   useEffect(() => { setCustomCompCatsForLookup(customCompCats); }, [customCompCats]);
   // v11: 同步 shopMaterials 到全局 lookup,让所有 getMaterialEffectivePrice 调用能读到
-  useEffect(() => { setShopMaterialsForLookup(shopMaterials); }, [shopMaterials]);
+  // v17: 从 useEffect 挪到渲染期 —— effect 在渲染之后跑,改完本店价这一帧的成本
+  // 和箱价还会用旧价算。setter 幂等、不动 React 状态,渲染期调用是安全的。
+  setShopMaterialsForLookup(shopMaterials);
   // v17: 全局配置(日元汇率 + 价格显示口径)。注入给成本链和显示 helper。
   // ⚠️ 故意不放 useEffect —— effect 在渲染之后跑,改完汇率/口径这一帧列表还会显示旧数字。
   // 这两个 setter 幂等、不改 React 状态,渲染期间调用是安全的。
