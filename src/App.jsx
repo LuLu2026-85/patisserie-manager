@@ -345,6 +345,15 @@ const DEFAULT_FX_JPY_CNY = 0.048;   // 1 日元 ≈ 多少人民币(可在数据
 let _fxJpyToCny = DEFAULT_FX_JPY_CNY;
 const setFxForLookup = (r) => { const n = parseFloat(r); _fxJpyToCny = (!isNaN(n) && n > 0) ? n : DEFAULT_FX_JPY_CNY; };
 const getFx = () => _fxJpyToCny;
+
+// v17.1: 显示口径 —— LuLu 平时看人民币,但数据里存量是日元报价。
+//   "CNY" = 全部折成人民币显示(日元的标 ≈,表示是换算来的),默认
+//   "raw" = 各按各的原币种显示(核对日本报价单时用)
+// 只影响「看」,不影响存储 —— 输入框永远是原币种,否则会把她填的数改掉。
+// 成本 / 利润率不受这个开关影响:配方里可能混币种,必须统一人民币才加得起来。
+let _displayCur = "CNY";
+const setDisplayCurForLookup = (v) => { _displayCur = v === "raw" ? "raw" : "CNY"; };
+const getDisplayCur = () => _displayCur;
 // 一条记录(材料 / 本店原料 / 配料)的币种;无字段 = 老数据 = 日元
 const curOf = (o) => (o && o.currency === "CNY") ? "CNY" : "JPY";
 // 把任意币种的金额折成人民币
@@ -366,11 +375,29 @@ const per100 = (pricePerG) => {
 // 售价的币种。跟材料价同一条规矩:没字段 = 老数据 = 日元。
 // (老配方里写的 450 是东京时期定的 450 円,不是 450 元 —— 不折算的话利润率会虚高到 99%)
 const priceCurOf = (o) => (o && o.priceCurrency === "CNY") ? "CNY" : "JPY";
-// 售价显示:保留原币种原值,不折算(定价是定价,不是估算)
-const fmtSellPrice = (v, o) => {
+// 售价显示。存的永远是原币种原值(定价就是定价),但显示跟随全局口径 ——
+// 老配方那个 450 是东京时期的 450 円,LuLu 平时看人民币,得给她折算过的数。
+// opts.raw 强制原币种(编辑器里的输入框旁边用)。
+const fmtSellPrice = (v, o, opts = {}) => {
   const n = parseFloat(v);
   if (isNaN(n) || n <= 0) return "";
-  return priceCurOf(o) === "CNY" ? `¥${n.toLocaleString()}` : `${n.toLocaleString()}円`;
+  const isJpy = priceCurOf(o) === "JPY";
+  if (isJpy && _displayCur === "CNY" && !opts.raw) {
+    const cny = Math.round(n * _fxJpyToCny * 100) / 100;
+    return cny > 0 ? `≈¥${cny.toLocaleString()}` : "";
+  }
+  return isJpy ? `${n.toLocaleString()}円` : `¥${n.toLocaleString()}`;
+};
+// 总价(袋价 / 箱价)的显示,同样跟随口径
+const fmtTotalPrice = (v, currency, opts = {}) => {
+  const n = parseFloat(v);
+  if (isNaN(n) || n <= 0) return "";
+  const isJpy = curOf({ currency }) === "JPY";
+  if (isJpy && _displayCur === "CNY" && !opts.raw) {
+    const cny = Math.round(n * _fxJpyToCny * 100) / 100;
+    return cny > 0 ? `≈¥${cny.toLocaleString()}` : "";
+  }
+  return isJpy ? `${Math.round(n).toLocaleString()}円` : `¥${Math.round(n * 100) / 100}`;
 };
 // v17: 一个金额换算到另一币种的显示串。日元 → 人民币用汇率乘,人民币 → 日元用汇率除。
 // 给「双币对照」行用 —— 报价单是日元,但记账和成本都要人民币,两个数得同时看见。
@@ -397,10 +424,17 @@ const priceCurBtn = (obj, onToggle, lang) => (
 );
 
 // opts.approx: 日元时附上按当前汇率折出的人民币参考值
+// opts.raw: 强制原币种(输入框旁的对照之类,不跟全局口径走)
 const fmtUnitPrice = (pricePerG, currency, opts = {}) => {
   const v = per100(pricePerG);
   if (!v) return "";
-  if (curOf({ currency }) === "CNY") return `¥${v}/100g`;
+  const isJpy = curOf({ currency }) === "JPY";
+  // 全局口径 = 人民币时,日元价折算显示,带 ≈ 表明是换算值
+  if (isJpy && _displayCur === "CNY" && !opts.raw) {
+    const cny = Math.round(parseFloat(v) * _fxJpyToCny * 100) / 100;
+    return cny > 0 ? `≈¥${cny}/100g` : "";
+  }
+  if (!isJpy) return `¥${v}/100g`;
   const head = `${v}円/100g`;
   if (!opts.approx) return head;
   const cny = Math.round(parseFloat(v) * _fxJpyToCny * 100) / 100;
@@ -10457,7 +10491,13 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
                       {[
                         m.packSize ? `${m.packSize}${m.casePack ? ` × ${m.casePack}` : ""}` : null,
                         m.pricePerG ? fmtUnitPrice(m.pricePerG, curOf(m)) : null,
-                        casePrice > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ${getMaterialRawPrice(m).currency === "CNY" ? "" : "≈"}¥${casePrice.toFixed(0)}` : null,
+                        (() => {
+                          // 箱价按原币种算,再交给 fmtTotalPrice 按全局口径决定怎么显示
+                          const _rp = getMaterialRawPrice(m);
+                          const _rawCase = _rp.price > 0 && m.packSize && m.casePack
+                            ? _rp.price * parsePackSizeToGrams(m.packSize) * parseFloat(m.casePack) : 0;
+                          return _rawCase > 0 ? `${lang === "zh" ? "箱价" : "箱価"} ${fmtTotalPrice(_rawCase, _rp.currency)}` : null;
+                        })(),
                       ].filter(Boolean).map((t, i, arr) => (
                         <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span>{t}</span>
@@ -10634,7 +10674,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                 <div style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
                   <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.5px", textTransform: "uppercase" }}>📖 {lang === "zh" ? "参考价" : "参考価"}</div>
                   <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.textPrimary, marginTop: 2 }}>{fmtUnitPrice(refPrice, curOf(material))}</div>
-                  {curOf(material) === "JPY" && (
+                  {curOf(material) === "JPY" && getDisplayCur() === "raw" && (
                     <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>≈ {fmtOther(parseFloat(refPrice) * 100, "JPY")}/100g</div>
                   )}
                   {material.priceRange && material.priceRange.asOf && (
@@ -10650,7 +10690,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                 <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm, border: `0.5px solid ${T.success}` }}>
                   <div style={{ fontSize: 10, color: T.success, letterSpacing: "0.5px", textTransform: "uppercase" }}>🏷️ {lang === "zh" ? "本店价" : "仕入価"}</div>
                   <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>{fmtUnitPrice(sm.pricePerG, curOf(sm))}</div>
-                  {curOf(sm) === "JPY" && (
+                  {curOf(sm) === "JPY" && getDisplayCur() === "raw" && (
                     <div style={{ fontSize: 10, color: T.success, opacity: 0.75, marginTop: 2 }}>≈ {fmtOther(parseFloat(sm.pricePerG) * 100, "JPY")}/100g</div>
                   )}
                 </div>
@@ -10659,7 +10699,14 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
             {casePrice > 0 && (
               <div style={{ background: T.successBg, padding: "10px 12px", borderRadius: T.radiusSm }}>
                 <div style={{ fontSize: 10, color: T.success, letterSpacing: "0.5px", textTransform: "uppercase" }}>{lang === "zh" ? "整箱约" : "1ケース合計"}</div>
-                <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>{getMaterialRawPrice(material).currency === "CNY" ? "" : "≈"}¥{casePrice.toFixed(0)}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 17, fontWeight: 500, color: T.success, marginTop: 2 }}>
+                  {(() => {
+                    const _rp = getMaterialRawPrice(material);
+                    const _rawCase = _rp.price > 0 && material.packSize && material.casePack
+                      ? _rp.price * parsePackSizeToGrams(material.packSize) * parseFloat(material.casePack) : 0;
+                    return fmtTotalPrice(_rawCase, _rp.currency);
+                  })()}
+                </div>
               </div>
             )}
           </div>
@@ -10833,6 +10880,32 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
         {zh
           ? `举例:日本黄油 2200円/kg → 折 ¥${Math.round(2200 * fx * 100) / 100}/kg(即 ¥${Math.round(220 * fx * 100) / 100}/100g)`
           : `例:バター 2200円/kg → ¥${Math.round(2200 * fx * 100) / 100}/kg`}
+      </div>
+
+      {/* v17.1: 价格显示口径 —— 存量是日元报价,但平时要看人民币 */}
+      <div style={{ borderTop: `0.5px solid ${T.border}`, marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginBottom: 8 }}>
+          {zh ? "💴 价格显示口径" : "💴 価格の表示通貨"}
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          {[["CNY", zh ? "¥ 都折成人民币" : "¥ 人民元に統一"], ["raw", zh ? "円 各按原币种" : "円 元の通貨のまま"]].map(([v, label]) => {
+            const on = (appSettings.displayCurrency || "CNY") === v;
+            return (
+              <button key={v} type="button"
+                onClick={() => setAppSettings(prev => ({ ...prev, displayCurrency: v }))}
+                style={{ padding: "5px 12px", fontSize: 12, fontWeight: 500, cursor: "pointer", borderRadius: T.radiusPill, fontFamily: T.fontSans,
+                  background: on ? T.accent : "transparent", color: on ? "#fff" : T.textSecondary,
+                  border: `0.5px solid ${on ? T.accent : T.border}` }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.7 }}>
+          {zh
+            ? "选「都折成人民币」时,日元报价按上面的汇率折算显示,并标一个 ≈ 表示是换算来的(例:450円 的售价显示成 ≈¥" + (Math.round(450 * fx * 100) / 100) + ")。存进去的还是原来的数字和币种,只是给你看的口径变了 —— 录入框里永远是原币种,不会被改。"
+            : "「人民元に統一」だと円建ては上のレートで換算表示(≈ 付き)。保存される値は元のまま、入力欄も元の通貨です。"}
+        </div>
       </div>
     </div>
   );
@@ -11874,7 +11947,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
           </div>
           {refPrice && (
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 16 }}>
-              📖 {lang === "zh" ? "百科参考价" : "百科参考価"}: {fmtUnitPrice(refPrice, curOf(mat))}
+              📖 {lang === "zh" ? "百科参考价" : "百科参考価"}: {fmtUnitPrice(refPrice, curOf(mat), { raw: true })}
               {mat && mat.priceRange && mat.priceRange.asOf && <span style={{ marginLeft: 6 }}>({mat.priceRange.asOf})</span>}
               <span style={{ marginLeft: 6, color: T.textMuted }}>{lang === "zh" ? "· 要改去「材料百科」里改" : "· 変更は材料事典から"}</span>
             </div>
@@ -13146,9 +13219,16 @@ function App() {
   useEffect(() => { setCustomCompCatsForLookup(customCompCats); }, [customCompCats]);
   // v11: 同步 shopMaterials 到全局 lookup,让所有 getMaterialEffectivePrice 调用能读到
   useEffect(() => { setShopMaterialsForLookup(shopMaterials); }, [shopMaterials]);
-  // v17: 全局配置(目前只有日元汇率)。同样注入给成本链,让日元材料能折成人民币算成本
-  const [appSettings, setAppSettings] = useState(() => ({ fxJpyToCny: DEFAULT_FX_JPY_CNY, ...(stored?.appSettings || {}) }));
-  useEffect(() => { setFxForLookup(appSettings.fxJpyToCny); }, [appSettings.fxJpyToCny]);
+  // v17: 全局配置(日元汇率 + 价格显示口径)。注入给成本链和显示 helper。
+  // ⚠️ 故意不放 useEffect —— effect 在渲染之后跑,改完汇率/口径这一帧列表还会显示旧数字。
+  // 这两个 setter 幂等、不改 React 状态,渲染期间调用是安全的。
+  const [appSettings, setAppSettings] = useState(() => ({
+    fxJpyToCny: DEFAULT_FX_JPY_CNY,
+    displayCurrency: "CNY",     // LuLu 平时看人民币
+    ...(stored?.appSettings || {}),
+  }));
+  setFxForLookup(appSettings.fxJpyToCny);
+  setDisplayCurForLookup(appSettings.displayCurrency);
   // 🏷 产品家族（Product Family）
   // v1 内测: 默认种子 = SEED_FAMILIES (family_buttercream_cake + family_pate_a_cake), 老 family_basque 已隐藏
   const [productFamilies, setProductFamilies] = useState(mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES));
