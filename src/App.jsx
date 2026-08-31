@@ -10847,6 +10847,108 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
   );
 }
 
+// ─── 🏭 厂家选择器:输入即筛 ─────────────
+// 469 家用原生 <select> 翻不动。中 / 日 / 法名都能搜,同一大分类的排最前
+// (录凝固剂时先看到凝固剂厂家,而不是从乳业开始翻)。
+// 选项用 onMouseDown 而不是 onClick —— input 的 blur 会先触发,onClick 就永远进不来。
+function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);
+  const boxRef = useRef(null);
+  const zh = lang === "zh";
+  const selected = brands.find(b => b.id === value);
+  const label = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || "(无名)";
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  const kw = q.trim().toLowerCase();
+  const all = useMemo(() => {
+    const hit = kw
+      ? brands.filter(b => `${b.nameZh || ""}${b.nameJa || ""}${b.nameFr || ""}`.toLowerCase().includes(kw))
+      : brands.slice();
+    // 同大分类的排前面;其余保持原顺序
+    return hit.sort((a, b) => {
+      const am = a.categoryId === categoryId ? 0 : 1;
+      const bm = b.categoryId === categoryId ? 0 : 1;
+      return am - bm;
+    });
+  }, [brands, kw, categoryId]);
+  const list = all.slice(0, 50);
+
+  const pick = (b) => {
+    onChange(b ? b.id : "");
+    setQ("");
+    setOpen(false);
+  };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHi(h => Math.min(h + 1, list.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { if (open && list[hi]) { e.preventDefault(); pick(list[hi]); } }
+    else if (e.key === "Escape") { setOpen(false); }
+  };
+
+  return (
+    <div ref={boxRef} style={{ position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <input
+          value={open ? q : (selected ? label(selected) : "")}
+          onChange={e => { setQ(e.target.value); setOpen(true); setHi(0); }}
+          onFocus={() => { setQ(""); setOpen(true); setHi(0); }}
+          onKeyDown={onKey}
+          placeholder={selected ? label(selected) : (zh ? "输入厂家名搜索…" : "メーカー名で検索…")}
+          style={{ ...inpStyle, paddingRight: selected ? 26 : 12 }}
+        />
+        {selected && !open && (
+          <button type="button" onClick={() => pick(null)} title={zh ? "清除" : "クリア"}
+            style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", border: "none", background: "transparent", cursor: "pointer", color: T.textTertiary, fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>×</button>
+        )}
+      </div>
+      {open && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, top: "calc(100% + 3px)", zIndex: T.z.popover,
+          background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm,
+          boxShadow: T.sh.popover, maxHeight: 260, overflowY: "auto",
+        }}>
+          {list.length === 0 && (
+            <div style={{ padding: "10px 12px", fontSize: 12, color: T.textTertiary }}>
+              {zh ? `没有匹配「${q}」的厂家。去「材料百科」页可以新建厂家。` : `「${q}」に一致するメーカーなし`}
+            </div>
+          )}
+          {list.map((b, i) => {
+            const sameCat = b.categoryId === categoryId;
+            return (
+              <div key={b.id}
+                onMouseDown={(e) => { e.preventDefault(); pick(b); }}
+                onMouseEnter={() => setHi(i)}
+                style={{
+                  padding: "7px 12px", fontSize: 13, cursor: "pointer", display: "flex",
+                  alignItems: "center", justifyContent: "space-between", gap: 8,
+                  background: i === hi ? T.bgMuted : "transparent",
+                  color: b.id === value ? T.accent : T.textPrimary,
+                  fontWeight: b.id === value ? 500 : 400,
+                }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label(b)}</span>
+                {sameCat && <span style={{ fontSize: 10, color: T.success, flex: "0 0 auto" }}>{zh ? "本类" : "同分類"}</span>}
+              </div>
+            );
+          })}
+          {all.length > list.length && (
+            <div style={{ padding: "7px 12px", fontSize: 11, color: T.textTertiary, borderTop: `0.5px solid ${T.borderSoft}` }}>
+              {zh ? `还有 ${all.length - list.length} 家,继续输入缩小范围` : `他 ${all.length - list.length} 件`}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 💱 日元汇率设置卡(数据 tab) ─────────────
 // 材料百科的存量是日元报价,配方成本要按这个折成人民币。
 // 输入按「100 日元 = ? 元」,因为国内看汇率就是这个口径;存的是 1 日元 = ? 元。
@@ -11127,13 +11229,13 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "法文名" : "フランス語名"}</label><input value={form.nameFr || ""} onChange={f("nameFr")} placeholder="(可选)" style={inpStyle} /></div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家</label>
-            <select value={form.brandId} onChange={e => {
-              const b = brands.find(x => x.id === e.target.value);
-              setForm(prev => ({ ...prev, brandId: e.target.value, categoryId: b ? b.categoryId : prev.categoryId, subcategoryId: b ? (b.subcategoryId || "other") : prev.subcategoryId }));
-            }} style={inpStyle}>
-              <option value="">- 选择厂家 -</option>
-              {brands.map(b => <option key={b.id} value={b.id}>{b.nameZh || b.nameJa}</option>)}
-            </select>
+            <BrandPicker
+              brands={brands} value={form.brandId} categoryId={form.categoryId} lang={lang} inpStyle={inpStyle}
+              onChange={(id) => {
+                const b = brands.find(x => x.id === id);
+                setForm(prev => ({ ...prev, brandId: id, categoryId: b ? b.categoryId : prev.categoryId, subcategoryId: b ? (b.subcategoryId || "other") : prev.subcategoryId }));
+              }}
+            />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>大分类</label>
