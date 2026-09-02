@@ -13762,7 +13762,7 @@ function App() {
       cats,                     // 老价格表保留(里面也可能有价,用户自决是否清理 cats)
       // shopMaterials 不导出 ← IP 保护核心
       exportedAt: new Date().toISOString(),
-      version: 16,
+      version: 17,
       _ipPackage: true,         // 标记,导入端可识别这是分发包
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });

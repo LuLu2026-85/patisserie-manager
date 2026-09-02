@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **💰 记账铁律(2026-08-26 立,所有窗口生效)**:对话中只要出现"钱动了"(LuLu 说付了/交了定金/签了合同应付),**不管当时在聊什么,立即追加一行到 `C:\Users\11508\Desktop\05_工作店铺\798_总账_2026.md`**,分类九选一(设备/装修/房租押金/材料/运营/咖啡/小道具/证照中介/其他)。报价和估价不记。LuLu 说"记账:xxx"=直接记;"拉总账"=按分类汇总对预算。规则详情在总账文件头部。
 
-**⚠️ `.claude/notes/` 存的是业务级文档,不是软件文档**。LuLu 常在这个 cwd 里聊选址 / 设备 / 原料公司这类跟代码无关的事,产出就近落在这里(选址决策、设备采购总档、厨房设计条件表、烘焙原料公司计划、Marcona 采购)。
+**⚠️ `.claude/notes/` 存的是业务级文档,不是软件文档**。LuLu 常在这个 cwd 里聊开店筹备这类跟代码无关的事,产出就近落在这里 —— 已有 20 多份,覆盖开业总计划、798 装修报批攻略、设备采购总档、厨房设计条件表、招聘计划与面试指南、**商标注册**、**MJ 产品图路线与合规**、回国带料清单、经营模型基准数据、选址决策(历史存档)等。
 - **别把这些当项目文档去维护或重构**,它们的权威索引在 Hub 的「🧭 当前主线」。
 - 但**该更新时要更新** —— 比如设备又成交了一台,要写回 `.claude/notes/设备采购总档_*.md`,不能只在对话里说完就算。
 - 软件本身的文档是 `manual.md` / `progress.md` / `schema_full.md` / `handoff_*.md`,和 notes/ 不是一回事。
@@ -165,6 +165,7 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 **Materials encyclopedia (IP asset)**:
 - `brands` — manufacturer dim (origin / founded year / story / image).
 - `materials` — branded SKU products with `priceRange.mid` reference price.
+  ⚠️ 价格存了两处(`pricePerG` + `priceRange.mid`),改价必须一起写,见下面「💱 币种与单价口径」。
 
 **Shop ops (private — stripped from IP package)**:
 - `shopMaterials` — actual purchase records with `pricePerG` real cost; **stripped on `exportPublicIP`**.
@@ -174,7 +175,7 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 - `productFamilies` — recipe groupings sharing mold / temp / time.
 
 Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-defined component categories)、
-`appSettings`(v17 新增,目前只装日元汇率 `fxJpyToCny`)。
+`appSettings`(v17 新增,装日元汇率 `fxJpyToCny` 和价格显示口径 `displayCurrency`)。
 
 ## 💱 币种与单价口径 (v17, 2026-08-31)
 
@@ -197,6 +198,42 @@ Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-def
    (本店价人民币 + 百科价日元时取的是本店价,那就不是约数)。
 5. 汇率在 `appSettings.fxJpyToCny`(1 日元 = 多少人民币,默认 0.048),数据 tab 的
    `FxSettingCard` 按「100 日元 = ? 元」录入。改了要通过 `setFxForLookup` 注入全局。
+6. **售价也有币种:`priceCurrency`(`recipes.price` / `creations.price` / `products.sellPrice`)。**
+   同样缺省日元 —— 老配方那个 `450` 是东京时期的 450 円。**算利润率前必须先折**
+   (`toCNY(r.price, priceCurOf(r))`),否则成本折了、售价没折,费南雪会从 80.6% 虚高到 99.1%。
+   显示走 `fmtSellPrice`。新建的配方 / 组合蛋糕 / 商品默认 `priceCurrency: "CNY"`。
+
+### 显示口径开关 (v17.1, 2026-09-01)
+
+`appSettings.displayCurrency` 决定**看到的**是哪种钱,**只影响显示,不影响存储**:
+
+- `"CNY"`(默认)—— 日元价按汇率折算显示并标 `≈`(`450円` → `≈¥19.35`)。LuLu 平时看人民币。
+- `"raw"` —— 各按原币种显示。核对日本报价单时切过去。
+
+实现集中在 `fmtUnitPrice` / `fmtSellPrice` / `fmtTotalPrice` 三个 helper 读模块级 `_displayCur`,
+所以**所有调用点自动跟随,不用逐个改**。`opts.raw` 给编辑器里的对照值兜底(输入框旁边的
+参考价要和输入框同口径)。**录入框永远是原币种** —— 折算值和输入框混在一起会把用户填的数改掉。
+**成本 / 利润率不受这个开关影响**:配方里可能混币种,必须统一人民币才加得起来。
+
+### ⚠️ 价格有两个字段,必须一起写
+
+`materials` 里价格存了两处,是 v11 迁移(`pricePerG` → `priceRange.mid`)留下的:
+
+- 编辑器 (`MaterialEditForm`) 改的是 **`pricePerG`**
+- 但**成本链 `getMaterialEffectivePrice` 和「添加为本店原料」读的是 `priceRange.mid`**
+
+**只写一个 = 改了价不生效**(2026-09-01 实际踩到:LuLu 在百科改价,添加到本店原料时被改回旧价,
+而且配方成本一直用的也是旧价)。`MaterialEditForm.handleSave` 现在保存时一并写 `priceRange.mid`,
+**价变了才更新 `asOf`**。任何批量改材料价的脚本也必须同时写这两个字段。
+
+主数据实测 1802 条两字段全一致,所以没做历史迁移 —— 但**在 app 里手改过价、又没重新保存的条目会不一致**。
+
+### 渲染期注入,不要用 useEffect
+
+`setFxForLookup` / `setDisplayCurForLookup` / `setShopMaterialsForLookup` 这三个注入模块级变量的
+setter,**在 App 函数体里直接调用,不放 `useEffect`**。effect 在渲染之后跑,改完汇率 / 口径 / 本店价
+的这一帧,列表和成本还会用旧值算,要等下次状态变化才更新。三个 setter 都幂等、不动 React 状态,
+渲染期调用是安全的。
 
 **LuLu 的方向是一点点把百科换成国内货源**,日元数据是待替换的存量,不是要长期维护的东西。
 
@@ -228,6 +265,12 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 - `PackPriceFields` —— 规格与价格那一整块(币种 + 单包/一箱 + 袋价/箱价/单价三格互算)。
   材料百科和本店原料共用一个。**供货商报价单给的是袋价或箱价,不是 ¥/g**,所以三格填任意
   一格,另外两格自动算;`anchor` 记住用户按哪个口径报的价,改包装克数时保住那个口径重算单价。
+  下面一行双币对照(`fmtOther`)给另一种钱的值 —— 报价单是一种钱、记账是另一种,两个数要同时看见。
+- `BrandPicker` —— 厂家选择器(输入即筛)。**469 个厂家用原生 `<select>` 翻不动**,而且顺序
+  跟当前大分类无关。中 / 日 / 法名都能搜,同一 `categoryId` 的排最前并标「本类」,键盘 ↑↓ / Enter /
+  Esc 可用,超过 50 条截断并提示还剩多少。**选项必须用 `onMouseDown` 而不是 `onClick`** ——
+  input 的 blur 先触发会把面板关掉,onClick 永远进不来。选中后仍联动大分类 / 子分类。
+  (材料筛选处那两个带「全部」选项的厂家下拉还是原生 select,没改。)
 - `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
   点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
   是两回事,**不联动**。
@@ -266,6 +309,8 @@ These are user-authored import packages (recipes, components, knowledge, materia
 - 自定义隔断用 DEFS 里的 `uwall`(隔墙段,`wallish:1` 豁免墙体重叠判定)。
 - 叠放高度 `stackHeight` 有互为载体的去重逻辑(visited set),UNOX 10盘+5盘曾因此误报 4016mm,改叠放逻辑前看 commit 989dac2。
 - 横屏(iPad landscape)有专门布局分支,竖屏/横屏断点都在 `GLOBAL_CSS` 同级的媒体查询里。
+- **`PIPES` 常量是场馆 2×Ø235 横穿管道**(管底 2000,y=2445/2795,与 COLUMNS 同级"标死"):画成红色限高带,
+  总高 >2000 的设备压进带内会在检查清单报红。现场实测后只改 `PIPES.ys` 两个数,其余自动跟。
 
 ## README
 
