@@ -363,6 +363,15 @@ const toCNY = (v, currency) => {
   return currency === "CNY" ? n : n * _fxJpyToCny;
 };
 
+// v17.2: 切币种时把已填的数按汇率换算过去 —— 保住「这笔钱的真实价值」不变。
+// 只给币种按钮用(不是显示口径开关,那个不动存储)。切回去能原样还原,点错了再点一次即可。
+const convCur = (v, from, to, dp = 6) => {
+  const n = parseFloat(v);
+  if (isNaN(n) || n <= 0 || from === to || !(_fxJpyToCny > 0)) return v;
+  const p = Math.pow(10, dp);
+  return String(Math.round((to === "CNY" ? n * _fxJpyToCny : n / _fxJpyToCny) * p) / p);
+};
+
 // v17: 单价显示口径 —— 存的是每克价,给人看的是每 100g。
 // 人民币下 ¥/g 全是 0.008 这种读不动的小数,×100 之后面粉 0.8 / 黄油 13 / 杏仁粉 22。
 // 人民币写「¥」、日元写「円」—— 两个符号刻意长得不一样,扫一眼列表就知道
@@ -412,8 +421,10 @@ const fmtOther = (v, currency) => {
 };
 
 // 售价旁边的币种切换,一个字宽
-const priceCurBtn = (obj, onToggle, lang) => (
-  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle(priceCurOf(obj) === "CNY" ? "JPY" : "CNY"); }}
+const priceCurBtn = (obj, onToggle, lang, price = null) => (
+  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation();
+    const from = priceCurOf(obj), to = from === "CNY" ? "JPY" : "CNY";
+    onToggle(to, convCur(price, from, to, 2)); }}
     title={lang === "zh" ? "售价的币种,点一下切换" : "販売価の通貨を切替"}
     style={{ marginLeft: 6, padding: "0 5px", fontSize: 11, lineHeight: 1.4, cursor: "pointer", verticalAlign: "middle",
       background: priceCurOf(obj) === "CNY" ? "transparent" : "#FEF3C7",
@@ -7882,7 +7893,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>售价（每份 ¥）</label>
             <div style={{ display: "flex", alignItems: "center" }}>
               <input type="number" value={form.price || ""} onChange={f("price")} placeholder="780" style={inpStyle} />
-              {priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}
+              {priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}
             </div>
           </div>
         </div>
@@ -11074,7 +11085,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
         {[["CNY", zh ? "¥ 人民币" : "¥ 人民元"], ["JPY", zh ? "円 日元" : "円 日本円"]].map(([c, label]) => {
           const on = cur === c;
           return (
-            <button key={c} type="button" onClick={() => onChange({ currency: c })}
+            <button key={c} type="button" onClick={() => { if (c === cur) return; setDraft(null); onChange({ currency: c, pricePerG: convCur(pricePerG, cur, c) }); }}
               style={{ padding: "4px 12px", fontSize: 11, fontWeight: 500, cursor: "pointer", borderRadius: T.radiusPill, fontFamily: T.fontSans,
                 background: on ? T.accent : "transparent", color: on ? "#fff" : T.textSecondary, border: `0.5px solid ${on ? T.accent : T.border}` }}>
               {label}
@@ -11575,7 +11586,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         {grid("1fr 1fr", [fld("配方名（中文）", inp("nameZh", "费南雪")), fld("配方名（日本語）", inp("nameJa", "フィナンシェ"))])}
         {grid("1fr 1fr", [fld("配方名（Français）", inp("nameFr", "Financier")), fld("分类", sel("category", ["焼き菓子","生菓子","パン・ヴィエノワズリー","ショコラ","アントルメ","タルト","その他"]))])}
         {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "SN1648 25連")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", "個")), fld("制作时间（分）", inp("time", "60", "number"))])}
-        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
+        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
         {grid("1fr 1fr", [fld("保存方法", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
       </>)}
 
@@ -12729,7 +12740,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "销售单价(¥)" : "販売価(¥)"}</div>
             <div style={{ display: "flex", alignItems: "center" }}>
               <input type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
-              {priceCurBtn(form, c => setForm(prev => ({ ...prev, priceCurrency: c })), lang)}
+              {priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, sellPrice: p })), lang, form.sellPrice)}
             </div>
           </label>
         </div>
