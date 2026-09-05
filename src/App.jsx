@@ -4059,6 +4059,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
                       id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                       materialId: ing.materialId,
                       pricePerG: String(ref),
+                      currency: m ? curOf(m) : curOf(ing),   // v17: 价取自百科就用百科币种,兜底到手写价的币种
                       packSize: (m && m.packSize) || "",
                       casePack: (m && m.casePack) || "",
                       note: "",
@@ -5580,6 +5581,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
@@ -5613,6 +5617,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
@@ -8537,6 +8544,9 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
@@ -8570,6 +8580,9 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
@@ -10747,6 +10760,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                     id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                     materialId: material.id,
                     pricePerG: String(refPrice),
+                    currency: curOf(material),   // v17: 价从百科带过来,币种必须一起带
                     packSize: material.packSize || "",
                     casePack: material.casePack || "",
                     note: "",
@@ -11492,12 +11506,13 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
           toUpsert.forEach(ing => {
             const idx = next.findIndex(sm => sm.materialId === ing.materialId);
             if (idx >= 0) {
-              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)) };
+              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing) };   // v17: 币种跟手写价走
             } else {
               next.push({
                 id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                 materialId: ing.materialId,
                 pricePerG: String(parseFloat(ing.unitPrice)),
+                currency: curOf(ing),   // v17
               });
             }
           });
@@ -11937,6 +11952,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
@@ -11970,6 +11988,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                 nameFr: i.nameFr || mat.nameFr || "",
                 brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
                 unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
                 cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
               };
             }));
