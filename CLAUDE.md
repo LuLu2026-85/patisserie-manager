@@ -185,6 +185,8 @@ Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-def
    52 条手写单价,最低 0.15 ¥/g,没有一条低到人民币量级)。所以**故意不写迁移函数** ——
    缺省即 JPY,老数据一个字节都没动。新建的材料 / 本店原料 / 配料行显式写 `currency: "CNY"`。
    判定统一走 `curOf(o)`,别自己写 `o.currency === ...`。
+   **构造 shopMaterials / 给配料行绑材料的地方有 10 处(grep `materialId:`),给对象加任何按条走的字段都要全带** ——
+   2026-09-04 加 currency 只改了 picker 那 1 处,漏了 9 处,LuLu 三天后撞上「百科改人民币,添加到本店变日元」。
 2. **存储永远是「每克价」(`pricePerG`),只有显示和输入是「每 100g」。** 人民币下 ¥/g 全是
    0.008 这种读不动的小数。换算只在 UI 边界发生:显示走 `fmtUnitPrice`,输入走
    `PackPriceFields` 里 `editPrice("g", 100)` 的除法。**别把 /100g 写进任何存储字段。**
