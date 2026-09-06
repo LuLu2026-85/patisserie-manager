@@ -164,6 +164,9 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 
 **Materials encyclopedia (IP asset)**:
 - `brands` — manufacturer dim (origin / founded year / story / image).
+  `categoryId` 是**可选的主分类**(空 = 全品类 / 综合渠道,如淘宝、进口商;v17.2, 2026-09-06)。**分类→厂家浏览、首页「N 家厂商」计数、
+  厂家下拉,全部按「厂家名下材料所在的分类」推导,不按这个字段** —— 主数据 469 家里 73 家的材料本来就跨分类。显示用 `getBrandCat(b)`,
+  空分类给「🏪 全品类」外观,别掉进 `getMaterialCat` 的「其他」兜底。
 - `materials` — branded SKU products with `priceRange.mid` reference price.
   ⚠️ 价格存了两处(`pricePerG` + `priceRange.mid`),改价必须一起写,见下面「💱 币种与单价口径」。
 
@@ -269,7 +272,9 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   一格,另外两格自动算;`anchor` 记住用户按哪个口径报的价,改包装克数时保住那个口径重算单价。
   下面一行双币对照(`fmtOther`)给另一种钱的值 —— 报价单是一种钱、记账是另一种,两个数要同时看见。
 - `BrandPicker` —— 厂家选择器(输入即筛)。**469 个厂家用原生 `<select>` 翻不动**,而且顺序
-  跟当前大分类无关。中 / 日 / 法名都能搜,同一 `categoryId` 的排最前并标「本类」,键盘 ↑↓ / Enter /
+  跟当前大分类无关。中 / 日 / 法名都能搜;**「本类」= 主分类是本类,或在本类下已有材料**(`inCatBrandIds`,由
+  `MaterialEditForm` 从 `materials` 算好传进来),全品类厂家排第二档并标「全品类」;**选中全品类厂家不联动大分类**,
+  只有主分类非空的厂家才联动。键盘 ↑↓ / Enter /
   Esc 可用,超过 50 条截断并提示还剩多少。**选项必须用 `onMouseDown` 而不是 `onClick`** ——
   input 的 blur 先触发会把面板关掉,onClick 永远进不来。选中后仍联动大分类 / 子分类。
   (材料筛选处那两个带「全部」选项的厂家下拉还是原生 select,没改。)

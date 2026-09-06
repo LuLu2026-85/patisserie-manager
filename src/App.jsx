@@ -1538,6 +1538,10 @@ const MATERIAL_PARAM_TEMPLATES = {
 
 // 取分类
 const getMaterialCat = (id) => MATERIAL_CATEGORIES.find(c => c.id === id) || MATERIAL_CATEGORIES[MATERIAL_CATEGORIES.length - 1];
+// 厂家专用:brands.categoryId 是可选的「主分类」。空 = 全品类 / 综合渠道(淘宝、进口商这种什么都卖的),
+// 不能掉进 getMaterialCat 的「其他」兜底,得有自己的外观。
+const BRAND_CAT_ALL = { id: "", zh: "全品类", ja: "全カテゴリ", icon: "🏪", color: "#4B5563", bg: "#E5E7EB" };
+const getBrandCat = (b) => (b && b.categoryId) ? getMaterialCat(b.categoryId) : BRAND_CAT_ALL;
 
 // ───────────── 知识库标签（用于知识点分类和筛选）─────────────
 const KNOWLEDGE_TAGS = [
@@ -9279,6 +9283,8 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
       material={materialEditTarget === "new" ? null : materialEditTarget}
       brandId={brandViewId}
       brands={brands}
+      materials={materials}
+      defaultCategoryId={categoryFilter}
       onSave={(m) => {
         setMaterials(prev => {
           const found = prev.find(x => x.id === m.id);
@@ -9341,7 +9347,7 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
       creations={creations}
       lang={lang}
       onEdit={() => setBrandEditTarget(b)}
-      onBack={() => { setBrandViewId(null); setCategoryFilter(b.categoryId); }}
+      onBack={() => { setBrandViewId(null); setCategoryFilter(b.categoryId || null); }}
       onAddMaterial={() => setMaterialEditTarget("new")}
       onViewMaterial={(id) => setMaterialViewId(id)}
       onEditMaterial={(m) => setMaterialEditTarget(m)}
@@ -9406,17 +9412,20 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
   // 原来每次渲染 MATERIAL_CATEGORIES.map 里都 brands.filter().length,
   // 14 个分类 × (397 brands + 1416 materials) ≈ 25000 次比较每次重渲染
   const categoryCounts = useMemo(() => {
+    // 「这个分类下有几家厂家」= 在这个分类下有材料的厂家 ∪ 主分类挂在这里的厂家。
+    // 一家厂家可以同时算进多个分类(中沢乳业 = 奶油 + 牛奶芝士;淘宝 = 全品类),
+    // 所以各分类的厂家数相加会大于厂家总数 —— 这是对的,不是重复计数。
     const counts = {};
-    brands.forEach(b => {
-      if (!b.categoryId) return;
-      if (!counts[b.categoryId]) counts[b.categoryId] = { brandCount: 0, productCount: 0 };
-      counts[b.categoryId].brandCount++;
-    });
+    const brandSets = {};
+    const touch = (cat) => { if (!counts[cat]) counts[cat] = { brandCount: 0, productCount: 0 }; if (!brandSets[cat]) brandSets[cat] = new Set(); };
+    brands.forEach(b => { if (!b.categoryId) return; touch(b.categoryId); brandSets[b.categoryId].add(b.id); });
     materials.forEach(m => {
       if (!m.categoryId) return;
-      if (!counts[m.categoryId]) counts[m.categoryId] = { brandCount: 0, productCount: 0 };
+      touch(m.categoryId);
       counts[m.categoryId].productCount++;
+      if (m.brandId) brandSets[m.categoryId].add(m.brandId);
     });
+    Object.keys(brandSets).forEach(cat => { counts[cat].brandCount = brandSets[cat].size; });
     return counts;
   }, [brands, materials]);
 
@@ -9488,7 +9497,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {searchResults.brands.map(b => {
-                  const cat = getMaterialCat(b.categoryId);
+                  const cat = getBrandCat(b);
                   const productN = materials.filter(m => m.brandId === b.id).length;
                   return (
                     <button
@@ -10350,15 +10359,21 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "法文名" : "フランス語名"}</label><input value={form.nameFr || ""} onChange={f("nameFr")} placeholder="(可选)" style={inpStyle} /></div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>大分类</label>
-            <select value={form.categoryId} onChange={(e) => setForm(prev => ({ ...prev, categoryId: e.target.value, subcategoryId: "other" }))} style={inpStyle}>
+            <select value={form.categoryId || ""} onChange={(e) => setForm(prev => ({ ...prev, categoryId: e.target.value, subcategoryId: e.target.value ? "other" : "" }))} style={inpStyle}>
+              {/* 空 = 全品类:淘宝、1688、进口商这种什么都卖的渠道;它会出现在每一个它有材料的分类下 */}
+              <option value="">{BRAND_CAT_ALL.icon} {lang === "zh" ? "全品类 / 综合渠道(淘宝、进口商等)" : "全カテゴリ / 総合"}</option>
               {MATERIAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.zh}</option>)}
             </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "子分类" : "サブカテゴリ"}</label>
-            <select value={form.subcategoryId || "other"} onChange={f("subcategoryId")} style={inpStyle}>
-              {getSubcategoriesFor(form.categoryId).map(s => <option key={s.id} value={s.id}>{s.icon} {lang === "zh" ? s.zh : s.ja}</option>)}
-            </select>
+            {form.categoryId ? (
+              <select value={form.subcategoryId || "other"} onChange={f("subcategoryId")} style={inpStyle}>
+                {getSubcategoriesFor(form.categoryId).map(s => <option key={s.id} value={s.id}>{s.icon} {lang === "zh" ? s.zh : s.ja}</option>)}
+              </select>
+            ) : (
+              <div style={{ ...inpStyle, background: "#F5F5F5", color: T.textTertiary }}>{lang === "zh" ? "全品类不分子类" : "—"}</div>
+            )}
           </div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产地" : "原産地"}</label><input value={form.origin || ""} onChange={f("origin")} placeholder="北海道" style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "创立年份" : "創立年"}</label><input type="number" value={form.foundedYear || ""} onChange={f("foundedYear")} placeholder="1967" style={inpStyle} /></div>
@@ -10390,7 +10405,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
 
 // ─── 厂家详情 + 产品列表 ─────────────
 function BrandDetail({ brand, materials, allMaterials, recipes, components, creations, lang, onEdit, onBack, onAddMaterial, onViewMaterial, onEditMaterial }) {
-  const cat = getMaterialCat(brand.categoryId);
+  const cat = getBrandCat(brand);
   const name = pickLang(brand, "name", lang);
   const story = pickLang(brand, "story", lang);
 
@@ -10876,7 +10891,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
 // 469 家用原生 <select> 翻不动。中 / 日 / 法名都能搜,同一大分类的排最前
 // (录凝固剂时先看到凝固剂厂家,而不是从乳业开始翻)。
 // 选项用 onMouseDown 而不是 onClick —— input 的 blur 会先触发,onClick 就永远进不来。
-function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle }) {
+function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle, inCatBrandIds = null }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -10897,13 +10912,10 @@ function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle }) {
     const hit = kw
       ? brands.filter(b => `${b.nameZh || ""}${b.nameJa || ""}${b.nameFr || ""}`.toLowerCase().includes(kw))
       : brands.slice();
-    // 同大分类的排前面;其余保持原顺序
-    return hit.sort((a, b) => {
-      const am = a.categoryId === categoryId ? 0 : 1;
-      const bm = b.categoryId === categoryId ? 0 : 1;
-      return am - bm;
-    });
-  }, [brands, kw, categoryId]);
+    // 排序三档:本类(主分类是本类,或在本类下已有材料)> 全品类渠道 > 其余;档内保持原顺序
+    const rank = (b) => (b.categoryId === categoryId || (inCatBrandIds && inCatBrandIds.has(b.id))) ? 0 : (!b.categoryId ? 1 : 2);
+    return hit.sort((a, b) => rank(a) - rank(b));
+  }, [brands, kw, categoryId, inCatBrandIds]);
   const list = all.slice(0, 50);
 
   const pick = (b) => {
@@ -10946,7 +10958,8 @@ function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle }) {
             </div>
           )}
           {list.map((b, i) => {
-            const sameCat = b.categoryId === categoryId;
+            const sameCat = b.categoryId === categoryId || (inCatBrandIds && inCatBrandIds.has(b.id));
+            const isAll = !b.categoryId;
             return (
               <div key={b.id}
                 onMouseDown={(e) => { e.preventDefault(); pick(b); }}
@@ -10960,6 +10973,7 @@ function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle }) {
                 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label(b)}</span>
                 {sameCat && <span style={{ fontSize: 10, color: T.success, flex: "0 0 auto" }}>{zh ? "本类" : "同分類"}</span>}
+                {!sameCat && isAll && <span style={{ fontSize: 10, color: T.textTertiary, flex: "0 0 auto" }}>{zh ? "全品类" : "全カテゴリ"}</span>}
               </div>
             );
           })}
@@ -11151,12 +11165,13 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
 }
 
 // ─── 产品编辑 ─────────────
-function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack, lang = "zh" }) {
+function MaterialEditForm({ material, brandId, brands, materials = [], defaultCategoryId = null, onSave, onDelete, onBack, lang = "zh" }) {
   const isNew = !material;
   const [errorMsg, setErrorMsg] = useState("");
 
   const currentBrand = brands.find(b => b.id === (material?.brandId || brandId));
-  const defaultCategory = material?.categoryId || currentBrand?.categoryId || "dairy_other";
+  // 从分类页点「+ 新产品」进来时,默认就是那个分类(defaultCategoryId = categoryFilter),别一律落到牛奶芝士
+  const defaultCategory = material?.categoryId || currentBrand?.categoryId || defaultCategoryId || "dairy_other";
   const defaultSubcategory = material?.subcategoryId || currentBrand?.subcategoryId || "other";
 
   const empty = {
@@ -11178,6 +11193,8 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
   };
   const [form, setForm] = useState(material ? { ...material, parameters: material.parameters || {} } : empty);
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
+  // 当前大分类下已有材料的厂家 → 给 BrandPicker 排前并标「本类」(厂家的主分类只是提示,真正的归属看材料)
+  const inCatBrandIds = useMemo(() => new Set(materials.filter(m => m.categoryId === form.categoryId && m.brandId).map(m => m.brandId)), [materials, form.categoryId]);
 
   const updateParam = (k, v) => setForm(prev => ({ ...prev, parameters: { ...prev.parameters, [k]: v } }));
   const addCustomParam = () => {
@@ -11255,10 +11272,12 @@ function MaterialEditForm({ material, brandId, brands, onSave, onDelete, onBack,
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家</label>
             <BrandPicker
-              brands={brands} value={form.brandId} categoryId={form.categoryId} lang={lang} inpStyle={inpStyle}
+              brands={brands} value={form.brandId} categoryId={form.categoryId} lang={lang} inpStyle={inpStyle} inCatBrandIds={inCatBrandIds}
               onChange={(id) => {
                 const b = brands.find(x => x.id === id);
-                setForm(prev => ({ ...prev, brandId: id, categoryId: b ? b.categoryId : prev.categoryId, subcategoryId: b ? (b.subcategoryId || "other") : prev.subcategoryId }));
+                // 厂家有主分类才联动;全品类厂家(淘宝这种)不动用户已选的分类
+                const follow = !!(b && b.categoryId);
+                setForm(prev => ({ ...prev, brandId: id, categoryId: follow ? b.categoryId : prev.categoryId, subcategoryId: follow ? (b.subcategoryId || "other") : prev.subcategoryId }));
               }}
             />
           </div>
