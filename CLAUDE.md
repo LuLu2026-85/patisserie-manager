@@ -267,6 +267,9 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 - Group colors (`GROUPS`) use a transparent background with a colored left border + pill border so they render identically in light and dark embeds.
  五个盆的色相刻意分散、明度统一压在 32~42%,**转灰度打印仍能分出 3 档以上**,红绿色觉障碍也能靠明度区分 —— 改这五个色值前先想清楚这条。
 - 配料表列宽只在模块常量 `ING_COLS` 定义一次,表头 / 数据行 / 汇总条三处共用。
+- **配料行 / 组合蛋糕层的成本显示走 `fmtCost(v)`**(不到 1 元两位小数、1 到 10 元一位、10 元以上整数,尾零去掉,
+  小于 1 分显示「<¥0.01」;没价返回空串)。**别再手写 `toFixed(0)`** —— 盐 1g 的 0.03 元会显示成「¥0」,和没价的空白分不清
+  (2026-09-14 LuLu 提的)。批次总成本 / 单个成本数大,仍是整数或一位小数,不走这里。
 - `PackPriceFields` —— 规格与价格那一整块(币种 + 单包/一箱 + 袋价/箱价/单价三格互算)。
   材料百科和本店原料共用一个。**供货商报价单给的是袋价或箱价,不是 ¥/g**,所以三格填任意
   一格,另外两格自动算;`anchor` 记住用户按哪个口径报的价,改包装克数时保住那个口径重算单价。

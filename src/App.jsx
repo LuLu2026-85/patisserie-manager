@@ -434,6 +434,17 @@ const priceCurBtn = (obj, onToggle, lang, price = null) => (
   </button>
 );
 
+// 配料行 / 层的成本显示。整数四舍五入会把盐 1g 的 0.03 元显示成「¥0」,和「没价」(空白)分不清。
+// 规则:不到 1 元两位小数、1 到 10 元一位小数、10 元以上整数,尾零去掉;小于 1 分显示「<¥0.01」。
+// 批次总成本 / 单个成本不走这里(数大,整数够用)。
+const fmtCost = (v) => {
+  const n = parseFloat(v);
+  if (!isFinite(n) || n <= 0) return "";
+  if (n < 0.005) return "<¥0.01";
+  if (n >= 10) return "¥" + Math.round(n).toLocaleString();
+  return "¥" + (n < 1 ? n.toFixed(2) : n.toFixed(1)).replace(/.?0+$/, "");
+};
+
 // opts.approx: 日元时附上按当前汇率折出的人民币参考值
 // opts.raw: 强制原币种(输入框旁的对照之类,不跟全局口径走)
 const fmtUnitPrice = (pricePerG, currency, opts = {}) => {
@@ -4268,7 +4279,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
                       <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
                     </div>
                     <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
-                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{scaledCost > 0 ? `¥${scaledCost.toFixed(0)}` : ""}</div>
+                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{fmtCost(scaledCost)}</div>
                   </div>
                 );
               })}
@@ -5000,7 +5011,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
                       </div>
                       <div style={{ textAlign: "right", fontWeight: 500, fontSize: 15, color: scale !== 1 ? "#6D28D9" : "#111111" }}>{scale === 1 ? ing.qty : scaledQty.toFixed(1)}</div>
                       <div style={{ fontSize: 13, color: "#666666", paddingLeft: 4 }}>{ing.unit}</div>
-                      <div style={{ textAlign: "right", fontSize: 12, color: "#666666" }}>{scaledCost > 0 ? `¥${scaledCost.toFixed(0)}` : ""}</div>
+                      <div style={{ textAlign: "right", fontSize: 12, color: "#666666" }}>{fmtCost(scaledCost)}</div>
                     </div>
                   );
                 })}
@@ -7528,7 +7539,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
                             ) : (
                               <span style={{ color: "#CA8A04" }}>⚠ 未填用量</span>
                             )}
-                            <span>💰 本层成本 <strong>¥{actualCost.toFixed(0)}</strong></span>
+                            <span>💰 本层成本 <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
                           </>
                         )}
@@ -8075,7 +8086,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #F59E0B", borderRadius: 4, background: "#FFFBEB", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
                       <div style={{ padding: "5px 8px", fontSize: 11, color: "#666", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                        {actualCost > 0 ? <span>本层成本 <strong style={{ color: "#059669" }}>¥{actualCost.toFixed(0)}</strong></span> : <span style={{ color: "#999" }}>填用量→算成本</span>}
+                        {actualCost > 0 ? <span>本层成本 <strong style={{ color: "#059669" }}>{fmtCost(actualCost)}</strong></span> : <span style={{ color: "#999" }}>填用量→算成本</span>}
                       </div>
                     </div>
 
