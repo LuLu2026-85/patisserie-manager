@@ -442,7 +442,7 @@ const fmtCost = (v) => {
   if (!isFinite(n) || n <= 0) return "";
   if (n < 0.005) return "<¥0.01";
   if (n >= 10) return "¥" + Math.round(n).toLocaleString();
-  return "¥" + (n < 1 ? n.toFixed(2) : n.toFixed(1)).replace(/.?0+$/, "");
+  return "¥" + (n < 1 ? n.toFixed(2) : n.toFixed(1)).replace(/\.?0+$/, "");
 };
 
 // opts.approx: 日元时附上按当前汇率折出的人民币参考值
