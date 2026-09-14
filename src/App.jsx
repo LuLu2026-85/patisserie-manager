@@ -3022,6 +3022,8 @@ input, textarea, select, button { font-family: inherit; }
 @media (max-width: 1023px) {
   /* 平板：配料表去掉品牌列 */
   .rc-ing-head, .rc-ing-row, .rc-ing-total { grid-template-columns: 1fr 110px 88px !important; }
+  /* 品牌列(k-desktop-only)在 600 到 1023px 也要藏,否则 4 个格子挤 3 列,成本被顶到第二行 */
+  .rc-ing-head > .k-desktop-only, .rc-ing-row > .k-desktop-only, .rc-ing-total > .k-desktop-only { display: none !important; }
 }
 @media (max-width: 599px) {
   .rc-container { padding-left: 16px; padding-right: 16px; }
