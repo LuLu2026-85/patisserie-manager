@@ -281,6 +281,11 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   Esc 可用,超过 50 条截断并提示还剩多少。**选项必须用 `onMouseDown` 而不是 `onClick`** ——
   input 的 blur 先触发会把面板关掉,onClick 永远进不来。
   (材料筛选处那两个带「全部」选项的厂家下拉还是原生 select,没改。)
+- `BrandManageView` + `BrandReassignDialog` —— 厂家管理页(材料百科首页右上「管理厂家」进;v17.3, 2026-09-14)。
+  一张可勾选的表(名称 / 主分类 / 材料数),筛「0 材料」「全品类」「疑似重名」(中日法任一名归一化后撞车),勾选后批量删或合并,
+  点分类标签就地改主分类。**删厂家永远不删材料**:名下有材料的必须先在对话框里选一家接手,材料改挂过去再删;没材料的直接删 + 撤销 toast。
+  删 / 合并只有一个写出口 `applyBrandRemoval`(在 `MaterialsView` 外壳里),厂家编辑页的「删除」也走它 —— **别再写第二个级联删材料的路径**。
+  `MaterialsView` 现在是外壳(持 `brandManageOpen` + 对话框状态),原来的主视图改名 `MaterialsViewBody`。
 - `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
   点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
   是两回事,**不联动**。

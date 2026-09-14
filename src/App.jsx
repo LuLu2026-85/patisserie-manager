@@ -9251,7 +9251,7 @@ function getUsageScenes(material, recipes, components, creations) {
 
 // ─── 材料百科主视图 ─────────────
 // [B7 修复] brandFilter / searchQ 提升到 App,从详情返回不丢筛选
-function MaterialsView({ brands, setBrands, materials, setMaterials, shopMaterials = [], setShopMaterials, recipes, components, creations, lang, setLang, confirmDialog, showToast,
+function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMaterials = [], setShopMaterials, recipes, components, creations, lang, setLang, confirmDialog, showToast,
   categoryFilter, setCategoryFilter,
   subcategoryFilter, setSubcategoryFilter,
   brandFilter = "", setBrandFilter = () => {},
@@ -9259,7 +9259,9 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
   brandViewId, setBrandViewId, brandEditTarget, setBrandEditTarget,
   materialViewId, setMaterialViewId, materialEditTarget, setMaterialEditTarget,
   materialReturnTo, setMaterialReturnTo,
-  setTab, setViewId }) {
+  setTab, setViewId,
+  // v17.3 厂家管理:由外层 MaterialsView 提供(状态 + 删/合并的唯一写出口)
+  brandManageOpen = false, setBrandManageOpen = () => {}, requestDelete = () => {}, requestMerge = () => {} }) {
 
   // 编辑厂家
   if (brandEditTarget !== null) {
@@ -9276,13 +9278,8 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
         setBrandEditTarget(null);
       }}
       onDelete={() => {
-        confirmDialog("删除这个厂家吗？其产品将被一并删除。", () => {
-          setBrands(prev => prev.filter(x => x.id !== brandEditTarget.id));
-          setMaterials(prev => prev.filter(x => x.brandId !== brandEditTarget.id));
-          showToast("已删除");
-          setBrandEditTarget(null);
-          setBrandViewId(null);
-        });
+        // v17.3: 不再连带删材料。名下有材料 → 先弹「挪到哪家」;没材料 → 直接删 + 给撤销
+        requestDelete([brandEditTarget.id], () => { setBrandEditTarget(null); setBrandViewId(null); });
       }}
       onBack={() => setBrandEditTarget(null)}
     />;
@@ -9358,10 +9355,21 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
       creations={creations}
       lang={lang}
       onEdit={() => setBrandEditTarget(b)}
-      onBack={() => { setBrandViewId(null); setCategoryFilter(b.categoryId || null); }}
+      onBack={() => { setBrandViewId(null); if (!brandManageOpen) setCategoryFilter(b.categoryId || null); }}
       onAddMaterial={() => setMaterialEditTarget("new")}
       onViewMaterial={(id) => setMaterialViewId(id)}
       onEditMaterial={(m) => setMaterialEditTarget(m)}
+    />;
+  }
+
+  // 厂家管理(v17.3):批量删 / 合并 / 改主分类
+  if (brandManageOpen) {
+    return <BrandManageView
+      brands={brands} setBrands={setBrands} materials={materials} lang={lang}
+      onBack={() => setBrandManageOpen(false)}
+      onViewBrand={(id) => setBrandViewId(id)}
+      onDeleteBrands={requestDelete}
+      onMergeBrands={requestMerge}
     />;
   }
 
@@ -9397,11 +9405,12 @@ function MaterialsView({ brands, setBrands, materials, setMaterials, shopMateria
     setCategoryFilter={setCategoryFilter}
     setBrandViewId={setBrandViewId}
     setMaterialViewId={setMaterialViewId}
+    onManageBrands={() => setBrandManageOpen(true)}
   />;
 }
 
 // ═══ 材料百科首页(含全局搜索)═══
-function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBrandViewId, setMaterialViewId }) {
+function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBrandViewId, setMaterialViewId, onManageBrands }) {
   const [searchQ, setSearchQ] = useState("");
   const q = searchQ.trim().toLowerCase();
 
@@ -9451,8 +9460,9 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
             {lang === "zh" ? "📚 材料百科" : "📚 材料事典"}
           </div>
         </div>
-        <div style={{ fontSize: 11, color: T.textTertiary }}>
-          {brands.length} {lang === "zh" ? "家厂商" : "社"} · {materials.length} {lang === "zh" ? "产品" : "製品"}
+        <div style={{ fontSize: 11, color: T.textTertiary, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>{brands.length} {lang === "zh" ? "家厂商" : "社"} · {materials.length} {lang === "zh" ? "产品" : "製品"}</span>
+          {onManageBrands && <Btn size="sm" onClick={onManageBrands}>{lang === "zh" ? "管理厂家" : "メーカー管理"}</Btn>}
         </div>
       </div>
 
@@ -9651,6 +9661,380 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
           );
         })}
       </div>
+    </div>
+  );
+}
+
+
+// ═══ 厂家管理 (v17.3, 2026-09-14) ═══
+// 三件事:批量删、合并、就地改主分类。核心规则:**删厂家永远不删材料** —— 名下有材料的,
+// 必须先选一家接手(BrandReassignDialog),材料改挂过去再删。没材料的直接删 + 给撤销。
+// 删 / 合并只有一个写出口 applyBrandRemoval,编辑页的「删除」和管理页的批量删都走它。
+function MaterialsView(props) {
+  const { brands, setBrands, materials, setMaterials, lang, showToast } = props;
+  const [brandManageOpen, setBrandManageOpen] = useState(false);
+  // { mode: "delete" | "merge", sourceIds: [...], afterDone?: fn }
+  const [reassign, setReassign] = useState(null);
+  const zh = lang === "zh";
+  const bName = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "(无名)";
+
+  // 删 deleteIds 这几家;它们名下的材料全部改挂到 targetId(没材料时 targetId 可空)。先做 + 给撤销。
+  const applyBrandRemoval = (deleteIds, targetId, afterDone) => {
+    const del = new Set(deleteIds.filter(id => id !== targetId));
+    if (del.size === 0) return;
+    const moved = materials.filter(m => del.has(m.brandId));
+    if (moved.length > 0 && !targetId) return; // 有材料必须先选接手的厂家,不能裸删
+    const removed = brands.map((b, i) => [i, b]).filter(([, b]) => del.has(b.id));
+    const prevBrandOf = new Map(moved.map(m => [m.id, m.brandId]));
+    const now = new Date().toISOString();
+    if (moved.length > 0) setMaterials(prev => prev.map(m => del.has(m.brandId) ? { ...m, brandId: targetId, updatedAt: now } : m));
+    setBrands(prev => prev.filter(b => !del.has(b.id)));
+    const target = targetId ? brands.find(b => b.id === targetId) : null;
+    const names = removed.map(([, b]) => bName(b));
+    const who = names.length <= 2 ? names.map(n => `「${n}」`).join("") : (zh ? `${names.length} 家` : `${names.length} 社`);
+    const tName = target ? bName(target) : "";
+    const msg = zh
+      ? (moved.length > 0 ? `已删除${who},${moved.length} 条材料挪到「${tName}」` : `已删除${who}`)
+      : (moved.length > 0 ? `${who} を削除、材料 ${moved.length} 件を「${tName}」へ` : `${who} を削除`);
+    showToast(msg, {
+      undo: () => {
+        setBrands(prev => {
+          const next = prev.filter(b => !del.has(b.id));
+          removed.forEach(([i, b]) => next.splice(Math.min(i, next.length), 0, b));
+          return next;
+        });
+        if (moved.length > 0) setMaterials(prev => prev.map(m => prevBrandOf.has(m.id) ? { ...m, brandId: prevBrandOf.get(m.id) } : m));
+      },
+    });
+    if (afterDone) afterDone();
+  };
+
+  // 页面调用的两个入口
+  const requestDelete = (ids, afterDone) => {
+    const set = new Set(ids);
+    const n = materials.filter(m => set.has(m.brandId)).length;
+    if (n === 0) applyBrandRemoval(ids, null, afterDone);
+    else setReassign({ mode: "delete", sourceIds: ids, afterDone });
+  };
+  const requestMerge = (ids, afterDone) => {
+    if (ids.length < 2) return;
+    setReassign({ mode: "merge", sourceIds: ids, afterDone });
+  };
+
+  return (
+    <>
+      <MaterialsViewBody {...props}
+        brandManageOpen={brandManageOpen} setBrandManageOpen={setBrandManageOpen}
+        requestDelete={requestDelete} requestMerge={requestMerge} />
+      {reassign && (
+        <BrandReassignDialog
+          mode={reassign.mode}
+          sources={brands.filter(b => reassign.sourceIds.includes(b.id))}
+          brands={brands}
+          materials={materials}
+          lang={lang}
+          onCancel={() => setReassign(null)}
+          onConfirm={(targetId) => {
+            const r = reassign;
+            setReassign(null);
+            applyBrandRemoval(r.sourceIds, targetId, r.afterDone);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// 「挪到哪家」对话框。mode="delete":从其余厂家里选接手的;mode="merge":从选中的几家里选保留的。
+function BrandReassignDialog({ mode, sources, brands, materials, lang, onConfirm, onCancel }) {
+  const zh = lang === "zh";
+  const merge = mode === "merge";
+  const [target, setTarget] = useState(merge && sources[0] ? sources[0].id : "");
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onCancel?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  const srcSet = new Set(sources.map(b => b.id));
+  const countOf = (id) => materials.filter(m => m.brandId === id).length;
+  const bName = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "(无名)";
+  const total = sources.reduce((acc, b) => acc + countOf(b.id), 0);
+  const movedN = merge ? total - (target ? countOf(target) : 0) : total;
+  const targetBrand = brands.find(b => b.id === target);
+  const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
+  return (
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.confirm, display: "flex", alignItems: "center", justifyContent: "center", padding: T.sp.xl }}>
+      <div role="dialog" aria-modal="true"
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 460, width: "100%", boxShadow: T.sh.overlay }}>
+        <div style={{ padding: "24px 24px 20px" }}>
+          <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{merge ? (zh ? "合并厂家" : "メーカーを統合") : (zh ? "删除厂家" : "メーカーを削除")}</div>
+          <div style={{ ...T.fs.titleS, marginTop: T.sp.m, color: T.ink, fontFamily: T.fontSans }}>
+            {merge
+              ? (zh ? `${sources.length} 家合成一家,保留哪家?` : `${sources.length} 社を1社に。残すのは?`)
+              : (zh ? `这 ${sources.length} 家名下还有 ${total} 条材料` : `${sources.length} 社に材料が ${total} 件`)}
+          </div>
+          <div style={{ ...T.fs.small, color: T.body, marginTop: 10, fontFamily: T.fontSans, lineHeight: 1.65 }}>
+            {merge
+              ? (zh ? "其余几家名下的材料会全部改挂到保留的那家,然后删掉那几家。材料一条不丢。" : "他社の材料は残す社へ移し、他社は削除します。材料は失われません。")
+              : (zh ? "材料不会被删。选一家接手,删除后这些材料会挂到那家名下。" : "材料は削除しません。引き継ぐメーカーを選んでください。")}
+          </div>
+          {merge ? (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 4 }}>
+              {sources.map(b => (
+                <label key={b.id} className="k-row"
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: `1px solid ${target === b.id ? T.ink : T.border}`, borderRadius: T.radius, cursor: "pointer", background: T.surface }}>
+                  <input type="radio" name="brand-merge-keep" checked={target === b.id} onChange={() => setTarget(b.id)} style={{ margin: 0 }} />
+                  <span style={{ ...T.fs.small, color: T.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: T.fontSans }}>
+                    {bName(b)}
+                    {b.nameFr && b.nameFr !== bName(b) ? <span style={{ color: T.muted, marginLeft: 6 }}>{b.nameFr}</span> : null}
+                  </span>
+                  <span style={{ ...T.fs.caption, ...T.num, color: T.secondary, flexShrink: 0, fontFamily: T.fontSans }}>{countOf(b.id)} {zh ? "条" : "件"}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ ...T.fs.caption, color: T.body, marginBottom: 6, fontFamily: T.fontSans }}>
+                {sources.map(b => `「${bName(b)}」`).join("")}{zh ? " 的材料挪到:" : " の材料の移動先:"}
+              </div>
+              <BrandPicker brands={brands.filter(b => !srcSet.has(b.id))} value={target} categoryId={sources[0] ? sources[0].categoryId : null} onChange={setTarget} lang={lang} inpStyle={inpStyle} />
+            </div>
+          )}
+          {target && movedN > 0 && (
+            <div style={{ marginTop: 14, borderLeft: `3px solid ${T.warning}`, paddingLeft: T.sp.m, ...T.fs.caption, color: T.body, lineHeight: 1.6, fontFamily: T.fontSans }}>
+              {zh ? `${movedN} 条材料 → 「${targetBrand ? bName(targetBrand) : ""}」` : `材料 ${movedN} 件 → 「${targetBrand ? bName(targetBrand) : ""}」`}
+              {merge ? (zh ? `,然后删除其余 ${sources.length - 1} 家` : `、他 ${sources.length - 1} 社を削除`) : (zh ? `,然后删除这 ${sources.length} 家` : `、${sources.length} 社を削除`)}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: T.sp.s, padding: "14px 24px", borderTop: `1px solid ${T.line}` }}>
+          <button onClick={onCancel} className="k-btn k-btn-ghost"
+            style={{ ...T.fs.caption, padding: "7px 14px", color: T.body, background: "transparent", border: "1px solid transparent", borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans }}>
+            {zh ? "取消" : "キャンセル"}
+          </button>
+          <Btn variant={merge ? "primary" : "danger"} disabled={!target} onClick={() => target && onConfirm(target)}>
+            {merge ? (zh ? "合并" : "統合する") : (zh ? "挪过去并删除" : "移動して削除")}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 厂家管理页:一张可勾选的表(名称 / 主分类 / 材料数),筛「0 材料」「全品类」「疑似重名」,勾选后批量删或合并。
+function BrandManageView({ brands, setBrands, materials, lang, onBack, onViewBrand, onDeleteBrands, onMergeBrands }) {
+  const zh = lang === "zh";
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");   // all | empty | allcat | dup
+  const [sort, setSort] = useState("count");     // count | name | cat
+  const [selected, setSelected] = useState(() => new Set());
+  const [limit, setLimit] = useState(120);
+  const [catEditId, setCatEditId] = useState(null);
+  const bName = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "(无名)";
+
+  // 每家的材料数 + 材料横跨了几个分类
+  const stats = useMemo(() => {
+    const m = new Map();
+    materials.forEach(x => {
+      if (!x.brandId) return;
+      let st = m.get(x.brandId);
+      if (!st) { st = { n: 0, cats: new Set() }; m.set(x.brandId, st); }
+      st.n++;
+      if (x.categoryId) st.cats.add(x.categoryId);
+    });
+    return m;
+  }, [materials]);
+  const countOf = (id) => (stats.get(id) ? stats.get(id).n : 0);
+
+  // 疑似重名:中 / 日 / 法任一名字归一化(去空格、括号、点号,不分大小写)后撞车。值 = 撞车的那个键,用来把同组排到一起。
+  const dupGroup = useMemo(() => {
+    const norm = (v) => String(v || "").toLowerCase().replace(/[\s\u3000()（）\[\]【】「」・·、,.，。'’"“”\-_/]/g, "");
+    const byName = new Map();
+    brands.forEach(b => {
+      const keys = new Set([b.nameZh, b.nameJa, b.nameFr].map(norm).filter(k => k.length >= 2));
+      keys.forEach(k => { if (!byName.has(k)) byName.set(k, new Set()); byName.get(k).add(b.id); });
+    });
+    const group = new Map();
+    byName.forEach((ids, k) => { if (ids.size >= 2) ids.forEach(id => { if (!group.has(id)) group.set(id, k); }); });
+    return group;
+  }, [brands]);
+
+  const orphanN = useMemo(() => {
+    const ids = new Set(brands.map(b => b.id));
+    return materials.filter(m => m.brandId && !ids.has(m.brandId)).length;
+  }, [brands, materials]);
+  const emptyN = brands.reduce((acc, b) => acc + (countOf(b.id) === 0 ? 1 : 0), 0);
+  const allCatN = brands.reduce((acc, b) => acc + (b.categoryId ? 0 : 1), 0);
+  const dupN = dupGroup.size;
+
+  const kw = q.trim().toLowerCase();
+  const list = useMemo(() => {
+    const catName = (b) => (b.categoryId ? (zh ? getMaterialCat(b.categoryId).zh : getMaterialCat(b.categoryId).ja) : "");
+    const l = brands.filter(b => {
+      if (filter === "empty" && countOf(b.id) !== 0) return false;
+      if (filter === "allcat" && b.categoryId) return false;
+      if (filter === "dup" && !dupGroup.has(b.id)) return false;
+      if (kw && !`${b.nameZh || ""}${b.nameJa || ""}${b.nameFr || ""}${b.origin || ""}`.toLowerCase().includes(kw)) return false;
+      return true;
+    });
+    const byName = (a, b) => bName(a).localeCompare(bName(b), "zh");
+    if (filter === "dup") l.sort((a, b) => dupGroup.get(a.id).localeCompare(dupGroup.get(b.id)) || byName(a, b));
+    else if (sort === "name") l.sort(byName);
+    else if (sort === "cat") l.sort((a, b) => catName(a).localeCompare(catName(b), "zh") || countOf(b.id) - countOf(a.id) || byName(a, b));
+    else l.sort((a, b) => countOf(b.id) - countOf(a.id) || byName(a, b));
+    return l;
+  }, [brands, filter, kw, sort, stats, dupGroup, zh]);
+  const shown = list.slice(0, limit);
+
+  const toggle = (id) => setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const clearSel = () => setSelected(new Set());
+  const allVisibleSelected = list.length > 0 && list.every(b => selected.has(b.id));
+  const toggleAll = () => setSelected(prev => {
+    if (allVisibleSelected) { const n = new Set(prev); list.forEach(b => n.delete(b.id)); return n; }
+    const n = new Set(prev); list.forEach(b => n.add(b.id)); return n;
+  });
+  const selIds = brands.filter(b => selected.has(b.id)).map(b => b.id); // 只算还存在的
+  const selMat = selIds.reduce((acc, id) => acc + countOf(id), 0);
+
+  // 就地改主分类:换了分类就把子分类重置成「其他」;改成全品类子分类清空(和 BrandEditForm 同规则)
+  const changeCat = (b, catId) => {
+    setBrands(prev => prev.map(x => x.id === b.id
+      ? { ...x, categoryId: catId, subcategoryId: catId ? (x.categoryId === catId ? (x.subcategoryId || "other") : "other") : "", updatedAt: new Date().toISOString() }
+      : x));
+    setCatEditId(null);
+  };
+
+  const inpStyle = { padding: "8px 10px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radius, background: T.bgCard, fontFamily: T.fontSans, color: T.textPrimary, boxSizing: "border-box" };
+  const chip = (key, label, n) => {
+    const on = filter === key;
+    return (
+      <button key={key} onClick={() => { setFilter(key); setLimit(120); }} className="k-btn"
+        style={{ padding: "6px 12px", fontSize: 12, borderRadius: T.radius, border: `0.5px solid ${on ? T.accent : T.border}`, background: on ? T.bgSoft : T.bgCard, color: on ? T.accent : T.textSecondary, cursor: "pointer", fontFamily: T.fontSans, fontWeight: on ? 500 : 400 }}>
+        {label} ({n})
+      </button>
+    );
+  };
+  const filterLabel = { empty: zh ? "0 材料" : "材料 0", allcat: zh ? "全品类" : "全カテゴリ", dup: zh ? "疑似重名" : "重複疑い" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 2 }}>{zh ? "材料百科" : "材料事典"}</div>
+          <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.brand, letterSpacing: "-0.3px" }}>{zh ? "厂家管理" : "メーカー管理"}</div>
+        </div>
+        <Btn onClick={onBack}>{zh ? "← 返回" : "← 戻る"}</Btn>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: "1rem", lineHeight: 1.7, padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${T.accentSoft}` }}>
+        {zh
+          ? "勾选后可以批量删除或合并。删厂家不会删材料:名下有材料的,会先让你选一家接手。点分类标签可以直接改主分类。"
+          : "チェックして一括削除・統合。メーカー削除で材料は消えません(引き継ぎ先を選びます)。分類ラベルをクリックで変更。"}
+        {orphanN > 0 && <span style={{ color: T.warning }}>{zh ? ` 另有 ${orphanN} 条材料挂在已不存在的厂家上。` : ` 存在しないメーカーの材料が ${orphanN} 件。`}</span>}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input type="text" value={q} onChange={(e) => { setQ(e.target.value); setLimit(120); }} className="k-input"
+          placeholder={zh ? "🔍 搜厂家名 / 产地…" : "🔍 メーカー名・産地…"}
+          style={{ ...inpStyle, flex: "1 1 200px", minWidth: 160 }} />
+        <select value={sort} onChange={(e) => setSort(e.target.value)} style={{ ...inpStyle, cursor: "pointer" }} title={zh ? "排序" : "並び替え"}>
+          <option value="count">{zh ? "材料多 → 少" : "材料数 多→少"}</option>
+          <option value="name">{zh ? "按名称" : "名前順"}</option>
+          <option value="cat">{zh ? "按分类" : "分類順"}</option>
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        {chip("all", zh ? "全部" : "すべて", brands.length)}
+        {chip("empty", filterLabel.empty, emptyN)}
+        {chip("allcat", filterLabel.allcat, allCatN)}
+        {chip("dup", filterLabel.dup, dupN)}
+      </div>
+
+      {selIds.length > 0 && (
+        <div style={{ position: "sticky", top: 0, zIndex: T.z.sticky, background: T.ink, color: T.paper, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8, borderRadius: T.radius, boxShadow: T.sh.popover }}>
+          <span style={{ ...T.fs.small, flex: "1 1 160px", fontFamily: T.fontSans }}>
+            {zh ? `已选 ${selIds.length} 家 · 名下 ${selMat} 条材料` : `${selIds.length} 社選択 · 材料 ${selMat} 件`}
+          </span>
+          <Btn size="sm" variant="danger" style={{ background: T.paper }} onClick={() => onDeleteBrands(selIds, clearSel)}>
+            {zh ? (selMat > 0 ? "删除(先挪材料)" : "删除") : "削除"}
+          </Btn>
+          <Btn size="sm" disabled={selIds.length < 2} style={{ color: T.paper, borderColor: T.paper }} onClick={() => onMergeBrands(selIds, clearSel)}>
+            {zh ? "合并为一家" : "1社に統合"}
+          </Btn>
+          <button onClick={clearSel} className="k-btn"
+            style={{ ...T.fs.caption, color: T.paper, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, opacity: 0.8 }}>
+            {zh ? "取消选择" : "選択解除"}
+          </button>
+        </div>
+      )}
+
+      {list.length === 0 ? (
+        <EmptyState variant="filter" lang={lang}
+          title={zh ? "没有符合条件的厂家" : "該当するメーカーがありません"}
+          hint={zh ? `${brands.length} 家里都没找到` : `${brands.length} 社の中に見つかりません`}
+          chips={[
+            ...(kw ? [{ label: `“${q}”`, onRemove: () => setQ("") }] : []),
+            ...(filter !== "all" ? [{ label: filterLabel[filter], onRemove: () => setFilter("all") }] : []),
+          ]}
+          onClearAll={() => { setQ(""); setFilter("all"); }} />
+      ) : (
+        <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg }}>
+          <div style={{ display: "grid", gridTemplateColumns: "24px minmax(0,1fr) auto auto", gap: 10, alignItems: "center", padding: "8px 10px", background: T.sunken, borderBottom: `1px solid ${T.line}`, ...T.fs.label, color: T.subtle, fontFamily: T.fontSans }}>
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAll} title={zh ? "全选 / 全不选(当前筛选结果)" : "全選択 / 解除"} style={{ cursor: "pointer", margin: 0 }} />
+            <span>{zh ? `厂家 · ${list.length} 家` : `メーカー · ${list.length} 社`}</span>
+            <span>{zh ? "主分类" : "主分類"}</span>
+            <span style={{ textAlign: "right" }}>{zh ? "材料" : "材料"}</span>
+          </div>
+          {shown.map(b => {
+            const isSel = selected.has(b.id);
+            const n = countOf(b.id);
+            const st = stats.get(b.id);
+            const cat = getBrandCat(b);
+            const isDup = dupGroup.has(b.id);
+            const primary = bName(b);
+            const sub = [b.nameJa && b.nameJa !== primary ? b.nameJa : null, b.nameZh && b.nameZh !== primary ? b.nameZh : null, b.nameFr && b.nameFr !== primary ? b.nameFr : null, b.origin].filter(Boolean).join(" · ");
+            return (
+              <div key={b.id} className="k-row"
+                style={{ display: "grid", gridTemplateColumns: "24px minmax(0,1fr) auto auto", gap: 10, alignItems: "center", padding: "8px 10px", borderBottom: `1px solid ${T.lineFaint}`, background: isSel ? T.sunken : "transparent" }}>
+                <input type="checkbox" checked={isSel} onChange={() => toggle(b.id)} style={{ cursor: "pointer", margin: 0 }} />
+                <div style={{ minWidth: 0, cursor: "pointer" }} onClick={() => toggle(b.id)}>
+                  <div style={{ ...T.fs.small, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: T.fontSans }}>
+                    {primary}
+                    {isDup && <span style={{ marginLeft: 6, fontSize: 10, color: T.warning, border: `1px solid ${T.warning}`, borderRadius: T.radius, padding: "0 4px" }}>{zh ? "重名?" : "重複?"}</span>}
+                  </div>
+                  {(sub || (st && st.cats.size > 1)) && (
+                    <div style={{ ...T.fs.caption, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: T.fontSans }}>
+                      {sub}{sub && st && st.cats.size > 1 ? " · " : ""}{st && st.cats.size > 1 ? (zh ? `材料跨 ${st.cats.size} 类` : `${st.cats.size} 分類にまたがる`) : ""}
+                    </div>
+                  )}
+                </div>
+                {catEditId === b.id ? (
+                  <select autoFocus value={b.categoryId || ""} onChange={(e) => changeCat(b, e.target.value)} onBlur={() => setCatEditId(null)}
+                    style={{ ...inpStyle, padding: "4px 6px", maxWidth: 150 }}>
+                    <option value="">{BRAND_CAT_ALL.icon} {zh ? BRAND_CAT_ALL.zh : BRAND_CAT_ALL.ja}</option>
+                    {MATERIAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {zh ? c.zh : c.ja}</option>)}
+                  </select>
+                ) : (
+                  <button className="k-btn" onClick={() => setCatEditId(b.id)} title={zh ? "点一下改主分类" : "クリックで主分類を変更"}
+                    style={{ background: cat.bg, color: cat.color, border: "none", padding: "3px 8px", borderRadius: T.radiusPill, fontSize: 11, cursor: "pointer", fontFamily: T.fontSans, whiteSpace: "nowrap" }}>
+                    {cat.icon} {zh ? cat.zh : cat.ja} ▾
+                  </button>
+                )}
+                <button className="k-btn" onClick={() => onViewBrand(b.id)} title={zh ? "看这家的材料" : "このメーカーの材料"}
+                  style={{ ...T.fs.caption, ...T.num, color: n === 0 ? T.muted : T.info, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, minWidth: 44, textAlign: "right", padding: "4px 0", textDecoration: n === 0 ? "none" : "underline", textUnderlineOffset: 3 }}>
+                  {n} {zh ? "条" : "件"}
+                </button>
+              </div>
+            );
+          })}
+          {list.length > shown.length && (
+            <div style={{ padding: 12, textAlign: "center" }}>
+              <Btn size="sm" onClick={() => setLimit(l => l + 120)}>{zh ? `再显示 ${Math.min(120, list.length - shown.length)} 家(还有 ${list.length - shown.length})` : `さらに ${Math.min(120, list.length - shown.length)} 社(残り ${list.length - shown.length})`}</Btn>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
