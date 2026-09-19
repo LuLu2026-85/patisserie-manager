@@ -469,6 +469,8 @@ let _shopMaterials = [];
 const setShopMaterialsForLookup = (sm) => {
   _shopMaterials = Array.isArray(sm) ? sm : [];
 };
+// v17.4: 「本店原料已有」判定,给关联候选排序 / 打「本店」标签用。不走 props,和上面的价格 helper 一样读注入值。
+const isShopMaterialId = (id) => !!id && _shopMaterials.some(s => s && s.materialId === id);
 
 // v11: 返回 material 的"有效价"
 // 优先级: ① 本店原料 shopMaterials.pricePerG → ② materials.priceRange.mid → ③ materials.pricePerG(兼容老字段)
@@ -1131,6 +1133,7 @@ const normalizeBrandName = (s) => {
 // 策略: 基于关键词重叠 + 同义词归一 + 百分比对照 + 品牌别名 (v13.1)
 const smartMatchMaterial = (ing, materials, brands) => {
   if (!ing || !Array.isArray(materials) || materials.length === 0) return [];
+  const shopIds = new Set(_shopMaterials.map(x => x && x.materialId).filter(Boolean)); // v17.4
 
   const clean = (s) => {
     if (!s) return "";
@@ -1211,14 +1214,18 @@ const smartMatchMaterial = (ing, materials, brands) => {
     const mZhClean = clean(m.nameZh || "");
     const mJaClean = clean(m.nameJa || "");
     let score = 0;
+    // v17.4: 中文 / 日文名上的重叠率单独记一份 —— 只靠法文名撞上的(「Sucre」⊂「Sucre inverti」)不算「对得齐」
+    let zhJa = 0;
 
     if ((ingZhClean && mZhClean === ingZhClean) || (ingJaClean && mJaClean === ingJaClean)) {
       score = 100;
+      zhJa = 1;
     } else {
       const overlapZh = tokenOverlap(ingTokensZh, mTokensZh);
       const overlapJa = tokenOverlap(ingTokensJa, mTokensJa);
       const overlapFr = tokenOverlap(ingTokensFr, mTokensFr);
       const maxOverlap = Math.max(overlapZh, overlapJa, overlapFr);
+      zhJa = Math.max(overlapZh, overlapJa);
 
       // 重叠率映射 (v13.1 放宽: 0.8→75 旧 70 / 0.65→65 新增档 / 0.5→55 / 0.4→45)
       if (maxOverlap >= 1.0) score = 85;
@@ -1254,12 +1261,34 @@ const smartMatchMaterial = (ing, materials, brands) => {
 
     if (score >= 40) {
       if (m.isBest) score += 2;
-      results.push({ score: Math.min(100, score), material: m });
+      results.push({ score: Math.min(100, score), material: m, inShop: shopIds.has(m.id), zhJa });
     }
   }
 
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, 5);
+  // 仍按分数排(fuzzyMatchMaterial 靠 [0] / [1] 算置信度);够分(≥ 70)的本店候选不被「只留前 5」截掉
+  return results.filter((r, i) => i < 5 || (r.inShop && r.score >= 70));
+};
+
+// v17.4 (2026-09-19, LuLu:「一键关联的逻辑改一下 最优先本店原料已有」)
+// 本店候选「够格优先」= 本店原料已有 + 中文 / 日文名对得齐(zhJa ≥ 0.8)+ 分数 ≥ 85 + 不比最高分低 10 分以上。
+// 两道门槛都不能去(主数据回归出来的):
+//  · 「对得齐」:打分只看「你写的词有没有全出现在对方名字里」,「细砂糖」的法文 Sucre 会和 ハローデックス 的
+//    Sucre inverti 全重叠打到 87,不加门槛 11 行砂糖会被勾成转化糖浆。
+//  · 「不比最高分低 10 分以上」:「Union 业务用杏仁粉」精确命中 Union 100 分,本店 Marcona 靠泛称日文名
+//    アーモンドパウダー 全重叠拿 85,不加门槛点名了品牌的行也会被本店抢走。
+const shopMatchWins = (c, topScore = 0) => !!(c && c.inShop && c.zhJa >= 0.8 && c.score >= 85 && c.score >= topScore - 10);
+// 自动勾选:够格的本店候选优先;否则分数最高且 ≥ minScore 的。cands 必须是 smartMatchMaterial 的原序(按分)
+const pickAutoMatch = (cands, minScore = 70) => {
+  if (!Array.isArray(cands) || cands.length === 0) return null;
+  const hit = cands.find(c => shopMatchWins(c, cands[0].score));
+  if (hit) return hit;
+  return cands[0].score >= minScore ? cands[0] : null;
+};
+// 显示顺序:够分(≥ 70)的本店候选排最前,其余按分数(分数低的本店候选留在原位,只打标签,不当噪音浮上来)
+const sortShopFirst = (cands) => {
+  const w = (c) => (c.inShop && c.score >= 70) ? 1 : 0;
+  return [...cands].sort((a, b) => (w(b) - w(a)) || (b.score - a.score));
 };
 
 // 计算 ingredient 当前的权威单价 (¥/g)
@@ -3216,16 +3245,17 @@ function fuzzyMatchMaterial(ing, materials, brands) {
   if (!ing || (!ing.nameZh && !ing.nameJa)) {
     return { best: null, bestScore: 0, candidates: [], highConfidence: false };
   }
-  const scored = smartMatchMaterial(ing, materials, brands); // [{score, material}]
-  const best = scored[0] || null;
-  // 高置信度:最佳 ≥ 85 且与次优差 ≥ 15,或唯一候选 ≥ 85
-  const highConfidence = !!(best && best.score >= 85 && (
+  const scored = smartMatchMaterial(ing, materials, brands); // [{score, material, inShop, zhJa}]
+  // v17.4: 够格的本店候选直接当最佳且高置信;否则沿用「最佳 ≥ 85 且与次优差 ≥ 15,或唯一候选 ≥ 85」
+  const shopBest = scored.find(c => shopMatchWins(c, scored[0].score)) || null;
+  const best = shopBest || scored[0] || null;
+  const highConfidence = !!shopBest || !!(best && best.score >= 85 && (
     scored.length === 1 || (best.score - (scored[1]?.score || 0)) >= 15
   ));
   return {
     best: best?.material || null,
     bestScore: best?.score || 0,
-    candidates: scored.map(x => x.material).slice(0, 5),
+    candidates: sortShopFirst(scored).map(x => x.material),
     highConfidence,
   };
 }
@@ -3690,6 +3720,7 @@ function BulkMaterialLinkWizard({ recipes, components, creations, materials, bra
                             return (
                               <option key={m.id} value={m.id}>
                                 {m === r.best && r.highConfidence ? "✨ " : ""}
+                                {isShopMaterialId(m.id) ? (lang === "zh" ? "🏪本店 " : "🏪仕入 ") : ""}
                                 {lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)}
                                 {bName ? ` (${bName})` : ""}
                                 {m.pricePerG ? " " + fmtUnitPrice(m.pricePerG, curOf(m)) : ""}
@@ -10060,8 +10091,11 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
         return hay.includes(q);
       });
     }
-    // 排序: isBest 优先 > rating > 名字
+    // 排序: 本店原料已有 (v17.4) > isBest > rating > 名字。_shopMaterials 是渲染期注入的,弹窗每次打开都是新的,不进依赖
+    const shopIds = new Set(_shopMaterials.map(x => x && x.materialId).filter(Boolean));
     return [...list].sort((a, b) => {
+      const sa = shopIds.has(a.id) ? 1 : 0, sb = shopIds.has(b.id) ? 1 : 0;
+      if (sa !== sb) return sb - sa;
       if ((b.isBest ? 1 : 0) !== (a.isBest ? 1 : 0)) return (b.isBest ? 1 : 0) - (a.isBest ? 1 : 0);
       if ((b.rating || 0) !== (a.rating || 0)) return (b.rating || 0) - (a.rating || 0);
       return (a.nameZh || a.nameJa || "").localeCompare(b.nameZh || b.nameJa || "");
@@ -10190,6 +10224,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
                     {m.isBest && <span style={{ color: "#059669", marginRight: 3 }}>⭐</span>}
                     {m.isCouverture && <span style={{ color: "#B45309", marginRight: 3 }}>🏆</span>}
                     {lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)}
+                    {isShopMaterialId(m.id) && <span title={lang === "zh" ? "本店原料已有" : "仕入れ済み"} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "1px 5px", border: `1px solid ${T.success}`, color: T.success, marginLeft: 6, whiteSpace: "nowrap", verticalAlign: "middle" }}>{lang === "zh" ? "本店" : "仕入"}</span>}
                   </div>
                   <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
                     {b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : ""}
@@ -10242,27 +10277,24 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
   const analysis = useMemo(() => {
     return ings
       .filter(ing => !ing.materialId && (ing.nameZh || ing.nameJa))
-      .map(ing => ({
-        ing,
-        candidates: smartMatchMaterial(ing, materials, brands),
-      }));
+      .map(ing => {
+        const scored = smartMatchMaterial(ing, materials, brands);
+        // v17.4: 本店原料已有的候选排最前;自动勾选也是够格的本店优先(规则见 shopMatchWins)
+        return { ing, candidates: sortShopFirst(scored), auto: pickAutoMatch(scored) };
+      });
   }, [ings, materials, brands]);
 
   // 用户选中的映射: { [ing._id]: materialId | null }
   const [selections, setSelections] = useState(() => {
     const init = {};
-    analysis.forEach(({ ing, candidates }) => {
-      // 默认:匹配度 >= 70 自动选最高的一个
-      if (candidates.length > 0 && candidates[0].score >= 70) {
-        init[ing._id] = candidates[0].material.id;
-      } else {
-        init[ing._id] = null; // 不自动关联,让用户选
-      }
+    analysis.forEach(({ ing, auto }) => {
+      init[ing._id] = auto ? auto.material.id : null; // 没够格的候选就不自动关联,让用户选
     });
     return init;
   });
 
   const autoMatchCount = Object.values(selections).filter(v => v !== null).length;
+  const shopAutoCount = analysis.filter(a => a.auto && a.auto.inShop).length;
   const totalCount = analysis.length;
 
   if (totalCount === 0) {
@@ -10308,8 +10340,8 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
         </div>
         <div style={{ fontSize: 12, color: T.textSecondary, background: T.bgMuted, padding: "10px 14px", borderRadius: T.radius, lineHeight: 1.7 }}>
           {lang === "zh"
-            ? `🔍 共扫描 ${totalCount} 个未关联材料,AI 自动匹配了 ${autoMatchCount} 个高可信度结果(分数 ≥ 70)。请检查下方每一项并调整,然后点「应用」。`
-            : `${totalCount} 件スキャン、${autoMatchCount} 件が高信頼(≥ 70)で自動選択。下記確認して「適用」。`}
+            ? `🔍 共扫描 ${totalCount} 个未关联材料,AI 自动匹配了 ${autoMatchCount} 个高可信度结果(分数 ≥ 70)${shopAutoCount > 0 ? `,其中 ${shopAutoCount} 个优先勾了本店原料已有的` : ""}。本店原料已有的候选标「本店」并尽量排前。请检查下方每一项并调整,然后点「应用」。`
+            : `${totalCount} 件スキャン、${autoMatchCount} 件が高信頼(≥ 70)で自動選択${shopAutoCount > 0 ? `(うち仕入れ済み ${shopAutoCount} 件を優先)` : ""}。仕入れ済みは先頭に「仕入」表示。下記確認して「適用」。`}
         </div>
 
         <div style={{ overflowY: "auto", flex: 1, border: `0.5px solid ${T.border}`, borderRadius: T.radius }}>
@@ -10350,7 +10382,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
                         {lang === "zh" ? "(不关联)" : "(関連しない)"}
                       </span>
                     </label>
-                    {candidates.map(({ score, material: m }) => {
+                    {candidates.map(({ score, material: m, inShop }) => {
                       const b = brands.find(x => x.id === m.brandId);
                       const checked = selectedId === m.id;
                       const scoreColor = score >= 90 ? "#059669" : score >= 70 ? "#D97706" : "#6B7280";
@@ -10373,6 +10405,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
                           <span style={{ fontSize: 12 }}>
                             {m.isBest && <span style={{ color: "#059669" }}>⭐ </span>}
                             {lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)}
+                            {inShop && <span title={lang === "zh" ? "本店原料已有" : "仕入れ済み"} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "1px 5px", border: `1px solid ${T.success}`, color: T.success, marginLeft: 6, whiteSpace: "nowrap", verticalAlign: "middle" }}>{lang === "zh" ? "本店" : "仕入"}</span>}
                             {b && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>
                               · {lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)}
                             </span>}
@@ -14032,6 +14065,7 @@ function App() {
             materialId: hit.materialId,
             brand: b ? (b.nameZh || b.nameJa) : ing.brand,
             unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : ing.unitPrice,
+            currency: (!isNaN(pp) && pp > 0) ? "CNY" : ing.currency, // v17: pp 是折算后的人民币
             cost: !isNaN(pp) && pp > 0 && q > 0 ? (q * pp).toFixed(1) : ing.cost,
           };
         });
@@ -14063,6 +14097,7 @@ function App() {
             materialId: hit.materialId,
             brand: b ? (b.nameZh || b.nameJa) : ing.brand,
             unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : ing.unitPrice,
+            currency: (!isNaN(pp) && pp > 0) ? "CNY" : ing.currency, // v17: pp 是折算后的人民币
             cost: !isNaN(pp) && pp > 0 && q > 0 ? (q * pp).toFixed(1) : ing.cost,
           };
         });
@@ -14090,6 +14125,7 @@ function App() {
               materialId: hit.materialId,
               brand: b ? (b.nameZh || b.nameJa) : ing.brand,
               unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : ing.unitPrice,
+              currency: (!isNaN(pp) && pp > 0) ? "CNY" : ing.currency, // v17: pp 是折算后的人民币
               cost: !isNaN(pp) && pp > 0 && q > 0 ? (q * pp).toFixed(1) : ing.cost,
             };
           });

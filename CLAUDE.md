@@ -286,6 +286,15 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   点分类标签就地改主分类。**删厂家永远不删材料**:名下有材料的必须先在对话框里选一家接手,材料改挂过去再删;没材料的直接删 + 撤销 toast。
   删 / 合并只有一个写出口 `applyBrandRemoval`(在 `MaterialsView` 外壳里),厂家编辑页的「删除」也走它 —— **别再写第二个级联删材料的路径**。
   `MaterialsView` 现在是外壳(持 `brandManageOpen` + 对话框状态),原来的主视图改名 `MaterialsViewBody`。
+- **关联候选「本店原料已有」优先**(v17.4, 2026-09-19,LuLu:「一键关联的逻辑改一下 最优先本店原料已有」)。三个入口共用一套规则:
+  编辑页「🤖 批量关联」(`BulkMatchModal`)、行首 🔗 选材料(`MaterialPickerModal`)、`fuzzyMatchMaterial`(数据 tab 向导
+  `BulkMaterialLinkWizard`,**目前没有按钮能打开,是死代码**)。`smartMatchMaterial` 每个候选带 `inShop`(读渲染期注入的
+  `_shopMaterials`,判定用 `isShopMaterialId`)和 `zhJa`(中 / 日文名重叠率,法文不算);显示走 `sortShopFirst`(≥ 70 分的本店候选
+  浮顶并标「本店」),自动勾选走 `pickAutoMatch` → `shopMatchWins`:**本店 + 中 / 日文名对得齐(`zhJa ≥ 0.8`)+ ≥ 85 分 + 不比最高分
+  低 10 分以上**才优先勾本店的,否则按最高分 ≥ 70。两道门槛都是主数据回归逼出来的,别删:打分只看「你写的词有没有全出现在对方名字里」,
+  「细砂糖」的法文 Sucre 会和 ハローデックス 的 Sucre inverti 全重叠打到 87(没有「对得齐」→ 11 行砂糖勾成转化糖浆);
+  「Union 业务用杏仁粉」精确命中 Union 100 分、本店 Marcona 靠泛称日文名拿 85(没有「差 10 分」→ 点名了品牌的行被本店抢走)。
+  **改这套规则前先跑 `.claude/scripts/match_probe.cjs`**(把打分函数从 App.jsx 抽出来对主数据全量跑,列出自动勾选会变的行)。
 - `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
   点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
   是两回事,**不联动**。
