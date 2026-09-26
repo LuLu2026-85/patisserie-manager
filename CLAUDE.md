@@ -159,7 +159,7 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 - `recipes` — standalone recipes (e.g. seeded `FINANCIER`). Ingredients carry a `group` field (`bowl1`..`bowl5`, `none`) that drives the grouped-ingredient layout.
 - `components` — reusable parts (biscuit, mousse, jelly, glaze, etc.) used inside `creations`. Seeded with `AGREABLE_MOUSSE`.
 - `creations` — "组合蛋糕" layered cakes that reference `components` as layers.
-- `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` free-text name array (substring match, not id).
+- `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` free-text name array (matched by name, not id — four-tier rule, see 「知识 ↔ 配方 / 组件 / 蛋糕的名字关联」 below).
 - `cats` — **deprecated** old price table; UI hidden but kept for compat.
 
 **Materials encyclopedia (IP asset)**:
@@ -295,6 +295,16 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   「细砂糖」的法文 Sucre 会和 ハローデックス 的 Sucre inverti 全重叠打到 87(没有「对得齐」→ 11 行砂糖勾成转化糖浆);
   「Union 业务用杏仁粉」精确命中 Union 100 分、本店 Marcona 靠泛称日文名拿 85(没有「差 10 分」→ 点名了品牌的行被本店抢走)。
   **改这套规则前先跑 `.claude/scripts/match_probe.cjs`**(把打分函数从 App.jsx 抽出来对主数据全量跑,列出自动勾选会变的行)。
+- **知识 ↔ 配方 / 组件 / 蛋糕的名字关联**(v17.5, 2026-09-25)。`knowledge.relatedRecipes` 仍是名字数组(没改数据格式),
+  知识页「关联配方」按钮和三个详情页底下的「相关知识」共用 `makeKnowledgeLinkResolver` + `knowledgeLinksTo`(在 `KnowledgeDetail` 上方),
+  **按钮跳到哪,哪一页底下就列这条知识**。从严到松四档,某档只命中一个才算:全名相同(NFKC,不管大小写 / 法文重音 / 空格 / 「・」)→
+  去版本号(v1.0 / v3C / v0)相同 → 再去括号备注相同 → 是某一项名字的一部分(≥ 2 字,纯英文 ≥ 4 字母)。命中多个 = 同名,
+  按钮灰 + 标「N 个同名」,反查时每个候选页都列。**别再拆碎词**:旧规则拆词后「v1.0」「ショコラ」「de」都能把按钮带走,
+  主数据 165 个按钮跳错 55 个(Grand Gâteau 跳进巧克力布列塔尼、Framboisier 跳进装饰组件)。`splitLinkNames` 把 4 条被粘成
+  「A「, 」B」的旧数据读时拆开。三个详情页因此要多收 `recipes` / `components` / `creations` 三个 prop。
+  **改这套规则前先跑 `.claude/scripts/entry/compare_knowledge_links.cjs`**(逐个按钮对比改前改后,规则原样抄在同目录
+  `knowledge_link_v2.cjs`)。录入包预演用 `sim_knowledge_links.cjs`,**用前看一眼文件头写的是新规则还是旧规则,要和线上 App 一致**
+  (新规则版带 `--legacy` 开关)。清单和改法见 `.claude/知识按钮跳转_清单与改法_2026-09-25.pdf`。
 - `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
   点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
   是两回事,**不联动**。

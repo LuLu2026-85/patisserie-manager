@@ -4038,7 +4038,7 @@ function StickySaveBar({ onSave, label = "保存" }) {
 }
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
-function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast }) {
+function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast }) {
   const name = pickLang(r, "name", lang);
   const nameOther = rawLang(r, "name", lang);
 
@@ -4064,16 +4064,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
   const liveMargin = _priceNum > 0 && liveUnitCost > 0 ? ((_priceNum - liveUnitCost) / _priceNum) * 100 : 0;
   const mc = liveMargin >= 50 ? "green" : liveMargin >= 30 ? "amber" : "red";
 
-  // 反向查找关联知识点
-  const relatedKnowledge = knowledge.filter(k => {
-    const related = k.relatedRecipes || [];
-    const myNames = [r.nameZh, r.nameJa, r.nameFr].filter(Boolean).map(n => n.toLowerCase());
-    return related.some(rn => {
-      const rLower = (rn || "").toLowerCase();
-      return myNames.some(mn => mn.includes(rLower) || rLower.includes(mn) ||
-        rLower.split(/[（）()【】・]/g).some(kw => kw.length >= 2 && myNames.some(mn => mn.includes(kw))));
-    });
-  });
+  // 反向查找关联知识点(和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
+  const relatedKnowledge = knowledgeLinksTo("recipe", r.id, knowledge, recipes, components, creations);
 
   return (
     <div>
@@ -4426,7 +4418,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], onNavigat
 }
 
 // ─── 组件仓库 View ───────────────────────────────────────────────
-function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat }) {
+function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat }) {
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
 
@@ -4477,6 +4469,9 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           lang={lang}
           setLang={setLang}
           knowledge={knowledge}
+          recipes={recipes}
+          components={components}
+          creations={creations}
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(comp); setViewId(null); }}
           onBack={() => setViewId(null)}
@@ -4853,7 +4848,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 }
 
 // ─── 组件详情 View ───────────────────────────────────────────────
-function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledge = [], onNavigateToKnowledge, onPrint, materials = [], brands = [] }) {
+function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [] }) {
   const cat = getCompCat(c.componentCategory);
   const name = pickLang(c, "name", lang);
   const nameOther = rawLang(c, "name", lang);
@@ -4868,16 +4863,8 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
   // v11 Task #4: 本店原料优先,实时算总成本
   const liveTotalCost = (c.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
 
-  // 找到关联的知识点（反向查找：知识点的 relatedRecipes 里是否包含此组件的名字）
-  const relatedKnowledge = knowledge.filter(k => {
-    const related = k.relatedRecipes || [];
-    const myNames = [c.nameZh, c.nameJa, c.nameFr].filter(Boolean).map(n => n.toLowerCase());
-    return related.some(r => {
-      const rLower = (r || "").toLowerCase();
-      return myNames.some(mn => mn.includes(rLower) || rLower.includes(mn) ||
-        rLower.split(/[（）()【】・]/g).some(kw => kw.length >= 2 && myNames.some(mn => mn.includes(kw))));
-    });
-  });
+  // 找到关联的知识点(反向查找,和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
+  const relatedKnowledge = knowledgeLinksTo("component", c.id, knowledge, recipes, components, creations);
 
   return (
     <div>
@@ -7064,7 +7051,7 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
 }
 
 // ─── 组合蛋糕 View ───────────────────────────────────────────────
-function CreationsView({ creations, setCreations, components, cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge }) {
+function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge }) {
   if (editTarget !== null) {
     return (
       <CreationEditForm
@@ -7109,6 +7096,9 @@ function CreationsView({ creations, setCreations, components, cats, onUpdateCats
           creation={cr}
           lang={lang}
           knowledge={knowledge}
+          recipes={recipes}
+          components={components}
+          creations={creations}
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(cr); setViewId(null); }}
           onBack={() => setViewId(null)}
@@ -7295,7 +7285,7 @@ function LayerRecipeSteps({ steps, cat, lang }) {
   );
 }
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onNavigateToKnowledge }) {
+function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
   const name = pickLang(c, "name", lang);
@@ -7319,10 +7309,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], onN
   const priceNum = toCNY(c.price, priceCurOf(c));
   const marginPercent = priceNum > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
 
-  // 关联知识点（通过蛋糕名字匹配）
-  const relatedKnowledge = (knowledge || []).filter(k =>
-    (k.relatedRecipes || []).some(r => r === c.nameZh || r === c.nameJa)
-  );
+  // 关联知识点(反向查找,和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
+  const relatedKnowledge = knowledgeLinksTo("creation", c.id, knowledge, recipes, components, creations);
 
   // 状态对应emoji
   const statusInfo = {
@@ -8875,50 +8863,73 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
   );
 }
 
+// ─── 知识 ↔ 配方/组件/蛋糕 的名字关联(v17.5, 2026-09-25)─────────────
+// 知识页的「关联配方」按钮,和配方 / 组件 / 蛋糕详情页底下的「相关知识」,都走这一套,两个方向永远对得上。
+// 从严到松四档,某一档只命中一个就是它;命中两个以上不猜(按钮灰 + 标「N 个同名」,反查时每个候选页都列):
+//   ① 全名相同(不管全角半角、大小写、法文重音、空格、中间点「・·」)
+//   ② 去掉版本号(v1.0 / v3C / v0)后相同   ③ 再去掉括号里的备注后相同
+//   ④ 是某一项名字的一部分(至少 2 个字,纯英文至少 4 个字母)
+// 旧规则把名字拆成碎词、碎词撞上就算,「v1.0」「ショコラ」「de」都能把按钮带走,165 个按钮跳错 55 个。
+// 改这套规则前先跑 .claude/scripts/entry/compare_knowledge_links.cjs(对主数据逐个按钮对比改前改后)。
+// 旧数据里有 4 条被粘成「A「, 」B」的一串(引号被批量换成了「」),读的时候拆开
+const splitLinkNames = (r) => String(r || "").split(/「\s*[,，、]\s*」/).map(s => s.trim()).filter(Boolean);
+const _linkKeyCache = new Map();
+function linkKeys(name) {
+  const raw = String(name || "");
+  let hit = _linkKeyCache.get(raw);
+  if (hit) return hit;
+  const base = raw.normalize("NFKC").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC");   // é→e;日文浊点不受影响
+  const noVer = base.replace(/(^|[^a-z0-9])v\d+(?:\.\d+)*[a-z]?(?![a-z0-9])/g, "$1");
+  const core = noVer.replace(/\([^()]*\)|【[^【】]*】|\[[^\[\]]*\]/g, "");
+  const squash = s => s.replace(/[\s・·•]/g, "");
+  hit = { full: squash(base), noVer: squash(noVer), core: squash(core) };
+  _linkKeyCache.set(raw, hit);
+  return hit;
+}
+// 名字 → 目标:{ type, item } / { ambiguous: [{ type, item }, ...] } / null
+function makeKnowledgeLinkResolver(recipes, components, creations) {
+  const cands = [];
+  for (const [type, list] of [["recipe", recipes], ["component", components], ["creation", creations]])
+    for (const item of list || []) {
+      const keys = [item.nameZh, item.nameJa, item.nameFr].filter(Boolean).map(linkKeys);
+      if (keys.length) cands.push({ type, item, keys });
+    }
+  return (name) => {
+    const q = linkKeys(name);
+    if (!q.full) return null;
+    const partOf = q.core.length >= (/^[\x00-\x7f]+$/.test(q.core) ? 4 : 2);
+    const tiers = [
+      k => k.full === q.full,
+      k => k.noVer === q.noVer,
+      k => !!q.core && k.core === q.core,
+      k => partOf && k.core.includes(q.core),
+    ];
+    for (const test of tiers) {
+      const hits = cands.filter(c => c.keys.some(test));
+      if (hits.length === 1) return { type: hits[0].type, item: hits[0].item };
+      if (hits.length > 1) return { ambiguous: hits.map(h => ({ type: h.type, item: h.item })) };
+    }
+    return null;
+  };
+}
+// 详情页反查:哪些知识的按钮指向这一项(同名多个候选时也算)
+function knowledgeLinksTo(type, id, knowledge, recipes, components, creations) {
+  const resolve = makeKnowledgeLinkResolver(recipes, components, creations);
+  return (knowledge || []).filter(k => (k.relatedRecipes || []).flatMap(splitLinkNames).some(n => {
+    const m = resolve(n);
+    return !!m && (m.ambiguous || [m]).some(x => x.type === type && x.item.id === id);
+  }));
+}
+
 // ─── 知识点详情 ─────────────────────────────────────────────
 function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, components, creations }) {
   const title = pickLang(k, "title", lang);
   const content = pickLang(k, "content", lang);
   const titleOther = rawLang(k, "title", lang);
 
-  // 智能匹配：在 recipes / components / creations 中查找对应项
-  // 使用关键词匹配：只要关联名和候选项名称有共同的关键词就算匹配
-  const findMatch = (relatedName) => {
-    const q = (relatedName || "").toLowerCase().trim();
-    if (!q) return null;
-
-    // 提取关键词：去掉括号、特殊符号后的主要词
-    const extractKeywords = (str) => {
-      const cleaned = (str || "").toLowerCase()
-        .replace(/[（）()【】\[\]・·、,， ]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      return cleaned.split(" ").filter(w => w.length >= 2);
-    };
-
-    const qKeywords = extractKeywords(q);
-    if (qKeywords.length === 0) return null;
-
-    // 匹配逻辑：候选项的名字中包含关联名的任何一个关键词，或反之
-    const matchName = (item) => {
-      const itemNames = [item.nameZh, item.nameJa, item.nameFr].filter(Boolean).map(n => n.toLowerCase());
-      for (const name of itemNames) {
-        // 完整包含
-        if (name.includes(q) || q.includes(name)) return true;
-        // 关键词交集
-        const nameKeywords = extractKeywords(name);
-        for (const kw of qKeywords) {
-          if (kw.length >= 2 && nameKeywords.some(nk => nk.includes(kw) || kw.includes(nk))) return true;
-        }
-      }
-      return false;
-    };
-
-    for (const r of (recipes || [])) if (matchName(r)) return { type: "recipe", item: r };
-    for (const c of (components || [])) if (matchName(c)) return { type: "component", item: c };
-    for (const cr of (creations || [])) if (matchName(cr)) return { type: "creation", item: cr };
-    return null;
-  };
+  // 在 recipes / components / creations 里按名字找目标,规则见上面 makeKnowledgeLinkResolver
+  const resolveLink = makeKnowledgeLinkResolver(recipes, components, creations);
 
   return (
     <div>
@@ -8980,8 +8991,16 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: "0.5px solid #E5E5E5" }}>
             <div style={{ fontSize: 12, color: "#666666", marginBottom: 8, fontWeight: 500 }}>📎 关联配方 / 関連レシピ（点击跳转）</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {k.relatedRecipes.map((r, i) => {
-                const match = findMatch(r);
+              {k.relatedRecipes.flatMap(splitLinkNames).map((r, i) => {
+                const match = resolveLink(r);
+                if (match && match.ambiguous) {
+                  const names = match.ambiguous.map(x => x.item.nameZh || x.item.nameJa).join(" / ");
+                  return (
+                    <span key={i} style={{ background: "#F5F5F5", color: "#888888", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontStyle: "italic" }} title={`${match.ambiguous.length} 个同名:${names}\n在「编辑」里写全名或从下拉里重选,就能跳`}>
+                      {r}<span style={{ fontSize: 10, fontStyle: "normal", marginLeft: 6 }}>{lang === "zh" ? `${match.ambiguous.length} 个同名` : `同名 ${match.ambiguous.length} 件`}</span>
+                    </span>
+                  );
+                }
                 if (match && onNavigate) {
                   const typeLabel = { recipe: "配方", component: "组件", creation: "蛋糕" }[match.type];
                   const typeBg = { recipe: "#DBEAFE", component: "#D1FAE5", creation: "#FCE7F3" }[match.type];
@@ -15512,7 +15531,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={() => setPrintTarget({ type: "recipe", data: viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={() => setPrintTarget({ type: "recipe", data: viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
         </div>
       )}
 
@@ -15763,6 +15782,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           saved={saved}
           confirmDialog={confirmDialog}
           knowledge={knowledge}
+          recipes={recipes}
+          creations={creations}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
           onQuickAddKnowledge={(k) => {
             setKnowledge(prev => [...prev, k]);
@@ -15783,6 +15804,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           creations={creations}
           setCreations={setCreations}
           components={components}
+          recipes={recipes}
           cats={cats}
           onUpdateCats={setCats}
           brands={brands}
