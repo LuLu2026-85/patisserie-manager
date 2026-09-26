@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **💰 记账铁律(2026-08-26 立,所有窗口生效)**:对话中只要出现"钱动了"(LuLu 说付了/交了定金/签了合同应付),**不管当时在聊什么,立即追加一行到 `C:\Users\11508\Desktop\05_工作店铺\798_总账_2026.md`**,分类九选一(设备/装修/房租押金/材料/运营/咖啡/小道具/证照中介/其他)。报价和估价不记。LuLu 说"记账:xxx"=直接记;"拉总账"=按分类汇总对预算。规则详情在总账文件头部。
 
-**⚠️ `.claude/notes/` 存的是业务级文档,不是软件文档**。LuLu 常在这个 cwd 里聊开店筹备这类跟代码无关的事,产出就近落在这里 —— 已有 20 多份,覆盖开业总计划、798 装修报批攻略、设备采购总档、厨房设计条件表、**暖通电力(空调排烟玻璃方案,第六节是 60 kW 电力落地包)**、排烟方案给设计、**厨房水处理(含 §11 软水机选型复核、§12 罐体几何判定式、§13 采购状态板)**、冷库采购要点、招聘计划与面试指南、**商标注册**、**MJ 产品图路线与合规**、回国带料清单、经营模型基准数据、选址决策(历史存档)等。
+**⚠️ `.claude/notes/` 存的是业务级文档,不是软件文档**。LuLu 常在这个 cwd 里聊开店筹备这类跟代码无关的事,产出就近落在这里 —— 已有 20 多份,覆盖开业总计划、798 装修报批攻略、设备采购总档、厨房设计条件表、**暖通电力(空调排烟玻璃方案,第六节是 60 kW 电力落地包)**、排烟方案给设计、**厨房水处理(含 §11 软水机选型复核、§12 罐体几何判定式、§13 采购状态板)**、冷库采购要点、招聘计划与面试指南(含咖啡师版、招人策略总分析、候选人一览与工资速查表 PDF,PDF 源在 `notes/_pdf_src/`)、**商标注册**、**MJ 产品图路线与合规**、**原料国产化选型**(`辅料_*.md` / `黄油线_*` / `蛋线_*` / `面包线_*`,2026-09 起逐项定,Hub 里有索引)、回国带料清单、经营模型基准数据、选址决策(历史存档)等。
 - **别把这些当项目文档去维护或重构**,它们的权威索引在 Hub 的「🧭 当前主线」。
 - 但**该更新时要更新** —— 比如设备又成交了一台,要写回 `.claude/notes/设备采购总档_*.md`,不能只在对话里说完就算。
 - 软件本身的文档是 `manual.md` / `progress.md` / `schema_full.md` / `handoff_*.md`,和 notes/ 不是一回事。
@@ -312,6 +312,8 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
+
+**⚠️ 数据 tab 两个导入按钮行为完全不同**:「选择 JSON(覆盖)」`importData` 把每个实体整体换成文件里的(**文件里没有的实体直接清成 `[]`**);「合并导入(只新增不覆盖)」`mergeImportData` 只追加 —— recipes / components / creations 按 id 或 nameZh / nameJa 去重,knowledge 按 id / title,brands / materials 按 id 合并字段。**局部包(比如只含一条新配方)必须走合并导入**,走覆盖会把其他数据全清掉。`my_data_export.json` 只是某次导出的快照(2026-09-25 时停在 09-04),LuLu 之后在 app 里的改动不在里面,所以新录入默认出只含新条目的 `RURU_<名>_合并导入.json` 让她合并导入,别让她整份导入主数据文件。做法见 `.claude/recipe_entry_sop.md` §1.13。
 
 ## `public/layout.html` — 798 厨房布局台(独立工具,不属于主 app)
 
