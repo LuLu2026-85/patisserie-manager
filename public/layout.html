@@ -588,10 +588,19 @@ const DEFS = {
     note:"高800·台面可用·动线核心·前开门可现场改铰向"},
   rt158:{n:"冷藏台 RT-158MC", w:1500, d:750, h:800, plan:1, surf:1,
     cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用"},
+  // 2026-08-31 新增:合同 WS-2026082829 实购型号。RT-158MA 与 RT-158MC 同尺寸、价差 660,
+  // 差异(层架/门数/压缩机?)供方尚未书面说明 → 先按 MC 的净空与功率建块。
+  rt158ma:{n:"冷藏台 RT-158MA", w:1500, d:750, h:800, plan:1, surf:1, est:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32},
+    note:"高800·台面可用·⚠️与 RT-158MC 同尺寸差 660 元,差异待供方书面说明·⚠️功率暂借 MC 值,待铭牌参数表"},
   rt128:{n:"冷藏台 RT-128MC", w:1200, d:750, h:800, plan:1, surf:1,
     cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用"},
   ft158:{n:"冷冻台 FT-158MC", w:1500, d:750, h:800, plan:1, surf:1,
     cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32}, note:"高800·台面可用·-25~-7℃"},
+  // 2026-08-31 新增:合同 WS-2026082829 实购。台下操作台 S 与 M 同深 750(只有立柜才 800/850 分家)。
+  fte188:{n:"冷冻台 FTE-188SC", w:1800, d:750, h:800, plan:1, surf:1, est:1,
+    cl:{front:500, side:{b:TUNE.gapWall}}, util:{pw:"220V单相", kw:0.32},
+    note:"高800·台面可用·-25~-7℃·S系列变频(金星)·⚠️功率暂借 FT-158MC 值,待供方铭牌参数表"},
   ct150:{n:"恒温高湿台 CT-150SDJ-R", w:1500, d:750, h:800, plan:1, surf:1, est:1,
     cl:{front:500, side:{r:150, b:TUNE.gapWall}},
     util:{pw:"100V经变压器", kw:0.17, trafo:1},
@@ -614,6 +623,14 @@ const DEFS = {
   hfb78:{n:"插盘冷冻 HF-78MC-B", w:700, d:850, h:1990, plan:1,
     door:{side:"R", w:660}, cl:{front:700, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.71}, note:"直插22盘400×600·接急冷机出品连盘转移,强烈推荐"},
+  // 2026-08-31 新增:合同 WS-2026082829 实购。⚠️注意 S 与 M 不同尺寸 —— M 系列深850高1990,
+  // S 系列深800高2000(库里 hre188/hfe188 已是这个口径)。之前把这 50mm 当成误差是错的。
+  hfe78:{n:"插盘冷冻 HFE-78SC", w:700, d:800, h:2000, plan:1, est:1,
+    door:{side:"R", w:660},
+    cl:{front:700, side:{b:TUNE.gapWall},
+        over:{noCeil:2200, why:"S系列机组顶置,进出风在上方(按 HRE/HFE-188SC 口径推,700宽款待铭牌确认)"}},
+    util:{pw:"220V单相", kw:0.71},
+    note:"直插盘·S系列变频(金星)·脚可调总高最高约2020 → ⚠️禁止进 2m 限高管道带投影·⚠️合同写「2门」,门数/开向待确认·⚠️功率暂借 HF-78MC-B 值,待铭牌参数表"},
   hrf128:{n:"双温柜 HRF-128MC", w:1200, d:850, h:1990, plan:1,
     door:{side:"D", w:580}, cl:{front:700, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.40}, note:"对开双门·可现场改铰向(官方)"},
@@ -633,6 +650,11 @@ const DEFS = {
     cl:{front:400, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.31, water:1, drain:1},
     note:"前开储冰门·前留约400⚠️·日产47kg/储15kg·要给水+排水"},
+  // 2026-08-31 新增:合同 WS-2026082829 实购的就是这台(890 高进不了台下,按落地机摆)。
+  im65:{n:"制冰机 IM-65BZ", w:600, d:589, h:890, plan:1, est:1,
+    cl:{front:400, side:{b:TUNE.gapWall}},
+    util:{pw:"220V单相", kw:0.45, water:1, drain:1},
+    note:"前开储冰门·前留约400⚠️·要给水+排水·高890(合同写 800+90 地脚,备注又提 50mm 地脚 → 总高 890 还是 850 待供方确认)·⚠️功率是按 IM-45CBZ/IM-100BZ 内插的估值,不是目录值,待铭牌参数表"},
   im100:{n:"制冰机 IM-100BZ", w:660, d:590, h:1380, plan:1, est:1,
     cl:{front:400, side:{b:TUNE.gapWall}},
     util:{pw:"220V单相", kw:0.68, water:1, drain:1},
@@ -2147,7 +2169,8 @@ $("btnReset").onclick = ev => {
 
 /* ═══ 抽屉 chips ═════════════════════════════════════════════════════ */
 const AUX    = ["softener","trafo","hood","drain","stand","trolley","molder"];
-const HOSHI  = ["rt188","rt158","rt128","ft158","ct150","hre188","hfe188","hr128","hr78","hf128","hf78","hrb78","hfb78","hrf128","im45","im100"];
+// 2026-08-31:合同 WS-2026082829 实购的 4 个型号原来库里没有,已补(rt158ma / fte188 / hfe78 / im65)。
+const HOSHI  = ["rt188","rt158","rt158ma","rt128","fte188","ft158","ct150","hre188","hfe188","hr128","hr78","hf128","hf78","hrb78","hfb78","hfe78","hrf128","im45","im65","im100"];
 const ARTGRP = ["pipeart","ringtable","ringtable18","halfring"];
 const PLANNED= ["pillar","display","espresso","wtable","sink3","hsink","shelf","bar","island","custom","mark"];
 const WALLGRP= ["uwall"];

@@ -61,8 +61,8 @@ LuLu 是产品负责人,不是程序员,英文技术术语不熟。所有对话�
 > "你确定要这么做吗?我理解你的意思是 xxx,这会导致 yyy,确认吗?"
 
 ### 图片引用约定
-LuLu 发的图片统一放在 `/mnt/c/Users/11508/Desktop/claude图片/` 目录下。
-- 当 LuLu 说"看下图 X"或"看图 X.png"时,自动理解为该目录下的文件,直接 `Read /mnt/c/Users/11508/Desktop/claude图片/X.png` (或 .jpg / .jpeg / .webp 等),不要反问"图在哪"。
+LuLu 发的图片统一放在 `C:\Users\11508\Desktop\claude图片\` 目录下。
+- 当 LuLu 说"看下图 X"或"看图 X.png"时,自动理解为该目录下的文件,直接 `Read C:\Users\11508\Desktop\claude图片\X.png` (或 .jpg / .jpeg / .webp 等),不要反问"图在哪"。
 - 用户复制粘贴图片时,Claude Code CLI 会把文件保存到桌面并把路径插入对话框 — 直接用那个路径 Read 即可,不必移动到上述目录。
 
 ## Bug 修复授权模板(2026-04-29 立)
@@ -354,10 +354,10 @@ The user-facing README is Chinese-only and describes the product, not the code:
 
 ## Chrome DevTools MCP 调试环境
 
-- 调试 Chrome 启动命令（在 Windows CMD 里）：
-  `"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir="C:\temp\chrome-debug"`
-- WSL 里 chrome-devtools MCP 通过 `http://172.24.64.1:9223` 连接（netsh portproxy 9223→127.0.0.1:9222）
-- WSL 网关 IP 偶尔会变。如果连不上先在 WSL 跑 `ip route show | grep default | awk '{print $3}'` 确认
+- 调试 Chrome 启动命令（在 Windows CMD 里）,两台电脑 Chrome 装的位置不一样:
+  - 新电脑 KORORA:`"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir="C:\temp\chrome-debug"`
+  - 旧笔记本 LAPTOP-4KPUUQJ1:路径换成 `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,其余一样
+- chrome-devtools MCP 直连 `http://127.0.0.1:9222`。两台都是 Windows 上直接跑 Claude Code,旧机那套 WSL + `netsh portproxy 9223→9222` 的桥接已作废,别再照抄。
 - Chrome 必须先开着再启动 Claude Code，否则 MCP 握手可能失败
 - 调试 Chrome 里的 localStorage 专属这个用户目录（`C:\temp\chrome-debug`），和主力 Chrome 完全隔离
 
