@@ -4421,6 +4421,11 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat }) {
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
+  const [compSearch, setCompSearch] = useState("");
+  // 「在用」标记(2026-09-26):和配方的 onSale 同一套思路 —— 组件上一个布尔,标了的排到最前 + 「在用中」筛选。
+  // 缺省 = 不在用,老数据不用迁移。跟组合蛋糕 layers 里存的组件快照无关,不联动。
+  const toggleInUse = (id) => setComponents(prev => prev.map(x =>
+    x.id === id ? { ...x, inUse: !x.inUse, updatedAt: new Date().toISOString() } : x));
 
   if (editTarget !== null) {
     return (
@@ -4483,7 +4488,137 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
     }
   }
 
-  const filtered = filterCat === "all" ? components : components.filter(c => c.componentCategory === filterCat);
+  // ── 列表视图的数据:搜索 × 分类 / 在用 筛选;「全部」和「在用中」时按分类分段 ──
+  const compQuery = compSearch.trim().toLowerCase();
+  const matchQuery = (c) => !compQuery || [c.nameZh, c.nameJa, c.nameFr, c.flavorName].some(s => (s || "").toLowerCase().includes(compQuery));
+  const inUseCount = components.filter(c => c.inUse).length;
+  const baseList = filterCat === "all" ? components
+    : filterCat === "inuse" ? components.filter(c => c.inUse)
+    : components.filter(c => c.componentCategory === filterCat);
+  const filtered = baseList.filter(matchQuery);
+  const inUseFirst = (list) => [...list].sort((a, b) => (b.inUse ? 1 : 0) - (a.inUse ? 1 : 0));   // 稳定排序,同组内保持原顺序
+  const groupedView = filterCat === "all" || filterCat === "inuse";
+  const listCats = [...COMPONENT_CATEGORIES, ...customCompCats];
+  const knownCatIds = new Set(listCats.map(ct => ct.id));
+  const compGroups = listCats
+    .map(ct => ({ cat: ct, items: inUseFirst(filtered.filter(c => (knownCatIds.has(c.componentCategory) ? c.componentCategory : "other") === ct.id)) }))
+    .filter(g => g.items.length > 0);
+  // 被哪些组合蛋糕用到:按 layers[].sourceComponentId 反查,只显示不写数据;同一个蛋糕用了好几层只算一次
+  const usedIn = {};
+  (creations || []).forEach(cr => {
+    const crName = pickLang(cr, "name", lang) || cr.nameFr || "";
+    new Set((cr.layers || []).map(l => l && l.sourceComponentId).filter(Boolean))
+      .forEach(id => { (usedIn[id] = usedIn[id] || []).push(crName); });
+  });
+  const emptyChips = [];
+  if (filterCat !== "all") {
+    const ct = filterCat === "inuse" ? null : getCompCat(filterCat);
+    emptyChips.push({ label: ct ? (lang === "zh" ? ct.zh : ct.ja) : (lang === "zh" ? "在用中" : "使用中"), onRemove: () => setFilterCat("all") });
+  }
+  if (compQuery) emptyChips.push({ label: `「${compSearch.trim()}」`, onRemove: () => setCompSearch("") });
+
+  const renderCompCard = (c) => {
+    const cat = getCompCat(c.componentCategory);
+    const name = pickLang(c, "name", lang);
+    const nameSub = rawLang(c, "name", lang);
+    const flavor = c.flavorFamily ? getFlavorFamily(c.flavorFamily) : null;
+    const avatarLetter = (c.nameFr || name || "?").charAt(0).toUpperCase();
+    const uses = usedIn[c.id] || [];
+    const usageText = uses.length === 0 ? null
+      : lang === "zh"
+        ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合蛋糕`)
+        : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
+    return (
+      <div
+        key={c.id}
+        onClick={() => setViewId(c.id)}
+        style={{
+          background: T.bgCard,
+          border: `0.5px solid ${T.border}`,
+          borderRadius: T.radiusLg,
+          padding: "16px 20px",
+          cursor: "pointer",
+          borderLeft: `3px solid ${cat.color}`,
+          transition: "border-color 0.15s, transform 0.12s",
+          display: "flex",
+          gap: 14,
+          alignItems: "center",
+        }}
+        // 悬停只换上右下三边,左边分类色条保持不变(原来整圈换色,移开后色条会变灰)
+        onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(-1px)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(0)"; }}
+      >
+        {/* 在用圆点(和配方「在售中」同款);点它不进详情 */}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); toggleInUse(c.id); }}
+          title={c.inUse
+            ? (lang === "zh" ? "在用 — 点一下取消" : "使用中 — タップで解除")
+            : (lang === "zh" ? "点一下标为在用(会排到最前面)" : "タップで使用中に")}
+          aria-label={c.inUse ? (lang === "zh" ? "取消在用" : "使用中を解除") : (lang === "zh" ? "标为在用" : "使用中にする")}
+          style={{
+            width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+            cursor: "pointer", lineHeight: 1, fontSize: 13,
+            color: c.inUse ? T.success : T.line,
+          }}
+        >{c.inUse ? "●" : "○"}</button>
+
+        {/* 首字母圆形徽章（用食感分类的颜色） */}
+        <div style={{
+          width: 44, height: 44, borderRadius: "50%",
+          background: cat.bg, color: cat.color,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontFamily: T.fontSerif, fontSize: 18, fontStyle: "italic", fontWeight: 500,
+          flexShrink: 0,
+        }}>{avatarLetter}</div>
+
+        {/* 中间内容 */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* 标题行 */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+            {c.nameFr && (
+              <span style={{ fontFamily: T.fontSerif, fontSize: 16, color: T.textPrimary, fontWeight: 500 }}>
+                {c.nameFr}
+              </span>
+            )}
+            <span style={{ fontSize: 14, color: c.nameFr ? T.textSecondary : T.textPrimary, fontWeight: c.nameFr ? 400 : 500 }}>
+              {c.nameFr ? "· " : ""}{name}
+            </span>
+            {nameSub && nameSub !== name && (
+              <span style={{ fontSize: 12, color: T.textTertiary }}>· {nameSub}</span>
+            )}
+          </div>
+
+          {/* 标签行 */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
+            <span style={{ background: cat.bg, color: cat.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
+              {lang === "zh" ? cat.zh : cat.ja}
+            </span>
+            {flavor && (
+              <span style={{ background: flavor.bg, color: flavor.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
+                {flavor.emoji} {c.flavorName || (lang === "zh" ? flavor.zh : flavor.ja)}
+              </span>
+            )}
+          </div>
+
+          {/* 信息行 */}
+          <div title={uses.length > 1 ? uses.join(" / ") : undefined} style={{ fontSize: 11, color: T.textTertiary, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {[
+              c.yield ? `${c.yield} ${c.unit || "g"}` : null,
+              (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
+              c.totalCost > 0 ? `¥${c.totalCost.toFixed(0)}` : null,
+              usageText,
+            ].filter(Boolean).map((t, i, arr) => (
+              <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{t}</span>
+                {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -4705,6 +4840,16 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
       {/* 📋 列表视图 */}
       {compViewMode === "list" && (<>
 
+      {/* 🔍 搜索:中 / 日 / 法名和风味名都能搜 */}
+      <input
+        type="text"
+        className="k-input"
+        value={compSearch}
+        onChange={e => setCompSearch(e.target.value)}
+        placeholder={lang === "zh" ? "搜索组件名(中文 / 日文 / 法文都行)" : "コンポーネント名で検索(中・日・仏)"}
+        style={{ width: "100%", maxWidth: 360, padding: "8px 12px", marginBottom: 10, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box" }}
+      />
+
       {/* 分类筛选 */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
         <button
@@ -4721,6 +4866,23 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             transition: "all 0.15s",
           }}
         >{lang === "zh" ? "全部" : "すべて"}</button>
+        <button
+          onClick={() => setFilterCat("inuse")}
+          style={{
+            padding: "5px 14px", fontSize: 12,
+            border: `${filterCat === "inuse" ? 1 : 0.5}px solid ${filterCat === "inuse" ? T.success : T.border}`,
+            borderRadius: T.radiusPill,
+            background: filterCat === "inuse" ? T.successBg : T.bgCard,
+            color: filterCat === "inuse" ? T.success : T.textSecondary,
+            cursor: "pointer",
+            fontWeight: filterCat === "inuse" ? 500 : 400,
+            fontFamily: T.fontSans,
+            transition: "all 0.15s",
+          }}
+        >
+          <span style={{ color: T.success, marginRight: 4 }}>●</span>{lang === "zh" ? "在用中" : "使用中"}
+          {inUseCount > 0 && <span style={{ color: filterCat === "inuse" ? T.success : T.textMuted, marginLeft: 3, opacity: 0.7 }}>{inUseCount}</span>}
+        </button>
         {[...COMPONENT_CATEGORIES, ...customCompCats].map(cat => {
           const count = components.filter(c => c.componentCategory === cat.id).length;
           const active = filterCat === cat.id;
@@ -4747,101 +4909,51 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         })}
       </div>
 
-      {filtered.length === 0 && (
+      {components.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem", color: "#666666", fontSize: 13, lineHeight: 1.8 }}>
-          {components.length === 0 ? (
-            <>
-              暂无组件。点「+ 新增组件」开始搭建你的配方积木库。<br/>
-              <span style={{ fontSize: 12, color: "#999999" }}>
-                在这里存入生地・慕斯・果冻・脆片・淋面等基础配方，<br/>组合蛋糕时可以直接调用。
-              </span>
-            </>
-          ) : "此分类下暂无组件"}
+          暂无组件。点「+ 新增组件」开始搭建你的配方积木库。<br/>
+          <span style={{ fontSize: 12, color: "#999999" }}>
+            在这里存入生地・慕斯・果冻・脆片・淋面等基础配方，<br/>组合蛋糕时可以直接调用。
+          </span>
         </div>
       )}
 
-      <div style={{ display: "grid", gap: 10 }}>
-        {filtered.map(c => {
-          const cat = getCompCat(c.componentCategory);
-          const name = pickLang(c, "name", lang);
-          const nameSub = rawLang(c, "name", lang);
-          const flavor = c.flavorFamily ? getFlavorFamily(c.flavorFamily) : null;
-          const avatarLetter = (c.nameFr || name || "?").charAt(0).toUpperCase();
-          return (
-            <div
-              key={c.id}
-              onClick={() => setViewId(c.id)}
-              style={{
-                background: T.bgCard,
-                border: `0.5px solid ${T.border}`,
-                borderRadius: T.radiusLg,
-                padding: "16px 20px",
-                cursor: "pointer",
-                borderLeft: `3px solid ${cat.color}`,
-                transition: "border-color 0.15s, transform 0.12s",
-                display: "flex",
-                gap: 14,
-                alignItems: "center",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
-            >
-              {/* 首字母圆形徽章（用食感分类的颜色） */}
-              <div style={{
-                width: 44, height: 44, borderRadius: "50%",
-                background: cat.bg, color: cat.color,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontFamily: T.fontSerif, fontSize: 18, fontStyle: "italic", fontWeight: 500,
-                flexShrink: 0,
-              }}>{avatarLetter}</div>
+      {components.length > 0 && filtered.length === 0 && (
+        filterCat === "inuse" && inUseCount === 0 && !compQuery ? (
+          <EmptyState
+            variant="first" lang={lang}
+            title={lang === "zh" ? "还没标记在用的组件" : "使用中のコンポーネントがありません"}
+            hint={lang === "zh" ? "点组件卡片最左边的小圆圈就标上了。标过的会排到最前面。" : "カード左端の丸をタップすると使用中になり、先頭に並びます。"}
+            actions={[{ label: lang === "zh" ? "去全部组件" : "すべてへ", onClick: () => setFilterCat("all") }]}
+          />
+        ) : (
+          <EmptyState
+            variant="filter" lang={lang}
+            title={lang === "zh" ? "没有符合条件的组件" : "条件に合うコンポーネントがありません"}
+            chips={emptyChips}
+            onClearAll={() => { setFilterCat("all"); setCompSearch(""); }}
+          />
+        )
+      )}
 
-              {/* 中间内容 */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {/* 标题行 */}
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
-                  {c.nameFr && (
-                    <span style={{ fontFamily: T.fontSerif, fontSize: 16, color: T.textPrimary, fontWeight: 500 }}>
-                      {c.nameFr}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 14, color: c.nameFr ? T.textSecondary : T.textPrimary, fontWeight: c.nameFr ? 400 : 500 }}>
-                    {c.nameFr ? "· " : ""}{name}
-                  </span>
-                  {nameSub && nameSub !== name && (
-                    <span style={{ fontSize: 12, color: T.textTertiary }}>· {nameSub}</span>
-                  )}
-                </div>
-
-                {/* 标签行 */}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
-                  <span style={{ background: cat.bg, color: cat.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
-                    {lang === "zh" ? cat.zh : cat.ja}
-                  </span>
-                  {flavor && (
-                    <span style={{ background: flavor.bg, color: flavor.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
-                      {flavor.emoji} {c.flavorName || (lang === "zh" ? flavor.zh : flavor.ja)}
-                    </span>
-                  )}
-                </div>
-
-                {/* 信息行 */}
-                <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  {[
-                    c.yield ? `${c.yield} ${c.unit || "g"}` : null,
-                    (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
-                    c.totalCost > 0 ? `¥${c.totalCost.toFixed(0)}` : null,
-                  ].filter(Boolean).map((t, i, arr) => (
-                    <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span>{t}</span>
-                      {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
-                    </span>
-                  ))}
-                </div>
+      {groupedView ? (
+        <div style={{ display: "grid", gap: 20 }}>
+          {compGroups.map(({ cat, items }) => (
+            <div key={cat.id} style={{ display: "grid", gap: 10 }}>
+              {/* 分段小标题:分类名 + 个数 */}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, paddingBottom: 6, borderBottom: `1px solid ${T.lineFaint}` }}>
+                <span style={{ fontSize: 13, fontWeight: 500, color: cat.color }}>{lang === "zh" ? cat.zh : cat.ja}</span>
+                <span style={{ fontSize: 11, color: T.textMuted, ...T.num }}>{items.length}</span>
               </div>
+              {items.map(renderCompCard)}
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {inUseFirst(filtered).map(renderCompCard)}
+        </div>
+      )}
       </>)}
     </div>
   );
