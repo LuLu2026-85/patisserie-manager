@@ -308,6 +308,12 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 - `recipes[].onSale` —— 「在售中」布尔标记(季节食材决定当季卖哪几款)。配方一览行首圆点
   点一下切换,标了的排到最前,顶部还有独立的「在售中」tab。跟 `products`(可售单元 / 库存)
   是两回事,**不联动**。
+- `components[].inUse` —— 组件仓库的「在用」标记(v17.6, 2026-09-26),照 `onSale` 做:卡片行首圆点点一下切换,
+  标了的排到所在分段最前,筛选条多一个「● 在用中 N」。缺省 = 不在用,老数据不迁移。**是手动标记,不从组合蛋糕推导**,
+  也不写进 `creations.layers`(层里是组件快照)。**整体替换组件对象的地方要把它带过去** —— 「↻ 同步回组件库」
+  (App 里的 `onUpdateComponent`)就是整体替换,已补;组件编辑页是 `...form` 带原对象,天然保留。
+  同一页还加了:搜索框(中 / 日 / 法名 + 风味名)、「全部」和「在用中」时按分类分段(认不出的分类并进「其他」段)、
+  卡片信息行「用在「X」等 N 个组合蛋糕」(按 `layers[].sourceComponentId` 反查,只显示不写数据;手搭的空白层没有这个 id,不计入)。
 
 ## RURU_*.json files at repo root
 
