@@ -8256,7 +8256,23 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
     }
     return { ...linked, _id: idx };
   }));
-  const [steps, setSteps] = useState((layer.steps || []).map((s, i) => ({ _id: i, text: s })));
+  // 层从组件带来的是 stepsZh / stepsJa(addLayerFromComponent);以前这里只读老字段 steps,打开就是空的。
+  // 和组件编辑页同一套:中日两栏,老数据只有 steps 时放进日文栏
+  const initStepsZh = layer.stepsZh || [];
+  const initStepsJa = layer.stepsJa || layer.steps || [];
+  const [steps, setSteps] = useState(
+    Array.from({ length: Math.max(initStepsZh.length, initStepsJa.length, 1) }, (_, i) => ({
+      _id: i,
+      textZh: initStepsZh[i] || "",
+      textJa: initStepsJa[i] || "",
+    }))
+  );
+  // 保存层和同步回组件库共用。老字段 steps 要清掉,不然两栏都删空时 pickSteps 会回退到它
+  const stepsOut = () => ({
+    stepsZh: steps.map(s => (s.textZh || "").trim()).filter(Boolean),
+    stepsJa: steps.map(s => (s.textJa || "").trim()).filter(Boolean),
+    steps: undefined,
+  });
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
@@ -8298,7 +8314,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
     onSave({
       ...form,
       ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
-      steps: steps.map(s => s.text).filter(Boolean),
+      ...stepsOut(),
       totalCost: total,
     });
   };
@@ -8331,14 +8347,15 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
     }
     const validIngs = ings.filter(i => i.nameZh || i.nameJa);
     const total = validIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+    // 只带这一页能看到、能改的字段,App 那边按字段合并到原组件上。
+    // 法文名 / 备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
     const updated = {
       id: layer.sourceComponentId,
-      nameZh: form.nameZh, nameJa: form.nameJa, nameFr: form.nameFr,
+      nameZh: form.nameZh, nameJa: form.nameJa,
       componentCategory: form.componentCategory,
       yield: form.yield, unit: form.unit,
       ingredients: validIngs.map(({ _id, ...rest }) => rest),
-      steps: steps.map(s => s.text).filter(Boolean),
-      notesZh: form.notesZh || "", notesJa: form.notesJa || "",
+      ...stepsOut(),
       totalCost: total,
       updatedAt: new Date().toISOString(),
     };
@@ -8536,14 +8553,32 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
       {/* 制法 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "制作流程" : "作り方"}</div>
-          <Btn size="sm" onClick={() => setSteps(prev => [...prev, { _id: nextStepId.current++, text: "" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+          <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "制作流程（中日双语）" : "作り方（中国語・日本語）"}</div>
+          <Btn size="sm" onClick={() => setSteps(prev => [...prev, { _id: nextStepId.current++, textZh: "", textJa: "" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
         </div>
+        {/* 和组件编辑页(ComponentEditForm)同一套:每步中日两格 + 上移下移 */}
         {steps.map((s, i) => (
-          <div key={s._id} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+          <div key={s._id} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12, paddingBottom: 12, borderBottom: i < steps.length - 1 ? "0.5px dashed #E5E5E5" : "none" }}>
             <div style={{ minWidth: 22, height: 22, borderRadius: "50%", background: "#F5F5F5", border: "0.5px solid #CCCCCC", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 500, marginTop: 7, flexShrink: 0 }}>{i + 1}</div>
-            <input value={s.text} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, text: e.target.value } : st))} placeholder="步骤描述…" style={inpStyle} />
-            <button onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px" }}>×</button>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+              <input value={s.textZh || ""} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, textZh: e.target.value } : st))} placeholder="中文步骤描述…" style={inpStyle} />
+              <input value={s.textJa || ""} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, textJa: e.target.value } : st))} placeholder="日本語ステップ…" style={inpStyle} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
+              <button
+                onClick={() => setSteps(prev => { if (i === 0) return prev; const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; })}
+                disabled={i === 0}
+                style={{ background: i === 0 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === 0 ? "not-allowed" : "pointer", color: i === 0 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
+                title="上移"
+              >↑</button>
+              <button
+                onClick={() => setSteps(prev => { if (i === prev.length - 1) return prev; const n = [...prev]; [n[i], n[i + 1]] = [n[i + 1], n[i]]; return n; })}
+                disabled={i === steps.length - 1}
+                style={{ background: i === steps.length - 1 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === steps.length - 1 ? "not-allowed" : "pointer", color: i === steps.length - 1 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
+                title="下移"
+              >↓</button>
+            </div>
+            <button onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
           </div>
         ))}
       </div>
@@ -15816,8 +15851,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           saved={saved}
           confirmDialog={confirmDialog}
           onUpdateComponent={(updated) => {
-            confirmDialog("确定将此修改同步回组件库吗？\n\n这不会影响其他已创建的组合蛋糕，只会更新组件库里的原始配方。", () => {
-              setComponents(prev => prev.map(c => c.id === updated.id ? updated : c));
+            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n这不会影响其他已创建的组合蛋糕，只会更新组件库里的原始配方。", () => {
+              // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
+              // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
+              setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
               showToast("✓ 已更新回组件库");
             }, { danger: false });
           }}
