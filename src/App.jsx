@@ -1321,6 +1321,19 @@ const getIngLiveCost = (ing, materials, brands, cats) => {
   return toCNY(ing.cost, curOf(ing));
 };
 
+// 一组配料的实时总成本(人民币)。组件卡片 / 选组件弹窗 / 组合蛋糕都走这里,不读存下来的 totalCost ——
+// 那个数没有币种:东京时期存的是日元,v17 之后点过「保存层」的又是人民币,当人民币显示会差 23 倍
+// (Framboisier 列表 ¥22,885、实际约 ¥312)。配方详情 / 组件详情一直是这么实时算的。
+const getIngsLiveCost = (ings, materials, brands) => (ings || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
+// 组合蛋糕单层实际成本 = 这一层配料的实时成本 × (本蛋糕用量 / 产出量);没设产出量就按整批
+const calcLayerLiveCost = (l, materials, brands) => {
+  const componentYield = parseFloat(l.yield) || 0;
+  const usedAmount = parseFloat(l.usedAmount) || 0;
+  const componentCost = getIngsLiveCost(l.ingredients, materials, brands);
+  if (componentYield === 0) return componentCost;
+  return componentCost * (usedAmount / componentYield);
+};
+
 
 // 根据输入的名字在cats里找匹配的大类（返回第一个匹配）
 const findCatByName = (name, cats) => {
@@ -4528,6 +4541,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
       : lang === "zh"
         ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合蛋糕`)
         : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
+    const liveCost = getIngsLiveCost(c.ingredients, materials, brands);  // 不读 c.totalCost,见 getIngsLiveCost
     return (
       <div
         key={c.id}
@@ -4606,7 +4620,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             {[
               c.yield ? `${c.yield} ${c.unit || "g"}` : null,
               (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
-              c.totalCost > 0 ? `¥${c.totalCost.toFixed(0)}` : null,
+              liveCost > 0 ? `¥${liveCost.toFixed(0)}` : null,
               usageText,
             ].filter(Boolean).map((t, i, arr) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -5223,7 +5237,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             const pp = getMaterialEffectivePrice(m);
             if (!isNaN(pp) && pp > 0) {
               const q = parseFloat(linked.qty) || 0;
-              return { ...linked, _id: idx, unitPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };
+              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
             }
           }
         }
@@ -5281,7 +5295,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       const pp = getMaterialEffectivePrice(m);
       if (isNaN(pp) || pp <= 0) return i;
       const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
     });
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const stepsZh = steps.map(s => s.textZh.trim()).filter(Boolean);
@@ -7211,6 +7225,8 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           recipes={recipes}
           components={components}
           creations={creations}
+          materials={materials}
+          brands={brands}
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(cr); setViewId(null); }}
           onBack={() => setViewId(null)}
@@ -7249,7 +7265,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           const name = pickLang(c, "name", lang);
           const nameSub = rawLang(c, "name", lang);
           const layers = c.layers || [];
-          const totalCost = layers.reduce((s, l) => s + (l.totalCost || 0), 0);
+          const totalCost = layers.reduce((s, l) => s + calcLayerLiveCost(l, materials, brands), 0);  // 和详情页同一套:实时算 + 按本蛋糕用量折
           const servesNum = parseFloat(c.serves) || 1;
           const portionsNum = parseFloat(c.portions) || 1;
           const priceNum = toCNY(c.price, priceCurOf(c));
@@ -7397,21 +7413,15 @@ function LayerRecipeSteps({ steps, cat, lang }) {
   );
 }
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge }) {
+function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
   const name = pickLang(c, "name", lang);
   const description = c.description || "";
   const layers = c.layers || [];
 
-  // 🧮 新的成本计算逻辑
-  const calcLayerActualCost = (l) => {
-    const componentYield = parseFloat(l.yield) || 0;
-    const usedAmount = parseFloat(l.usedAmount) || 0;
-    const componentCost = parseFloat(l.totalCost) || 0;
-    if (componentYield === 0) return componentCost;
-    return componentCost * (usedAmount / componentYield);
-  };
+  // 🧮 单层实际成本:按这一层的配料实时算,不读存下来的 totalCost(没有币种,见 getIngsLiveCost)
+  const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
 
   const totalCostAll = layers.reduce((s, l) => s + calcLayerActualCost(l), 0);
   const servesNum = parseFloat(c.serves) || 1;
@@ -7859,14 +7869,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
 
-  // 🧮 单层实际成本 = 组件成本 × (本蛋糕用量 / 组件产出量)
-  const calcLayerActualCost = (l) => {
-    const componentYield = parseFloat(l.yield) || 0;
-    const usedAmount = parseFloat(l.usedAmount) || 0;
-    const componentCost = parseFloat(l.totalCost) || 0;
-    if (componentYield === 0) return componentCost; // 没设置产出量，就用原成本
-    return componentCost * (usedAmount / componentYield);
-  };
+  // 🧮 单层实际成本 = 这一层配料的实时成本 × (本蛋糕用量 / 组件产出量),和详情页同一个函数
+  const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
 
   // 总成本（本批次，比如4台蛋糕）
   const totalCostAll = (form.layers || []).reduce((s, l) => s + calcLayerActualCost(l), 0);
@@ -8284,6 +8288,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       {showComponentPicker && (
         <ComponentPicker
           components={components}
+          materials={materials}
+          brands={brands}
           onSelect={addLayerFromComponent}
           onClose={() => setShowComponentPicker(false)}
         />
@@ -8293,7 +8299,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 }
 
 // ─── 组件选择弹窗 ─────────────────────────────────────────────
-function ComponentPicker({ components, onSelect, onClose, lang = "zh" }) {
+function ComponentPicker({ components, materials = [], brands = [], onSelect, onClose, lang = "zh" }) {
   const [filterCat, setFilterCat] = useState("all");
   const filtered = filterCat === "all" ? components : components.filter(c => c.componentCategory === filterCat);
 
@@ -8335,7 +8341,7 @@ function ComponentPicker({ components, onSelect, onClose, lang = "zh" }) {
                     <div style={{ fontSize: 11, color: "#666666", marginTop: 4, display: "flex", gap: 10 }}>
                       <span style={{ background: cat.bg, color: cat.color, padding: "1px 8px", borderRadius: 20 }}>{cat.zh}</span>
                       <span>{(c.ingredients || []).length} 种原料</span>
-                      <span>¥{(c.totalCost || 0).toFixed(0)}</span>
+                      <span>¥{getIngsLiveCost(c.ingredients, materials, brands).toFixed(0)}</span>
                     </div>
                   </div>
                 );
@@ -8362,7 +8368,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
         const pp = getMaterialEffectivePrice(m);
         if (!isNaN(pp) && pp > 0) {
           const q = parseFloat(linked.qty) || 0;
-          return { ...linked, _id: idx, unitPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };
+          return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
         }
       }
     }
@@ -8420,7 +8426,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
       const pp = getMaterialEffectivePrice(m);
       if (isNaN(pp) || pp <= 0) return i;
       const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
     });
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     onSave({
@@ -12023,7 +12029,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
             const pp = getMaterialEffectivePrice(m);
             if (!isNaN(pp) && pp > 0) {
               const q = parseFloat(linked.qty) || 0;
-              return { ...linked, _id: idx, unitPrice: String(pp), _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };
+              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币;不标 CNY,「保存到本店原料」会把人民币数当日元存进去
             }
           }
         }
@@ -12110,7 +12116,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       const pp = getMaterialEffectivePrice(m);
       if (isNaN(pp) || pp <= 0) return i;
       const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
     });
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
     if (saveToShop && typeof setShopMaterials === "function") {

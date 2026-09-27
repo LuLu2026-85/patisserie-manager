@@ -198,6 +198,12 @@ Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-def
    用 `getMaterialRawPrice(m)` → `{ price, currency, source }`。
    手写单价和 `ing.cost` 快照同样按 `curOf(ing)` 折(`getIngUnitPrice` / `getIngLiveCost`)。
    **编辑态的 `totalCost` 也折**(3 处),否则混币种会把日元和人民币直接相加。
+   **把它的结果写回配料行(`unitPrice: String(pp)`)必须同时写 `currency: "CNY"`** —— 三个编辑页打开 / 保存时刷新价格的 6 处
+   到 2026-09-27 才补上:老配料没币种字段,刷新出的人民币被当日元再乘一次汇率,编辑页成本小 23 倍,
+   「保存到本店原料」还会把人民币数当日元存进本店原料。
+   **组件卡片 / 选组件弹窗 / 组合蛋糕(列表、详情、编辑)的成本一律实时算**(`getIngsLiveCost` / `calcLayerLiveCost`)。
+   `components[].totalCost` 和 `creations.layers[].totalCost` 这两个快照**没有币种,只写不读**:东京时期存的是日元,
+   v17 后保存过的是人民币或混的。2026-09-27 前直接加 ¥ 显示,Framboisier 列表 ¥22,885、实际约 ¥312。
 4. **人民币写 `¥`、日元写 `円`** —— 两个符号刻意不同,LuLu 扫一眼列表就知道哪条还是日本
    老数据、该换国内货源。折算出来的数标 `≈`,且是否标 `≈` 要看**实际取用的那条**的币种
    (本店价人民币 + 百科价日元时取的是本店价,那就不是约数)。
