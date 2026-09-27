@@ -434,6 +434,24 @@ const priceCurBtn = (obj, onToggle, lang, price = null) => (
   </button>
 );
 
+// 配料行手写单价旁边的币种切换,配方 / 组件 / 层三个编辑页共用(组件和层原来没有,老行没有 currency = 日元,改不成人民币)。
+// 语义同 priceCurBtn:「这笔钱是哪种钱」,切过去保住同一笔钱,单价、成本快照、改价前的原价一起折。
+// onToggle 收要合并进这一行的字段。关联了百科的行别显示:那种行的价跟百科走,手写价不参与计算。
+const ingCurBtn = (ing, onToggle, lang) => {
+  const cur = curOf(ing), to = cur === "CNY" ? "JPY" : "CNY";
+  return (
+    <button type="button" onClick={() => onToggle({ currency: to, unitPrice: convCur(ing.unitPrice, cur, to), cost: convCur(ing.cost, cur, to, 2),
+      ...(ing._originalPrice !== undefined ? { _originalPrice: convCur(ing._originalPrice, cur, to) } : {}) })}
+      title={lang === "zh" ? "这条单价的币种,点一下切换(人民币 / 日元),已填的价一起换算" : "この単価の通貨を切替(入力済みの価格も換算)"}
+      style={{ padding: "2px 4px", fontSize: 11, lineHeight: 1.2, cursor: "pointer", borderRadius: 3,
+        background: cur === "CNY" ? "transparent" : "#FEF3C7",
+        border: `0.5px solid ${cur === "CNY" ? T.border : "#F59E0B"}`,
+        color: cur === "CNY" ? T.textSecondary : "#92400E" }}>
+      {cur === "CNY" ? "¥" : "円"}
+    </button>
+  );
+};
+
 // 配料行 / 层的成本显示。整数四舍五入会把盐 1g 的 0.03 元显示成「¥0」,和「没价」(空白)分不清。
 // 规则:不到 1 元两位小数、1 到 10 元一位小数、10 元以上整数,尾零去掉;小于 1 分显示「<¥0.01」。
 // 批次总成本 / 单个成本不走这里(数大,整数够用)。
@@ -5556,7 +5574,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                 };
                 const { material: linkedMat } = resolveIngMaterial(ing, materials, brands);
                 // 检查价格是否和价格表当前值不一致
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice &&
+                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                   Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
                   ? parseFloat(linkedBrand.price) : null;
                 return (
@@ -5596,7 +5614,10 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                       )}
                     </td>
                     <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                        <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
+                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
+                      </div>
                       {priceDrift !== null && (
                         <button onClick={() => {
                           setIngs(prev => prev.map(i => {
@@ -8597,7 +8618,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                   }));
                 };
                 const { material: linkedMat } = resolveIngMaterial(ing, materials, brands);
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice &&
+                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                   Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
                   ? parseFloat(linkedBrand.price) : null;
                 return (
@@ -8634,7 +8655,10 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
                       )}
                     </td>
                     <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                        <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
+                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
+                      </div>
                       {priceDrift !== null && (
                         <button onClick={() => {
                           setIngs(prev => prev.map(i => {
@@ -12336,7 +12360,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                   }));
                 };
                 const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice &&
+                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                   Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
                   ? parseFloat(linkedBrand.price) : null;
                 return (
@@ -12382,13 +12406,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                       <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                         <input type="number" placeholder={curOf(ing) === "CNY" ? "¥/g" : "円/g"} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...iStyle, width: 52, borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined }} />
                         {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
-                        {!ing.materialId && (
-                          <button type="button" onClick={() => updateIng(ing._id, "currency", curOf(ing) === "CNY" ? "JPY" : "CNY")}
-                            title={lang === "zh" ? "这条单价的币种,点一下切换(人民币 / 日元)" : "この単価の通貨を切替"}
-                            style={{ padding: "2px 4px", fontSize: 11, lineHeight: 1.2, background: curOf(ing) === "CNY" ? "transparent" : "#FEF3C7", border: `0.5px solid ${curOf(ing) === "CNY" ? T.border : "#F59E0B"}`, borderRadius: 3, cursor: "pointer", color: curOf(ing) === "CNY" ? T.textSecondary : "#92400E" }}>
-                            {curOf(ing) === "CNY" ? "¥" : "円"}
-                          </button>
-                        )}
+                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
                         {ing._priceModified && (
                           <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                         )}
