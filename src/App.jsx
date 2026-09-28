@@ -2924,7 +2924,7 @@ async function deleteImageBlob(id) {
 // 每次 saveData 自动写一份到 IndexedDB。万一 localStorage 被清/损坏,可从备份列表里挑一个版本恢复。
 // 2026-09-29 体检第 2 批:以前只留最近 30 次保存(每停手 0.8 秒就算一次),误导入隔天才发现就找不回导入前的版本;
 // 打开恢复列表还把 30 份整份数据全读进来逐份解析。现在:
-//   · 分层保留:最近 BACKUP_RECENT 份 + 最近 BACKUP_DAYS 天每天一份(当天最早那份);内容和上一份一样不存
+//   · 分层保留:最近 BACKUP_RECENT 份 + 最近 BACKUP_HOURS 小时每小时一份 + 最近 BACKUP_DAYS 天每天一份(当天最早那份);内容和上一份一样不存
 //   · 覆盖导入 / 清除全部 / 恢复备份之前存一份「固定」备份(pinned),不参与上面的轮换(最多 BACKUP_PINNED_MAX 份)
 //   · 新库 patisserie_backup_v2 把小摘要(meta)和整份数据(payloads)分开存:列表只读摘要,点「恢复」才读整份
 //   · 旧库 patisserie_backup(升级前的备份)照样能列、能恢复,只读时间不读内容;超过 BACKUP_DAYS 天的自动清掉
@@ -2935,6 +2935,7 @@ const BACKUP_META = "meta";
 const BACKUP_PAYLOADS = "payloads";
 const BACKUP_RECENT = 15;
 const BACKUP_DAYS = 14;
+const BACKUP_HOURS = 12;
 const BACKUP_PINNED_MAX = 10;
 const BACKUP_SUMMARY_KEYS = ["recipes", "components", "creations", "materials", "brands", "knowledge"];
 
@@ -2997,6 +2998,17 @@ function pickBackupsToDelete(metas, now) {
   sorted.filter(m => m.pinned).slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
   const auto = sorted.filter(m => !m.pinned);
   auto.slice(0, BACKUP_RECENT).forEach(m => keep.add(m.id));
+  // 最近 BACKUP_HOURS 小时每小时留一份(那一小时最早那份):卖货时每点一次 +/- 都存一份,
+  // 只留最近 15 份的话几分钟就轮完,两小时前的状态就找不回来了
+  const firstOfHour = new Map();
+  auto.forEach(m => {
+    const t = new Date(m.savedAt || "").getTime();
+    if (isNaN(t) || now - t > BACKUP_HOURS * 3600000) return;
+    const hour = Math.floor(t / 3600000);
+    const cur = firstOfHour.get(hour);
+    if (!cur || (m.savedAt || "") < (cur.savedAt || "")) firstOfHour.set(hour, m);
+  });
+  firstOfHour.forEach(m => keep.add(m.id));
   const cutoff = localDateStr(new Date(now - (BACKUP_DAYS - 1) * 86400000));
   const firstOfDay = new Map();
   auto.forEach(m => {
@@ -3751,8 +3763,8 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
             </div>
             <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>
               {lang === "zh"
-                ? `自动备份(浏览器内置数据库):最近 ${BACKUP_RECENT} 份 + 最近 ${BACKUP_DAYS} 天每天一份;覆盖导入、清除全部、恢复备份之前另存一份「固定」备份,不会被自动挤掉(最多 ${BACKUP_PINNED_MAX} 份) · 当前 ${snapshots.length} 份`
-                : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件;上書き・全削除・復元の前は固定保存(最大 ${BACKUP_PINNED_MAX} 件) · 現在 ${snapshots.length} 件`}
+                ? `自动备份(浏览器内置数据库):最近 ${BACKUP_RECENT} 份 + 最近 ${BACKUP_HOURS} 小时每小时一份 + 最近 ${BACKUP_DAYS} 天每天一份;覆盖导入、清除全部、恢复备份之前另存一份「固定」备份,不会被自动挤掉(最多 ${BACKUP_PINNED_MAX} 份) · 当前 ${snapshots.length} 份`
+                : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_HOURS} 時間は1時間1件 + ${BACKUP_DAYS} 日間は1日1件;上書き・全削除・復元の前は固定保存(最大 ${BACKUP_PINNED_MAX} 件) · 現在 ${snapshots.length} 件`}
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
@@ -17984,7 +17996,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.2px", textTransform: "uppercase", fontWeight: 500, margin: "1.5rem 0 0.6rem" }}>{txt}</div>
             );
             const backupCards = [
-              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
+              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_HOURS} 小时每小时一份、最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
               { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
               { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             ];
