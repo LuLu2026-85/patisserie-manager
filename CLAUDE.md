@@ -158,7 +158,8 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 **Core 5 (legacy)**:
 - `recipes` — standalone recipes (e.g. seeded `FINANCIER`). Ingredients carry a `group` field (`bowl1`..`bowl5`, `none`) that drives the grouped-ingredient layout.
 - `components` — reusable parts (biscuit, mousse, jelly, glaze, etc.) used inside `creations`. Seeded with `AGREABLE_MOUSSE`.
-- `creations` — "组合蛋糕" layered cakes that reference `components` as layers.
+- `creations` — 「组合产品」(2026-09-27 前叫「组合蛋糕」,实体 id 和 tab id 没改)that reference `components` as layers.
+  `structure` 字段决定长相:`"stack"` 叠层(缺省,自上而下,蛋糕类)/ `"assembly"` 拼装(壳 / 馅 / 顶,不分上下,泡芙 / 塔 / 丹麦类),见下面「组合产品的结构」。
 - `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` free-text name array (matched by name, not id — four-tier rule, see 「知识 ↔ 配方 / 组件 / 蛋糕的名字关联」 below).
 - `cats` — **deprecated** old price table; UI hidden but kept for compat.
 
@@ -325,7 +326,12 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   「↻ 同步回组件库」(App 里的 `onUpdateComponent`)2026-09-27 起按字段合并 `{ ...c, ...updated }`,层只带层编辑页能改的字段
   (中日文名 / 分类 / 产出量 / 单位 / 原料 / `stepsZh` / `stepsJa`),在用和风味 / 模具 / 图片 / 备注都天然保留,**别改回整体替换**。
   同一页还加了:搜索框(中 / 日 / 法名 + 风味名)、「全部」和「在用中」时按分类分段(认不出的分类并进「其他」段)、
-  卡片信息行「用在「X」等 N 个组合蛋糕」(按 `layers[].sourceComponentId` 反查,只显示不写数据;手搭的空白层没有这个 id,不计入)。
+  卡片信息行「用在「X」等 N 个组合产品」(按 `layers[].sourceComponentId` 反查,只显示不写数据;手搭的空白层没有这个 id,不计入)。
+- **组合产品的结构 `creations[].structure`**(2026-09-27,LuLu 用组件搭泡芙时「上下层」显得怪):`"stack"` 叠层(缺省,老数据没这个字段 = 叠层,
+  不迁移)/ `"assembly"` 拼装。**只换文字和示意图,layers 的顺序 / 用量 / 成本算法一概不动**:拼装不画左侧竖条、「N 层」→「N 个部分」、
+  「本层用量」→「用量」、「制作台数 / 每台切几份」→「制作个数 / 每个分几份」、「单台成本」→「单个成本」。叫法全部从 `creationWords(structure, lang)`
+  取(`CREATION_STRUCTURES` 表定义在 `CreationsView` 上方),列表 / 详情 / 编辑 / 层编辑四处共用,**别在页面里散写「层」「台」**。
+  慕斯的夹心就是叠层里中间的一层(剖面图画法),刻意不另设类型。编辑页「结构」两个胶囊按钮切换,`LayerEditForm` 多收一个 `structure` prop。
 
 ## RURU_*.json files at repo root
 

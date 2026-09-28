@@ -126,7 +126,7 @@ const I18N = {
   // 新建按钮
   newRecipe:     { zh: "+ 新建配方",     ja: "+ レシピ新規" },
   newComponent:  { zh: "+ 新增组件",     ja: "+ コンポーネント追加" },
-  newCreation:   { zh: "+ 新建蛋糕",     ja: "+ ケーキ新規" },
+  newCreation:   { zh: "+ 新建组合产品", ja: "+ 組立製品新規" },
   newKnowledge:  { zh: "+ 新增知识点",   ja: "+ ナレッジ追加" },
   newFamily:     { zh: "+ 新建家族",     ja: "+ ファミリー新規" },
   newBrand:      { zh: "+ 新增厂家",     ja: "+ メーカー追加" },
@@ -295,14 +295,14 @@ const GROUPS = {
 const GROUP_ORDER = ["bowl1", "bowl2", "bowl3", "bowl4", "bowl5", "none"];
 
 // 手机底栏固定这 4 个高频 tab（+ 第 5 格是「更多」）；
-// 其余 5 个（采购 / 组合蛋糕 / 知识库 / 供货商 / 数据）收进「更多」全屏抽屉。
+// 其余 5 个（采购 / 组合产品 / 知识库 / 供货商 / 数据）收进「更多」全屏抽屉。
 const MOBILE_NAV = ["list", "components", "products", "materialsPedia"];
 
 // 配料表列宽：名称(吃剩余) / 用量 / 品牌 / 成本。
 // 只在这里定义一次，表头 · 数据行 · 汇总条三处共用（原先在两个地方各写了一遍，改一处漏一处）
 const ING_COLS = "1fr 96px 132px 88px";
 
-// ───────────── 组件类别（用于仓库分类 & 组合蛋糕的层结构）─────────────
+// ───────────── 组件类别（用于仓库分类 & 组合产品的层结构）─────────────
 // 分类标签型：灰底(sunken) + 色点。bg 一律 sunken，颜色只出现在圆点上。
 const COMPONENT_CATEGORIES = [
   { id: "base",     zh: "基础组件",        ja: "ベース",          color: "#77776E", bg: "#F2F2EC" },
@@ -3323,7 +3323,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
       const n = (a) => Array.isArray(a) ? a.length : 0;
       return lang === "zh"
         ? `配方 ${n(d.recipes)} · 组件 ${n(d.components)} · 组合 ${n(d.creations)} · 材料 ${n(d.materials)} · 品牌 ${n(d.brands)} · 知识 ${n(d.knowledge)}`
-        : `レシピ ${n(d.recipes)} · コンポ ${n(d.components)} · ケーキ ${n(d.creations)} · 材料 ${n(d.materials)} · ブランド ${n(d.brands)}`;
+        : `レシピ ${n(d.recipes)} · コンポ ${n(d.components)} · 組立製品 ${n(d.creations)} · 材料 ${n(d.materials)} · ブランド ${n(d.brands)}`;
     } catch { return ""; }
   };
 
@@ -3644,8 +3644,8 @@ function BulkMaterialLinkWizard({ recipes, components, creations, materials, bra
             </div>
             <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>
               {lang === "zh"
-                ? `扫描全部配方/组件/组合蛋糕,发现 ${totalCount} 个未关联材料 (高置信度自动匹配 ${highConfidenceCount} 个)`
-                : `全レシピ/コンポーネント/ケーキをスキャン、未連動 ${totalCount} 件 (自動推定 ${highConfidenceCount} 件)`}
+                ? `扫描全部配方/组件/组合产品,发现 ${totalCount} 个未关联材料 (高置信度自动匹配 ${highConfidenceCount} 个)`
+                : `全レシピ/コンポーネント/組立製品をスキャン、未連動 ${totalCount} 件 (自動推定 ${highConfidenceCount} 件)`}
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
@@ -3710,7 +3710,7 @@ function BulkMaterialLinkWizard({ recipes, components, creations, materials, bra
                 const sel = selection[item.key];
                 const parentLabel = item.type === "recipe" ? (lang === "zh" ? "配方" : "レシピ")
                   : item.type === "component" ? (lang === "zh" ? "组件" : "コンポ")
-                  : (lang === "zh" ? "组合蛋糕" : "ケーキ");
+                  : (lang === "zh" ? "组合产品" : "組立製品");
                 return (
                   <div key={item.key} style={{
                     padding: "10px 12px",
@@ -4557,7 +4557,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
     const uses = usedIn[c.id] || [];
     const usageText = uses.length === 0 ? null
       : lang === "zh"
-        ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合蛋糕`)
+        ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合产品`)
         : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
     const liveCost = getIngsLiveCost(c.ingredients, materials, brands);  // 不读 c.totalCost,见 getIngsLiveCost
     return (
@@ -4945,7 +4945,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         <div style={{ textAlign: "center", padding: "3rem", color: "#666666", fontSize: 13, lineHeight: 1.8 }}>
           暂无组件。点「+ 新增组件」开始搭建你的配方积木库。<br/>
           <span style={{ fontSize: 12, color: "#999999" }}>
-            在这里存入生地・慕斯・果冻・脆片・淋面等基础配方，<br/>组合蛋糕时可以直接调用。
+            在这里存入生地・慕斯・果冻・脆片・淋面等基础配方，<br/>做组合产品时可以直接调用。
           </span>
         </div>
       )}
@@ -7197,7 +7197,43 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
   );
 }
 
-// ─── 组合蛋糕 View ───────────────────────────────────────────────
+// ─── 组合产品的「结构」(2026-09-27) ─────────────────────────────────
+// creations[].structure:"stack" 叠层(一层压一层、自上而下,蛋糕类)/ "assembly" 拼装(壳、馅、顶各是一部分、不分上下,
+// 泡芙 / 塔 / 丹麦 / 夹馅面包类)。缺省 = 叠层,老数据不迁移。慕斯的夹心就是叠层里中间的一层(剖面图的画法),不另设类型。
+// 只影响文字和示意图:拼装不画左侧竖条、「层」改「部分」、「台」改「个」;layers 的顺序 / 用量 / 成本算法一概不动。
+// 跟结构有关的叫法全部从 creationWords 取,别在页面里散写「层」「台」。
+const CREATION_STRUCTURES = [
+  { id: "stack",    zh: "叠层", ja: "積層",      hintZh: "一层压一层，自上而下（蛋糕类）",                       hintJa: "上から下へ積み重ねる（ケーキ類）" },
+  { id: "assembly", zh: "拼装", ja: "組み合わせ", hintZh: "壳、馅、顶各是一部分，不分上下（泡芙 / 塔 / 丹麦类）", hintJa: "殻・中身・トップの組み合わせ、上下なし（シュー / タルト類）" },
+];
+const creationStructureOf = (c) => (c && c.structure === "assembly") ? "assembly" : "stack";
+const creationWords = (structure, lang = "zh") => {
+  const stack = structure !== "assembly";
+  const zh = lang === "zh";
+  return {
+    isStack: stack,
+    partCount: (n) => stack ? `${n} ${zh ? "层" : "層"}` : `${n} ${zh ? "个部分" : "パーツ"}`,
+    unit: stack ? "台" : (zh ? "个" : "個"),
+    sectionTitle: stack ? (zh ? "🎂 层结构（自上而下）" : "🎂 層構成（上から下へ）") : (zh ? "🧩 组成部分" : "🧩 構成パーツ"),
+    sectionHint: stack ? "每层可设自定义名称、实际用量" : "每部分可设自定义名称、实际用量",
+    emptyDetail: stack ? "（尚未添加层）" : "（尚未添加组成部分）",
+    emptyEdit: stack ? "还没有层。从组件库挑一个开始搭。" : "还没有组成部分。从组件库挑一个开始。",
+    newBlank: stack ? (zh ? "+ 新建空白层" : "+ 空白層追加") : (zh ? "+ 新建空白部分" : "+ 空白パーツ追加"),
+    customNamePh: stack ? "自定义层名（例：顶层、中层饼底、夹心）" : "自定义名称（例：外壳、内馅、顶部）",
+    usedLabel: stack ? "本层用量" : "用量",
+    costLabel: stack ? "本层成本" : "成本",
+    servesLabel: stack ? "制作台数" : "制作个数",
+    portionsLabel: stack ? "每台切几份" : "每个分几份",
+    perUnitCost: stack ? "单台成本" : "单个成本",
+    tipFillUsed: `💡 提示：点击下方每${stack ? "层" : "部分"}「编辑」填写「本产品用量」，才能精确计算成本`,
+    deleteConfirm: stack ? "删除这一层吗？" : "删除这一部分吗？",
+    editTitle: stack ? "编辑层：" : "编辑部分：",
+    fromLib: `💡 这一${stack ? "层" : "部分"}来自组件库。你可以自由调整不影响组件库。如果调整后想同步回组件库，保存前点「↻ 同步回组件库」。`,
+    saveBtn: stack ? (zh ? "保存层" : "レイヤー保存") : (zh ? "保存这部分" : "パーツ保存"),
+  };
+};
+
+// ─── 组合产品 View ───────────────────────────────────────────────
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge }) {
   if (editTarget !== null) {
     return (
@@ -7214,12 +7250,12 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
             const found = prev.find(x => x.id === c.id);
             return found ? prev.map(x => x.id === c.id ? c : x) : [...prev, c];
           });
-          showToast("✓ 组合蛋糕已保存");
+          showToast("✓ 组合产品已保存");
           setViewId(c.id);
           setEditTarget(null);
         }}
         onDelete={() => {
-          confirmDialog("删除这个组合蛋糕吗？", () => {
+          confirmDialog("删除这个组合产品吗？", () => {
             setCreations(prev => prev.filter(x => x.id !== editTarget.id));
             showToast("已删除");
             setEditTarget(null);
@@ -7260,22 +7296,22 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组合蛋糕（${creations.length}）` : `組立ケーキ（${creations.length}）`}</div>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组合产品（${creations.length}）` : `組立製品（${creations.length}）`}</div>
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新建蛋糕" : "+ ケーキ新規"}</Btn>
+          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新建组合产品" : "+ 組立製品新規"}</Btn>
         </div>
       </div>
 
       {creations.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem", color: T.textSecondary, fontSize: 13, lineHeight: 1.8 }}>
-          {lang === "zh" ? "还没有组合蛋糕。" : "まだケーキがありません。"}<br />
+          {lang === "zh" ? "还没有组合产品。" : "まだ組立製品がありません。"}<br />
           <span style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>
             {lang === "zh" ? (
-              <>从「组件仓库」挑选组件像搭积木一样创建新蛋糕，<br />记录试吃反馈与改进方向。</>
+              <>从「组件仓库」挑选组件像搭积木一样创建新产品（蛋糕、泡芙、塔……），<br />记录试吃反馈与改进方向。</>
             ) : (
-              <>コンポーネントを積み上げて新しいケーキを作成し、<br />試食フィードバックと改善方向を記録します。</>
+              <>コンポーネントを組み合わせて新しい製品（ケーキ、シュー、タルト…）を作成し、<br />試食フィードバックと改善方向を記録します。</>
             )}
           </span>
         </div>
@@ -7348,7 +7384,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                   {/* 规格信息 */}
                   <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     {[
-                      layers.length > 0 ? `${layers.length} ${lang === "zh" ? "层" : "層"}` : null,
+                      layers.length > 0 ? creationWords(creationStructureOf(c), lang).partCount(layers.length) : null,
                       c.size || c.mold,
                       c.portions ? `${c.portions} ${lang === "zh" ? "份" : "人前"}` : null,
                       c.shelfLife,
@@ -7409,7 +7445,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
   );
 }
 
-// ─── 组合蛋糕详情 ────────────────────────────────────────────────
+// ─── 组合产品详情 ────────────────────────────────────────────────
 // ─── 配方模式下的步骤展开子组件（二次点击） ─────────────
 function LayerRecipeSteps({ steps, cat, lang }) {
   const [showSteps, setShowSteps] = useState(false);
@@ -7440,6 +7476,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
   const name = pickLang(c, "name", lang);
   const description = c.description || "";
   const layers = c.layers || [];
+  const W = creationWords(creationStructureOf(c), lang);  // 叠层 / 拼装的叫法
 
   // 🧮 单层实际成本:按这一层的配料实时算,不读存下来的 totalCost(没有币种,见 getIngsLiveCost)
   const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
@@ -7469,7 +7506,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          {lang === "zh" ? "组合蛋糕详情" : "ケーキ詳細"}
+          {lang === "zh" ? "组合产品详情" : "組立製品詳細"}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
@@ -7580,11 +7617,11 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
           <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: T.textTertiary, alignItems: "center" }}>
             {[
               c.size,
-              c.serves ? `${c.serves}${lang === "zh" ? "台" : "台"}` : null,
+              c.serves ? `${c.serves}${W.unit}` : null,
               c.portions ? `${c.portions}${lang === "zh" ? "等分" : "等分"}` : null,
               c.prepTime,
               c.shelfLife,
-              layers.length > 0 ? `${layers.length}${lang === "zh" ? "层" : "層"}` : null,
+              layers.length > 0 ? W.partCount(layers.length) : null,
             ].filter(Boolean).map((t, i, arr) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span>{t}</span>
@@ -7605,7 +7642,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
               <div style={{ fontSize: 16, fontWeight: 500, color: "#166534" }}>¥{totalCostAll.toFixed(0)}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>单个蛋糕成本</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{W.perUnitCost}</div>
               <div style={{ fontSize: 16, fontWeight: 500, color: "#166534" }}>¥{costPerCake.toFixed(0)}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
@@ -7642,13 +7679,13 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
 
       {/* 🎂 层结构（带示意图） */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-        <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 12 }}>🎂 层结构（自上而下）</div>
-        {layers.length === 0 && <div style={{ fontSize: 13, color: "#999999" }}>（尚未添加层）</div>}
+        <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 12 }}>{W.sectionTitle}</div>
+        {layers.length === 0 && <div style={{ fontSize: 13, color: "#999999" }}>{W.emptyDetail}</div>}
 
         {layers.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 12 }}>
-            {/* 左侧：示意图 */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, position: "sticky", top: 10, alignSelf: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: W.isStack ? "60px 1fr" : "1fr", gap: 12 }}>
+            {/* 左侧：示意图(只有叠层画;拼装不分上下,不画) */}
+            {W.isStack && <div style={{ display: "flex", flexDirection: "column", gap: 2, position: "sticky", top: 10, alignSelf: "start" }}>
               {layers.map((l, i) => {
                 const cat = getCompCat(l.componentCategory);
                 const usedAmount = parseFloat(l.usedAmount) || 0;
@@ -7666,7 +7703,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
                   </div>
                 );
               })}
-            </div>
+            </div>}
 
             {/* 右侧：层列表 */}
             <div>
@@ -7699,11 +7736,11 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
                         {viewMode === "detail" && (
                           <>
                             {usedAmount > 0 ? (
-                              <span>📏 本层用量 <strong>{usedAmount}g</strong></span>
+                              <span>📏 {W.usedLabel} <strong>{usedAmount}g</strong></span>
                             ) : (
                               <span style={{ color: "#CA8A04" }}>⚠ 未填用量</span>
                             )}
-                            <span>💰 本层成本 <strong>{fmtCost(actualCost)}</strong></span>
+                            <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
                           </>
                         )}
@@ -7864,7 +7901,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
   );
 }
 
-// ─── 组合蛋糕编辑 Form ───────────────────────────────────────────
+// ─── 组合产品编辑 Form ───────────────────────────────────────────
 function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], onSave, onDelete, onBack, onUpdateComponent, confirmDialog, knowledge = [], lang = "zh" }) {
   const isNew = !creation;
   const [errorMsg, setErrorMsg] = useState("");
@@ -7875,6 +7912,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     chef: "", flavorTags: [],
     status: "試作",
     price: "", priceCurrency: "CNY", prepTime: "", shelfLife: "",
+    structure: "stack",  // 叠层 / 拼装,见 CREATION_STRUCTURES;老数据没有这个字段 = 叠层
     layers: [],
     rating: 0,
     tasting: { date: "", notes: "", feedback: "", improvement: "" },
@@ -7889,6 +7927,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [showComponentPicker, setShowComponentPicker] = useState(false);
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
+  const structure = creationStructureOf(form);
+  const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法,切换只换文字和示意图,不动 layers
 
   // 🧮 单层实际成本 = 这一层配料的实时成本 × (本蛋糕用量 / 组件产出量),和详情页同一个函数
   const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
@@ -7953,9 +7993,9 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const deleteLayer = (idx) => {
     const doDelete = () => setForm(prev => ({ ...prev, layers: prev.layers.filter((_, i) => i !== idx) }));
     if (confirmDialog) {
-      confirmDialog("删除这一层吗？", doDelete);
+      confirmDialog(W.deleteConfirm, doDelete);
     } else {
-      if (window.confirm("删除这一层吗？")) doDelete();
+      if (window.confirm(W.deleteConfirm)) doDelete();
     }
   };
 
@@ -7977,13 +8017,14 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
   const handleSave = () => {
     if (!form.nameZh.trim()) {
-      setErrorMsg("请输入蛋糕名称");
+      setErrorMsg("请输入产品名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
     onSave({
       ...form,
       id: creation ? creation.id : "creation_" + Date.now(),
+      structure,
       layers: (form.layers || []).map(({ _lid, ...rest }) => rest),
       updatedAt: new Date().toISOString(),
     });
@@ -7997,6 +8038,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     return (
       <LayerEditForm
         layer={layer}
+        structure={structure}
         cats={cats}
         onUpdateCats={onUpdateCats}
         brands={brands}
@@ -8012,7 +8054,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建组合蛋糕" : "编辑组合蛋糕"}</div>
+        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建组合产品" : "编辑组合产品"}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
@@ -8029,17 +8071,17 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>🏷️ 基本信息</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>蛋糕名（中文）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（中文）</label>
             <input value={form.nameZh} onChange={f("nameZh")} placeholder="热带水果白巧克力慕斯蛋糕" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>蛋糕名（日本語）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（日本語）</label>
             <input value={form.nameJa} onChange={f("nameJa")} placeholder="アグレアブル トロピカル" style={inpStyle} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>蛋糕名（FR）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（FR）</label>
             <input value={form.nameFr} onChange={f("nameFr")} placeholder="Tropique Blanc" style={inpStyle} />
           </div>
           <div>
@@ -8049,7 +8091,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         </div>
         <div>
           <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>概念描述</label>
-          <textarea value={form.description} onChange={f("description")} placeholder="这个蛋糕想表达什么？口味方向？灵感来源？" style={{...inpStyle, minHeight: 60, resize: "vertical"}} />
+          <textarea value={form.description} onChange={f("description")} placeholder="这个产品想表达什么？口味方向？灵感来源？" style={{...inpStyle, minHeight: 60, resize: "vertical"}} />
         </div>
       </div>
 
@@ -8062,11 +8104,11 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <input value={form.size || form.mold || ""} onChange={f("size")} placeholder="15cm セルクル" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>制作台数</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{W.servesLabel}</label>
             <input type="number" value={form.serves || ""} onChange={f("serves")} placeholder="4" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>每台切几份</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{W.portionsLabel}</label>
             <input type="number" value={form.portions || ""} onChange={f("portions")} placeholder="8" style={inpStyle} />
           </div>
           <div>
@@ -8138,7 +8180,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <div style={{ fontSize: 15, fontWeight: 500, color: "#166534" }}>¥{totalCostAll.toFixed(0)}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>单个蛋糕成本</div>
+            <div style={{ color: "#666" }}>{W.perUnitCost}</div>
             <div style={{ fontSize: 15, fontWeight: 500, color: "#166534" }}>¥{costPerCake.toFixed(0)}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
@@ -8163,7 +8205,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         )}
         {(form.layers || []).length > 0 && !form.layers.every(l => l.usedAmount) && (
           <div style={{ fontSize: 11, color: "#CA8A04", marginTop: 6, lineHeight: 1.6 }}>
-            💡 提示：点击下方每层「编辑」填写"本蛋糕实际用量"，才能精确计算成本
+            {W.tipFillUsed}
           </div>
         )}
       </div>
@@ -8172,26 +8214,51 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <div>
-            <div style={{ fontWeight: 500, fontSize: 14 }}>🎂 层结构（自上而下）</div>
-            <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>每层可设自定义名称、本蛋糕实际用量</div>
+            <div style={{ fontWeight: 500, fontSize: 14 }}>{W.sectionTitle}</div>
+            <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>{W.sectionHint}</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <Btn size="sm" variant="primary" onClick={() => setShowComponentPicker(true)}>+ 从组件库选</Btn>
-            <Btn size="sm" onClick={() => addEmptyLayer()}>{lang === "zh" ? "+ 新建空白层" : "+ 空白層追加"}</Btn>
+            <Btn size="sm" onClick={() => addEmptyLayer()}>{W.newBlank}</Btn>
           </div>
+        </div>
+
+        {/* 结构:叠层 / 拼装。只换文字和示意图,不动已加的层 */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+          <span style={{ fontSize: 11, color: T.textTertiary }}>{lang === "zh" ? "结构" : "構造"}</span>
+          {CREATION_STRUCTURES.map(s => {
+            const active = structure === s.id;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setForm(prev => ({ ...prev, structure: s.id }))}
+                title={lang === "zh" ? s.hintZh : s.hintJa}
+                style={{
+                  padding: "4px 12px", fontSize: 12, cursor: "pointer", fontFamily: T.fontSans,
+                  border: `${active ? 1 : 0.5}px solid ${active ? T.brand : T.border}`, borderRadius: T.radiusPill,
+                  background: active ? T.brand : T.bgCard, color: active ? T.bgApp : T.textSecondary,
+                  fontWeight: active ? 500 : 400, transition: "all 0.15s",
+                }}
+              >{lang === "zh" ? s.zh : s.ja}</button>
+            );
+          })}
+          <span style={{ fontSize: 11, color: T.textTertiary }}>
+            {(CREATION_STRUCTURES.find(s => s.id === structure) || CREATION_STRUCTURES[0])[lang === "zh" ? "hintZh" : "hintJa"]}
+          </span>
         </div>
 
         {(!form.layers || form.layers.length === 0) && (
           <div style={{ textAlign: "center", padding: "2rem", color: "#999999", fontSize: 13, border: "1px dashed #CCCCCC", borderRadius: 8 }}>
-            还没有层。从组件库挑一个开始搭。
+            {W.emptyEdit}
           </div>
         )}
 
         {/* 📐 结构示意图 + 详细列表 */}
         {(form.layers || []).length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "50px 1fr", gap: 10 }}>
-            {/* 左侧：垂直堆叠示意图 */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ display: "grid", gridTemplateColumns: W.isStack ? "50px 1fr" : "1fr", gap: 10 }}>
+            {/* 左侧：垂直堆叠示意图(只有叠层画;拼装不分上下,不画) */}
+            {W.isStack && <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {form.layers.map((layer, idx) => {
                 const cat = getCompCat(layer.componentCategory);
                 return (
@@ -8200,7 +8267,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                   </div>
                 );
               })}
-            </div>
+            </div>}
 
             {/* 右侧：详细列表 */}
             <div>
@@ -8233,18 +8300,18 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                       <input
                         value={layer.customName || ""}
                         onChange={e => updateLayerField("customName", e.target.value)}
-                        placeholder="自定义层名（例：顶层、中层饼底）"
+                        placeholder={W.customNamePh}
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
                       <input
                         type="number"
                         value={layer.usedAmount || ""}
                         onChange={e => updateLayerField("usedAmount", e.target.value)}
-                        placeholder={componentYield > 0 ? `本蛋糕用量(g)，原组件${componentYield}g` : "本蛋糕用量(g)"}
+                        placeholder={componentYield > 0 ? `本产品用量(g)，原组件${componentYield}g` : "本产品用量(g)"}
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #F59E0B", borderRadius: 4, background: "#FFFBEB", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
                       <div style={{ padding: "5px 8px", fontSize: 11, color: "#666", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                        {actualCost > 0 ? <span>本层成本 <strong style={{ color: "#059669" }}>{fmtCost(actualCost)}</strong></span> : <span style={{ color: "#999" }}>填用量→算成本</span>}
+                        {actualCost > 0 ? <span>{W.costLabel} <strong style={{ color: "#059669" }}>{fmtCost(actualCost)}</strong></span> : <span style={{ color: "#999" }}>填用量→算成本</span>}
                       </div>
                     </div>
 
@@ -8376,7 +8443,8 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 }
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
-function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, lang = "zh", onUpdateCats }) {
+function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, lang = "zh", onUpdateCats }) {
+  const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
@@ -8522,13 +8590,13 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
         />
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-        <div style={{ fontSize: 16, fontWeight: 500 }}>编辑层：{form.nameZh || form.nameJa || "未命名"}</div>
+        <div style={{ fontSize: 16, fontWeight: 500 }}>{W.editTitle}{form.nameZh || form.nameJa || "未命名"}</div>
         <Btn onClick={onBack}>← 取消</Btn>
       </div>
 
       {layer.sourceComponentId && (
         <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "8px", padding: "10px 14px", marginBottom: "1rem", fontSize: 12, color: "#1E40AF" }}>
-          💡 这一层来自组件库。你可以自由调整不影响组件库。如果调整后想同步回组件库，保存前点「↻ 同步回组件库」。
+          {W.fromLib}
         </div>
       )}
 
@@ -8731,7 +8799,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
         ) : <div />}
         <div style={{ display: "flex", gap: 8 }}>
           <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-          <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存层" : "レイヤー保存"}</Btn>
+          <Btn variant="primary" onClick={handleSave}>{W.saveBtn}</Btn>
         </div>
       </div>
       {/* 🔗 材料百科选择弹窗 */}
@@ -8807,7 +8875,7 @@ function LayerEditForm({ layer, cats = [], brands = [], materials = [], onSave, 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
       {/* 浮动保存栏 */}
-      <StickySaveBar onSave={handleSave} label={lang === "zh" ? "保存层" : "レイヤー保存"} />
+      <StickySaveBar onSave={handleSave} label={W.saveBtn} />
     </div>
   );
 }
@@ -9179,7 +9247,7 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
                   );
                 }
                 if (match && onNavigate) {
-                  const typeLabel = { recipe: "配方", component: "组件", creation: "蛋糕" }[match.type];
+                  const typeLabel = { recipe: "配方", component: "组件", creation: "组合产品" }[match.type];
                   const typeBg = { recipe: "#DBEAFE", component: "#D1FAE5", creation: "#FCE7F3" }[match.type];
                   const typeColor = { recipe: "#1E40AF", component: "#065F46", creation: "#9D174D" }[match.type];
                   return (
@@ -9345,7 +9413,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
 
       {/* 关联配方 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>关联配方 / 组件 / 蛋糕</div>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>关联配方 / 组件 / 组合产品</div>
 
         {/* 从现有数据中选择（可点击跳转的核心） */}
         <div style={{ marginBottom: 12 }}>
@@ -9381,7 +9449,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
               </optgroup>
             )}
             {creations.length > 0 && (
-              <optgroup label="🎂 组合蛋糕">
+              <optgroup label="🎂 组合产品">
                 {creations.map(cr => {
                   const name = cr.nameZh || cr.nameJa;
                   return <option key={cr.id} value={`creation||${name}`}>{name}</option>;
@@ -13043,7 +13111,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12 }}>📦 {lang === "zh" ? "组成(每份含)" : "構成"}</div>
           {(p.items || []).length === 0 ? (
-            <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "未关联任何配方/组合蛋糕/组件" : "未関連"}</div>
+            <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "未关联任何配方/组合产品/组件" : "未関連"}</div>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               {p.items.map((it, i) => {
@@ -13113,7 +13181,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
       </div>
       {products.length === 0 ? (
         <div style={{ background: T.bgSoft, borderRadius: T.radius, padding: "40px 20px", textAlign: "center", fontSize: 13, color: T.textSecondary, lineHeight: 1.8 }}>
-          {lang === "zh" ? <>还没有商品。<br/>商品 = 对外销售的单品或礼盒,绑定你的配方/组合蛋糕后<br/>可以管理库存、看每天该做什么、记销售。</> : <>商品未登録。<br/>販売するSKUとレシピを紐付けて在庫管理。</>}
+          {lang === "zh" ? <>还没有商品。<br/>商品 = 对外销售的单品或礼盒,绑定你的配方/组合产品后<br/>可以管理库存、看每天该做什么、记销售。</> : <>商品未登録。<br/>販売するSKUとレシピを紐付けて在庫管理。</>}
         </div>
       ) : (
         <>
@@ -13271,7 +13339,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
       />
       <Section title={lang === "zh" ? "配方" : "レシピ"} emoji="🧁" pool={recipePool} type="recipe" color="#a87b3e" originCount={recipes.length} />
       <Section title={lang === "zh" ? "组件" : "部品"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
-      <Section title={lang === "zh" ? "组合蛋糕" : "ケーキ"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
+      <Section title={lang === "zh" ? "组合产品" : "組立製品"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
     </div>
   );
 }
@@ -13356,7 +13424,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
           <Btn size="sm" variant="primary" onClick={() => setPicker({})}>+ {lang === "zh" ? "加一项" : "追加"}</Btn>
         </div>
         {(form.items || []).length === 0 ? (
-          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic", padding: "12px 0" }}>{lang === "zh" ? "还没有组成项。点「+ 加一项」从配方/组合蛋糕/组件选。礼盒可加多项。" : "未追加"}</div>
+          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic", padding: "12px 0" }}>{lang === "zh" ? "还没有组成项。点「+ 加一项」从配方/组合产品/组件选。礼盒可加多项。" : "未追加"}</div>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>
             {(form.items || []).map((it, i) => {
@@ -14409,7 +14477,7 @@ function App() {
     { id: "purchase", zh: "采购", ja: "仕入" },
     { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
     { id: "components", zh: "组件仓库", ja: "コンポーネント", mZh: "组件", mJa: "パーツ" },
-    { id: "creations", zh: "组合蛋糕", ja: "組立ケーキ" },
+    { id: "creations", zh: "组合产品", ja: "組立製品" },
     { id: "knowledge", zh: "知识库", ja: "ナレッジ" },
     { id: "shopMaterials", zh: "本店原料", ja: "仕入れ原料" },
     { id: "suppliers", zh: "供货商", ja: "仕入先" },
@@ -14813,7 +14881,7 @@ function App() {
             if (report.brandsAdded) lines.push("+ 新品牌: " + report.brandsAdded + " (散布在 " + report.catsUpdated + " 个已有大类)");
             if (report.componentsNew) lines.push("+ 新组件: " + report.componentsNew);
             if (report.recipesNew) lines.push("+ 新配方: " + report.recipesNew);
-            if (report.creationsNew) lines.push("+ 新组合蛋糕: " + report.creationsNew);
+            if (report.creationsNew) lines.push("+ 新组合产品: " + report.creationsNew);
             if (report.knowledgeNew) lines.push("+ 新知识点: " + report.knowledgeNew);
             // [B1 修复] 7 个补字段的报告
             if (report.productsNew) lines.push("+ 新商品: " + report.productsNew);
@@ -15969,7 +16037,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         />
       )}
 
-      {/* 组合蛋糕 */}
+      {/* 组合产品 */}
       {tab === "creations" && (
         <CreationsView
           creations={creations}
@@ -15987,7 +16055,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           saved={saved}
           confirmDialog={confirmDialog}
           onUpdateComponent={(updated) => {
-            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n这不会影响其他已创建的组合蛋糕，只会更新组件库里的原始配方。", () => {
+            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n这不会影响其他已创建的组合产品，只会更新组件库里的原始配方。", () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
@@ -16157,7 +16225,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div style={{ fontSize: 13, color: "#666666", lineHeight: 2 }}>
               {lang === "zh" ? "配方" : "レシピ"}：<strong>{recipes.length}</strong> {lang === "zh" ? "个" : "件"}<br />
               {lang === "zh" ? "组件" : "コンポーネント"}：<strong>{components.length}</strong> {lang === "zh" ? "个" : "件"}<br />
-              {lang === "zh" ? "组合蛋糕" : "組立ケーキ"}：<strong>{creations.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "组合产品" : "組立製品"}：<strong>{creations.length}</strong> {lang === "zh" ? "个" : "件"}<br />
               {lang === "zh" ? "知识点" : "ナレッジ"}：<strong>{knowledge.length}</strong> {lang === "zh" ? "条" : "件"}<br />
               {lang === "zh" ? "厂家" : "ブランド"}：<strong>{brands.length}</strong> {lang === "zh" ? "家" : "社"}<br />
               {lang === "zh" ? "材料百科" : "材料事典"}：<strong>{materials.length}</strong> {lang === "zh" ? "条" : "件"}<br />
