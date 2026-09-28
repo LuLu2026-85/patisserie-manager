@@ -6896,9 +6896,9 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           {lang === "zh" ? "🖨 打印预览" : "🖨 印刷プレビュー"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <Btn size="sm" onClick={() => setShowLogoUpload(true)}>{lang === "zh" ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>
+          <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{lang === "zh" ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>
           <Btn size="sm" variant="primary" onClick={doPrint}>{lang === "zh" ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
-          <Btn size="sm" onClick={onClose}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn size="sm" onClick={onClose} style={{ background: T.paper }}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
