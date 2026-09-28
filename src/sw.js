@@ -1,33 +1,82 @@
 // 极简原生 Service Worker(不依赖 workbox 运行时)
 // 目标:首次加载后把整个 app 壳缓存到设备,之后离线 / 国内免梯子也能打开。
 // 本 app 纯客户端,数据全在 localStorage + IndexedDB,SW 只负责把静态文件离线化。
+//
+// 2026-09-29 体检修(两处):
+// 1. 以前所有版本共用一个缓存名,新版文件直接写进正在用的缓存,单个文件下载失败被吞掉照样启用。
+//    更新时梯子抖一下 → 新首页进了缓存、新主程序没进 → 之后国内不开梯子打开就白屏。
+//    现在每个版本一个缓存(名字带版本号);首页和主程序必须全部下载成功才启用新版,失败就继续用旧版。
+// 2. 以前每次更新都重新下载全部约 8.7 MB(主要是字体)。现在记下每个文件的版本号(构建时算的内容哈希),
+//    没变的文件从旧缓存直接拷过来。
 
-// vite-plugin-pwa(injectManifest)会在构建时把预缓存清单注入到这里:
+// vite-plugin-pwa(injectManifest)会在构建时把预缓存清单注入到这里:[{ url, revision }]
 const MANIFEST = self.__WB_MANIFEST || [];
-const CACHE = 'patisserie-shell-v1';
+const PREFIX = 'patisserie-shell-';
+const norm = (u) => '/' + String(u).replace(/^\.?\//, '');
+const ENTRIES = MANIFEST
+  .map((e) => (typeof e === 'string' ? { url: norm(e), revision: '' } : (e && e.url ? { url: norm(e.url), revision: e.revision || '' } : null)))
+  .filter(Boolean);
+const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+const CACHE = PREFIX + hash(ENTRIES.map((e) => e.url + '@' + e.revision).join('|'));
+const REV_KEY = '/__sw-revisions.json';
+// 关键文件:少一个就打不开 app
+const isCritical = (u) => u === '/index.html' || /^\/assets\/index-[^/]+\.(js|css)$/.test(u);
 
-// 预缓存清单 → 绝对路径列表(再补上根路径 '/' 兜底导航)
-const ASSETS = Array.from(new Set([
-  '/',
-  ...MANIFEST.map((e) => (typeof e === 'string' ? e : e && e.url)).filter(Boolean),
-]));
-
-// 安装:把 app 壳全部抓进缓存
+// 安装:把 app 壳抓进这一版自己的缓存
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      // 逐个缓存而非 addAll(全有或全无):个别文件失败不拖垮整体离线能力
-      // cache:'reload' 确保抓到的是网络最新版,不走 HTTP 缓存
+      // 旧版本记下的「文件 → 版本号」:版本号没变的文件直接从旧缓存拷,不重下
+      const oldRevs = new Map();
+      for (const name of await caches.keys()) {
+        if (!name.startsWith(PREFIX) || name === CACHE) continue;
+        try {
+          const r = await (await caches.open(name)).match(REV_KEY);
+          if (!r) continue;
+          const map = await r.json();
+          for (const [u, rev] of Object.entries(map)) if (!oldRevs.has(u)) oldRevs.set(u, { rev, name });
+        } catch (e) { /* 旧记录读不出就当没有 */ }
+      }
+      const tryReuse = async (e) => {
+        const o = oldRevs.get(e.url);
+        if (!o || !e.revision || o.rev !== e.revision) return false;
+        const res = await (await caches.open(o.name)).match(e.url);
+        if (!res) return false;
+        await cache.put(e.url, res);
+        return true;
+      };
+      // cache:'reload' 确保抓到的是网络最新版,不走 HTTP 缓存;非 2xx 当失败
+      const fetchInto = async (u) => {
+        const res = await fetch(new Request(u, { cache: 'reload' }));
+        if (!res.ok) throw new Error(u + ' ' + res.status);
+        await cache.put(u, res);
+      };
+
+      // 关键文件全有或全无:任何一个失败就抛出 → 这一版不启用,旧版和旧缓存原封不动
+      const fresh = new Set();   // 这一版真正拿到新版本的文件
+      const critical = ['/', ...ENTRIES.filter((e) => isCritical(e.url)).map((e) => e.url)];
+      for (const u of critical) {
+        const e = ENTRIES.find((x) => x.url === u);
+        if (!(e && (await tryReuse(e)))) await fetchInto(u);
+        fresh.add(u);
+      }
+      // 其余文件尽力而为:下载失败就先把旧版本的副本放进来顶着(旧缓存这时还没删),
+      // 不然激活时旧缓存被整个删掉,字体表 / 厨房布局台离线就没了(审查发现)
       await Promise.all(
-        ASSETS.map(async (u) => {
+        ENTRIES.filter((e) => !isCritical(e.url)).map(async (e) => {
           try {
-            await cache.add(new Request(u, { cache: 'reload' }));
-          } catch (e) {
-            // 单个资源抓取失败(如临时 404)忽略,不影响其余预缓存
+            if (!(await tryReuse(e))) await fetchInto(e.url);
+            fresh.add(e.url);
+          } catch (err) {
+            try { const stale = await caches.match(e.url); if (stale) await cache.put(e.url, stale); } catch (err2) { /* 忽略 */ }
           }
         })
       );
+      // 只记真正拿到新版本的文件;拿旧副本顶着的不记,下次更新会重下
+      const have = {};
+      for (const e of ENTRIES) if (fresh.has(e.url)) have[e.url] = e.revision;
+      await cache.put(REV_KEY, new Response(JSON.stringify(have), { headers: { 'Content-Type': 'application/json' } }));
       await self.skipWaiting();
     })()
   );

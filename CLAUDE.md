@@ -372,11 +372,41 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
 7. 新字段(`follow` / `localVariant` / `prepMode` / `creations.onSale`)缺省就是老行为,**payload `version` 仍是 17,不写迁移**
    (老数据的归一化由 effect 做,只加标记)。
 
+## 2026-09-29 体检第 1 批修复(改这些地方前先看)
+
+全面体检报告在 Artifact「kororā App 体检」,原始结果 `.claude/audit_2026-09-28/audit_result.json`(每条带 fixHint)。第 1 批修了 11 个严重 bug,留下这些规则:
+
+1. **编辑页离开保护**:编辑页用 `useDirtyGuard(() => 要比较的状态)`,把返回的 bind 挂在根元素上(`<div {...dirtyBind}>`);
+   快照在她第一次按键 / 点击时才拍,所以编辑页打开后 effect 自动调整表单不会被误判成「改过」。**顶部导航、手机底栏、「更多」抽屉切页一律走
+   `goTab(t)`,别再直接 `setTab`** —— `goTab` 有未保存改动时先弹 confirmDialog。离开组件 / 组合产品 tab 时 effect 会清掉
+   `compEditTarget` / `creationEditTarget`(以前切回来还是旧编辑页)。新写的编辑页也要接 `useDirtyGuard`。
+2. **多窗口**:`storage` 事件只在别的窗口写入时触发。**按内容判断**:`saveData` 的内容(不含 `savedAt`)和本窗口上次写入 / 载入的
+   `lastBodyRef` 一样就不写;别的窗口写进来的内容和 `lastBodyRef` 一样就不算改过。真不一样才 `staleRef = true`:本窗口停止自动保存、
+   顶上红条提示刷新。(审查发现:只看「有没有写」时,新开或刷新一个窗口就把另一个窗口踢成过期、两边来回互踢。)
+   离开页面(`pagehide` / 切到后台)时只在 `pendingRef` 有没存的改动才立刻写一次。备份恢复写完存档到刷新之间 `_suspendSaves = true`,任何保存都跳过。
+3. **合并导入**:brands / materials / shopMaterials 已存在的条目走 `mergeByNewer`:`updatedAt` 更晚的一边为准,另一边只补缺字段;
+   单价 / 参考价 / 币种(`pricePerG` / `priceRange` / `currency`)**永远整组取同一边**。**两边都没写修改时间(老数据)时以文件为准**,
+   只有一边写了时写了的算新。录入包要更新已有材料,生成时给那条写上当前 `updatedAt`。本店原料的所有写入口(编辑页保存、「保存到本店原料」、
+   「+ 添加为本店原料」、配方页批量加入、删供货商剥离)都写 `updatedAt`,材料和厂家编辑页本来就写。
+   (以前字段级合并,旧文件没 currency → 本机「人民币」标签 + 文件的日元数,成本错 20 到 50 倍。)
+4. **规格解析 `parsePackSizeToGrams`**:认 kg / g / L / ml 和中文 千克 / 公斤 / 克 / 升 / 毫升(液体按 1 g/ml),千位逗号先去掉,
+   多规格取第一段、第一段没单位借后面的;個 / 本 / 枚 / 号缶 这类计件返回 0(页面显示「规格未知」,PackPriceFields 提示直接填单价)。
+   `PackPriceFields` 用 `anchorVal` 记住她最后填的袋价 / 箱价原数,改规格时拿它重算单价。
+5. **采购清单**的小计和合计按 `toCNY(sm.pricePerG, curOf(sm))` 折人民币,日元来的标 `≈`。旧价格表 cats 品牌下拉写价时标 `currency: "JPY"`。
+6. **打印**:预览外层 div 必须带 `className="print-overlay"`;PrintView 的 `@media print` 用 `#root > div > *:not(.print-overlay) { display:none }`
+   把 app 其余部分移出排版,外层和 `.print-area` 改成 static(行内 position/min-height 用 !important 盖掉)。**以前多页的单子只印第一页。**
+   验证方法:同结构的测试页用 Edge 无界面模式打成 PDF 数行数(`msedge --headless=new --print-to-pdf=...`)。默认打印 logo 是定稿字标 SVG。
+7. **离线缓存 `src/sw.js`**:每个版本一个缓存(名字 = 预缓存清单哈希);首页 + 主程序(`/`、`/index.html`、`/assets/index-*.js|css`)
+   全部下载成功才启用新版,否则继续用旧版;记下每个文件的 revision,没变的从旧缓存拷(字体不再每次重下);非关键文件下载失败时
+   先放旧版副本顶着、不记 revision(激活会删旧缓存,不顶着字体表 / 布局台离线就没了)。**改 sw.js 后跑
+   `npm run build && node .claude/scripts/sw/sw_install_probe.cjs`**(模拟全新安装 / 主程序下载失败 / 复用 / 激活删旧缓存)。
+8. 组件和组合产品部分的保存**不再弹「有 N 个材料未在价格表中」**(旧价格表 v11 已停用);矩阵空格新建组件按新建处理(`!component.id`)。
+
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
 
-**⚠️ 数据 tab 两个导入按钮行为完全不同**:「选择 JSON(覆盖)」`importData` 把每个实体整体换成文件里的(**文件里没有的实体直接清成 `[]`**);「合并导入(只新增不覆盖)」`mergeImportData` 只追加 —— recipes / components / creations 按 id 或 nameZh / nameJa 去重,knowledge 按 id / title,brands / materials 按 id 合并字段。**局部包(比如只含一条新配方)必须走合并导入**,走覆盖会把其他数据全清掉。`my_data_export.json` 只是某次导出的快照(2026-09-25 时停在 09-04),LuLu 之后在 app 里的改动不在里面,所以新录入默认出只含新条目的 `RURU_<名>_合并导入.json` 让她合并导入,别让她整份导入主数据文件。做法见 `.claude/recipe_entry_sop.md` §1.13。
+**⚠️ 数据 tab 两个导入按钮行为完全不同**:「选择 JSON(覆盖)」`importData` 把每个实体整体换成文件里的(**文件里没有的实体直接清成 `[]`**);「合并导入(只新增不覆盖)」`mergeImportData` 只追加 —— recipes / components / creations 按 id 或 nameZh / nameJa 去重,knowledge 按 id / title,brands / materials / shopMaterials 已存在的按修改时间取新的一边(`mergeByNewer`,见上面「体检第 1 批」第 3 条)。**局部包(比如只含一条新配方)必须走合并导入**,走覆盖会把其他数据全清掉。`my_data_export.json` 只是某次导出的快照(2026-09-25 时停在 09-04),LuLu 之后在 app 里的改动不在里面,所以新录入默认出只含新条目的 `RURU_<名>_合并导入.json` 让她合并导入,别让她整份导入主数据文件。做法见 `.claude/recipe_entry_sop.md` §1.13。
 
 ## `public/layout.html` — 798 厨房布局台(独立工具,不属于主 app)
 

@@ -3102,10 +3102,22 @@ function loadData() {
   return null;
 }
 
-function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings) {
+// 备份恢复写完存档、刷新页面之前置 true:这段时间任何保存都跳过(否则离开页面时的立即保存会把恢复的数据盖回去)
+let _suspendSaves = false;
+// 去掉 savedAt 之后的存档内容,用来判断「内容到底变没变」(见 saveData 的 opts.lastBody 和 App 的多窗口判断)
+function storageBodyOf(raw) {
+  try { if (!raw) return null; const o = JSON.parse(raw); delete o.savedAt; return JSON.stringify(o); } catch (e) { return null; }
+}
+function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, opts = {}) {
+  if (_suspendSaves) return { ok: true, skipped: true };
   try {
-    const payload = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, savedAt: new Date().toISOString(), version: 17 });
+    // 2026-09-29:内容(不含 savedAt)和上次写入 / 载入时一样就不写 —— 每写一次,同源的其他窗口都会收到 storage 事件、
+    // 被判成「过期」停止保存;以前新开或刷新一个窗口就会把另一个正在用的窗口踢成过期(内容其实一样)。顺带不再存重复的备份
+    const body = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, version: 17 });
+    if (opts.lastBody && opts.lastBody.current === body) return { ok: true, size: body.length, skipped: true };
+    const payload = body.slice(0, -1) + ',"savedAt":' + JSON.stringify(new Date().toISOString()) + "}";
     localStorage.setItem(STORAGE_KEY, payload);
+    if (opts.lastBody) opts.lastBody.current = body;
     // 自动备份到 IndexedDB (fire-and-forget,失败不影响主流程)
     addBackupSnapshot(payload);
     return { ok: true, size: payload.length };
@@ -3116,6 +3128,43 @@ function saveData(recipes, cats, components, creations, knowledge, brands, mater
 }
 
 // 智能合并：保留用户数据，同时补入缺失的预置项目
+// 合并导入时同 id 已存在的条目:修改时间(updatedAt)更晚的一边为准,另一边只补缺的字段。
+// lockedKeys 是必须整组取同一边的字段(单价 + 币种):那一边没有的就删掉,不从另一边借 ——
+// 2026-09-29 体检修:以前 {...本机, ...文件} 字段级合并,旧文件没有 currency 时本机的「人民币」标签留着、
+// 单价却换成文件里的日元数。只有一边写了 updatedAt 时,写了的那边算新的(录入包要更新已有材料,生成时写上当前时间)。
+// 两边都没写修改时间(老数据:本店原料 50 条一条都没有,材料 1838 条只有 73 条有)时沿用改之前的「文件为准」,
+// 只是价格那组字段整组取文件那一边 —— 不然两台电脑之间合并导入永远更新不了这些老条目(审查发现)。
+function mergeByNewer(existing, inc, lockedKeys = []) {
+  const tLocal = Date.parse((existing && existing.updatedAt) || "") || 0;
+  const tFile = Date.parse((inc && inc.updatedAt) || "") || 0;
+  const fileWins = tFile > tLocal || (tFile === 0 && tLocal === 0);
+  const next = fileWins ? { ...existing, ...inc } : { ...inc, ...existing };
+  const src = fileWins ? inc : existing;
+  lockedKeys.forEach(k => { if (src && Object.prototype.hasOwnProperty.call(src, k)) next[k] = src[k]; else delete next[k]; });
+  return next;
+}
+
+// ─── 编辑页「有没有没保存的改动」(2026-09-29 体检修)────────────────────────
+// 以前编辑页没保存就点顶部导航 / 手机底栏,内容当场丢,没有任何提醒。
+// 每个编辑页调用 useDirtyGuard(() => 要比较的状态),把返回的 bind 挂到根元素上;
+// App 切页前调 anyEditorDirty(),有改动就先问一句。
+// 基准快照在她第一次按键 / 点击时才拍(捕获阶段,改动还没发生)——编辑页刚打开时 effect 会自动调整表单
+// (比如组合产品把部分同步成组件库最新内容),在那之前拍会被误判成「改过」。改回原样也算没改。
+const _dirtyChecks = new Set();
+const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) return true; } catch (e) { return true; } } return false; };
+function useDirtyGuard(getState) {
+  const latest = useRef(getState);
+  latest.current = getState;
+  const initial = useRef(null);
+  useEffect(() => {
+    const check = () => initial.current !== null && JSON.stringify(latest.current()) !== initial.current;
+    _dirtyChecks.add(check);
+    return () => { _dirtyChecks.delete(check); };
+  }, []);
+  const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current()); } catch (e) { initial.current = ""; } } };
+  return { onPointerDownCapture: arm, onKeyDownCapture: arm };
+}
+
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
 function mergeWithDefaults(userItems, defaultItems) {
   const userIds = new Set((userItems || []).map(x => x.id));
@@ -3137,17 +3186,29 @@ function num(x, fallback = 0) {
 // 多规格 "1KG/10KG" 取第一个: 1000
 // "1kg 冷凍" → 1000
 // 不合法或空 → 0
+// 2026-09-29 体检修:以前只认 g / kg,「1L」「1.8L」被当成 1 克、1.8 克(填袋价后每克价大 1000 倍),
+// 「1,000g」的千位逗号被当成多规格分隔符算成 1 克,「1/10/25KG」取第一段「1」又没单位也按 1 克。
+// 现在:千位逗号先去掉;认 kg / g / L / ml(液体按 1 g/ml 近似)和中文 千克 / 公斤 / 克 / 升 / 毫升;
+// 多规格取第一段,第一段没写单位就借后面第一个出现的单位;個 / 本 / 枚 / 号缶 这类计件规格认不出克数,返回 0(页面显示「规格未知」)。
 function parsePackSizeToGrams(ps) {
   if (!ps) return 0;
-  const str = String(ps).trim();
-  // 多规格 "1KG/10KG" 取第一段
-  const first = str.split(/[\/、，,]/)[0].trim();
-  const m = first.match(/^\s*(\d+(?:\.\d+)?)\s*(kg|kG|KG|Kg|g|G)?/);
+  const str = String(ps).trim().replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
+  const parts = str.split(/[\/、，,]/).map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return 0;
+  const re = /^\s*(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|g|克|l|ℓ|升)?/i;
+  const m = parts[0].match(re);
   if (!m) return 0;
   const num = parseFloat(m[1]);
-  if (isNaN(num)) return 0;
-  const unit = (m[2] || 'g').toLowerCase();
-  return unit === 'kg' ? num * 1000 : num;
+  if (!isFinite(num)) return 0;
+  let unit = m[2];
+  if (!unit) {
+    const rest = parts[0].slice(m[0].length).trim();
+    if (rest && /^[個个本枚缶号號粒片袋箱入]/.test(rest)) return 0;
+    for (const p of parts.slice(1)) { const mm = p.match(re); if (mm && mm[2]) { unit = mm[2]; break; } }
+  }
+  unit = (unit || "g").toLowerCase();
+  if (unit === "kg" || unit === "千克" || unit === "公斤" || unit === "l" || unit === "ℓ" || unit === "升") return num * 1000;
+  return num;
 }
 
 // ─── UI primitives ───────────────────────────────────────────────
@@ -3475,6 +3536,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
       () => {
         const current = localStorage.getItem(STORAGE_KEY);
         if (current && current !== snap.payload) addBackupSnapshot(current);
+        _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
         localStorage.setItem(STORAGE_KEY, snap.payload);
         showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
         setTimeout(() => location.reload(), 800);
@@ -4276,6 +4338,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                       packSize: (m && m.packSize) || "",
                       casePack: (m && m.casePack) || "",
                       note: "",
+                      updatedAt: new Date().toISOString(),   // 合并导入按修改时间取新的一边(mergeByNewer)
                     });
                   });
                   return [...prev, ...add];
@@ -5392,10 +5455,11 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
-  const isNew = !component;
+  // 矩阵空格新建时传进来的是「只带预设分类 / 风味、没有 id」的对象,也算新建(以前当成编辑已有组件,存出来 id 是空的)
+  const isNew = !component || !component.id;
   const empty = { nameZh: "", nameJa: "", nameFr: "", componentCategory: "mousse", flavorFamily: "", flavorName: "", mold: "", yield: "", unit: "g", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [] };
   const [form, setForm] = useState(component ? { flavorFamily: "", flavorName: "", ...component } : empty);
-  const [ings, setIngs] = useState(component
+  const [ings, setIngs] = useState(component && (component.ingredients || []).length > 0
     ? component.ingredients.map((i, idx) => {
         const linked = autoLinkIng(i, cats);
         if (linked.materialId && Array.isArray(materials)) {
@@ -5445,6 +5509,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   );
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
+  const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const updateIng = (id, field, val) => setIngs(prev => prev.map(i => i._id === id ? { ...i, [field]: val } : i));
@@ -5469,7 +5534,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
     const stepsJa = steps.map(s => s.textJa.trim()).filter(Boolean);
     onSave({
       ...form,
-      id: component ? component.id : "comp_" + Date.now(),
+      id: (component && component.id) ? component.id : "comp_" + Date.now(),
       yield: parseFloat(form.yield) || 0,
       ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
       stepsZh,
@@ -5486,24 +5551,8 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
-    // 检测未关联材料(有名字但无 catId,且 onUpdateCats 可用)
-    if (onUpdateCats) {
-      const unlinked = ings
-        .map((ing, i) => ({ ing, idx: i }))
-        .filter(({ ing }) => (ing.nameZh || ing.nameJa) && !ing.catId)
-        .map(({ ing, idx }) => ({
-          idx,
-          nameZh: ing.nameZh || "",
-          nameJa: ing.nameJa || "",
-          brand: ing.brand || "",
-          unit: ing.unit || "g",
-          unitPrice: ing.unitPrice || "",
-        }));
-      if (unlinked.length > 0) {
-        setUnlinkedDialog({ items: unlinked });
-        return;
-      }
-    }
+    // 2026-09-29:不再弹「有 N 个材料未在价格表中」。那张旧价格表(cats)v11 起已停用,配方编辑页早就去掉了这一步;
+    // 组件这里还在弹,33 个组件里 30 个一保存就弹,点「加入并保存」还会往停用的表里写日元人民币混着的数
     doSave(ings);
   };
 
@@ -5512,7 +5561,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const cat = getCompCat(form.componentCategory);
 
   return (
-    <div>
+    <div {...dirtyBind}>
       {unlinkedDialog && (
         <UnlinkedIngredientsDialog
           unlinkedItems={unlinkedDialog.items}
@@ -5726,6 +5775,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
                       brandIdx: bi,
                       brand: getBrandName(brand, lang),
                       unitPrice: brand.price || "",
+                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
+                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
+                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
                       cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
                     };
                   }));
@@ -6659,14 +6711,9 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
 // 🖨 打印模块
 // ═══════════════════════════════════════════════════════════════
 
-// 默认SVG LOGO（用户可替换）- 简约"R"花体字，带糕点装饰
-const DEFAULT_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
-  <circle cx="60" cy="60" r="55" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-  <circle cx="60" cy="60" r="48" fill="none" stroke="#1a1a1a" stroke-width="0.5"/>
-  <text x="60" y="68" font-family="Georgia, 'Times New Roman', serif" font-size="48" font-weight="400" fill="#1a1a1a" text-anchor="middle" font-style="italic">R</text>
-  <text x="60" y="88" font-family="Georgia, serif" font-size="6" letter-spacing="3" fill="#1a1a1a" text-anchor="middle">— PATISSERIE —</text>
-  <path d="M 30 95 Q 60 100 90 95" fill="none" stroke="#1a1a1a" stroke-width="0.5"/>
-</svg>`;
+// 默认 LOGO(用户可在打印预览「⚙ LOGO设置」换成自己的图片网址)。
+// 2026-09-29:从旧的「R」花体占位图换成定稿字标 —— 桌面「kororā logo相关/线稿版/字标_kororā_纯黑.svg」原样内嵌(纯黑矢量,黑白打印最清楚)
+const DEFAULT_LOGO_SVG = `<svg id="a" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270.91 54.12"><defs><style>.b{fill:#000000;}</style></defs><path class="b" d="M265.57,2.31c-.1-.12-.25-.18-.4-.18l-17.5,.6c-.23,0-.43,.18-.47,.4l-.77,3.97c-.03,.15,.01,.3,.11,.42s.25,.18,.4,.18l17.5-.6c.23,0,.43-.18,.47-.4l.77-3.97c.03-.15-.01-.3-.11-.42Z"/><path d="M88.51,28.14c-.75-4.86-3.61-8.46-7.97-10.8h0s-.09-.05-.13-.07c-.03-.02-.06-.04-.1-.06-.18-.09-.33-.17-.47-.2-1.84-.82-3.74-1.43-5.65-1.73-.8-.13-1.06,.04-1.13,.87-.16,1.96-.42,3.91-.64,5.86-.09,.83-.08,1.36,.15,1.76,.03,.05,.1,.14,.59,.64,.36,.36,.55,.55,.9,.87,.49,.45,3.25,4.21,2.73,9.44-.07,.75-.63,5.16-4,8.28-1.95,1.81-4.25,2.69-6.97,2.05-2.61-.62-4.61-3.27-4.91-6.47-.37-3.82,.44-7.13,2.55-9.86,.78-1.01,1.73-1.94,2.88-2.79,1.25-.93,1.39-1.43,.91-2.98-.58-1.88-1.2-3.75-1.71-5.64-.22-.8-.5-.92-1.27-.64-2.05,.73-4.03,1.82-5.86,3.18-5.87,4.37-10.09,11.59-9.56,19.37,.24,3.48,1.35,6.62,3.66,9.29,3.5,4.04,8.06,5.57,13.22,5.6,4.68,.02,8.97-1.27,12.74-3.92,7.59-5.33,11.52-12.54,10.04-22.07Z"/><path d="M183.23,28.14c-.75-4.86-3.61-8.46-7.97-10.8h0s-.09-.05-.13-.07c-.03-.02-.06-.04-.1-.06-.18-.09-.33-.17-.47-.2-1.84-.82-3.74-1.43-5.65-1.73-.8-.13-1.06,.04-1.13,.87-.16,1.96-.42,3.91-.64,5.86-.09,.83-.08,1.36,.15,1.76,.03,.05,.1,.14,.59,.64,.36,.36,.55,.55,.9,.87,.49,.45,3.25,4.21,2.73,9.44-.07,.75-.63,5.16-4,8.28-1.95,1.81-4.25,2.69-6.97,2.05-2.61-.62-4.61-3.27-4.91-6.47-.37-3.82,.44-7.13,2.55-9.86,.78-1.01,1.73-1.94,2.88-2.79,1.25-.93,1.39-1.43,.91-2.98-.58-1.88-1.2-3.75-1.71-5.64-.22-.8-.5-.92-1.27-.64-2.05,.73-4.03,1.82-5.86,3.18-5.87,4.37-10.09,11.59-9.56,19.37,.24,3.48,1.35,6.62,3.66,9.29,3.5,4.04,8.06,5.57,13.22,5.6,4.68,.02,8.97-1.27,12.74-3.92,7.59-5.33,11.52-12.54,10.04-22.07Z"/><path d="M132.29,14.97c-.41,.07-.82,.07-1.23,.17-2.58,.65-4.9,1.83-7.04,3.37-2.42,1.74-4.54,3.81-6.68,6.16,0-.5-.05-.78-.01-1.06,.3-2.15,.6-4.31,.94-6.45,.08-.51,0-.72-.46-.8h-3.91c-2.06,.09-4.12-.02-6.17-.04-.89-.01-1.14,.33-1.24,1.04-.8,5.63-1.61,11.27-2.4,16.9-.88,6.27-1.73,12.54-2.66,18.8-.14,.95,.11,1.06,.94,1.05,3.32-.04,6.63-.04,9.95,0,.91,0,1.25-.35,1.27-1.24,.06-3.12,.51-6.19,1.38-9.18,2.19-7.46,6.47-13.16,13.74-16.34,.59-.26,1.15-.55,1.7-.86,.72-.41,1.15-.96,1.26-1.8,.4-3.04,.83-6.08,1.26-9.12,.07-.53-.07-.7-.62-.61Z"/><path d="M225.24,14.97c-.41,.07-.82,.07-1.23,.17-2.58,.65-4.9,1.83-7.04,3.37-2.42,1.74-4.54,3.81-6.68,6.16,0-.5-.05-.78-.01-1.06,.3-2.15,.6-4.31,.94-6.45,.08-.51,0-.72-.46-.8h-3.91c-2.06,.09-4.12-.02-6.17-.04-.89-.01-1.14,.33-1.24,1.04-.8,5.63-1.61,11.27-2.4,16.9-.88,6.27-1.73,12.54-2.66,18.8-.14,.95,.11,1.06,.94,1.05,3.32-.04,6.63-.04,9.95,0,.91,0,1.25-.35,1.27-1.24,.06-3.12,.51-6.19,1.38-9.18,2.19-7.46,6.47-13.16,13.74-16.34,.59-.26,1.15-.55,1.7-.86,.72-.41,1.15-.96,1.26-1.8,.4-3.04,.83-6.08,1.26-9.12,.07-.53-.07-.7-.62-.61Z"/><path d="M29.6,54.1c-1.19,0-2.38-.04-3.57,.02-.59,.03-.95-.21-1.23-.93-.49-1.3-1-2.58-1.51-3.86-.46-1.15-.38-.85-1.08-2.74-.92-2.5-1.34-3.77-1.29-4.2,.08-.68,1.5-1.96,4.33-4.5,1.1-.99,2.04-1.79,2.64-1.56,.36,.14,.42,.6,.48,.75,1.81,5.25,3.64,10.49,5.5,15.71,.21,.6,.28,.97,.09,1.16-.18,.18-.53,.15-.68,.14-.77-.05-1.94-.05-3.67,.01Z"/><path d="M30.02,16.21c-1.01-.01-1.77,.32-2.45,1.06-2.69,2.94-5.42,5.85-8.13,8.77-1.34,1.44-2.69,2.88-4.04,4.31l-.2-.08c.02-.35,.03-.7,.07-1.05,.37-3.18,.75-6.36,1.12-9.53,.48-4.07,.96-8.14,1.44-12.2,.09-.78,.36-3.06,.72-6.1,.03-.25,.05-.5,.09-.75s.09-.44-.02-.55c-.07-.07-.17-.08-.24-.07H7.68s-.07,0-.11,.03c-.01,.01-.02,.02-.02,.03l-.09,.65v.02l-.12,.83h0L3.75,27.06h0c-.32,2.32-.65,4.63-.97,6.95C1.87,40.44,.98,46.87,.03,53.29c-.12,.8,.17,.84,.78,.83,3.25-.02,6.5-.02,9.76,0,.73,0,1.12-.22,1.22-1,.31-2.41,.67-4.81,1.01-7.22,.08-.6,.14-1.17,.6-1.66,8.33-8.98,16.65-17.97,24.97-26.96,.22-.24,.58-.41,.54-1.05-2.96,0-5.92,.02-8.88-.01Z"/><path class="b" d="M269.99,16.44c-1.7,.06-3.41,.01-5.12,.02-1.19,0-2.38,0-3.57,.02-.51,.01-1,.07-1.11,.79-.85,5.92-1.73,11.83-2.61,17.75-.46,3.07-1.5,5.89-3.59,8.21-1.81,2.01-4.09,2.67-6.72,1.9-2.53-.74-3.89-2.58-4.39-5.08-.23-1.17-1.3-5.19,.91-8.97,.34-.59,1.68-2.88,4.26-4.27,.21-.11,.61-.3,1.02-.49,.32-.15,1.44-.57,1.77-.8,.22-.17,.41-.37,.41-.37l.02-.03c.55-.62,.99-4.44,.99-4.44h0c.15-1.04,.57-3.07,.49-4.43,0-.17-.04-.54-.3-.79-.35-.33-.91-.26-1.17-.23-5.1,.73-7.61,2.04-7.61,2.04-1.77,.92-3.95,2.06-6.25,4.32-3.82,3.76-5.32,8.02-5.93,10.27,0,0-1.51,4.95-.97,10.66,.21,2.16,.65,3.62,1.23,4.85,.44,.92,.99,1.8,1.66,2.62,2.06,2.52,4.74,3.71,7.89,4.04,4.3,.44,8.17-.45,11.38-3.44,.6-.56,1.23-1.1,1.99-1.77,.11,1.18,.25,2.19,.28,3.21,.02,.68,.29,.89,.94,.89,2.9-.02,5.8-.01,8.7,0,.69,0,1.03-.25,1.13-.98,.36-2.63,.79-5.25,1.18-7.87,.84-5.63,1.66-11.26,2.5-16.89,.48-3.23,.97-6.45,1.46-9.68,.11-.71-.04-1.06-.88-1.04Z"/></svg>`;
 
 const LOGO_DATA_URI = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(DEFAULT_LOGO_SVG)));
 
@@ -6840,7 +6887,13 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           @page { size: A4; margin: 15mm; }
           body * { visibility: hidden; }
           .print-area, .print-area * { visibility: visible; }
-          .print-area { position: absolute; left: 0; top: 0; width: 100%; }
+          /* 2026-09-29 体检修:预览外层是「固定在屏幕上、自带滚动条」的框,打印时只有一页高,超出的被裁掉 ——
+             多页的单子只印出第一页(或第一页重复几张)。打印时把外层放回正常文档流、不裁切,
+             app 其余部分直接不排版(只 visibility:hidden 还会占位,多出白纸)。
+             .print-area 行内写了 position:relative 和 min-height:297mm,要用 !important 盖掉。 */
+          #root > div > *:not(.print-overlay) { display: none !important; }
+          .print-overlay { position: static !important; overflow: visible !important; height: auto !important; }
+          .print-area { position: static !important; min-height: 0 !important; width: 100%; }
           .no-print { display: none !important; }
           /* 一行不跨页 */
           .print-area tr, .print-area li, .print-area .p-row { break-inside: avoid; page-break-inside: avoid; }
@@ -7100,8 +7153,9 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
     <div style={{ position: "relative", zIndex: 1, fontFamily: 'Georgia, "Hiragino Mincho ProN", "游明朝", "PingFang SC", serif', color: "#2D1B0E" }}>
       {/* 顶部封面区 */}
       <div style={{ textAlign: "center", paddingBottom: "12mm", borderBottom: "0.5px solid #AC6B3A", marginBottom: "10mm" }}>
-        <img src={logoSrc} style={{ width: "30mm", height: "30mm", margin: "0 auto 5mm" }} alt="LOGO" />
-        <div style={{ fontFamily: "Georgia, serif", fontSize: "14pt", letterSpacing: "8pt", marginBottom: "2mm", color: "#2D1B0E", fontWeight: 500 }}>{brandName}</div>
+        <img src={logoSrc} style={{ display: "block", width: "auto", height: "auto", maxWidth: "60mm", maxHeight: "30mm", margin: "0 auto 5mm" }} alt="LOGO" />
+        {/* 默认 logo 就是「kororā」字标,再排一遍文字店名就重复了;换了自定义 logo 才排 */}
+        {logoSrc !== LOGO_DATA_URI && <div style={{ fontFamily: "Georgia, serif", fontSize: "14pt", letterSpacing: "8pt", marginBottom: "2mm", color: "#2D1B0E", fontWeight: 500 }}>{brandName}</div>}
         <div style={{ fontSize: "9pt", letterSpacing: "4pt", color: "#7A5F4A", fontStyle: "italic" }}>— {brandSubtitle} —</div>
       </div>
 
@@ -7154,7 +7208,7 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
 
       {/* 底部 */}
       <div style={{ marginTop: "15mm", paddingTop: "5mm", borderTop: "0.5px solid #1a1a1a", textAlign: "center", fontSize: "8pt", letterSpacing: 3, color: "#666" }}>
-        <div>{brandName} PATISSERIE · HANDCRAFTED WITH CARE</div>
+        <div>{brandName} · {brandSubtitle}</div>
         <div style={{ marginTop: "1mm" }}>{new Date().toLocaleDateString("ja-JP")}</div>
       </div>
     </div>
@@ -7185,9 +7239,9 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
       {/* 顶部条 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "0.8px solid #2D1B0E", paddingBottom: "4mm", marginBottom: "6mm" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "3mm" }}>
-          <img src={logoSrc} style={{ width: "12mm", height: "12mm" }} alt="LOGO" />
+          <img src={logoSrc} style={{ width: "auto", height: "auto", maxWidth: "40mm", maxHeight: "12mm" }} alt="LOGO" />
           <div>
-            <div style={{ fontFamily: "Georgia, serif", fontSize: "11pt", letterSpacing: "3pt", fontWeight: 500, color: "#2D1B0E" }}>{brandName}</div>
+            {logoSrc !== LOGO_DATA_URI && <div style={{ fontFamily: "Georgia, serif", fontSize: "11pt", letterSpacing: "3pt", fontWeight: 500, color: "#2D1B0E" }}>{brandName}</div>}
             <div style={{ fontSize: "7pt", letterSpacing: "2pt", color: "#7A5F4A", fontStyle: "italic" }}>{brandSubtitle}</div>
           </div>
         </div>
@@ -7291,7 +7345,7 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
       {/* 底部 */}
       <div style={{ marginTop: "10mm", paddingTop: "3mm", borderTop: "0.5px solid #999", display: "flex", justifyContent: "space-between", fontSize: "8pt", color: "#666" }}>
-        <div>{brandName} PATISSERIE · {brandSubtitle} · 归档笔记</div>
+        <div>{brandName} · {brandSubtitle} · 归档笔记</div>
         <div>{new Date().toLocaleDateString("zh-CN")}</div>
       </div>
     </div>
@@ -8625,6 +8679,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [showComponentPicker, setShowComponentPicker] = useState(false);
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
+  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页时 App 先问一句(部分编辑页另有自己的)
   // v17.8: 编辑期间组件库变了(比如刚「↻ 同步回组件库」),表单里跟组件库走的部分也换成最新内容,
   // 不然打开同组件的另一部分看到的是旧的,原样保存会被当成「改过」而变成本产品专用
   useEffect(() => {
@@ -8765,7 +8820,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   }
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建组合产品" : "编辑组合产品"}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -9198,6 +9253,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       textJa: initStepsJa[i] || "",
     }))
   );
+  const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
   // 保存层和同步回组件库共用。老字段 steps 要清掉,不然两栏都删空时 pickSteps 会回退到它
   const stepsOut = () => ({
     stepsZh: steps.map(s => (s.textZh || "").trim()).filter(Boolean),
@@ -9252,23 +9308,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   };
 
   const handleSave = () => {
-    if (onUpdateCats) {
-      const unlinked = ings
-        .map((ing, i) => ({ ing, idx: i }))
-        .filter(({ ing }) => (ing.nameZh || ing.nameJa) && !ing.catId)
-        .map(({ ing, idx }) => ({
-          idx,
-          nameZh: ing.nameZh || "",
-          nameJa: ing.nameJa || "",
-          brand: ing.brand || "",
-          unit: ing.unit || "g",
-          unitPrice: ing.unitPrice || "",
-        }));
-      if (unlinked.length > 0) {
-        setUnlinkedDialog({ items: unlinked });
-        return;
-      }
-    }
+    // 2026-09-29:同组件编辑页,不再弹已停用的旧价格表「未在价格表中」对话框
     doSave(ings);
   };
 
@@ -9299,7 +9339,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   const cat = getCompCat(form.componentCategory);
 
   return (
-    <div>
+    <div {...dirtyBind}>
       {unlinkedDialog && (
         <UnlinkedIngredientsDialog
           unlinkedItems={unlinkedDialog.items}
@@ -9407,6 +9447,9 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
                       brandIdx: bi,
                       brand: getBrandName(brand, lang),
                       unitPrice: brand.price || "",
+                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
+                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
+                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
                       cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
                     };
                   }));
@@ -12199,6 +12242,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                     packSize: material.packSize || "",
                     casePack: material.casePack || "",
                     note: "",
+                    updatedAt: new Date().toISOString(),   // 合并导入按修改时间取新的一边(mergeByNewer)
                   }]);
                   if (typeof showToast === "function") showToast((lang === "zh" ? "✓ 已添加到本店原料 " : "✓ 仕入れ原料に追加 ") + fmtUnitPrice(refPrice, curOf(material)));
                 }}>
@@ -12490,6 +12534,9 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
 function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, lang, inpStyle, textSpec = false, priceLabel = null, required = false, autoFocus = false }) {
   const [draft, setDraft] = useState(null);   // { field: "pack" | "case" | "g", value }
   const [anchor, setAnchor] = useState("g");  // 最后编辑过的价格口径
+  // 她最后填的袋价 / 箱价原数。改规格时拿它重算单价,不再用「当前每克价 × 当前克数」现算 ——
+  // 以前把单包 1000 删空再打 500,中间经过「1」「空」「5」,每步都拿上一步算坏的单价去乘,袋价最后变 11000(2026-09-29 体检修)
+  const [anchorVal, setAnchorVal] = useState(0);
   const g = parsePackSizeToGrams(packSize);
   const cp = parseFloat(casePack) || 0;
   const ppg = parseFloat(pricePerG) || 0;
@@ -12506,9 +12553,10 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
     const v = e.target.value;
     setDraft({ field, value: v });
     setAnchor(field);
-    if (!v.trim()) { onChange({ pricePerG: "" }); return; }
+    if (!v.trim()) { setAnchorVal(0); onChange({ pricePerG: "" }); return; }
     const n = parseFloat(v);
     if (isNaN(n) || n < 0) return;
+    if (field !== "g") setAnchorVal(n);
     onChange({ pricePerG: divisor > 0 ? r6(n / divisor) : "" });
   };
   const editSpec = (key) => (e) => {
@@ -12516,7 +12564,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
     const ng = key === "packSize" ? parsePackSizeToGrams(v) : g;
     const ncp = key === "casePack" ? (parseFloat(v) || 0) : cp;
     const patch = { [key]: v };
-    const keep = anchor === "pack" ? packPrice : anchor === "case" ? casePrice : 0;
+    const keep = anchor === "pack" ? (anchorVal > 0 ? anchorVal : packPrice) : anchor === "case" ? (anchorVal > 0 ? anchorVal : casePrice) : 0;
     const div = anchor === "pack" ? ng : ng * ncp;
     if (keep > 0 && div > 0) patch.pricePerG = r6(keep / div);
     onChange(patch);
@@ -12533,7 +12581,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
         {[["CNY", zh ? "¥ 人民币" : "¥ 人民元"], ["JPY", zh ? "円 日元" : "円 日本円"]].map(([c, label]) => {
           const on = cur === c;
           return (
-            <button key={c} type="button" onClick={() => { if (c === cur) return; setDraft(null); onChange({ currency: c, pricePerG: convCur(pricePerG, cur, c) }); }}
+            <button key={c} type="button" onClick={() => { if (c === cur) return; setDraft(null); setAnchorVal(v => v > 0 ? (parseFloat(convCur(v, cur, c, 2)) || 0) : 0); onChange({ currency: c, pricePerG: convCur(pricePerG, cur, c) }); }}
               style={{ padding: "4px 12px", fontSize: 11, fontWeight: 500, cursor: "pointer", borderRadius: T.radiusPill, fontFamily: T.fontSans,
                 background: on ? T.accent : "transparent", color: on ? "#fff" : T.textSecondary, border: `0.5px solid ${on ? T.accent : T.border}` }}>
               {label}
@@ -12550,6 +12598,11 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
         <div><label style={lab}>{zh ? "单包(g)" : "単パック(g)"}</label><input type={textSpec ? "text" : "number"} value={packSize || ""} onChange={editSpec("packSize")} placeholder={textSpec ? "450 / 1kg" : "450"} style={inpStyle} /></div>
         <div><label style={lab}>{zh ? "一箱(包)" : "1ケース(パック)"}</label><input type={textSpec ? "text" : "number"} value={casePack || ""} onChange={editSpec("casePack")} placeholder={textSpec ? "20" : "30"} style={inpStyle} /></div>
       </div>
+      {String(packSize || "").trim() && !hasG && (
+        <div style={{ fontSize: 11, color: T.warning, margin: "-6px 0 10px" }}>
+          {zh ? "规格里没认出克数(比如「20個」「4号缶」),袋价和箱价没法换算,直接填单价" : "規格からグラム数を読めません。単価を直接入力してください"}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <div>
           <label style={lab}>{zh ? `袋价(${sym}/包)` : `パック価(${sym})`}</label>
@@ -12890,6 +12943,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   );
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
+  const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const qty = parseFloat(form.yield) || 0;
@@ -12945,13 +12999,14 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
           toUpsert.forEach(ing => {
             const idx = next.findIndex(sm => sm.materialId === ing.materialId);
             if (idx >= 0) {
-              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing) };   // v17: 币种跟手写价走
+              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
             } else {
               next.push({
                 id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                 materialId: ing.materialId,
                 pricePerG: String(parseFloat(ing.unitPrice)),
                 currency: curOf(ing),   // v17
+                updatedAt: new Date().toISOString(),
               });
             }
           });
@@ -13007,7 +13062,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const fld = (label, children) => <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{label}</label>{children}</div>;
 
   return (
-    <div>
+    <div {...dirtyBind}>
       {unlinkedDialog && (
         <UnlinkedIngredientsDialog
           unlinkedItems={unlinkedDialog.items}
@@ -13149,6 +13204,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
                       brandIdx: bi,
                       brand: getBrandName(brand, lang),
                       unitPrice: brand.price || "",
+                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
+                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
+                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
                       cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
                     };
                   }));
@@ -13491,7 +13549,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       showToast(lang === "zh" ? "⚠️ 本店价必须大于 0" : "⚠️ 仕入れ価格は 0 より大きく");
       return;
     }
-    const clean = { ...editing };
+    const clean = { ...editing, updatedAt: new Date().toISOString() };   // 修改时间给合并导入用(mergeByNewer)
     delete clean._new;
     setShopMaterials(prev => {
       const idx = prev.findIndex(x => x.id === clean.id);
@@ -13780,6 +13838,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           setProducts(prev => prev.filter(x => x.id !== editTarget.id));
           showToast(lang === "zh" ? "已删除" : "削除しました");
           setEditTarget(null);
+          setViewId(null);   // 编辑页是从详情进的,不清掉就会停在已删商品的详情(白屏)
         });
       }}
       onBack={() => {
@@ -13793,7 +13852,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
   // ─── 详情页 ───
   if (viewId) {
     const p = products.find(x => x.id === viewId);
-    if (!p) return null;
+    if (!p) { setTimeout(() => setViewId(null), 0); return null; }   // 兜底:找不到这条(删了 / 导入替换了)就回列表
     const sales = salesLog.filter(s => s.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const prods = productionLog.filter(l => l.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return (
@@ -14223,7 +14282,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
 const DAY_LABELS_ZH = ["日", "一", "二", "三", "四", "五", "六"];
 const DAY_LABELS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 
-function SuppliersView({ suppliers, setSuppliers, shopMaterials, materials, brands, lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget }) {
+function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterials, materials, brands, lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget }) {
   const mLabel = (m) => m ? (lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) : "";
   const dayLabels = lang === "zh" ? DAY_LABELS_ZH : DAY_LABELS_JA;
 
@@ -14242,10 +14301,13 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, materials, bran
       }}
       onDelete={() => {
         confirmDialog(lang === "zh" ? "删除这个供货商吗？本店原料上的关联会自动解除。" : "この仕入先を削除? 関連も解除されます。", () => {
-          // 删 supplier + 从 shopMaterials 的 supplierIds 中剥离
-          setSuppliers(prev => prev.filter(x => x.id !== editTarget.id));
+          // 删 supplier + 从 shopMaterials 的 supplierIds 中剥离(以前注释这么写、代码没做,确认框的话不兑现)
+          const sid = editTarget.id;
+          setSuppliers(prev => prev.filter(x => x.id !== sid));
+          if (setShopMaterials) setShopMaterials(prev => prev.map(sm => Array.isArray(sm.supplierIds) && sm.supplierIds.includes(sid) ? { ...sm, supplierIds: sm.supplierIds.filter(x => x !== sid), updatedAt: new Date().toISOString() } : sm));
           showToast(lang === "zh" ? "已删除" : "削除しました");
           setEditTarget(null);
+          setViewId(null);   // 同商品:不清掉会停在已删供货商的详情(白屏)
         });
       }}
       onBack={() => {
@@ -14258,7 +14320,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, materials, bran
 
   if (viewId) {
     const s = suppliers.find(x => x.id === viewId);
-    if (!s) return null;
+    if (!s) { setTimeout(() => setViewId(null), 0); return null; }   // 兜底:找不到就回列表
     // 本店原料里用这个供货商的条目
     const linkedSMs = shopMaterials.filter(sm => Array.isArray(sm.supplierIds) && sm.supplierIds.includes(s.id));
     return (
@@ -14659,10 +14721,12 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
             {entries.map(([supId, items]) => {
               const sup = suppliers.find(s => s.id === supId);
               const nextD = sup ? nextDelivery(sup, startDate) : null;
+              // 本店价按各自币种折成人民币再相加(没写币种 = 日元,见 curOf);日元折算的标 ≈
               const groupTotal = items.reduce((acc, it) => {
-                const pricePerG = it.sm ? parseFloat(it.sm.pricePerG) : 0;
+                const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
                 return acc + (pricePerG > 0 ? pricePerG * it.grams : 0);
               }, 0);
+              const groupApprox = items.some(it => it.sm && curOf(it.sm) === "JPY" && parseFloat(it.sm.pricePerG) > 0);
               return (
                 <div key={supId || "unassigned"} style={{ background: T.bgCard, border: `0.5px solid ${sup ? T.border : T.warning}`, borderLeft: `3px solid ${sup ? T.accent : T.warning}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
@@ -14675,7 +14739,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
                     </div>
                     <div style={{ fontSize: 13, fontFamily: T.fontSerif, fontWeight: 500, color: T.accent }}>
                       {items.length} {lang === "zh" ? "种" : "件"}
-                      {groupTotal > 0 && <span style={{ marginLeft: 8, color: T.success }}>¥{groupTotal.toFixed(0)}</span>}
+                      {groupTotal > 0 && <span style={{ marginLeft: 8, color: T.success }}>{groupApprox ? "≈" : ""}¥{groupTotal.toFixed(0)}</span>}
                     </div>
                   </div>
                   <div style={{ display: "grid", gap: 4 }}>
@@ -14683,8 +14747,9 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
                       const mat = materials.find(m => m.id === it.materialId);
                       const packG = it.sm && it.sm.packSize ? parsePackSizeToGrams(it.sm.packSize) : ((mat && mat.packSize) ? parsePackSizeToGrams(mat.packSize) : 0);
                       const packs = packG > 0 ? Math.ceil(it.grams / packG) : null;
-                      const pricePerG = it.sm ? parseFloat(it.sm.pricePerG) : 0;
+                      const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
                       const subtotal = pricePerG > 0 ? pricePerG * it.grams : 0;
+                      const approx = !!(it.sm && curOf(it.sm) === "JPY");
                       return (
                         <div key={it.materialId} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr", gap: 8, padding: "6px 10px", borderBottom: `0.5px dashed ${T.borderSoft}`, fontSize: 12, alignItems: "center" }}>
                           <div>{mat ? mLabel(mat) : <span style={{ color: T.danger }}>{it.materialId}</span>}</div>
@@ -14693,7 +14758,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
                             {packs != null ? `${packs} ${lang === "zh" ? "包" : "パック"}` : (lang === "zh" ? "规格未知" : "規格?")}
                           </div>
                           <div style={{ textAlign: "right", fontFamily: T.fontSerif, color: subtotal > 0 ? T.textPrimary : T.textTertiary }}>
-                            {subtotal > 0 ? `¥${subtotal.toFixed(0)}` : "—"}
+                            {subtotal > 0 ? `${approx ? "≈" : ""}¥${subtotal.toFixed(0)}` : "—"}
                           </div>
                         </div>
                       );
@@ -14860,6 +14925,32 @@ function App() {
   // 离开组合产品 tab(点导航去别处)就作废,免得以后从组合产品列表点进去,返回却跳到配方一览
   const [creationReturnTo, setCreationReturnTo] = useState(null);
   useEffect(() => { if (tab !== "creations") setCreationReturnTo(null); }, [tab]);
+  // 2026-09-29 体检修:离开组件 / 组合产品页就关掉编辑页。以前「正在编辑哪一条」留在 App 上,
+  // 切回来编辑页还开着、里面是切走前的旧内容,这时保存会把中间改过的在用 / 在售标记改回去;
+  // 从知识库点「关联组件」打开的也是这个旧编辑页
+  useEffect(() => {
+    if (tab !== "components") setCompEditTarget(null);
+    if (tab !== "creations") setCreationEditTarget(null);
+  }, [tab]);
+  // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
+  const goTab = (t) => {
+    const go = () => { setTab(t); setMoreOpen(false); };
+    if (t !== tab && anyEditorDirty()) {
+      confirmDialog(
+        lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+        go,
+        { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
+      );
+      return;
+    }
+    go();
+  };
+  // 关网页 / 刷新时也提醒(浏览器自己的提示框;有的内嵌窗口不显示,不影响)
+  useEffect(() => {
+    const onBeforeUnload = (e) => { if (anyEditorDirty()) { e.preventDefault(); e.returnValue = ""; } };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
   const [knowledgeViewId, setKnowledgeViewId] = useState(null);
   const [knowledgeEditTarget, setKnowledgeEditTarget] = useState(null);
   // Toast 队列（2a §09）：左下角、最多堆 3 条、5 秒消失、hover 暂停计时、可带「撤销」
@@ -14874,15 +14965,60 @@ function App() {
   // v56: 自动保存 debounce 800ms + 失败时 toast 提示
   // 之前:每次任意字段变更都立即全量 stringify(1-2MB),手机卡顿
   // 现在:停止输入 800ms 后才保存一次
-  const doSave = () => saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings);
+  // 2026-09-29 体检修:同一份数据开在两个窗口(桌面图标的 App 窗口 + 浏览器标签页)时,每个窗口都拿自己内存里的整份数据写回去,
+  // 旧窗口点一下在售圆点就把新窗口录的内容整份冲掉。浏览器的 storage 事件只在「别的窗口」写入时触发 ——
+  // 收到就把本窗口标成过期:停掉自动保存,顶上提示刷新。
+  // 只按「内容」判断:本窗口最后一次写入 / 载入的存档内容(不含 savedAt)。别的窗口写进来的内容和它一样就不算改过
+  // (审查发现:只看有没有写,新开或刷新一个窗口就会把另一个正在用的窗口踢成过期,两个窗口来回互踢)
+  const staleRef = useRef(false);
+  const lastBodyRef = useRef(undefined);
+  if (lastBodyRef.current === undefined) {
+    try { lastBodyRef.current = storageBodyOf(localStorage.getItem(STORAGE_KEY)); } catch (e) { lastBodyRef.current = null; }
+  }
+  const [staleWindow, setStaleWindow] = useState(false);
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== STORAGE_KEY && e.key !== null) return;
+      if (e.key === STORAGE_KEY && storageBodyOf(e.newValue) === lastBodyRef.current) return;
+      staleRef.current = true; setStaleWindow(true);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const doSave = () => staleRef.current
+    ? { ok: false, error: "stale" }
+    : saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, { lastBody: lastBodyRef });
+  // 刚改完 0.8 秒内就关页面 / 切走 iPad,防抖计时器来不及跑,最后一次修改会丢:离开时立刻存一次
+  const saveNowRef = useRef(doSave);
+  saveNowRef.current = doSave;
+  const pendingRef = useRef(false);   // 有没有还没写进去的改动;没有就不在离开时写(每写一次都会让别的窗口变成「过期」)
+  useEffect(() => {
+    const flush = () => {
+      if (staleRef.current || !pendingRef.current) return;
+      const res = saveNowRef.current();
+      if (res && res.ok) pendingRef.current = false;
+    };
+    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
 
   useEffect(() => {
+    if (staleRef.current) {
+      setSaveState({ status: "error", at: null, msg: lang === "zh" ? "已停止保存:数据在别的窗口改过,请刷新" : "保存停止:別のウィンドウで変更されました。再読み込みしてください" });
+      return;
+    }
     setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
+    pendingRef.current = true;
     const t = setTimeout(() => {
       const res = doSave();
       if (res && res.ok) {
+        pendingRef.current = false;
         // 数据只存在浏览器本地，所以「已保存」必须显式给出时间 —— 老板要能确信东西没丢
         setSaveState({ status: "saved", at: new Date() });
+      } else if (res && res.error === "stale") {
+        setSaveState({ status: "error", at: null, msg: lang === "zh" ? "已停止保存:数据在别的窗口改过,请刷新" : "保存停止:別のウィンドウで変更されました。再読み込みしてください" });
       } else {
         const msg = (res && res.error && res.error.includes("uota"))
           ? (lang === "zh" ? "保存失败：本地空间不足，去「数据」页清理旧数据" : "保存失敗：容量不足。データ画面で整理してください")
@@ -14891,7 +15027,7 @@ function App() {
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings]);
+  }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, staleWindow]);
 
   // v17.8: 组合产品里「跟组件库走」的部分 = 组件的最新内容(写进副本,见 syncFollowingLayers)。
   // 组件 / 组合产品 / 材料一变就对一遍;没东西要改时原样返回同一个数组,setState 不会重渲染,不会空转。
@@ -15203,7 +15339,7 @@ function App() {
     const on = tab === t;
     return (
       <button
-        key={t} onClick={() => setTab(t)} className="k-tab"
+        key={t} onClick={() => goTab(t)} className="k-tab"
         style={{
           position: "relative", padding: "0 0 12px", background: "transparent",
           color: on ? T.ink : T.secondary, border: "none",
@@ -15322,7 +15458,7 @@ function App() {
 
   // 🆕 合并导入：只新增不覆盖
   // - cats: 按 nameZh/nameJa 匹配,已有则只追加新品牌,没有则新建大类
-  // - components/recipes/creations/knowledge/brands/materials: 按名字和id匹配,已有跳过
+  // - components/recipes/creations/knowledge: 按名字和 id 匹配,已有跳过;brands/materials/shopMaterials: 已有的按修改时间取新的一边(mergeByNewer)
   const mergeImportData = (e) => {
     const f = e.target.files[0]; if (!f) return;
     const reader = new FileReader();
@@ -15337,7 +15473,7 @@ function App() {
         const report = { catsNew: 0, catsUpdated: 0, brandsAdded: 0, componentsNew: 0, recipesNew: 0, creationsNew: 0, knowledgeNew: 0 };
 
         confirmDialog(
-          "合并导入不会覆盖现有数据,只会追加新内容。\n(新大类→新增; 已有大类→追加其中不重复的新品牌; 配方/组件/知识按名字去重)\n\n确认继续？",
+          "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n\n确认继续？",
           () => {
             // 1. 合并 cats
             if (Array.isArray(d.cats)) {
@@ -15464,8 +15600,8 @@ function App() {
                   if (existingIdx < 0) {
                     result.push(inc);
                   } else {
-                    // 已存在:合并字段,新数据的字段覆盖旧的(但不删除旧有的字段)
-                    result[existingIdx] = { ...result[existingIdx], ...inc };
+                    // 已存在:修改时间更晚的一边为准,另一边只补缺的字段(2026-09-29,见 mergeByNewer)
+                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, []);
                   }
                 });
                 return result;
@@ -15481,8 +15617,9 @@ function App() {
                   if (existingIdx < 0) {
                     result.push(inc);
                   } else {
-                    // 已存在:合并字段
-                    result[existingIdx] = { ...result[existingIdx], ...inc };
+                    // 已存在:修改时间更晚的一边为准;单价 / 参考价 / 币种三样永远同一边(以前字段级合并,
+                    // 旧文件没有 currency,本机的「人民币」标签留着、单价却换成文件里的日元数,成本错 20 到 50 倍)
+                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, ["pricePerG", "priceRange", "currency"]);
                   }
                 });
                 return result;
@@ -15499,7 +15636,9 @@ function App() {
                   if (existingIdx < 0) {
                     result.push({ ...inc, id: inc.id || ("sm_" + Date.now() + Math.random().toString(36).slice(2,6)), supplierIds: Array.isArray(inc.supplierIds) ? inc.supplierIds : [] });
                   } else {
-                    result[existingIdx] = { ...result[existingIdx], ...inc, supplierIds: Array.isArray(inc.supplierIds) ? inc.supplierIds : (result[existingIdx].supplierIds || []) };
+                    // 同材料百科:修改时间更晚的一边为准,本店价和币种同一边
+                    const merged = mergeByNewer(result[existingIdx], inc, ["pricePerG", "currency"]);
+                    result[existingIdx] = { ...merged, supplierIds: Array.isArray(merged.supplierIds) ? merged.supplierIds : [] };
                   }
                 });
                 return result;
@@ -15905,6 +16044,19 @@ function App() {
   return (
     <div style={{ fontFamily: T.fontSans, color: T.textPrimary, fontSize: 14, position: "relative", background: T.bgApp, minHeight: "100vh", colorScheme: "light" }}>
       <style>{GLOBAL_CSS}</style>
+      {/* 2026-09-29:别的窗口改过数据 → 本窗口已停止保存,提示刷新(见 staleRef) */}
+      {staleWindow && (
+        <div role="alert" style={{ position: "sticky", top: 0, zIndex: T.z.toast, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
+          <span style={{ flex: 1, minWidth: 220 }}>
+            {lang === "zh"
+              ? "这份数据在别的窗口或标签页里改过了。这个窗口已经停止保存,免得把那边的修改冲掉。请刷新载入最新数据(这个窗口里刚改、还没存的内容会丢)。"
+              : "別のウィンドウでデータが変更されました。このウィンドウは保存を停止しています。再読み込みしてください。"}
+          </span>
+          <button type="button" onClick={() => window.location.reload()} style={{ background: "#FFFFFF", color: T.danger, border: "none", borderRadius: T.radius, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+            {lang === "zh" ? "刷新" : "再読み込み"}
+          </button>
+        </div>
+      )}
       {/* Toast 队列 · 左下角，最多堆 3 条 */}
       {toasts.length > 0 && (
         <div style={{ position: "fixed", bottom: 24, left: 24, right: 24, maxWidth: 420, zIndex: T.z.toast, display: "flex", flexDirection: "column", gap: T.sp.s, pointerEvents: "none" }}>
@@ -15923,7 +16075,7 @@ function App() {
 
       {/* 🖨 打印预览 */}
       {printTarget && printTarget.stage === "preview" && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 9998, overflow: "auto" }}>
+        <div className="print-overlay" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 9998, overflow: "auto" }}>
           <PrintView
             item={printTarget.data}
             itemType={printTarget.type}
@@ -16225,7 +16377,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           const on = tab === id;
           const badge = n.badge ? n.badge() : 0;
           return (
-            <button key={id} onClick={() => { setTab(id); setMoreOpen(false); }}
+            <button key={id} onClick={() => goTab(id)}
               style={{
                 padding: "12px 2px 16px", textAlign: "center", cursor: "pointer", background: "transparent",
                 border: "none", borderTop: on && !moreOpen ? `2px solid ${T.ink}` : "2px solid transparent", marginTop: -1,
@@ -16257,7 +16409,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           </div>
           <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
             {NAV.filter(n => !MOBILE_NAV.includes(n.id)).map(n => (
-              <button key={n.id} onClick={() => { setTab(n.id); setMoreOpen(false); }}
+              <button key={n.id} onClick={() => goTab(n.id)}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
                   minHeight: 56, padding: "0 16px", background: "transparent", cursor: "pointer",
@@ -16787,6 +16939,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           suppliers={suppliers}
           setSuppliers={setSuppliers}
           shopMaterials={shopMaterials}
+          setShopMaterials={setShopMaterials}
           materials={materials}
           brands={brands}
           lang={lang}
