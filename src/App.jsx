@@ -356,6 +356,11 @@ const setDisplayCurForLookup = (v) => { _displayCur = v === "raw" ? "raw" : "CNY
 const getDisplayCur = () => _displayCur;
 // 一条记录(材料 / 本店原料 / 配料)的币种;无字段 = 老数据 = 日元
 const curOf = (o) => (o && o.currency === "CNY") ? "CNY" : "JPY";
+// 本地日期「YYYY-MM-DD」(北京时间)。toISOString().slice(0,10) 是 UTC 日期,北京早上 8 点前会落到前一天(2026-09-29 体检第 2 批)
+const localDateStr = (d = new Date()) => {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+};
 // 把任意币种的金额折成人民币
 const toCNY = (v, currency) => {
   const n = parseFloat(v);
