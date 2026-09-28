@@ -2898,85 +2898,225 @@ async function deleteImageBlob(id) {
 }
 
 // ─── 自动备份: IndexedDB 多版本快照 (v13.1) ───────────────────
-// 每次 saveData 自动写一份到 IndexedDB,保留最近 BACKUP_MAX 份。
-// 万一 localStorage 被清/损坏,可从备份列表里挑一个版本恢复。
-const BACKUP_DB = "patisserie_backup";
+// 每次 saveData 自动写一份到 IndexedDB。万一 localStorage 被清/损坏,可从备份列表里挑一个版本恢复。
+// 2026-09-29 体检第 2 批:以前只留最近 30 次保存(每停手 0.8 秒就算一次),误导入隔天才发现就找不回导入前的版本;
+// 打开恢复列表还把 30 份整份数据全读进来逐份解析。现在:
+//   · 分层保留:最近 BACKUP_RECENT 份 + 最近 BACKUP_DAYS 天每天一份(当天最早那份);内容和上一份一样不存
+//   · 覆盖导入 / 清除全部 / 恢复备份之前存一份「固定」备份(pinned),不参与上面的轮换(最多 BACKUP_PINNED_MAX 份)
+//   · 新库 patisserie_backup_v2 把小摘要(meta)和整份数据(payloads)分开存:列表只读摘要,点「恢复」才读整份
+//   · 旧库 patisserie_backup(升级前的备份)照样能列、能恢复,只读时间不读内容;超过 BACKUP_DAYS 天的自动清掉
+const BACKUP_DB = "patisserie_backup";          // 旧库(升级前)
 const BACKUP_STORE = "snapshots";
-const BACKUP_MAX = 30;
+const BACKUP_DB2 = "patisserie_backup_v2";      // 新库
+const BACKUP_META = "meta";
+const BACKUP_PAYLOADS = "payloads";
+const BACKUP_RECENT = 15;
+const BACKUP_DAYS = 14;
+const BACKUP_PINNED_MAX = 10;
+const BACKUP_SUMMARY_KEYS = ["recipes", "components", "creations", "materials", "brands", "knowledge"];
 
+// 旧库:只打开已有的,没有就不建(旧版页面还开着时,它写进来的也能读到)
 function openBackupDB() {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") return reject(new Error("no indexedDB"));
-    const req = indexedDB.open(BACKUP_DB, 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(BACKUP_STORE)) {
-        const store = db.createObjectStore(BACKUP_STORE, { keyPath: "id", autoIncrement: true });
-        store.createIndex("savedAt", "savedAt");
-      }
+    const req = indexedDB.open(BACKUP_DB);
+    req.onupgradeneeded = (e) => { try { e.target.transaction.abort(); } catch (err) {} };
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => db.close();
+      if (!db.objectStoreNames.contains(BACKUP_STORE)) { db.close(); reject(new Error("no legacy store")); return; }
+      resolve(db);
     };
-    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
 
-// 同 payload 不重复备份(短时间内多次 save 内容相同时去重)
-let _lastBackupPayloadLen = 0;
-let _lastBackupTs = 0;
-async function addBackupSnapshot(payload) {
-  if (!payload) return;
-  const now = Date.now();
-  // 去重: 内容长度相同 + 距上次 < 1.5s 视为重复(自动保存连发)
-  if (payload.length === _lastBackupPayloadLen && now - _lastBackupTs < 1500) return;
-  _lastBackupPayloadLen = payload.length;
-  _lastBackupTs = now;
-  try {
-    const db = await openBackupDB();
-    const tx = db.transaction(BACKUP_STORE, "readwrite");
-    const store = tx.objectStore(BACKUP_STORE);
-    store.add({ payload, savedAt: new Date().toISOString(), size: payload.length });
-    // 清理超过 BACKUP_MAX 的旧记录
-    const idx = store.index("savedAt");
-    const countReq = store.count();
-    countReq.onsuccess = () => {
-      const surplus = countReq.result - BACKUP_MAX;
-      if (surplus > 0) {
-        const cursorReq = idx.openCursor();
-        let deleted = 0;
-        cursorReq.onsuccess = () => {
-          const cur = cursorReq.result;
-          if (cur && deleted < surplus) {
-            cur.delete();
-            deleted++;
-            cur.continue();
-          }
-        };
-      }
+function openBackupDB2() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") return reject(new Error("no indexedDB"));
+    const req = indexedDB.open(BACKUP_DB2, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(BACKUP_META)) db.createObjectStore(BACKUP_META, { keyPath: "id", autoIncrement: true });
+      if (!db.objectStoreNames.contains(BACKUP_PAYLOADS)) db.createObjectStore(BACKUP_PAYLOADS, { keyPath: "id" });
     };
+    req.onsuccess = () => { const db = req.result; db.onversionchange = () => db.close(); resolve(db); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 存档去掉末尾 savedAt 之后的内容(saveData 写入的格式),用来判断「和上一份一样」
+function backupBodyOf(payload) {
+  const i = payload.lastIndexOf(',"savedAt":');
+  return (i > 0 && payload.length - i < 60) ? payload.slice(0, i) : payload;
+}
+// 字符串指纹(约 4 毫秒 / 186 万字),带长度
+function backupHash(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return str.length + ":" + (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+}
+function backupSummary(src) {
+  const o = {};
+  BACKUP_SUMMARY_KEYS.forEach(k => { o[k] = Array.isArray(src && src[k]) ? src[k].length : 0; });
+  return o;
+}
+// 轮换:返回要删掉的备份 id。固定备份只按「最多 BACKUP_PINNED_MAX 份」删最旧的,不和自动备份一起轮换
+function pickBackupsToDelete(metas, now) {
+  const sorted = [...(metas || [])].sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""));   // 新 → 旧
+  const keep = new Set();
+  sorted.filter(m => m.pinned).slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  const auto = sorted.filter(m => !m.pinned);
+  auto.slice(0, BACKUP_RECENT).forEach(m => keep.add(m.id));
+  const cutoff = localDateStr(new Date(now - (BACKUP_DAYS - 1) * 86400000));
+  const firstOfDay = new Map();
+  auto.forEach(m => {
+    const t = new Date(m.savedAt || "");
+    if (isNaN(t.getTime())) { keep.add(m.id); return; }   // 读不出时间的不动
+    const day = localDateStr(t);
+    if (day < cutoff) return;
+    const cur = firstOfDay.get(day);
+    if (!cur || (m.savedAt || "") < (cur.savedAt || "")) firstOfDay.set(day, m);
+  });
+  firstOfDay.forEach(m => keep.add(m.id));
+  return sorted.filter(m => !keep.has(m.id)).map(m => m.id);
+}
+
+// counts:保存时手上的数组(只取条数);没给就解析一遍 payload。opts = { pinned, reason: "import" | "clear" | "restore" }
+// 返回 true = 存上了(或和上一份一样不用存)
+let _lastBackupHash = "";
+async function addBackupSnapshot(payload, counts, opts = {}) {
+  if (!payload || typeof payload !== "string") return false;
+  const pinned = !!opts.pinned;
+  let hash = "";
+  try { hash = backupHash(backupBodyOf(payload)); } catch (e) {}
+  if (!pinned && hash && hash === _lastBackupHash) return true;
+  let summary = null;
+  try { summary = backupSummary(counts || JSON.parse(payload)); } catch (e) {}
+  let db = null;
+  try {
+    db = await openBackupDB2();
+    const ok = await new Promise((resolve) => {
+      const tx = db.transaction([BACKUP_META, BACKUP_PAYLOADS], "readwrite");
+      const metaStore = tx.objectStore(BACKUP_META);
+      const payStore = tx.objectStore(BACKUP_PAYLOADS);
+      let result = false;
+      tx.oncomplete = () => resolve(result);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+      const all = metaStore.getAll();
+      all.onsuccess = () => {
+        const metas = all.result || [];
+        const now = Date.now();
+        const finish = (list) => { pickBackupsToDelete(list, now).forEach(id => { metaStore.delete(id); payStore.delete(id); }); result = true; };
+        const newest = metas.reduce((a, m) => (!a || (m.savedAt || "") > (a.savedAt || "")) ? m : a, null);
+        if (newest && hash && newest.hash === hash) {
+          // 和最近一份内容一样:不再多存一份;要固定就把那一份标成固定
+          if (pinned && !newest.pinned) {
+            const upd = { ...newest, pinned: true, reason: opts.reason || "" };
+            metaStore.put(upd);
+            finish(metas.map(m => m.id === upd.id ? upd : m));
+          } else result = true;
+          return;
+        }
+        const meta = { savedAt: new Date(now).toISOString(), size: payload.length, hash, summary, pinned, reason: pinned ? (opts.reason || "") : "" };
+        const addReq = metaStore.add(meta);
+        addReq.onsuccess = () => {
+          const id = addReq.result;
+          payStore.put({ id, payload });
+          finish([...metas, { ...meta, id }]);
+        };
+      };
+    });
+    if (ok && hash) _lastBackupHash = hash;
+    if (ok) pruneLegacyBackups();
+    return ok;
   } catch (e) {
     // 备份失败不影响主流程,只 warn
     if (typeof console !== "undefined" && console.warn) console.warn("[backup] failed:", e && e.message);
+    return false;
+  } finally {
+    try { if (db) db.close(); } catch (e) {}
   }
 }
 
-async function listBackupSnapshots() {
+// 旧库里超过 BACKUP_DAYS 天的备份清掉(每次打开 App 只做一次;只读 key,不读内容)
+let _legacyPruned = false;
+async function pruneLegacyBackups() {
+  if (_legacyPruned) return;
+  _legacyPruned = true;
+  let db = null;
   try {
-    const db = await openBackupDB();
-    return await new Promise((resolve) => {
-      const tx = db.transaction(BACKUP_STORE, "readonly");
-      const req = tx.objectStore(BACKUP_STORE).getAll();
-      req.onsuccess = () => resolve((req.result || []).sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || "")));
-      req.onerror = () => resolve([]);
+    db = await openBackupDB();
+    const cutoff = new Date(Date.now() - BACKUP_DAYS * 86400000).toISOString();
+    await new Promise((resolve) => {
+      const tx = db.transaction(BACKUP_STORE, "readwrite");
+      tx.oncomplete = () => resolve(); tx.onerror = () => resolve(); tx.onabort = () => resolve();
+      const store = tx.objectStore(BACKUP_STORE);
+      const cur = store.index("savedAt").openKeyCursor(IDBKeyRange.upperBound(cutoff, true));
+      cur.onsuccess = () => { const c = cur.result; if (c) { store.delete(c.primaryKey); c.continue(); } };
     });
-  } catch (e) { return []; }
+  } catch (e) {} finally { try { if (db) db.close(); } catch (e) {} }
 }
 
-async function deleteBackupSnapshot(id) {
+// 列表只返回摘要(不含整份数据)。旧库的只有时间,标 legacy
+async function listBackupSnapshots() {
+  const out = [];
+  let db = null;
   try {
-    const db = await openBackupDB();
-    const tx = db.transaction(BACKUP_STORE, "readwrite");
-    tx.objectStore(BACKUP_STORE).delete(id);
-  } catch (e) {}
+    db = await openBackupDB2();
+    const metas = await new Promise((resolve) => {
+      const req = db.transaction(BACKUP_META, "readonly").objectStore(BACKUP_META).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+    metas.forEach(m => out.push(m));
+  } catch (e) {} finally { try { if (db) db.close(); } catch (e) {} }
+  let ldb = null;
+  try {
+    ldb = await openBackupDB();
+    const rows = await new Promise((resolve) => {
+      const list = [];
+      const cur = ldb.transaction(BACKUP_STORE, "readonly").objectStore(BACKUP_STORE).index("savedAt").openKeyCursor();
+      cur.onsuccess = () => { const c = cur.result; if (c) { list.push({ id: "legacy_" + c.primaryKey, legacyId: c.primaryKey, savedAt: c.key, legacy: true }); c.continue(); } else resolve(list); };
+      cur.onerror = () => resolve(list);
+    });
+    rows.forEach(r => out.push(r));
+  } catch (e) {} finally { try { if (ldb) ldb.close(); } catch (e) {} }
+  return out.sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")));
+}
+
+// 点「恢复」时才读整份数据;读不到返回 null
+async function getBackupPayload(snap) {
+  let db = null;
+  try {
+    db = snap.legacy ? await openBackupDB() : await openBackupDB2();
+    const storeName = snap.legacy ? BACKUP_STORE : BACKUP_PAYLOADS;
+    return await new Promise((resolve) => {
+      const req = db.transaction(storeName, "readonly").objectStore(storeName).get(snap.legacy ? snap.legacyId : snap.id);
+      req.onsuccess = () => resolve(req.result && typeof req.result.payload === "string" ? req.result.payload : null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (e) { return null; } finally { try { if (db) db.close(); } catch (e) {} }
+}
+
+async function deleteBackupSnapshot(snap) {
+  let db = null;
+  try {
+    db = snap.legacy ? await openBackupDB() : await openBackupDB2();
+    await new Promise((resolve) => {
+      const tx = db.transaction(snap.legacy ? [BACKUP_STORE] : [BACKUP_META, BACKUP_PAYLOADS], "readwrite");
+      tx.oncomplete = () => resolve(); tx.onerror = () => resolve(); tx.onabort = () => resolve();
+      if (snap.legacy) tx.objectStore(BACKUP_STORE).delete(snap.legacyId);
+      else { tx.objectStore(BACKUP_META).delete(snap.id); tx.objectStore(BACKUP_PAYLOADS).delete(snap.id); }
+    });
+  } catch (e) {} finally { try { if (db) db.close(); } catch (e) {} }
 }
 
 // ─── 内容质量扫描 v13.1: 中日混杂 + 图片 markdown ───────────────
@@ -3124,7 +3264,8 @@ function saveData(recipes, cats, components, creations, knowledge, brands, mater
     localStorage.setItem(STORAGE_KEY, payload);
     if (opts.lastBody) opts.lastBody.current = body;
     // 自动备份到 IndexedDB (fire-and-forget,失败不影响主流程)
-    addBackupSnapshot(payload);
+    // 2026-09-29 体检第 2 批:顺手带上条数做摘要(以前恢复列表要把每份整份数据解析一遍才知道条数)
+    addBackupSnapshot(payload, { recipes, components, creations, materials, brands, knowledge });
     return { ok: true, size: payload.length };
   } catch (e) {
     // v56: 不再静默吞错。localStorage 限额约 5MB,超出会抛 QuotaExceededError
@@ -3171,9 +3312,11 @@ function useDirtyGuard(getState) {
 }
 
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
-function mergeWithDefaults(userItems, defaultItems) {
+// 2026-09-29 体检第 2 批:以前删掉的预置条目刷新后又被补回来。dismissed = appSettings.dismissedSeedIds 的 Set,
+// 元素是「实体:id」(如 "components:comp_ruru_xxx"),kind 是实体名;在里面的预置条目不再补
+function mergeWithDefaults(userItems, defaultItems, dismissed, kind) {
   const userIds = new Set((userItems || []).map(x => x.id));
-  const missing = defaultItems.filter(d => !userIds.has(d.id));
+  const missing = defaultItems.filter(d => !userIds.has(d.id) && !(dismissed && kind && dismissed.has(kind + ":" + String(d.id))));
   return [...(userItems || []), ...missing];
 }
 
@@ -3523,26 +3666,40 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     return (bytes / 1024 / 1024).toFixed(2) + " MB";
   };
 
-  const summarizePayload = (payload) => {
-    try {
-      const d = JSON.parse(payload);
-      const n = (a) => Array.isArray(a) ? a.length : 0;
-      return lang === "zh"
-        ? `配方 ${n(d.recipes)} · 组件 ${n(d.components)} · 组合 ${n(d.creations)} · 材料 ${n(d.materials)} · 品牌 ${n(d.brands)} · 知识 ${n(d.knowledge)}`
-        : `レシピ ${n(d.recipes)} · コンポ ${n(d.components)} · 組立製品 ${n(d.creations)} · 材料 ${n(d.materials)} · ブランド ${n(d.brands)}`;
-    } catch { return ""; }
+  // 2026-09-29 体检第 2 批:摘要是备份时存下的条数,不再把每份整份数据解析一遍(以前 30 份 × 186 万字,每次重画都解析)
+  const summarizeSnap = (s) => {
+    if (s.legacy) return lang === "zh" ? "升级前的旧备份(内容在点「恢复」时才读取)" : "旧形式のバックアップ(内容は復元時に読込)";
+    const d = s.summary;
+    if (!d) return "";
+    return lang === "zh"
+      ? `配方 ${d.recipes || 0} · 组件 ${d.components || 0} · 组合 ${d.creations || 0} · 材料 ${d.materials || 0} · 品牌 ${d.brands || 0} · 知识 ${d.knowledge || 0}`
+      : `レシピ ${d.recipes || 0} · コンポ ${d.components || 0} · 組立製品 ${d.creations || 0} · 材料 ${d.materials || 0} · ブランド ${d.brands || 0}`;
   };
+  const reasonLabel = (r) => ({
+    import: lang === "zh" ? "覆盖导入之前" : "上書きインポート前",
+    clear: lang === "zh" ? "清除全部之前" : "全削除前",
+    restore: lang === "zh" ? "恢复备份之前" : "復元前",
+  }[r] || "");
 
   const handleRestore = (snap) => {
     confirmDialog(
       lang === "zh"
-        ? `恢复到 ${formatTime(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态再存一份备份，所以可以反悔）。\n\n刷新页面后生效。`
-        : `${formatTime(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で別のバックアップとして保存されます。`,
-      () => {
-        const current = localStorage.getItem(STORAGE_KEY);
-        if (current && current !== snap.payload) addBackupSnapshot(current);
-        _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
-        localStorage.setItem(STORAGE_KEY, snap.payload);
+        ? `恢复到 ${formatTime(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态存一份「固定」备份，不会被轮换掉，所以可以反悔）。\n\n刷新页面后生效。`
+        : `${formatTime(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で固定バックアップとして保存されます。`,
+      async () => {
+        // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
+        const payload = await getBackupPayload(snap);
+        if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
+        try {
+          const current = localStorage.getItem(STORAGE_KEY);
+          if (current && current !== payload) await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
+          _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
+          localStorage.setItem(STORAGE_KEY, payload);
+        } catch (e) {
+          _suspendSaves = false;
+          showToast((lang === "zh" ? "⚠️ 恢复失败:" : "⚠️ 復元失敗:") + (e && e.message ? e.message : String(e)));
+          return;
+        }
         showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
         setTimeout(() => location.reload(), 800);
       }
@@ -3553,7 +3710,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     confirmDialog(
       lang === "zh" ? "删除这个备份吗？(不可恢复)" : "このバックアップを削除?",
       async () => {
-        await deleteBackupSnapshot(snap.id);
+        await deleteBackupSnapshot(snap);
         const refreshed = await listBackupSnapshots();
         setSnapshots(refreshed);
         showToast(lang === "zh" ? "已删除" : "削除完了");
@@ -3571,8 +3728,8 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
             </div>
             <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>
               {lang === "zh"
-                ? `自动备份 (浏览器 IndexedDB · 最多保留 ${BACKUP_MAX} 份 · 每次保存自动新增) · 当前 ${snapshots.length} 份`
-                : `自動バックアップ (最大 ${BACKUP_MAX} 件) · 現在 ${snapshots.length} 件`}
+                ? `自动备份(浏览器内置数据库):最近 ${BACKUP_RECENT} 份 + 最近 ${BACKUP_DAYS} 天每天一份;覆盖导入、清除全部、恢复备份之前另存一份「固定」备份,不会被自动挤掉(最多 ${BACKUP_PINNED_MAX} 份) · 当前 ${snapshots.length} 份`
+                : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件;上書き・全削除・復元の前は固定保存(最大 ${BACKUP_PINNED_MAX} 件) · 現在 ${snapshots.length} 件`}
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
@@ -3592,9 +3749,14 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: T.textPrimary }}>
                     {formatTime(s.savedAt)}
-                    <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 8 }}>· {formatSize(s.size)}</span>
+                    {s.size > 0 && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 8 }}>· {formatSize(s.size)}</span>}
+                    {s.pinned && (
+                      <span style={{ ...T.fs.label, color: T.info, border: `1px solid ${T.info}`, borderRadius: T.radius, padding: "0 6px", marginLeft: 8 }}>
+                        {lang === "zh" ? "固定" : "固定"}{reasonLabel(s.reason) ? ` · ${reasonLabel(s.reason)}` : ""}
+                      </span>
+                    )}
                   </div>
-                  <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>{summarizePayload(s.payload)}</div>
+                  <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>{summarizeSnap(s)}</div>
                 </div>
                 <Btn size="sm" onClick={() => handleRestore(s)}>{lang === "zh" ? "恢复" : "復元"}</Btn>
                 <button onClick={() => handleDelete(s)} style={{ background: "none", border: "none", cursor: "pointer", color: T.danger, fontSize: 16, padding: "4px 8px" }} title={lang === "zh" ? "删除" : "削除"}>🗑</button>
@@ -14792,7 +14954,7 @@ function PasswordGate({ onUnlock }) {
       try { localStorage.setItem(RURU_V1_PWD_KEY, "true"); } catch {}
       onUnlock();
     } else {
-      setError("パスワードが正しくありません / 密码不正确");
+      setError("密码不正确 / パスワードが正しくありません");   // 2026-09-29 体检第 2 批:密码页改中文在前(以前日文为主,北京员工看不懂)
       setInput("");
     }
   };
@@ -14801,25 +14963,25 @@ function PasswordGate({ onUnlock }) {
       <style>{GLOBAL_CSS}</style>
       <form onSubmit={submit} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: "40px 32px", maxWidth: 380, width: "100%", textAlign: "center" }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 28 }}><Wordmark size={26} /></div>
-        <div style={{ ...T.fs.micro, color: T.subtle, marginBottom: 24, fontFamily: T.fontSerif }}>パティスリー管理 · v1 内部テスト</div>
+        <div style={{ ...T.fs.micro, color: T.subtle, marginBottom: 24, fontFamily: T.fontSerif }}>配方管理 · v1 内部测试</div>
         <div style={{ ...T.fs.small, color: T.body, marginBottom: 18, lineHeight: 1.7 }}>
-          このアプリは内部テスト中です<br/>
-          这个 app 正在内部测试中
+          这个 app 正在内部测试中<br/>
+          <span style={{ ...T.fs.caption, color: T.subtle }}>このアプリは内部テスト中です</span>
         </div>
         <input
           type="password"
           className="k-input"
           value={input}
           onChange={e => { setInput(e.target.value); setError(""); }}
-          placeholder="パスワード / 密码"
+          placeholder="密码 / パスワード"
           autoFocus
           style={{ width: "100%", padding: "10px 14px", fontSize: 14, border: `1px solid ${T.border}`, borderRadius: T.radius, marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box", outline: "none", background: T.surface, color: T.ink }}
         />
         {error && <div style={{ ...T.fs.caption, color: T.danger, marginBottom: 8 }}>{error}</div>}
-        <button type="submit" className="k-btn k-btn-primary" style={{ width: "100%", padding: "12px 14px", background: T.ink, color: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontSize: 14, fontWeight: 400, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>入る / 进入</button>
+        <button type="submit" className="k-btn k-btn-primary" style={{ width: "100%", padding: "12px 14px", background: T.ink, color: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontSize: 14, fontWeight: 400, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>进入 / 入る</button>
         <div style={{ ...T.fs.label, color: T.muted, marginTop: 22, lineHeight: 1.7 }}>
-          パスワードは LuLu からお伝えします<br/>
-          一度入力すれば次回は不要です
+          密码请向 LuLu 要 · 输入一次,下次就不用再输<br/>
+          パスワードは LuLu から · 一度入力すれば次回は不要
         </div>
       </form>
     </div>
@@ -14837,14 +14999,18 @@ export default function AppRoot() {
 
 // ─── Main App ─────────────────────────────────────────────────────
 function App() {
-  const stored = loadData();
+  // 2026-09-29 体检第 2 批:以前 const stored = loadData() 写在函数体里,App 每重画一次就把整份存档(约 186 万字)重新解析一遍;
+  // 现在只在第一次渲染读一次,下面各 useState 的初值也改成惰性函数(只在第一次算)
+  const [stored] = useState(loadData);
+  // 删掉过的预置条目(见 mergeWithDefaults / 下面的 dismissedSeedIds effect)
+  const [dismissedSeeds] = useState(() => new Set(Array.isArray(stored?.appSettings?.dismissedSeedIds) ? stored.appSettings.dismissedSeedIds : []));
   // v1 内测: 默认种子 = 今天录入的 Framboisier + Caramel Abricot 全套
   // 老种子 (FINANCIER / COFFEE_BASQUE_* / AGREABLE_MOUSSE / DEFAULT_KNOWLEDGE / DEFAULT_CATS) 已隐藏 (代码保留以备回退)
-  const [recipes, setRecipes] = useState(mergeWithDefaults(stored?.recipes, SEED_RECIPES));
-  const [cats, setCats] = useState(migrateCats(stored?.cats) || []);
-  const [components, setComponents] = useState(mergeWithDefaults(stored?.components, SEED_COMPONENTS));
-  const [creations, setCreations] = useState(mergeWithDefaults(stored?.creations, SEED_CREATIONS));
-  const [knowledge, setKnowledge] = useState(mergeWithDefaults(stored?.knowledge, SEED_KNOWLEDGE));
+  const [recipes, setRecipes] = useState(() => mergeWithDefaults(stored?.recipes, SEED_RECIPES, dismissedSeeds, "recipes"));
+  const [cats, setCats] = useState(() => migrateCats(stored?.cats) || []);
+  const [components, setComponents] = useState(() => mergeWithDefaults(stored?.components, SEED_COMPONENTS, dismissedSeeds, "components"));
+  const [creations, setCreations] = useState(() => mergeWithDefaults(stored?.creations, SEED_CREATIONS, dismissedSeeds, "creations"));
+  const [knowledge, setKnowledge] = useState(() => mergeWithDefaults(stored?.knowledge, SEED_KNOWLEDGE, dismissedSeeds, "knowledge"));
   // 📚 材料百科
   const [brands, setBrands] = useState(stored?.brands || []);
   const [materials, setMaterials] = useState(stored?.materials || []);
@@ -14899,7 +15065,28 @@ function App() {
   setDisplayCurForLookup(appSettings.displayCurrency);
   // 🏷 产品家族（Product Family）
   // v1 内测: 默认种子 = SEED_FAMILIES (family_buttercream_cake + family_pate_a_cake), 老 family_basque 已隐藏
-  const [productFamilies, setProductFamilies] = useState(mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES));
+  const [productFamilies, setProductFamilies] = useState(() => mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES, dismissedSeeds, "productFamilies"));
+  // 2026-09-29 体检第 2 批:删掉的预置条目以前刷新后又被补回来(Framboisier、8 个组件、5 条知识……)。
+  // 载入时没被删过的预置条目都已补齐,所以「现在数据里找不到的预置 id」= 她删掉的(不管从哪一页删、清除全部还是覆盖导入),
+  // 记进 appSettings.dismissedSeedIds,下次载入 mergeWithDefaults 跳过;撤销删除 / 合并导入加回来后自动从名单里去掉
+  useEffect(() => {
+    const absent = [];
+    const scan = (kind, items, seeds) => {
+      const ids = new Set((items || []).map(x => String(x && x.id)));
+      (seeds || []).forEach(s => { if (s && !ids.has(String(s.id))) absent.push(kind + ":" + String(s.id)); });
+    };
+    scan("recipes", recipes, SEED_RECIPES);
+    scan("components", components, SEED_COMPONENTS);
+    scan("creations", creations, SEED_CREATIONS);
+    scan("knowledge", knowledge, SEED_KNOWLEDGE);
+    scan("productFamilies", productFamilies, SEED_FAMILIES);
+    absent.sort();
+    setAppSettings(prev => {
+      const cur = Array.isArray(prev.dismissedSeedIds) ? [...prev.dismissedSeedIds].sort() : [];
+      if (cur.join("\n") === absent.join("\n")) return prev;
+      return { ...prev, dismissedSeedIds: absent };
+    });
+  }, [recipes, components, creations, knowledge, productFamilies]);
   const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale"
   // v17: 「在售中」标记。季节食材决定当季卖哪几款,标了的排到最前 + 单独一页。
   // 只是配方上的一个布尔,跟 products(可售单元 / 库存)是两回事,不联动。
@@ -14939,7 +15126,8 @@ function App() {
   }, [tab]);
   // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
   const goTab = (t) => {
-    const go = () => { setTab(t); setMoreOpen(false); };
+    // 2026-09-29 体检第 2 批:家族详情 / 编辑是盖满屏的一层,以前点底栏切了页它还盖在上面,像导航失灵 —— 切页时一起关掉
+    const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); };
     if (t !== tab && anyEditorDirty()) {
       confirmDialog(
         lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
@@ -14990,6 +15178,23 @@ function App() {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+  // 2026-09-29 体检第 2 批(新功能):App 更新以后,以前要关掉重开才换上新版,她不知道自己用的是旧版。
+  // 离线缓存(src/sw.js)下载好新版会 skipWaiting + clients.claim,页面收到 controllerchange ——
+  // 只有「之前已经有旧版在管这一页」时才算更新(第一次安装也会触发,那次不提示),顶上出一条「刷新」提示。
+  // 页面开着时每 60 分钟问一次有没有新版(只在页面看得见时问)。不支持离线缓存的浏览器什么都不做。
+  const [swUpdateReady, setSwUpdateReady] = useState(false);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    const sw = navigator.serviceWorker;
+    let hadController = !!sw.controller;
+    const onChange = () => { if (hadController) setSwUpdateReady(true); hadController = true; };
+    sw.addEventListener("controllerchange", onChange);
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      try { sw.getRegistration().then(r => { if (r) r.update().catch(() => {}); }).catch(() => {}); } catch (e) {}
+    }, 60 * 60 * 1000);
+    return () => { sw.removeEventListener("controllerchange", onChange); clearInterval(timer); };
+  }, []);
   const doSave = () => staleRef.current
     ? { ok: false, error: "stale" }
     : saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, { lastBody: lastBodyRef });
@@ -15008,6 +15213,19 @@ function App() {
     document.addEventListener("visibilitychange", onVis);
     return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", onVis); };
   }, []);
+  // 2026-09-29 体检第 2 批:覆盖导入 / 清除全部之前存一份「固定」备份(不参与自动轮换)。
+  // 先把还没写进去的改动写掉,再拿存档里的内容备份。返回 true = 存上了
+  const pinBackupNow = async (reason) => {
+    try {
+      if (pendingRef.current && !staleRef.current) {
+        const res = saveNowRef.current();
+        if (res && res.ok) pendingRef.current = false;
+      }
+      const cur = localStorage.getItem(STORAGE_KEY);
+      if (!cur) return true;   // 本来就没有存档,没什么可备份的
+      return await addBackupSnapshot(cur, null, { pinned: true, reason });
+    } catch (e) { return false; }
+  };
 
   useEffect(() => {
     if (staleRef.current) {
@@ -15290,6 +15508,11 @@ function App() {
   const confirmDialog = (message, onConfirm, opts = {}) => {
     setConfirmState({ message, onConfirm, ...opts });
   };
+  // 2026-09-29 体检第 2 批:导入确认框点「确定」时要读「那一刻」的数据(闭包里的可能是选文件时的旧值)
+  const dataRef = useRef(null);
+  dataRef.current = { recipes, cats, components, creations, knowledge, brands, materials, shopMaterials, products, salesLog, productionLog, suppliers, productFamilies, customCompCats };
+  // 合并 / 覆盖导入的结果,留在数据页上(提示条 5 秒就没了)
+  const [importReport, setImportReport] = useState(null);
 
   const handleSaveRecipe = (r) => {
     setRecipes(prev => prev.find(x => x.id === r.id) ? prev.map(x => x.id === r.id ? r : x) : [...prev, r]);
@@ -15378,7 +15601,8 @@ function App() {
   const exportData = () => {
     const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, exportedAt: new Date().toISOString(), version: 17 }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `patisserie_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    // 2026-09-29 体检第 2 批:文件名用北京本地日期(以前 UTC,早上 8 点前导出的名字是昨天)
+    const a = document.createElement("a"); a.href = url; a.download = `patisserie_${localDateStr()}.json`; a.click();
     URL.revokeObjectURL(url); showToast("✓ 导出成功");
   };
 
@@ -15398,7 +15622,7 @@ function App() {
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `patisserie_IP_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `patisserie_IP_${localDateStr()}.json`; a.click();   // 2026-09-29 体检第 2 批:本地日期
     URL.revokeObjectURL(url);
     showToast(lang === "zh" ? `✓ IP 分发包已导出(剥离 ${shopMaterials.length} 条本店价)` : `✓ IP パック出力(仕入 ${shopMaterials.length} 件除外)`);
   };
@@ -15422,8 +15646,17 @@ function App() {
     return null; // 校验通过
   };
 
+  // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批)
+  const IMPORT_ENTITY_LABELS = [
+    ["recipes", "配方", "レシピ"], ["components", "组件", "コンポーネント"], ["creations", "组合产品", "組立製品"],
+    ["knowledge", "知识", "ナレッジ"], ["brands", "厂家", "メーカー"], ["materials", "材料百科", "材料事典"],
+    ["shopMaterials", "本店原料", "仕入れ原料"], ["products", "商品", "商品"], ["salesLog", "销售记录", "売上記録"],
+    ["productionLog", "生产记录", "生産記録"], ["suppliers", "供货商", "仕入先"], ["cats", "老价格表", "旧価格表"],
+  ];
   const importData = (e) => {
-    const f = e.target.files[0]; if (!f) return;
+    const f = e.target.files[0];
+    e.target.value = "";   // 2026-09-29 体检第 2 批:清空选择,同一个文件第二次选也能触发(以前取消后再选没反应)
+    if (!f) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
@@ -15433,7 +15666,28 @@ function App() {
           showToast((lang === "zh" ? "⚠️ 导入失败:" : "⚠️ インポート失敗:") + err);
           return;
         }
-        confirmDialog("导入后将覆盖当前数据，确认？", () => {
+        // 2026-09-29 体检第 2 批:以前确认框只写「导入后将覆盖当前数据」,局部包误点这里会把材料库等整块清空。
+        // 现在逐类列出「现有 → 文件 / 清空」,文件里缺的类别直接建议改用合并导入;覆盖前自动存一份固定备份
+        const cur = dataRef.current || {};
+        const emptied = [], replaced = [];
+        IMPORT_ENTITY_LABELS.forEach(([k, zh, ja]) => {
+          const label = lang === "zh" ? zh : ja;
+          const curN = Array.isArray(cur[k]) ? cur[k].length : 0;
+          if (!Array.isArray(d[k])) {
+            if (curN > 0) emptied.push(lang === "zh" ? `${label}：现有 ${curN} 条 → 清空(文件里没有)` : `${label}：${curN} 件 → 空になる(ファイルにない)`);
+          } else if (curN > 0 || d[k].length > 0) {
+            replaced.push(lang === "zh" ? `${label}：现有 ${curN} 条 → 换成文件里的 ${d[k].length} 条` : `${label}：${curN} 件 → ${d[k].length} 件`);
+          }
+        });
+        const partial = emptied.length > 0;
+        const msg = lang === "zh"
+          ? (partial
+              ? `这个文件里没有下面标「清空」的几类数据,覆盖导入会把你现有的这些全部清空。\n\n如果这是录入包(只含几条新配方 / 组件 / 知识),请点「取消」,改用下面的「合并导入」。\n\n覆盖前会自动存一份「固定」备份,出错可以在「恢复备份」里找回。`
+              : `文件里的数据会整体替换你现有的数据。\n\n覆盖前会自动存一份「固定」备份,出错可以在「恢复备份」里找回。`)
+          : (partial
+              ? `このファイルにないデータは空になります。新規パックなら「キャンセル」してマージインポートを使ってください。\n上書き前に固定バックアップを保存します。`
+              : `ファイルの内容で現在のデータを置き換えます。\n上書き前に固定バックアップを保存します。`);
+        const applyOverwrite = () => {
           setRecipes(d.recipes || []);
           setCats(migrateCats(d.cats || []));
           setComponents(d.components || []);
@@ -15452,7 +15706,21 @@ function App() {
           if (d.appSettings) setAppSettings(prev => ({ ...prev, ...d.appSettings }));
           if (d.customCompCats) setCustomCompCats(d.customCompCats);
           if (d.productFamilies) setProductFamilies(d.productFamilies);
-          showToast("✓ 数据导入成功");
+          showToast(lang === "zh" ? "✓ 数据导入成功" : "✓ インポート完了", { ms: 5000 });
+          setImportReport({ kind: "overwrite", fileName: f.name, at: new Date(), lines: [...emptied, ...replaced], skipped: [] });
+        };
+        confirmDialog(msg, async () => {
+          if (await pinBackupNow("import")) applyOverwrite();
+          else confirmDialog(
+            lang === "zh" ? "覆盖前的固定备份没存上(浏览器的数据库用不了)。仍然覆盖吗?建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できませんでした。それでも上書きしますか?",
+            applyOverwrite,
+            { title: lang === "zh" ? "备份没存上" : "バックアップ失敗", confirmText: lang === "zh" ? "仍然覆盖" : "上書きする" }
+          );
+        }, {
+          title: lang === "zh" ? (partial ? "覆盖导入会清空数据" : "覆盖导入") : (partial ? "上書きでデータが消えます" : "上書きインポート"),
+          kicker: lang === "zh" ? "导入数据(覆盖)" : "上書きインポート",
+          refs: [...emptied, ...replaced],
+          confirmText: lang === "zh" ? (partial ? "仍然覆盖" : "覆盖导入") : "上書きする",
         });
       } catch (err) {
         showToast((lang === "zh" ? "⚠️ 导入失败:JSON 格式错 - " : "⚠️ JSON エラー:") + (err.message || err));
@@ -15465,7 +15733,9 @@ function App() {
   // - cats: 按 nameZh/nameJa 匹配,已有则只追加新品牌,没有则新建大类
   // - components/recipes/creations/knowledge: 按名字和 id 匹配,已有跳过;brands/materials/shopMaterials: 已有的按修改时间取新的一边(mergeByNewer)
   const mergeImportData = (e) => {
-    const f = e.target.files[0]; if (!f) return;
+    const f = e.target.files[0];
+    e.target.value = "";   // 2026-09-29 体检第 2 批:清空选择,同一个文件第二次选也能触发(以前取消后再选没反应)
+    if (!f) return;
     const reader = new FileReader();
     reader.onload = ev => {
       try {
@@ -15475,129 +15745,120 @@ function App() {
           showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + err);
           return;
         }
-        const report = { catsNew: 0, catsUpdated: 0, brandsAdded: 0, componentsNew: 0, recipesNew: 0, creationsNew: 0, knowledgeNew: 0 };
 
         confirmDialog(
-          "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n\n确认继续？",
+          "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n销售 / 生产记录同一条以修改时间晚的为准。\n\n确认继续？",
           () => {
-            // 1. 合并 cats
+            // 2026-09-29 体检第 2 批:以前计数写在 setX(prev => …) 里面,点确定时确认框先关(App 已有待处理更新),
+            // 那些函数要等下次渲染才执行,拼提示时计数全是 0 —— 永远显示「无新内容可合并(都已存在)」,其实已经加进去了。
+            // 现在先用「点确定那一刻」的数据(dataRef)在外面算好要加的条目和计数,再 setX 追加;结果留在数据页上。
+            const cur = dataRef.current || {};
+            const lines = [];
+            const skipped = [];
+            const genId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
+            const nameOf = (x) => (x && (x.nameZh || x.nameJa || x.nameFr || x.titleZh || x.titleJa || x.title || x.id)) || "";
+            // 按 isDup 去重,返回要追加的条目(文件里自己重复的也只加第一条)
+            const pickNew = (base, incoming, isDup, makeId, label) => {
+              const add = [];
+              (incoming || []).forEach(inc => {
+                if (!inc || typeof inc !== "object") return;
+                const dup = (base || []).find(x => x && isDup(x, inc)) || add.find(x => isDup(x, inc));
+                if (dup) { if (label) skipped.push(`${label}「${nameOf(inc)}」`); return; }
+                add.push(makeId ? { ...inc, id: inc.id || makeId() } : inc);
+              });
+              return add;
+            };
+            // 追加:再按 id 挡一次(万一这之间别处也加了同 id 的)
+            const appendTo = (setter, add) => {
+              if (!add.length) return;
+              setter(prev => {
+                const ids = new Set((prev || []).map(x => x && x.id));
+                const a = add.filter(x => !(x.id !== undefined && ids.has(x.id)));
+                return a.length ? [...(prev || []), ...a] : prev;
+              });
+            };
+            const sameName = (a, b) => (b.id && a.id === b.id) || (b.nameZh && a.nameZh && b.nameZh === a.nameZh) || (b.nameJa && a.nameJa && b.nameJa === a.nameJa);
+            const zh = lang === "zh";
+
+            // 1. 合并 cats(按名字匹配大类,已有则只追加新品牌)
             if (Array.isArray(d.cats)) {
               const incomingCats = migrateCats(d.cats);
-              setCats(prev => {
-                const result = [...prev];
+              const mergeCats = (prevCats) => {
+                const result = [...(prevCats || [])];
+                const rep = { catsNew: 0, catsUpdated: 0, brandsAdded: 0 };
                 incomingCats.forEach(inc => {
-                  // 找现有大类(通过名字匹配,zh 或 ja 任一相同即视为同类)
                   const existingIdx = result.findIndex(c =>
                     (inc.nameZh && c.nameZh && inc.nameZh === c.nameZh) ||
                     (inc.nameJa && c.nameJa && inc.nameJa === c.nameJa)
                   );
                   if (existingIdx < 0) {
-                    // 新大类
                     result.push({ ...inc, id: inc.id || ("c" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.catsNew++;
+                    rep.catsNew++;
                   } else {
-                    // 已存在,合并 brands
                     const existing = result[existingIdx];
-                    const newBrands = [...existing.brands];
-                    let appendedBrandsInThisCat = 0;
+                    const newBrands = [...(existing.brands || [])];
+                    let appended = 0;
                     (inc.brands || []).forEach(incBrand => {
                       const dup = newBrands.find(b =>
                         (incBrand.nameZh && b.nameZh && incBrand.nameZh === b.nameZh) ||
                         (incBrand.nameJa && b.nameJa && incBrand.nameJa === b.nameJa)
                       );
-                      if (!dup) {
-                        newBrands.push(incBrand);
-                        appendedBrandsInThisCat++;
-                      }
+                      if (!dup) { newBrands.push(incBrand); appended++; }
                     });
-                    if (appendedBrandsInThisCat > 0) {
+                    if (appended > 0) {
                       result[existingIdx] = { ...existing, brands: newBrands };
-                      report.catsUpdated++;
-                      report.brandsAdded += appendedBrandsInThisCat;
+                      rep.catsUpdated++;
+                      rep.brandsAdded += appended;
                     }
                   }
                 });
-                return result;
-              });
+                return { result, rep };
+              };
+              const { rep } = mergeCats(cur.cats);
+              if (rep.catsNew || rep.brandsAdded) setCats(prev => mergeCats(prev).result);
+              if (rep.catsNew) lines.push((zh ? "+ 老价格表新大类 " : "+ 旧価格表カテゴリー ") + rep.catsNew);
+              if (rep.brandsAdded) lines.push((zh ? "+ 老价格表新品牌 " : "+ 旧価格表ブランド ") + rep.brandsAdded);
             }
 
-            // 2. 合并 components (按 id 或 nameZh/nameJa 去重)
+            // 2. 组件 / 3. 配方 / 4. 组合产品(按 id 或 nameZh / nameJa 去重,已有的不动)
             if (Array.isArray(d.components)) {
-              setComponents(prev => {
-                const result = [...prev];
-                d.components.forEach(inc => {
-                  const dup = result.find(c =>
-                    (inc.id && c.id === inc.id) ||
-                    (inc.nameZh && c.nameZh && inc.nameZh === c.nameZh) ||
-                    (inc.nameJa && c.nameJa && inc.nameJa === c.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("comp_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.componentsNew++;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ");
+              appendTo(setComponents, add);
+              if (add.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + add.length);
             }
-
-            // 3. 合并 recipes
             if (Array.isArray(d.recipes)) {
-              setRecipes(prev => {
-                const result = [...prev];
-                d.recipes.forEach(inc => {
-                  const dup = result.find(r =>
-                    (inc.id && r.id === inc.id) ||
-                    (inc.nameZh && r.nameZh && inc.nameZh === r.nameZh) ||
-                    (inc.nameJa && r.nameJa && inc.nameJa === r.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || (Date.now() + Math.floor(Math.random() * 1000)) });
-                    report.recipesNew++;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ");
+              appendTo(setRecipes, add);
+              if (add.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + add.length);
             }
-
-            // 4. 合并 creations
             if (Array.isArray(d.creations)) {
-              setCreations(prev => {
-                const result = [...prev];
-                d.creations.forEach(inc => {
-                  const dup = result.find(c =>
-                    (inc.id && c.id === inc.id) ||
-                    (inc.nameZh && c.nameZh && inc.nameZh === c.nameZh) ||
-                    (inc.nameJa && c.nameJa && inc.nameJa === c.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("creat_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.creationsNew++;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品");
+              appendTo(setCreations, add);
+              if (add.length) lines.push((zh ? "+ 新组合产品 " : "+ 組立製品 ") + add.length);
             }
 
-            // 5. 合并 knowledge (按 title 去重)
+            // 5. 知识:按 id,或中文 / 日文标题(去掉空格、全半角、大小写差别后)相同去重
+            // (2026-09-29 体检第 2 批:以前比的是 title 字段,知识条目根本没有这个字段,按标题去重从来没生效)
             if (Array.isArray(d.knowledge)) {
-              setKnowledge(prev => {
-                const result = [...prev];
-                d.knowledge.forEach(inc => {
-                  const dup = result.find(k =>
-                    (inc.id && k.id === inc.id) ||
-                    (inc.title && k.title && inc.title === k.title)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("k_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.knowledgeNew++;
-                  }
-                });
-                return result;
-              });
+              const normT = (s) => typeof s === "string" ? s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() : "";
+              const sameT = (a, b) => { const x = normT(a), y = normT(b); return !!x && x === y; };
+              const isDupK = (k, inc) => (inc.id && k.id === inc.id) || sameT(k.titleZh, inc.titleZh) || sameT(k.titleJa, inc.titleJa) || sameT(k.title, inc.title);
+              const add = pickNew(cur.knowledge, d.knowledge, isDupK, () => genId("k_"), zh ? "知识" : "ナレッジ");
+              appendTo(setKnowledge, add);
+              if (add.length) lines.push((zh ? "+ 新知识点 " : "+ ナレッジ ") + add.length);
             }
 
             // 6. 合并 brands/materials (材料百科,按 id 匹配;已存在时合并新字段)
+            const countNewById = (base, incoming) => {
+              const ids = new Set((base || []).map(x => x && x.id));
+              let n = 0, m = 0;
+              (incoming || []).forEach(inc => { if (inc && ids.has(inc.id)) m++; else n++; });
+              return [n, m];
+            };
             if (Array.isArray(d.brands)) {
+              const [n, m] = countNewById(cur.brands, d.brands);
+              if (n) lines.push((zh ? "+ 新厂家 " : "+ メーカー ") + n);
+              if (m) lines.push(zh ? `· 已有厂家 ${m} 家:按修改时间取新的一边` : `· 既存メーカー ${m}:新しい方を採用`);
               setBrands(prev => {
                 const result = [...prev];
                 d.brands.forEach(inc => {
@@ -15613,6 +15874,9 @@ function App() {
               });
             }
             if (Array.isArray(d.materials)) {
+              const [n, m] = countNewById(cur.materials, d.materials);
+              if (n) lines.push((zh ? "+ 新材料 " : "+ 材料 ") + n);
+              if (m) lines.push(zh ? `· 已有材料 ${m} 条:按修改时间取新的一边` : `· 既存材料 ${m}:新しい方を採用`);
               setMaterials(prev => {
                 // v11: priceRange 迁移；v14: imageUrls 格式升级
                 const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
@@ -15632,6 +15896,14 @@ function App() {
             }
             // v11: 合并 shopMaterials（按 materialId 去重；没 materialId 的孤立条目按 id 去重）
             if (Array.isArray(d.shopMaterials)) {
+              const base = cur.shopMaterials || [];
+              let n = 0, m = 0;
+              d.shopMaterials.forEach(inc => {
+                if (!inc || !(inc.materialId || inc.id)) return;
+                if (base.some(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id))) m++; else n++;
+              });
+              if (n) lines.push((zh ? "+ 新本店原料 " : "+ 仕入れ原料 ") + n);
+              if (m) lines.push(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
               setShopMaterials(prev => {
                 const result = [...prev];
                 d.shopMaterials.forEach(inc => {
@@ -15657,104 +15929,78 @@ function App() {
 
             // 7. 合并 products(商品,按 id/nameZh/nameJa 去重)
             if (Array.isArray(d.products)) {
-              setProducts(prev => {
-                const result = [...prev];
-                d.products.forEach(inc => {
-                  const dup = result.find(p =>
-                    (inc.id && p.id === inc.id) ||
-                    (inc.nameZh && p.nameZh && inc.nameZh === p.nameZh) ||
-                    (inc.nameJa && p.nameJa && inc.nameJa === p.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("prod_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.productsNew = (report.productsNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.products, d.products, sameName, () => genId("prod_"), zh ? "商品" : "商品");
+              appendTo(setProducts, add);
+              if (add.length) lines.push((zh ? "+ 新商品 " : "+ 商品 ") + add.length);
             }
 
-            // 8. 合并 salesLog(销售记录,只按 id 去重)
+            // 8 / 9. 销售 / 生产记录:按 id 去重;同一条(同 id)两边都有时,修改时间(没有就用创建时间)晚的为准
+            // (2026-09-29 体检第 2 批:以前同 id 整条跳过,另一台电脑下午在同一条上追加的销量合并不过来)
+            const logTime = (x) => Date.parse((x && (x.updatedAt || x.createdAt)) || "") || 0;
+            const mergeLogs = (base, incoming, prefix) => {
+              const add = [];
+              const replace = new Map();
+              (incoming || []).forEach(inc => {
+                if (!inc || typeof inc !== "object") return;
+                if (!inc.id) { add.push({ ...inc, id: genId(prefix) }); return; }
+                const inAdd = add.findIndex(x => x.id === inc.id);
+                if (inAdd >= 0) { if (logTime(inc) > logTime(add[inAdd])) add[inAdd] = inc; return; }
+                const dup = (base || []).find(s => s && s.id === inc.id);
+                if (!dup) { add.push(inc); return; }
+                const prevRep = replace.get(inc.id);
+                if (logTime(inc) > logTime(prevRep || dup)) replace.set(inc.id, inc);
+              });
+              return { add, replace };
+            };
+            const applyLogs = (setter, { add, replace }) => {
+              if (!add.length && !replace.size) return;
+              setter(prev => {
+                let changed = false;
+                let next = (prev || []).map(x => {
+                  const r = x && replace.get(x.id);
+                  if (r && logTime(r) > logTime(x)) { changed = true; return r; }
+                  return x;
+                });
+                const ids = new Set(next.map(x => x && x.id));
+                const a = add.filter(x => !ids.has(x.id));
+                if (a.length) { next = [...next, ...a]; changed = true; }
+                return changed ? next : prev;
+              });
+            };
+            let logsReplaced = 0;
             if (Array.isArray(d.salesLog)) {
-              setSalesLog(prev => {
-                const result = [...prev];
-                d.salesLog.forEach(inc => {
-                  const dup = inc.id && result.find(s => s.id === inc.id);
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("sl_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.salesLogNew = (report.salesLogNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const r = mergeLogs(cur.salesLog, d.salesLog, "sl_");
+              applyLogs(setSalesLog, r);
+              if (r.add.length) lines.push((zh ? "+ 新销售记录 " : "+ 売上記録 ") + r.add.length);
+              if (r.replace.size) { lines.push(zh ? `· 销售记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 売上記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
             }
-
-            // 9. 合并 productionLog(生产记录,只按 id 去重)
             if (Array.isArray(d.productionLog)) {
-              setProductionLog(prev => {
-                const result = [...prev];
-                d.productionLog.forEach(inc => {
-                  const dup = inc.id && result.find(s => s.id === inc.id);
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("pl_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.productionLogNew = (report.productionLogNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const r = mergeLogs(cur.productionLog, d.productionLog, "pl_");
+              applyLogs(setProductionLog, r);
+              if (r.add.length) lines.push((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
+              if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
             }
+            if (logsReplaced) lines.push(zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください");
 
             // 10. 合并 suppliers(供应商,按 id/nameZh/nameJa 去重)
             if (Array.isArray(d.suppliers)) {
-              setSuppliers(prev => {
-                const result = [...prev];
-                d.suppliers.forEach(inc => {
-                  const dup = result.find(s =>
-                    (inc.id && s.id === inc.id) ||
-                    (inc.nameZh && s.nameZh && inc.nameZh === s.nameZh) ||
-                    (inc.nameJa && s.nameJa && inc.nameJa === s.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("sup_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.suppliersNew = (report.suppliersNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.suppliers, d.suppliers, sameName, () => genId("sup_"), zh ? "供货商" : "仕入先");
+              appendTo(setSuppliers, add);
+              if (add.length) lines.push((zh ? "+ 新供货商 " : "+ 仕入先 ") + add.length);
             }
 
             // 11. 合并 productFamilies(产品家族,按 id/nameZh/nameJa 去重)
             if (Array.isArray(d.productFamilies)) {
-              setProductFamilies(prev => {
-                const result = [...prev];
-                d.productFamilies.forEach(inc => {
-                  const dup = result.find(f =>
-                    (inc.id && f.id === inc.id) ||
-                    (inc.nameZh && f.nameZh && inc.nameZh === f.nameZh) ||
-                    (inc.nameJa && f.nameJa && inc.nameJa === f.nameJa)
-                  );
-                  if (!dup) {
-                    result.push({ ...inc, id: inc.id || ("fam_" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    report.familiesNew = (report.familiesNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.productFamilies, d.productFamilies, sameName, () => genId("fam_"), zh ? "家族" : "ファミリー");
+              appendTo(setProductFamilies, add);
+              if (add.length) lines.push((zh ? "+ 新产品家族 " : "+ ファミリー ") + add.length);
             }
 
             // 12. 合并 customCompCats(自定义组件分类,按 id 去重)
             if (Array.isArray(d.customCompCats)) {
-              setCustomCompCats(prev => {
-                const result = [...prev];
-                d.customCompCats.forEach(inc => {
-                  const dup = inc.id && result.find(c => c.id === inc.id);
-                  if (!dup) {
-                    result.push(inc);
-                    report.customCompCatsNew = (report.customCompCatsNew || 0) + 1;
-                  }
-                });
-                return result;
-              });
+              const add = pickNew(cur.customCompCats, d.customCompCats, (a, b) => !!(b.id && a.id === b.id), null, null);
+              appendTo(setCustomCompCats, add);
+              if (add.length) lines.push((zh ? "+ 新组件分类 " : "+ コンポ分類 ") + add.length);
             }
 
             // 13. 合并 printSettings(对象;只在当前是默认值时才用导入的,避免覆盖用户配置)
@@ -15767,26 +16013,15 @@ function App() {
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-            // 报告
-            const lines = [];
-            if (report.catsNew) lines.push("+ 新大类: " + report.catsNew);
-            if (report.brandsAdded) lines.push("+ 新品牌: " + report.brandsAdded + " (散布在 " + report.catsUpdated + " 个已有大类)");
-            if (report.componentsNew) lines.push("+ 新组件: " + report.componentsNew);
-            if (report.recipesNew) lines.push("+ 新配方: " + report.recipesNew);
-            if (report.creationsNew) lines.push("+ 新组合产品: " + report.creationsNew);
-            if (report.knowledgeNew) lines.push("+ 新知识点: " + report.knowledgeNew);
-            // [B1 修复] 7 个补字段的报告
-            if (report.productsNew) lines.push("+ 新商品: " + report.productsNew);
-            if (report.salesLogNew) lines.push("+ 新销售记录: " + report.salesLogNew);
-            if (report.productionLogNew) lines.push("+ 新生产记录: " + report.productionLogNew);
-            if (report.suppliersNew) lines.push("+ 新供应商: " + report.suppliersNew);
-            if (report.familiesNew) lines.push("+ 新产品家族: " + report.familiesNew);
-            if (report.customCompCatsNew) lines.push("+ 新组件分类: " + report.customCompCatsNew);
-
-            const msg = lines.length > 0
-              ? "✓ 合并完成\n" + lines.join("\n")
-              : "无新内容可合并(都已存在)";
-            showToast(msg);
+            // 报告:提示条给一句话,完整结果(含因同名 / 同编号跳过的条目)留在数据页上
+            const added = lines.filter(l => l.startsWith("+"));
+            const msg = added.length > 0
+              ? (zh ? "✓ 合并完成:" : "✓ マージ完了:") + added.map(l => l.slice(2)).join(" · ")
+              : lines.length > 0
+                ? (zh ? "✓ 合并完成(没有新增条目;已有的条目按修改时间比过,取了新的一边)" : "✓ マージ完了(新規なし)")
+                : (zh ? "没有新内容:文件里的条目这里都已经有了" : "新しい内容はありません(すべて既存)");
+            showToast(msg + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : ""), { ms: 8000 });
+            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines, skipped });
           }
         );
       } catch (err) {
@@ -16039,7 +16274,7 @@ function App() {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `p3_eligible_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+    a.href = url; a.download = `p3_eligible_${localDateStr()}.json`; a.click();   // 2026-09-29 体检第 2 批:本地日期
     URL.revokeObjectURL(url);
     showToast(`✓ 导出 ${list.length} 条待爬 material 清单`);
   };
@@ -16058,6 +16293,32 @@ function App() {
               : "別のウィンドウでデータが変更されました。このウィンドウは保存を停止しています。再読み込みしてください。"}
           </span>
           <button type="button" onClick={() => window.location.reload()} style={{ background: "#FFFFFF", color: T.danger, border: "none", borderRadius: T.radius, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+            {lang === "zh" ? "刷新" : "再読み込み"}
+          </button>
+        </div>
+      )}
+      {/* 2026-09-29 体检第 2 批:新版本下载好了 → 提示刷新(见 swUpdateReady)。中性色,不是出错 */}
+      {swUpdateReady && !staleWindow && (
+        <div role="status" style={{ position: "sticky", top: 0, zIndex: T.z.toast - 1, background: T.sunken, color: T.ink, borderBottom: `1px solid ${T.line}`, padding: "8px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
+          <span style={{ flex: 1, minWidth: 220 }}>
+            {lang === "zh"
+              ? "新版本已经下载好了。点「刷新」换上新版(编辑页里没保存的内容请先保存)。"
+              : "新しいバージョンの準備ができました。「再読み込み」で切り替えます(編集中の内容は先に保存してください)。"}
+          </span>
+          <button type="button"
+            onClick={() => {
+              const reload = () => window.location.reload();
+              if (anyEditorDirty()) {
+                confirmDialog(
+                  lang === "zh" ? "编辑页里有还没保存的修改。现在刷新,刚才改的内容会丢。" : "保存していない変更があります。再読み込みすると失われます。",
+                  reload,
+                  { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,刷新" : "保存せず再読み込み", cancelText: lang === "zh" ? "先不刷新" : "戻る" }
+                );
+                return;
+              }
+              reload();
+            }}
+            style={{ background: T.ink, color: T.paper, border: "none", borderRadius: T.radius, padding: "5px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
             {lang === "zh" ? "刷新" : "再読み込み"}
           </button>
         </div>
@@ -16145,17 +16406,18 @@ function App() {
           lang={lang}
           onClose={() => setShowQualityScan(false)}
           onJumpMaterial={(id) => {
+            // 2026-09-29 体检第 2 批:以前跳到 "materials"(已废弃的旧价格表),材料编辑页没打开;材料百科是 "materialsPedia"
             const m = materials.find(x => x.id === id);
             if (m) {
               setMaterialEditTarget(m);
-              setTab("materials");
+              setTab("materialsPedia");
             }
           }}
           onJumpBrand={(id) => {
             const b = brands.find(x => x.id === id);
             if (b) {
               setBrandEditTarget(b);
-              setTab("materials");
+              setTab("materialsPedia");
             }
           }}
         />
@@ -16304,8 +16566,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       )}
 
       {/* 🏷 家族编辑表单（全屏覆盖） */}
+      {/* 2026-09-29 体检第 2 批:手机上底栏(约 68px)压在这一层下沿,「保存家族」被挡住 —— 底部留出 96px */}
       {familyEditTarget && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 500, overflow: "auto", padding: "1rem" }}>
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 500, overflow: "auto", padding: "1rem", paddingBottom: 96 }}>
           <div style={{ maxWidth: 900, margin: "0 auto" }}>
             <FamilyEditForm
               family={familyEditTarget === "new" ? null : familyEditTarget}
@@ -16336,7 +16599,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         const fm = productFamilies.find(f => f.id === familyViewId);
         if (!fm) { setFamilyViewId(null); return null; }
         return (
-          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 500, overflow: "auto", padding: "1rem" }}>
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 500, overflow: "auto", padding: "1rem", paddingBottom: 96 }}>
             <div style={{ maxWidth: 900, margin: "0 auto" }}>
               <FamilyDetail
                 family={fm}
@@ -16541,9 +16804,11 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                               ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
                               : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
                             style={{
-                              width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+                              // 2026-09-29 体检第 2 批:空圈以前是 T.line(白底上几乎看不见)、点击区只有 18px;
+                              // 改 T.muted,点击区 32px,负边距把占位压回 18px,行排版不变
+                              width: 32, height: 32, margin: -7, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
                               cursor: "pointer", lineHeight: 1, fontSize: 13, alignSelf: "center",
-                              color: c.onSale ? T.success : T.line,
+                              color: c.onSale ? T.success : T.muted,
                             }}
                           >{c.onSale ? "●" : "○"}</button>
                           {c.nameFr && (
@@ -16588,6 +16853,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 const unitCost = yieldN > 0 ? liveCost / yieldN : 0;
                 const priceN = toCNY(r.price, priceCurOf(r));   // v17: 折算后算利润率
                 const margin = priceN > 0 && unitCost > 0 ? ((priceN - unitCost) / priceN) * 100 : 0;
+                // 2026-09-29 体检第 2 批:有售价但成本算不出来(配料都没价 / 没填出品数)时,以前显示红色「0.0%」像是亏本 → 改显示灰色「缺成本」;
+                // 有几行没单价时成本偏低、利润率偏高,在下面标「N 项没价·偏高」(和详情页「成本算不全」同一口径)
+                const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length : 0;
                 return (
                   <div
                     key={r.id}
@@ -16612,9 +16880,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                             ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
                             : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
                           style={{
-                            width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+                            // 2026-09-29 体检第 2 批:空圈改 T.muted(以前 T.line 几乎看不见),点击区 32px,负边距保持原占位 18px
+                            width: 32, height: 32, margin: -7, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
                             cursor: "pointer", lineHeight: 1, fontSize: 13, alignSelf: "center",
-                            color: r.onSale ? T.success : T.line,
+                            color: r.onSale ? T.success : T.muted,
                           }}
                         >{r.onSale ? "●" : "○"}</button>
                         {r.nameFr && (
@@ -16641,7 +16910,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
                     {/* 利润率 */}
                     <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: margin >= 50 ? T.success : margin >= 30 ? T.warning : T.danger }}>
-                      {priceN > 0 ? `${margin.toFixed(1)}%` : ""}
+                      {priceN > 0 && unitCost > 0 ? `${margin.toFixed(1)}%` : ""}
+                      {priceN > 0 && !(unitCost > 0) && <span style={{ color: T.muted }}>{liveCost > 0 && !(yieldN > 0) ? (lang === "zh" ? "缺出品数" : "出来数なし") : (lang === "zh" ? "缺成本" : "原価なし")}</span>}
+                      {noPriceN > 0 && (
+                        <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,利润率偏高" : "単価のない材料があり、利益率は高めに出ています"}>
+                          {lang === "zh" ? `${noPriceN} 项没价·偏高` : `単価なし ${noPriceN}・高め`}
+                        </div>
+                      )}
                     </div>
                     {/* 售价 */}
                     <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
@@ -16732,7 +17007,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
               {/* 未归属家族的配方（独立）+ v17.8 没挂家族(或家族已删)的组合产品 */}
               {(() => {
-                const orphanRecipes = recipes.filter(r => !r.familyId);
+                // 2026-09-29 体检第 2 批:挂着已不存在的家族的配方(熔岩巧克力 / 波尔多可丽露 / 纽约芝士)以前在家族模式里哪都看不到,和组合产品一样归到这里
+                const orphanRecipes = recipes.filter(r => !r.familyId || !productFamilies.some(f => f.id === r.familyId));
                 const orphanCreations = creations.filter(c => !c.familyId || !productFamilies.some(f => f.id === c.familyId));
                 if (orphanRecipes.length === 0 && orphanCreations.length === 0) return null;
                 return (
@@ -17172,9 +17448,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.2px", textTransform: "uppercase", fontWeight: 500, margin: "1.5rem 0 0.6rem" }}>{txt}</div>
             );
             const backupCards = [
-              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `✨ v13.1 新增。每次保存自动写一份到浏览器内置数据库 (IndexedDB,跟主数据隔离),保留最近 ${BACKUP_MAX} 份历史。万一 localStorage 数据丢失,从这里挑一个版本恢复。` : `自動バックアップ (最大 ${BACKUP_MAX} 件) から復元`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
+              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
               { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
-              { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的 JSON 文件恢复全部数据。用于跨设备迁移或灾难恢复。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
+              { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             ];
             const exchangeCards = [
               { title: lang === "zh" ? "🆕 合并导入(只新增不覆盖)" : "🆕 マージインポート(追加のみ)", desc: lang === "zh" ? "✨ 推荐!只追加新内容,不覆盖现有数据。用于:从 Claude 拿到的新配方包 / 一键加入新材料和组件。已存在的项目会自动跳过。" : "✨ おすすめ!新規のみ追加、既存は上書きしない。Claude から受け取った新レシピパック等に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
@@ -17189,6 +17465,29 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 {backupCards.map(card)}
                 {secTitle(lang === "zh" ? "内容交换（与 Claude / 买家）" : "データ交換")}
                 {exchangeCards.map(card)}
+                {/* 2026-09-29 体检第 2 批:导入结果留在页面上(以前只有 2.5 秒的提示条,而且合并导入的计数永远是 0) */}
+                {importReport && (
+                  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderLeft: `3px solid ${T.info}`, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>
+                        {importReport.kind === "merge" ? (lang === "zh" ? "上次合并导入的结果" : "前回のマージ結果") : (lang === "zh" ? "上次覆盖导入的结果" : "前回の上書き結果")}
+                        <span style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, marginLeft: 8 }}>{importReport.fileName} · {String(importReport.at.getHours()).padStart(2, "0")}:{String(importReport.at.getMinutes()).padStart(2, "0")}</span>
+                      </div>
+                      <button type="button" onClick={() => setImportReport(null)} style={{ background: "none", border: "none", cursor: "pointer", color: T.subtle, fontSize: 16, padding: "0 4px" }} title={lang === "zh" ? "关掉" : "閉じる"}>×</button>
+                    </div>
+                    <div style={{ ...T.fs.caption, color: T.body, marginTop: 6, lineHeight: 1.7 }}>
+                      {importReport.lines.length === 0
+                        ? (lang === "zh" ? "没有新内容:文件里的条目这里都已经有了。" : "新しい内容はありませんでした。")
+                        : importReport.lines.map((l, i) => <div key={i}>{l}</div>)}
+                    </div>
+                    {importReport.skipped.length > 0 && (
+                      <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, lineHeight: 1.7 }}>
+                        <div style={{ color: T.body }}>{lang === "zh" ? `因为这里已有同名或同编号的,跳过了 ${importReport.skipped.length} 条(已有的没动):` : `同名・同IDのため ${importReport.skipped.length} 件スキップ:`}</div>
+                        <div>{importReport.skipped.slice(0, 30).join("、")}{importReport.skipped.length > 30 ? (lang === "zh" ? ` 等 ${importReport.skipped.length} 条` : ` ほか`) : ""}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {secTitle(lang === "zh" ? "维护工具" : "メンテナンス")}
                 {maintainCards.map(card)}
               </>
@@ -17256,7 +17555,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div style={{ background: T.surface, border: `1px solid ${T.danger}`, borderRadius: T.radiusLg, padding: "1.25rem" }}>
             <div style={{ fontWeight: 500, fontSize: 13, color: T.danger, marginBottom: 6 }}>危险操作</div>
             <p style={{ fontSize: 12, color: T.body, marginBottom: 10 }}>清除所有数据，不可撤销。请先导出备份。</p>
-            <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？此操作无法撤销！", () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]); showToast("已清除"); })}>清除全部数据</Btn>
+            {/* 2026-09-29 体检第 2 批:清除前先存一份「固定」备份(不参与自动轮换),以前清完只能靠很快就被挤掉的自动备份 */}
+            <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
+              const doClear = () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]); showToast("已清除"); };
+              if (await pinBackupNow("clear")) doClear();
+              else confirmDialog("清除前的固定备份没存上(浏览器的数据库用不了)。仍然清除吗?建议先点上面的「导出完整备份」存一份文件。", doClear, { title: "备份没存上", confirmText: "仍然清除" });
+            })}>清除全部数据</Btn>
           </div>
         </div>
       )}
