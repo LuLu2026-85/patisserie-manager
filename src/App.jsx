@@ -1346,7 +1346,7 @@ const getIngsLiveCost = (ings, materials, brands) => (ings || []).reduce((s, ing
 // 组合蛋糕单层实际成本 = 这一层配料的实时成本 × (本蛋糕用量 / 产出量);没设产出量就按整批
 const calcLayerLiveCost = (l, materials, brands) => {
   const componentYield = parseFloat(l.yield) || 0;
-  const usedAmount = parseFloat(l.usedAmount) || 0;
+  const usedAmount = parseUsedAmount(l.usedAmount, l.unit);  // 2026-09-29 体检第 2 批:以前 parseFloat,「约45g/个」按 0 算
   const componentCost = getIngsLiveCost(l.ingredients, materials, brands);
   if (componentYield === 0) return componentCost;
   return componentCost * (usedAmount / componentYield);
@@ -1364,6 +1364,24 @@ const calcLayerLiveCost = (l, materials, brands) => {
 // (成本本来就按百科实时算),不算内容;没关联的,手填的单价 / 币种 / 成本算内容。
 // matIds(现有材料 id 的 Set)用来把指向已删材料的 materialId 当成没关联 —— 部分编辑页保存时会清掉它们。
 // ⚠️ 改这一段先跑 .claude/scripts/creation_follow_probe.cjs(把这段抽出来对主数据全量跑)。
+// 2026-09-29 体检第 2 批:用量读数统一走 parseUsedAmount(calcLayerLiveCost / creationBatch / 详情页 / 编辑页)。
+// 以前各处直接 parseFloat:「约45g/个」「約 60–80g」开头是字 → 按 0 算;「1kg」「1,000g」→ 按 1 g 算。
+// 现在:千位逗号先去掉,开头的 约 / 約 / ~ / ～ 跳过,认 kg(部分的单位是 g 或空时 ×1000);读不出数字仍是 0。
+// 只取开头那个数 —— 后面还有数字 / + / 「/个」「每个」这种写法由 usedAmountAmbiguous 提醒。
+const _usedAmountLead = (raw) => {
+  const s = String(raw === undefined || raw === null ? "" : raw).trim()
+    .replace(/(\d),(?=\d{3}(?!\d))/g, "$1")
+    .replace(/^(?:约|約|~|～)\s*/, "");
+  const m = s.match(/^(\d+(?:\.\d+)?|\.\d+)\s*(kg|千克|公斤|g|克)?\s*/i);
+  if (!m) return null;
+  return { n: parseFloat(m[1]), kg: !!m[2] && !/^(g|克)$/i.test(m[2]), rest: s.slice(m[0].length) };
+};
+const parseUsedAmount = (raw, unit) => {
+  const r = _usedAmountLead(raw);
+  if (!r || !isFinite(r.n) || !(r.n > 0)) return 0;
+  const u = String(unit === undefined || unit === null ? "" : unit).trim();
+  return (r.kg && (!u || /^(g|克)$/i.test(u))) ? r.n * 1000 : r.n;
+};
 const _normTxt = (v) => (v === undefined || v === null || (typeof v === "number" && !isFinite(v))) ? "" : String(v).trim();
 const _normNum = (v) => { const n = parseFloat(v); return isFinite(n) ? String(n) : _normTxt(v); };
 // 产出量:空 / 0 都是「没填」(组件编辑页存的是 0,老副本里是 "",成本算法两者一样)
@@ -1452,7 +1470,7 @@ const creationBatch = (c, n, components, materials, brands) => {
   const parts = ((c && c.layers) || []).map((l0, idx) => {
     const l = l0 || {};
     const comp = l.sourceComponentId ? (components || []).find(x => x && x.id === l.sourceComponentId) : null;
-    const used = parseFloat(l.usedAmount) || 0;
+    const used = parseUsedAmount(l.usedAmount, l.unit);  // 2026-09-29 体检第 2 批:和 calcLayerLiveCost 同一个读法(以前 parseFloat)
     const yieldNum = parseFloat(l.yield) || 0;
     const noUsed = yieldNum > 0 && !(used > 0);
     const scale = yieldNum > 0 ? (used > 0 ? used * factor / yieldNum : null) : factor;
@@ -1485,10 +1503,15 @@ const usedAmountNote = (raw) => {
 };
 // 开头的数字后面紧跟 + / – / × / 到 这类(「500g + 170g」「60–80g」「35g×3」):只认开头那个数就算错了,要提醒;
 // 「12g（3 个，每个约 4 g）」这种括号里的说明不算
+// 2026-09-29 体检第 2 批:以前只看紧跟在数字后面的第一个字 ——「430g 海绵 + 168g 浸液」「45g/个」都认不出,
+// 开头带「约」的也不查。现在(括号里的说明先去掉)开头数字后面只要再出现数字、+ × * /、「每」就算有歧义;
+// 开头读不出数字、但写了「每个 / 每台 / /个」(「每个 45g」)也算 —— 用量要写这一批一共多少,不是每个多少。
 const usedAmountAmbiguous = (raw) => {
-  const s = _normTxt(raw);
-  const m = s.match(/^\d+(?:\.\d+)?\s*(?:g|克)?\s*/i);
-  return !!m && /^[+＋\-–—~～×xX*到至]/.test(s.slice(m[0].length));
+  const s = _normTxt(raw).replace(/[（(][^（）()]*[）)]/g, " ").trim();
+  if (!s) return false;
+  const r = _usedAmountLead(s);
+  if (!r) return /每|[/／]/.test(s) && /\d/.test(s);
+  return /^[+＋\-–—~～×xX*到至]/.test(r.rest) || /\d|[+＋×*/／]|每/.test(r.rest);
 };
 // END creation-follow helpers ────────────────────────────────────────────────
 
@@ -4654,7 +4677,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 }
 
 // ─── 组件仓库 View ───────────────────────────────────────────────
-function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat }) {
+function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
+  // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
   const [compSearch, setCompSearch] = useState("");
@@ -4680,11 +4704,45 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           setEditTarget(null);
         }}
         onDelete={() => {
-          confirmDialog("删除这个组件吗？\n（本操作无法撤销）", () => {
-            setComponents(prev => prev.filter(x => x.id !== editTarget.id));
-            showToast("已删除");
+          // 2026-09-29 体检第 2 批:以前只问「删除这个组件吗？」,不说哪些组合产品 / 商品在用它,删了也不能撤销。
+          // 照删配方(handleDeleteRecipe):有引用 → 确认框列出引用方;没引用 → 直接删 + 撤销
+          const snap = components.find(x => x.id === editTarget.id) || editTarget;
+          const cName = pickLang(snap, "name", lang) || snap.nameFr || "";
+          const usedByCreations = (creations || []).filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === snap.id));
+          const usedByProducts = (products || []).filter(p => (p.items || []).some(it => it && it.linkedType === "component" && String(it.linkedId) === String(snap.id)));
+          const refs = [
+            ...usedByCreations.map(cr => `${lang === "zh" ? "组合产品" : "組立製品"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`),
+            ...usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa || ""}`),
+          ];
+          const doDelete = () => {
+            const idx = components.findIndex(x => x.id === snap.id);
+            setComponents(prev => prev.filter(x => x.id !== snap.id));
             setEditTarget(null);
-          });
+            showToast(lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
+              undo: () => setComponents(prev => {
+                if (prev.find(x => x.id === snap.id)) return prev;
+                const next = [...prev];
+                next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
+                return next;
+              }),
+            });
+          };
+          if (refs.length > 0) {
+            confirmDialog(
+              lang === "zh"
+                ? "下面这些地方在用这个组件。删除后，组合产品里的这一部分保留当时的内容，但不再跟组件库同步；商品里这一项会显示「已删除」，采购计划会少算它。"
+                : "以下で使われています。削除すると組立製品のパーツは部品庫と連動しなくなり、商品は「削除済み」になります。",
+              doDelete,
+              {
+                kicker: lang === "zh" ? "删除组件" : "部品を削除",
+                title: lang === "zh" ? `删除「${cName}」？` : `「${cName}」を削除？`,
+                refs,
+                confirmText: lang === "zh" ? "仍然删除" : "削除する",
+              }
+            );
+          } else {
+            doDelete();
+          }
         }}
         onBack={() => {
           // [B4 修复] 有 id 跳详情(从详情进编辑则回详情),无 id 回列表(新建则回列表)
@@ -4716,7 +4774,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(comp); setViewId(null); }}
           onBack={() => setViewId(null)}
-          onPrint={onPrintComponent ? () => onPrintComponent(comp) : null}
+          onPrint={onPrintComponent ? (scaled) => onPrintComponent(scaled || comp) : null}
           materials={materials}
           brands={brands}
         />
@@ -5208,6 +5266,26 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
   const originalYield = parseFloat(c.yield) || 0;
   const target = parseFloat(targetYield) || 0;
   const scale = (originalYield > 0 && target > 0) ? target / originalYield : 1;
+  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的还是原配方的量。缩放过就把缩放后的副本交给打印
+  // (ComponentsView 的 onPrint 收到副本就用副本,没收到用原组件);只是打印用的副本,不写回数据。
+  const scaledForPrint = () => {
+    if (scale === 1) return null;
+    const unitTxt = c.unit || "g";
+    const tag = (zh) => zh ? `（按 ${fmtQty(target)}${unitTxt} 缩放，原 ${fmtQty(originalYield)}${unitTxt} ×${fmtQty(scale)}）` : `（${fmtQty(target)}${unitTxt} に換算・元 ${fmtQty(originalYield)}${unitTxt} ×${fmtQty(scale)}）`;
+    const isNum = (v) => v !== undefined && v !== null && /^\s*(\d+(\.\d+)?|\.\d+)\s*$/.test(String(v));
+    return {
+      ...c,
+      nameZh: c.nameZh ? c.nameZh + tag(true) : c.nameZh,
+      nameJa: c.nameJa ? c.nameJa + tag(false) : c.nameJa,
+      yield: String(target),
+      // 用量和屏幕上一样保留一位小数;「适量」这种不是数字的原样
+      ingredients: (c.ingredients || []).map(ing => ({
+        ...ing,
+        qty: isNum(ing.qty) ? (parseFloat(ing.qty) * scale).toFixed(1) : ing.qty,
+        cost: isNum(ing.cost) ? String(parseFloat(ing.cost) * scale) : ing.cost,
+      })),
+    };
+  };
 
   // v11 Task #4: 本店原料优先,实时算总成本
   const liveTotalCost = (c.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
@@ -5222,7 +5300,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
           {lang === "zh" ? "组件详情" : "コンポーネント詳細"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {onPrint && <Btn size="sm" onClick={onPrint}>{lang === "zh" ? "🖨 打印" : "🖨 印刷"}</Btn>}
+          {onPrint && <Btn size="sm" onClick={() => onPrint(scaledForPrint())}>{lang === "zh" ? (scale !== 1 ? "🖨 打印（缩放后）" : "🖨 打印") : (scale !== 1 ? "🖨 印刷（換算後）" : "🖨 印刷")}</Btn>}
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -5455,6 +5533,19 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
+  // 2026-09-29 体检第 2 批:新建分类的小输入框(以前用 prompt);null = 没打开
+  const [newCat, setNewCat] = useState(null);
+  const addNewCat = () => {
+    const zh = ((newCat && newCat.zh) || "").trim();
+    if (!zh) return;
+    const ja = ((newCat && newCat.ja) || "").trim() || zh;
+    const newId = "custom_" + Date.now();
+    const colorIdx = customCompCats.length % CUSTOM_CAT_COLORS.length;
+    const cat = { id: newId, zh, ja, color: CUSTOM_CAT_COLORS[colorIdx].color, bg: CUSTOM_CAT_COLORS[colorIdx].bg, custom: true };
+    if (onAddCustomCompCat) onAddCustomCompCat(cat);
+    setForm(prev => ({ ...prev, componentCategory: newId }));
+    setNewCat(null);
+  };
   // 矩阵空格新建时传进来的是「只带预设分类 / 风味、没有 id」的对象,也算新建(以前当成编辑已有组件,存出来 id 是空的)
   const isNew = !component || !component.id;
   const empty = { nameZh: "", nameJa: "", nameFr: "", componentCategory: "mousse", flavorFamily: "", flavorName: "", mold: "", yield: "", unit: "g", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [] };
@@ -5612,21 +5703,8 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
               value={form.componentCategory}
               onChange={(e) => {
                 if (e.target.value === "__new__") {
-                  const name = prompt("新分类名称（中文）：");
-                  if (!name || !name.trim()) return;
-                  const nameJa = prompt("日本語名（留空则同中文）：") || name.trim();
-                  const newId = "custom_" + Date.now();
-                  const colorIdx = customCompCats.length % CUSTOM_CAT_COLORS.length;
-                  const newCat = {
-                    id: newId,
-                    zh: name.trim(),
-                    ja: nameJa.trim(),
-                    color: CUSTOM_CAT_COLORS[colorIdx].color,
-                    bg: CUSTOM_CAT_COLORS[colorIdx].bg,
-                    custom: true,
-                  };
-                  if (onAddCustomCompCat) onAddCustomCompCat(newCat);
-                  setForm(prev => ({ ...prev, componentCategory: newId }));
+                  // 2026-09-29 体检第 2 批:以前连弹两个浏览器自带输入框(prompt),嵌入环境里可能不弹;改成下拉下面的小输入框
+                  setNewCat({ zh: "", ja: "" });
                 } else {
                   f("componentCategory")(e);
                 }
@@ -5639,6 +5717,21 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
               </optgroup>}
               <option value="__new__">➕ 新建分类...</option>
             </select>
+            {newCat && (
+              <div style={{ marginTop: 6, padding: 8, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgMuted, display: "flex", flexDirection: "column", gap: 6 }}
+                onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); setNewCat(null); } }}>
+                <input autoFocus value={newCat.zh} onChange={e => setNewCat(p => ({ ...p, zh: e.target.value }))}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNewCat(); } }}
+                  placeholder={lang === "zh" ? "新分类名称（中文）" : "新しい分類名（中国語）"} style={{ ...inpStyle, fontSize: 12 }} />
+                <input value={newCat.ja} onChange={e => setNewCat(p => ({ ...p, ja: e.target.value }))}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNewCat(); } }}
+                  placeholder={lang === "zh" ? "日文名（留空则同中文）" : "日本語名（空欄なら中国語と同じ）"} style={{ ...inpStyle, fontSize: 12 }} />
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <Btn size="sm" variant="ghost" onClick={() => setNewCat(null)}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+                  <Btn size="sm" variant="primary" disabled={!newCat.zh.trim()} onClick={addNewCat}>{lang === "zh" ? "添加" : "追加"}</Btn>
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "模具" : "型"}</label>
@@ -7573,12 +7666,23 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
 
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
 
+  // 2026-09-29 体检第 2 批:以前背景一收到 click 就关 —— 在框里拖选文字、松手在灰色背景上也算,写好的内容全丢。
+  // 现在按下和松开都在背景上才算点背景;表单里写了东西时,关之前在框里问一句(不用浏览器自带弹窗)
+  const downOnBackdrop = useRef(false);
+  const [askClose, setAskClose] = useState(false);
+  const hasContent = !!(titleZh.trim() || titleJa.trim() || contentZh.trim() || contentJa.trim() || customTag.trim() || selectedTags.length);
+  const requestClose = () => { if (hasContent) setAskClose(true); else onClose(); };
+  const askCloseRef = useRef(null);
+  useEffect(() => { if (askClose && askCloseRef.current && askCloseRef.current.scrollIntoView) askCloseRef.current.scrollIntoView({ block: "nearest" }); }, [askClose]);
+
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }} onClick={onClose}>
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}
+      onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={e => { const both = downOnBackdrop.current && e.target === e.currentTarget; downOnBackdrop.current = false; if (both) requestClose(); }}>
       <div style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
           <div style={{ fontSize: 16, fontWeight: 500 }}>📚 快速新建知识点</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+          <button onClick={requestClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
         </div>
 
         {relatedName && (
@@ -7630,9 +7734,16 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
           <textarea value={contentJa} onChange={e => setContentJa(e.target.value)} placeholder="【】で節分け" style={{...inpStyle, minHeight: 120, resize: "vertical"}} />
         </div>
 
+        {askClose && (
+          <div ref={askCloseRef} style={{ border: `0.5px solid ${T.warning}`, background: T.bgMuted, borderRadius: T.radiusSm, padding: "8px 12px", marginBottom: 12, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 180, color: T.textPrimary }}>{lang === "zh" ? "写的内容还没保存，关掉就没了。确定关闭吗？" : "入力内容は保存されていません。閉じますか？"}</span>
+            <Btn size="sm" onClick={() => setAskClose(false)}>{lang === "zh" ? "继续编辑" : "編集を続ける"}</Btn>
+            <Btn size="sm" variant="danger" onClick={onClose}>{lang === "zh" ? "不保存，关闭" : "保存せず閉じる"}</Btn>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
           {error && <span style={{ color: "#A32D2D", fontSize: 12, marginRight: 8 }}>⚠ {error}</span>}
-          <Btn onClick={onClose}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+          <Btn onClick={requestClose}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
           <Btn variant="primary" onClick={handleSave}>保存并关联</Btn>
         </div>
       </div>
@@ -7708,7 +7819,8 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 
 // ─── 组合产品 View ───────────────────────────────────────────────
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
-  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList }) {
+  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [] }) {
+  // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
   const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
   if (editTarget !== null) {
@@ -7732,11 +7844,41 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           setEditTarget(null);
         }}
         onDelete={() => {
-          confirmDialog("删除这个组合产品吗？", () => {
-            setCreations(prev => prev.filter(x => x.id !== editTarget.id));
-            showToast("已删除");
+          // 2026-09-29 体检第 2 批:以前只问「删除这个组合产品吗？」,不说哪些商品挂着它(删了商品页只剩「已删除」、
+          // 采购计划悄悄少算),也不能撤销。照删配方:有商品挂着 → 确认框列出来;没有 → 直接删 + 撤销
+          const snap = creations.find(x => x.id === editTarget.id) || editTarget;
+          const cName = pickLang(snap, "name", lang) || snap.nameFr || "";
+          const usedByProducts = (products || []).filter(p => (p.items || []).some(it => it && it.linkedType === "creation" && String(it.linkedId) === String(snap.id)));
+          const refs = usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa || ""}`);
+          const doDelete = () => {
+            const idx = creations.findIndex(x => x.id === snap.id);
+            setCreations(prev => prev.filter(x => x.id !== snap.id));
             setEditTarget(null);
-          });
+            showToast(lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
+              undo: () => setCreations(prev => {
+                if (prev.find(x => x.id === snap.id)) return prev;
+                const next = [...prev];
+                next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
+                return next;
+              }),
+            });
+          };
+          if (refs.length > 0) {
+            confirmDialog(
+              lang === "zh"
+                ? "下面这些商品挂着这个组合产品。删除后商品里这一项会显示「已删除」，采购计划会少算它的原料。"
+                : "以下の商品に含まれています。削除すると商品では「削除済み」になり、仕入れ計画から外れます。",
+              doDelete,
+              {
+                kicker: lang === "zh" ? "删除组合产品" : "組立製品を削除",
+                title: lang === "zh" ? `删除「${cName}」？` : `「${cName}」を削除？`,
+                refs,
+                confirmText: lang === "zh" ? "仍然删除" : "削除する",
+              }
+            );
+          } else {
+            doDelete();
+          }
         }}
         onBack={() => {
           // [B4 修复] 有 id 跳详情,无 id 回列表
@@ -7809,6 +7951,8 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           const priceNum = toCNY(c.price, priceCurOf(c));
           const costPerPortion = totalCost / servesNum / portionsNum;
           const marginPct = priceNum > 0 && costPerPortion > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
+          // 2026-09-29 体检第 2 批:列表上以前看不出哪款的用量没填 / 读不准(成本按 0 或只按开头的数算)
+          const usedWarnCount = layers.filter(l => l && ((parseFloat(l.yield) > 0 && !(parseUsedAmount(l.usedAmount, l.unit) > 0)) || usedAmountAmbiguous(l.usedAmount))).length;
 
           // 状态映射(key 和编辑页的下拉框一致:季節限定是日文汉字「節」;以前写成「节」、又漏了検討中,这两个状态都被显示成試作)
           const statusMap = {
@@ -7911,10 +8055,18 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                   {layers.length > 8 && (
                     <span style={{ fontSize: 10, color: T.textTertiary, padding: "2px 6px" }}>+{layers.length - 8}</span>
                   )}
+                  {/* 2026-09-29 体检第 2 批:用量没填 / 读不准的提醒;没有成本时也要出,所以不放在成本那个 span 里 */}
+                  {usedWarnCount > 0 && (
+                    <span style={{ marginLeft: "auto", fontSize: 11, color: T.warning }}
+                      title={lang === "zh" ? "这几个部分的用量没填、读不出数字，或写法有歧义（只按开头的数字算），成本和毛利不准。去「编辑」改成这一批一共多少克的纯数字。" : "使用量が未入力・読めない・曖昧な部分があります"}>
+                      ⚠ {lang === "zh" ? `${usedWarnCount} 个${creationWords(creationStructureOf(c), lang).isStack ? "层" : "部分"}用量没填或读不准` : `使用量要確認 ${usedWarnCount}`}
+                    </span>
+                  )}
                   {totalCost > 0 && (
-                    <span style={{ marginLeft: "auto", fontSize: 11, color: T.textTertiary }}>
+                    <span style={{ marginLeft: usedWarnCount > 0 ? 8 : "auto", fontSize: 11, color: T.textTertiary }}>
                       {lang === "zh" ? "原料" : "原価"} ¥{totalCost.toFixed(0)}
-                      {marginPct > 0 && <span style={{ marginLeft: 8, color: marginPct >= 65 ? T.success : marginPct >= 50 ? T.warning : T.danger }}>· {marginPct.toFixed(0)}%</span>}
+                      {/* 2026-09-29 体检第 2 批:以前 marginPct > 0 才显示,亏本(负毛利)的反而整栏空着;负数走红色 */}
+                      {priceNum > 0 && costPerPortion > 0 && <span style={{ marginLeft: 8, color: marginPct >= 65 ? T.success : marginPct >= 50 ? T.warning : T.danger }}>· {marginPct.toFixed(0)}%</span>}
                     </span>
                   )}
                 </div>
@@ -8072,7 +8224,7 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 {p.needed !== null ? (
                   <div style={{ fontFamily: T.fontSerif, fontSize: 20, fontWeight: 500, ...T.num }}>
-                    {fmtQty(p.needed)}<span style={{ fontSize: 12, marginLeft: 3, color: T.textSecondary }}>g</span>
+                    {fmtQty(p.needed)}<span style={{ fontSize: 12, marginLeft: 3, color: T.textSecondary }}>{l.unit || "g"}</span>{/* 2026-09-29 体检第 2 批:以前写死 g,单位是「颗 / 个」的部分也显示成克 */}
                   </div>
                 ) : (
                   <div style={{ fontSize: 12, color: T.textTertiary }}>{p.yieldNum > 0 ? "" : (zh ? `整批 × ${fmtQty(batch.factor)}` : `全量 × ${fmtQty(batch.factor)}`)}</div>
@@ -8088,14 +8240,14 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
             )}
             {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && (
               <div style={{ fontSize: 12, color: T.warning, marginTop: 8 }}>
-                ⚠ {zh ? `用量只认开头的数字，按 ${fmtQty(p.used)} g 一批算。不对的话去「编辑」改成纯数字。` : `先頭の数字 ${fmtQty(p.used)} g で計算しています。`}
+                ⚠ {zh ? `用量只认开头的数字，按 ${fmtQty(p.used)} ${l.unit || "g"} 一批算（是这一批一共的量，不是每个的量）。不对的话去「编辑」改成纯数字。` : `先頭の数字 ${fmtQty(p.used)} ${l.unit || "g"} で計算しています。`}
               </div>
             )}
 
             {p.stock ? (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 13 }}>
-                  {p.needed !== null ? (zh ? `从库存取 ${fmtQty(p.needed)} g` : `ストックから ${fmtQty(p.needed)} g`) : (zh ? "从库存取" : "ストックから")}
+                  {p.needed !== null ? (zh ? `从库存取 ${fmtQty(p.needed)} ${l.unit || "g"}` : `ストックから ${fmtQty(p.needed)} ${l.unit || "g"}`) : (zh ? "从库存取" : "ストックから")}
                 </div>
                 <button type="button" onClick={() => toggle(`${p.idx}:batch`)}
                   style={{ marginTop: 6, background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: T.textSecondary, fontFamily: T.fontSans }}>
@@ -8158,6 +8310,34 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
   );
 }
 
+// 2026-09-29 体检第 2 批:毛利卡片以前只看有没有填售价 —— 各部分都没填用量时单份成本 ¥0、毛利率绿色 100%;
+// 有部分没填用量 / 原料没价时照样显示,看起来很健康。详情页和编辑页共用这一个判断:
+// 成本是 0 → 毛利率显示「—」;算不全(creationBatch.incomplete)或用量写法有歧义 → 不给绿色,标「算不全 / 用量待确认」并说清原因。
+const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, lang = "zh" }) => {
+  const zh = lang !== "ja";
+  const parts = (batch && batch.parts) || [];
+  const noUsedCount = parts.filter(p => p.noUsed).length;
+  const missingCount = new Set(parts.flatMap(p => p.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size;
+  const ambiguousCount = parts.filter(p => !p.noUsed && usedAmountAmbiguous(p.layer.usedAmount)).length;
+  const zeroCost = !(costPerPortion > 0);
+  const incomplete = !!(batch && batch.incomplete) || (zeroCost && parts.length > 0);  // 还没加部分时只显示「—」,不提示
+  const unsure = incomplete || ambiguousCount > 0;
+  const reasons = [
+    noUsedCount ? (zh ? `${noUsedCount} 个部分没填用量（或读不出数字）` : `使用量未入力 ${noUsedCount}`) : "",
+    missingCount ? (zh ? `${missingCount} 项原料没价` : `価格なし ${missingCount}`) : "",
+    ambiguousCount ? (zh ? `${ambiguousCount} 个部分的用量只按开头的数字算` : `使用量が曖昧 ${ambiguousCount}`) : "",
+    (zeroCost && !noUsedCount && !missingCount) ? (zh ? "还算不出成本" : "原価を計算できません") : "",
+  ].filter(Boolean);
+  const showPct = priceNum > 0 && !zeroCost;
+  return {
+    unsure,
+    text: showPct ? `${marginPercent.toFixed(1)}%` : "—",
+    color: !showPct ? T.textSecondary : unsure ? T.warning : marginPercent >= 65 ? T.success : marginPercent >= 50 ? T.warning : T.danger,
+    badge: unsure ? (incomplete ? (zh ? "算不全" : "未確定") : (zh ? "用量待确认" : "使用量要確認")) : "",
+    note: unsure ? `⚠ ${zh ? "成本" : "原価"}${incomplete ? (zh ? "算不全" : "未確定") : (zh ? "可能不准" : "要確認")}：${reasons.join(zh ? "，" : "、")}${showPct && incomplete ? (zh ? "。实际毛利率会比这里低。" : "。実際の粗利率はこれより低くなります。") : ""}` : "",
+  };
+};
+
 function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
@@ -8171,12 +8351,35 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
   const linkStates = layers.map(l => layerLinkState(l, components, matIds));
   const differsIdx = linkStates.map((s, i) => s === "differs" ? i : -1).filter(i => i >= 0);
   const layerTitle = (l) => l.customName || pickLang(l, "name", lang) || "";
+  // 2026-09-29 体检第 2 批:撤销以前按「第几个部分」还原 —— 这几秒里进编辑删了前面的部分,旧内容会写到别的部分上。
+  // 现在按身份认:组件 id + 它是这个产品里第几个用同一组件的部分(_lid 保存时会去掉,不能用);认不出就不还原,提示一句。
+  const layerKeyAt = (arr, i) => {
+    const sid = arr[i] && arr[i].sourceComponentId;
+    if (!sid) return null;
+    let k = 0;
+    for (let j = 0; j < i; j++) if (arr[j] && arr[j].sourceComponentId === sid) k++;
+    return `${sid}#${k}`;
+  };
   const patchLayers = (patches, msg) => {
     if (!onUpdateCreation) return;
-    const before = {};
-    Object.keys(patches).forEach(i => { before[i] = layers[i]; });
+    const before = {};   // 身份 → 改之前的整个部分
+    Object.keys(patches).forEach(i => { const key = layerKeyAt(layers, Number(i)); if (key) before[key] = layers[i]; });
     onUpdateCreation(c.id, cr => ({ ...cr, layers: (cr.layers || []).map((l, i) => patches[i] ? { ...l, ...patches[i] } : l) }));
-    if (showToast) showToast(msg, { undo: () => onUpdateCreation(c.id, cr => ({ ...cr, layers: (cr.layers || []).map((l, i) => before[i] !== undefined ? before[i] : l) })) });
+    if (showToast) showToast(msg, { undo: () => {
+      const want = Object.keys(before).length;
+      let restored = -1;   // 更新函数没跑 = 产品已经不在了
+      onUpdateCreation(c.id, cr => {
+        const cur = cr.layers || [];
+        let n = 0;
+        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); if (key && before[key] !== undefined) { n++; return before[key]; } return l; });
+        restored = n;
+        return { ...cr, layers: next };
+      });
+      // 更新函数在 React 渲染时才跑,等它跑完再看还原了几个
+      setTimeout(() => {
+        if (restored < want) showToast(lang === "zh" ? "有的部分已经改过或删掉了，找不到原来那一部分，没有还原" : "該当パーツが見つからないため、一部を元に戻せませんでした");
+      }, 0);
+    } });
   };
   const applyLib = (idxs) => {
     const patches = {};
@@ -8197,6 +8400,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
   const costPerPortion = costPerCake / portionsNum;
   const priceNum = toCNY(c.price, priceCurOf(c));
   const marginPercent = priceNum > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
+  // 2026-09-29 体检第 2 批:算不全时毛利卡片要标出来(以前没填用量时显示绿色 100%)
+  const marginView = creationMarginView({ batch: creationBatch(c, null, components, materials, brands), priceNum, costPerPortion, marginPercent, lang });
 
   // 关联知识点(反向查找,和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
   const relatedKnowledge = knowledgeLinksTo("creation", c.id, knowledge, recipes, components, creations);
@@ -8364,12 +8569,18 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
               <div style={{ fontSize: 11, color: "#666" }}>毛利率</div>
-              <div style={{ fontSize: 16, fontWeight: 500, color: marginPercent >= 65 ? "#059669" : marginPercent >= 50 ? "#CA8A04" : "#DC2626" }}>
-                {priceNum > 0 ? `${marginPercent.toFixed(1)}%` : "—"}
+              {/* 2026-09-29 体检第 2 批:成本 0 → 「—」;算不全 → 不给绿色 + 标签(以前绿色 100%) */}
+              <div style={{ fontSize: 16, fontWeight: 500, color: marginView.color }}>
+                {marginView.text}
               </div>
+              {marginView.badge && (
+                <span style={{ display: "inline-block", marginTop: 2, fontSize: 10, color: T.warning, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusPill, padding: "0 6px" }}>{marginView.badge}</span>
+              )}
             </div>
           </div>
-          {priceNum > 0 && costPerPortion > 0 && (
+          {marginView.note ? (
+            <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
+          ) : priceNum > 0 && costPerPortion > 0 && (
             <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
               {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）" : "🚨 毛利率过低（<50%）"}
             </div>
@@ -8416,7 +8627,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
             {W.isStack && <div style={{ display: "flex", flexDirection: "column", gap: 2, position: "sticky", top: 10, alignSelf: "start" }}>
               {layers.map((l, i) => {
                 const cat = getCompCat(l.componentCategory);
-                const usedAmount = parseFloat(l.usedAmount) || 0;
+                const usedAmount = parseUsedAmount(l.usedAmount, l.unit);  // 2026-09-29 体检第 2 批:和成本同一个读法
                 // 根据用量动态调整高度（最小20px，最大60px）
                 const heightPct = usedAmount > 0 ? Math.min(60, Math.max(20, usedAmount / 30)) : 28;
                 const isHovered = expandedLayer === i;
@@ -8442,7 +8653,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                 const displaySteps = pickSteps(l, lang);
                 const displayNotes = pickLang(l, "notes", lang) || l.notes;
                 const actualCost = calcLayerActualCost(l);
-                const usedAmount = parseFloat(l.usedAmount) || 0;
+                const usedAmount = parseUsedAmount(l.usedAmount, l.unit);  // 2026-09-29 体检第 2 批:和成本同一个读法(以前「约45g/个」显示未填)
+                const usedUnit = l.unit || "g";  // 2026-09-29 体检第 2 批:以前写死 g,单位是「颗 / 个」时写错
 
                 return (
                   <div key={i} style={{ borderLeft: `4px solid ${cat.color}`, background: cat.bg, padding: "10px 14px", marginBottom: 8, borderRadius: "0 6px 6px 0" }}>
@@ -8464,7 +8676,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                         {viewMode === "detail" && (
                           <>
                             {usedAmount > 0 ? (
-                              <span>📏 {W.usedLabel} <strong>{usedAmountNote(l.usedAmount) ? l.usedAmount : `${usedAmount}g`}</strong>{usedAmountAmbiguous(l.usedAmount) && <span style={{ color: "#CA8A04" }}>（按 {fmtQty(usedAmount)} g 算）</span>}</span>
+                              <span>📏 {W.usedLabel} <strong>{usedAmountNote(l.usedAmount) ? l.usedAmount : `${usedAmount}${usedUnit}`}</strong>{usedAmountAmbiguous(l.usedAmount) && <span style={{ color: "#CA8A04" }}>（按 {fmtQty(usedAmount)} {usedUnit} 算）</span>}</span>
                             ) : (
                               <span style={{ color: "#CA8A04" }}>⚠ {usedAmountNote(l.usedAmount) ? `用量读不出数字（${l.usedAmount}）` : "未填用量"}</span>
                             )}
@@ -8479,7 +8691,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                         )}
                         {viewMode === "recipe" && (
                           <>
-                            {usedAmount > 0 && <span>📏 <strong>{usedAmount}g</strong></span>}
+                            {usedAmount > 0 && <span>📏 <strong>{usedAmount}{usedUnit}</strong></span>}
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
                           </>
                         )}
@@ -8702,6 +8914,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   // 毛利率
   const priceNum = toCNY(form.price, priceCurOf(form));
   const marginPercent = priceNum > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
+  // 2026-09-29 体检第 2 批:和详情页同一个判断,算不全时毛利卡片不给绿色 100%
+  const marginView = creationMarginView({ batch: creationBatch(form, null, components, materials, brands), priceNum, costPerPortion, marginPercent, lang });
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const fTasting = (key) => (e) => setForm(prev => ({ ...prev, tasting: { ...prev.tasting, [key]: e.target.value } }));
@@ -8961,12 +9175,18 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
             <div style={{ color: "#666" }}>毛利率</div>
-            <div style={{ fontSize: 15, fontWeight: 500, color: marginPercent >= 65 ? "#059669" : marginPercent >= 50 ? "#CA8A04" : "#DC2626" }}>
-              {priceNum > 0 ? `${marginPercent.toFixed(1)}%` : "—"}
+            {/* 2026-09-29 体检第 2 批:成本 0 → 「—」;算不全 → 不给绿色 + 标签(以前绿色 100%) */}
+            <div style={{ fontSize: 15, fontWeight: 500, color: marginView.color }}>
+              {marginView.text}
             </div>
+            {marginView.badge && (
+              <span style={{ display: "inline-block", marginTop: 2, fontSize: 10, color: T.warning, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusPill, padding: "0 6px" }}>{marginView.badge}</span>
+            )}
           </div>
         </div>
-        {priceNum > 0 && costPerPortion > 0 && (
+        {marginView.note ? (
+          <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
+        ) : priceNum > 0 && costPerPortion > 0 && (
           <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
             📊 {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）建议调整" : "🚨 毛利率过低（<50%）需要涨价或降本"}
           </div>
@@ -9044,7 +9264,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                 const name = layer.nameZh || layer.nameJa || "未命名";
                 const actualCost = calcLayerActualCost(layer);
                 const componentYield = parseFloat(layer.yield) || 0;
-                const usedAmount = parseFloat(layer.usedAmount) || 0;
+                const usedAmount = parseUsedAmount(layer.usedAmount, layer.unit);  // 2026-09-29 体检第 2 批:和成本同一个读法(以前 parseFloat)
+                const usedUnit = layer.unit || "g";  // 2026-09-29 体检第 2 批:以前提示和占位字写死 g
                 const usedNote = usedAmountNote(layer.usedAmount);
                 const linkTag = LAYER_LINK_TAGS[layerLinkState(layer, components, matIds)];
                 const updateLayerField = (field, val) => setForm(prev => ({ ...prev, layers: prev.layers.map((l, i) => i === idx ? { ...l, [field]: val } : l) }));
@@ -9080,7 +9301,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                         inputMode="decimal"
                         value={layer.usedAmount || ""}
                         onChange={e => updateLayerField("usedAmount", e.target.value)}
-                        placeholder={componentYield > 0 ? `这一批的用量 g（组件整批 ${componentYield}g）` : "这一批的用量 g"}
+                        placeholder={componentYield > 0 ? `这一批的用量 ${usedUnit}（组件整批 ${componentYield}${usedUnit}）` : `这一批的用量 ${usedUnit}`}
                         title={`用量 = 做「${W.servesLabel}」那么多${W.isStack ? "台" : "个"}时，这一部分一共要多少`}
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #F59E0B", borderRadius: 4, background: "#FFFBEB", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
@@ -9092,12 +9313,12 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                     {/* 提示用量未填 / 带说明的用量只认开头的数字 */}
                     {componentYield > 0 && !usedAmount && (
                       <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
-                        {usedNote ? "⚠ 用量读不出数字，成本和整体配方都按 0 算。改成纯数字（克）" : "⚠ 未填写用量，成本计算不准确"}
+                        {usedNote ? `⚠ 用量读不出数字，成本和整体配方都按 0 算。改成这一批一共多少的纯数字（${usedUnit}）` : "⚠ 未填写用量，成本计算不准确"}
                       </div>
                     )}
                     {usedAmount > 0 && usedAmountAmbiguous(layer.usedAmount) && (
                       <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
-                        ⚠ 只认开头的数字：按 {fmtQty(usedAmount)} g 算。不对的话改成纯数字（克）
+                        ⚠ 只认开头的数字：按 {fmtQty(usedAmount)} {usedUnit} 算（是这一批一共的量，不是每个的量）。不对的话改成纯数字（{usedUnit}）
                       </div>
                     )}
                   </div>
@@ -9524,9 +9745,30 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
             {autoCompleteData.brand.map(n => <option key={n} value={n} />)}
           </datalist>
         </div>
-        <div style={{ marginTop: 12, padding: "8px 12px", background: "#F5F5F5", borderRadius: 6, fontSize: 13 }}>
-          该层成本：<strong>¥{totalCost.toFixed(0)}</strong>
-        </div>
+        {/* 2026-09-29 体检第 2 批:以前叫「该层成本」,其实是组件整批的成本(还是存下来的成本快照),
+            和产品编辑页按用量折算的「本层成本」差好几倍。改名 + 按实时价 + 另给一行按用量折算的这一部分成本 */}
+        {(() => {
+          const zh = lang !== "ja";
+          const liveIngs = ings.filter(i => i.nameZh || i.nameJa);
+          const batchCost = getIngsLiveCost(liveIngs, materials, brands);
+          const yNum = parseFloat(form.yield) || 0;
+          const unitTxt = form.unit || "g";
+          const usedNum = parseUsedAmount(form.usedAmount, form.unit);
+          const partCost = calcLayerLiveCost({ ...form, ingredients: liveIngs }, materials, brands);
+          const partWord = W.isStack ? (zh ? "本层" : "この層") : (zh ? "这一部分" : "このパーツ");
+          return (
+            <div style={{ marginTop: 12, padding: "8px 12px", background: "#F5F5F5", borderRadius: 6, fontSize: 13 }}>
+              <div>{zh ? "组件整批成本" : "全量原価"}{yNum > 0 ? `（${fmtQty(yNum)} ${unitTxt}）` : ""}：<strong>{fmtCost(batchCost) || "¥0"}</strong></div>
+              <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 4 }}>
+                {yNum > 0
+                  ? (usedNum > 0
+                    ? (zh ? `${partWord}用 ${fmtQty(usedNum)} ${unitTxt}，成本 ${fmtCost(partCost) || "¥0"}（按用量 ÷ 产出量折算，产品成本按这个算）` : `${partWord} ${fmtQty(usedNum)} ${unitTxt}：${fmtCost(partCost) || "¥0"}`)
+                    : (zh ? `${partWord}还没填用量，按用量折算的成本算不出（回产品编辑页填用量）` : "使用量未入力のため按分原価は未計算"))
+                  : (zh ? `没填产出量：整批成本都算进产品成本` : "出来高未入力：全量原価をそのまま計上")}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* 制法 */}
