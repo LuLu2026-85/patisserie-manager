@@ -5879,7 +5879,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可，不必两种都填。名字、备注、步骤都是如此。
+        💡 提示：中文名必填，日文可以不填。备注、步骤中日文任一填写即可。
       </div>
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", borderLeft: `4px solid ${cat.color}` }}>
@@ -7830,15 +7830,15 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
                 {l.customName && compName && compName !== title && <span style={{ fontSize: "10pt", marginLeft: "8px" }}>{compName}</span>}
                 <span style={{ fontSize: "9pt", marginLeft: "8px", border: "1px solid #000", padding: "0 4px" }}>{p.stock ? tx("备货", "作り置き") : tx("现做", "当日")}</span>
               </div>
-              <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : ""}</div>
+              <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${l.unit || "g"}` : ""}</div>
             </div>
             {note && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{tx("用量原文", "原文")}：{note}</div>}
             {p.noUsed && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx("没填用量：下面是整批配方，没按个数算", "使用量未入力：全量レシピ")}</div>}
             {/* 2026-09-29 体检第 2 批:「500g + 170g」这类用量屏幕上有黄色提醒,打印单上以前没有,员工照大号数字做会少做 */}
-            {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(`用量只认开头的数字，按 ${fmtQty(p.used)} g 一批算，请核对用量原文`, `先頭の数字 ${fmtQty(p.used)} g で計算。原文を確認`)}</div>}
+            {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(`用量只认开头的数字，按 ${fmtQty(p.used)} ${l.unit || "g"} 一批算，请核对用量原文`, `先頭の数字 ${fmtQty(p.used)} ${l.unit || "g"} で計算。原文を確認`)}</div>}
             {p.stock ? (
               <div style={{ fontSize: "12pt", marginTop: "6px" }}>
-                {tx("从库存取", "ストックから")} <strong style={{ fontSize: "14pt" }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : ""}</strong>
+                {tx("从库存取", "ストックから")} <strong style={{ fontSize: "14pt" }}>{p.needed !== null ? `${fmtQty(p.needed)} ${l.unit || "g"}` : ""}</strong>
               </div>
             ) : (
               <>
@@ -9320,7 +9320,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可。规格和售价用于自动计算成本和毛利率。
+        💡 提示：中文名必填，日文可以不填。规格和售价用于自动计算成本和毛利率。
       </div>
 
       {/* 基本信息 */}
@@ -10618,7 +10618,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可，不必两种都填。标题和内容都是如此。
+        💡 提示：中文标题必填，日文可以不填。内容中日文任一填写即可。
       </div>
 
       {/* 标题 */}
@@ -12392,7 +12392,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
       </div>
 
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可。建议填写厂家故事，记录品牌的历史背景。
+        💡 提示：中文名必填，日文可以不填。建议填写厂家故事，记录品牌的历史背景。
       </div>
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -13319,7 +13319,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
       </div>
 
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可。参数按分类自动显示常用字段，可以自定义。
+        💡 提示：中文名必填，日文可以不填。参数按分类自动显示常用字段，可以自定义。
       </div>
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -14116,7 +14116,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
   const bLabel = (b) => b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : "";
 
   const filteredAvailable = availableMaterials.filter(m => {
-    if (catFilter && m.categoryId !== catFilter) return false;
+    if (catFilter && getMaterialCat(m.categoryId).id !== catFilter) return false;  // 2026-09-29 体检第 2 批:认不出的分类(misc / 旧 id)归「其他」,以前按分类筛不出来
     if (search) {
       const q = search.toLowerCase();
       const name = `${m.nameZh || ''}${m.nameJa || ''}${m.nameFr || ''}`.toLowerCase();
@@ -17839,6 +17839,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           knowledge={knowledge}
           recipes={recipes}
           creations={creations}
+          products={products}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
           onQuickAddKnowledge={(k) => {
             setKnowledge(prev => [...prev, k]);
@@ -17860,6 +17861,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setCreations={setCreations}
           components={components}
           recipes={recipes}
+          products={products}
           cats={cats}
           onUpdateCats={setCats}
           brands={brands}
