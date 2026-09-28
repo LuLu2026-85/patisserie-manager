@@ -4298,6 +4298,23 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
   const _priceNum = toCNY(r.price, priceCurOf(r));   // v17: 售价折人民币,才能跟已折算的成本比
   const liveMargin = _priceNum > 0 && liveUnitCost > 0 ? ((_priceNum - liveUnitCost) / _priceNum) * 100 : 0;
   const mc = liveMargin >= 50 ? "green" : liveMargin >= 30 ? "amber" : "red";
+  // 2026-09-29 体检第 2 批:以前有原料没价时利润率照常显示、看着像准确值;成本为 0 时显示红色 0.0% 像亏本。
+  // 和下面「成本算不全」红框同一个判定(getIngPriceSource === "none")
+  const _missingPriceCount = (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length;
+  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的是原配方的量。缩放过就把按倍数算好的副本交给打印(只给打印用,不写回数据)
+  const handlePrint = () => {
+    if (!onPrint) return;
+    if (scale === 1) { onPrint(); return; }
+    onPrint({
+      ...r,
+      yield: fmtQty(target).replace(/,/g, ""),
+      ingredients: (r.ingredients || []).map(ing => {
+        const q = parseFloat(ing.qty);
+        return isFinite(q) ? { ...ing, qty: fmtQty(q * scale) } : ing;   // 「适量」这类读不出数字的原样印
+      }),
+      _printScale: { from: originalYield, to: target, factor: scale },
+    });
+  };
 
   // 反向查找关联知识点(和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
   const relatedKnowledge = knowledgeLinksTo("recipe", r.id, knowledge, recipes, components, creations);
@@ -4349,7 +4366,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               </Btn>
             );
           })()}
-          {onPrint && <Btn size="sm" onClick={onPrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
+          {onPrint && <Btn size="sm" onClick={handlePrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
           <Btn size="sm" variant="primary" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn size="sm" variant="ghost" onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -4390,9 +4407,14 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             <div style={{ fontFamily: T.fontSerif, fontSize: 38, fontWeight: 300, letterSpacing: "-0.02em", marginTop: 4, ...T.num, color: T.ink, lineHeight: 1.1 }}>
               {fmtSellPrice(r.price, r)}
             </div>
-            <div style={{ ...T.fs.caption, marginTop: 6, color: liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger }}>
-              {lang === "zh" ? "利润率" : "利益率"} {liveMargin.toFixed(1)}%
+            <div style={{ ...T.fs.caption, marginTop: 6, color: liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted }}>
+              {lang === "zh" ? "利润率" : "利益率"} {liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
             </div>
+            {_missingPriceCount > 0 && liveUnitCost > 0 && (
+              <div style={{ ...T.fs.label, marginTop: 2, color: T.warning }}>
+                {lang === "zh" ? "成本不全·利润率偏高" : "原価不完全・利益率は高めに出ます"}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -4536,7 +4558,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                       {ing.note && <div style={{ ...T.fs.label, color: T.danger, marginTop: 4, lineHeight: 1.5, letterSpacing: 0 }}>{ing.note}</div>}
                     </div>
                     <div style={{ textAlign: "right", fontSize: 17, fontWeight: 400, ...T.num, color: scale !== 1 ? T.accent : T.ink, whiteSpace: "nowrap" }}>
-                      {scale === 1 ? ing.qty : scaledQty.toFixed(1)}
+                      {/* 2026-09-29 体检第 2 批:以前缩放后一律留 1 位小数,0.1g 皮屑缩小后显示 0.0;「适量」这类显示成 0.0 */}
+                      {scale === 1 ? ing.qty : (isFinite(parseFloat(ing.qty)) ? fmtQty(scaledQty) : ing.qty)}
                       <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
                     </div>
                     <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
@@ -4551,16 +4574,27 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         {/* 汇总条：顶部 1px ink，微标签 + 大数字 */}
         {liveTotalCost > 0 && (
           <div className="rc-ing-total" style={{ display: "grid", gridTemplateColumns: ING_COLS, padding: "18px 0 0", borderTop: `1px solid ${T.ink}`, marginTop: 2, alignItems: "baseline" }}>
+            {/* 2026-09-29 体检第 2 批:以前缩放后每行成本变了、总成本还是原配方的,上下对不上 —— 总成本跟着缩放并标倍数 */}
             <div style={{ paddingLeft: T.sp.xl, ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
               {lang === "zh" ? "原料总成本" : "材料原価合計"}
+              {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
             </div>
             <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted, ...T.num }}>
               {_priceNum > 0 && liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
+              {_priceNum > 0 && liveUnitCost > 0 && _missingPriceCount > 0 && (
+                <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·偏高" : "原価不完全・高め"}</div>
+              )}
             </div>
-            <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.secondary, ...T.num }}>
-              {lang === "zh" ? "单个成本" : "単個原価"} ¥{liveUnitCost.toFixed(1)}
+            {/* 2026-09-29 体检第 2 批:单个成本以前只在电脑宽度显示、只到 0.1 元 —— 挪到总成本下面,所有屏幕都显示,走 fmtCost */}
+            <div className="k-desktop-only" />
+            <div style={{ textAlign: "right", fontSize: 22, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
+              ¥{(liveTotalCost * scale).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {liveUnitCost > 0 && (
+                <div style={{ ...T.fs.label, fontFamily: T.fontSans, color: T.secondary, whiteSpace: "nowrap" }}>
+                  {lang === "zh" ? "单个成本" : "単個原価"} {fmtCost(liveUnitCost)}
+                </div>
+              )}
             </div>
-            <div style={{ textAlign: "right", fontSize: 22, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>¥{liveTotalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
           </div>
         )}
       </div>
@@ -6555,13 +6589,17 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
   const famName = lang === "zh" ? (fam.nameZh || fam.nameJa) : (fam.nameJa || fam.nameZh);
   const color = FAMILY_COLORS[fam.colorIdx || 0];
 
+  // 2026-09-29 体检第 2 批:以前勾第 4 个时在 setState 里弹浏览器原生 alert(项目禁用,嵌入环境可能不显示)—— 改成按钮旁的一行提示
+  const [compareLimitHit, setCompareLimitHit] = useState(false);
   const toggleCompare = (rid) => {
+    if (!selectedForCompare.includes(rid) && selectedForCompare.length >= 3) {
+      setCompareLimitHit(true);
+      return;
+    }
+    setCompareLimitHit(false);
     setSelectedForCompare(prev => {
       if (prev.includes(rid)) return prev.filter(x => x !== rid);
-      if (prev.length >= 3) {
-        alert("最多对比3个变体");
-        return prev;
-      }
+      if (prev.length >= 3) return prev;
       return [...prev, rid];
     });
   };
@@ -6617,9 +6655,16 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 500, fontSize: 14 }}>🧪 变体列表（{familyRecipes.length}）</div>
         {familyRecipes.length >= 2 && (
-          <Btn size="sm" variant={compareMode ? "primary" : "default"} onClick={() => { setCompareMode(!compareMode); setSelectedForCompare([]); }}>
-            {compareMode ? "退出对比" : "⚖ 对比模式"}
-          </Btn>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {compareMode && compareLimitHit && (
+              <span role="status" style={{ fontSize: 12, color: T.warning }}>
+                {lang === "zh" ? "最多对比 3 个变体，先取消一个再勾" : "比較は 3 件まで。1 件外してから選んでください"}
+              </span>
+            )}
+            <Btn size="sm" variant={compareMode ? "primary" : "default"} onClick={() => { setCompareMode(!compareMode); setSelectedForCompare([]); setCompareLimitHit(false); }}>
+              {compareMode ? "退出对比" : "⚖ 对比模式"}
+            </Btn>
+          </div>
         )}
       </div>
 
@@ -6721,9 +6766,10 @@ const LOGO_DATA_URI = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComp
 function PrintModal({ onClose, onConfirm, itemType }) {
   // 每个模板的推荐默认勾选（用户可改）
   const TEMPLATE_DEFAULTS = {
-    kitchen:  { ingredients: true, steps: false, notes: true,  images: false, relatedKnowledge: false }, // 厨房：不要步骤和图片
-    showcase: { ingredients: true, steps: false, notes: true,  images: true,  relatedKnowledge: false }, // 展示：要图片不要步骤
-    archive:  { ingredients: true, steps: true,  notes: true,  images: true,  relatedKnowledge: true  }, // 归档：全部
+    // 2026-09-29 体检第 2 批:以前还有「图片」「关联知识点」两个勾选,三个模板都没读,勾不勾印出来一样 —— 去掉
+    kitchen:  { ingredients: true, steps: false, notes: true }, // 厨房：不要步骤
+    showcase: { ingredients: true, steps: false, notes: true }, // 展示：不要步骤
+    archive:  { ingredients: true, steps: true,  notes: true }, // 归档：全部
   };
 
   const [template, setTemplate] = useState("kitchen");
@@ -6819,8 +6865,6 @@ function PrintModal({ onClose, onConfirm, itemType }) {
               ["ingredients", "原料"],
               ["steps", "制作流程"],
               ["notes", "注意事项·备注"],
-              ["images", "图片"],
-              ["relatedKnowledge", "关联知识点"],
             ].map(([k, label]) => (
               <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
                 <input type="checkbox" checked={sections[k]} onChange={e => handleSectionChange(k, e.target.checked)} />
@@ -6855,24 +6899,25 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
   const [showLogoUpload, setShowLogoUpload] = useState(false);
   const [logoUrlInput, setLogoUrlInput] = useState(printSettings.logoUrl || "");
   const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "kororā");
-  const [subtitleInput, setSubtitleInput] = useState(printSettings.brandSubtitle || "PATISSERIE");
+  // 2026-09-29 体检第 2 批:以前副标题清空保存后又被填回默认值、没设过时印写死的 PATISSERIE —— 现在空就是不印
+  const [subtitleInput, setSubtitleInput] = useState(typeof printSettings.brandSubtitle === "string" ? printSettings.brandSubtitle : "");
 
   const logoSrc = printSettings.logoUrl || LOGO_DATA_URI;
   const brandName = printSettings.brandName || "kororā";
-  const brandSubtitle = printSettings.brandSubtitle || "PATISSERIE";
+  const brandSubtitle = typeof printSettings.brandSubtitle === "string" ? printSettings.brandSubtitle.trim() : "";
 
   const doPrint = () => {
     window.print();
   };
 
   const saveLogo = () => {
-    onUpdateSettings({ logoUrl: logoUrlInput.trim(), brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() || "Boulangerie • Pâtisserie • Café" });
+    onUpdateSettings({ logoUrl: logoUrlInput.trim(), brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() });
     setShowLogoUpload(false);
   };
 
   const resetLogo = () => {
     setLogoUrlInput("");
-    onUpdateSettings({ logoUrl: "", brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() || "Boulangerie • Pâtisserie • Café" });
+    onUpdateSettings({ logoUrl: "", brandName: brandNameInput.trim() || "kororā", brandSubtitle: subtitleInput.trim() });
     setShowLogoUpload(false);
   };
 
@@ -6973,7 +7018,7 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
                 {lang === "zh" ? "副标题（可选）" : "サブタイトル（任意）"}
               </div>
-              <input value={subtitleInput} onChange={e => setSubtitleInput(e.target.value)} placeholder="PATISSERIE" style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
+              <input value={subtitleInput} onChange={e => setSubtitleInput(e.target.value)} placeholder={lang === "zh" ? "留空 = 不印副标题" : "空欄なら印刷しません"} style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
             </div>
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
@@ -7023,6 +7068,32 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
   );
 }
 
+// 2026-09-29 体检第 2 批:三个老模板共用的小工具
+// 原料按盆 ①→⑤ 排(同一盆内保持录入顺序),和屏幕一致;以前厨房版 / 归档版按录入顺序印,页脚却写「盆序 ①→⑤ 依次投料」
+const printSortByBowl = (ings) => (ings || []).map((ing, i) => ({ ing, i }))
+  .sort((a, b) => {
+    const oa = GROUP_ORDER.indexOf(a.ing && GROUPS[a.ing.group] ? a.ing.group : "none");
+    const ob = GROUP_ORDER.indexOf(b.ing && GROUPS[b.ing.group] ? b.ing.group : "none");
+    return (oa - ob) || (a.i - b.i);
+  })
+  .map(x => x.ing);
+// 总耗时 time:数字 = 分钟;文字(「约 30 分钟」)原样;0 / 空不印
+const printTimeText = (t, lang) => {
+  const s = t == null ? "" : String(t).trim();
+  if (!s || s === "0") return "";
+  if (/^\d+(\.\d+)?$/.test(s)) return lang === "ja" ? `${s} 分` : `${s} 分钟`;
+  return s;
+};
+// 配方详情「缩放计算」后打印:抬头写「做 100 個(原 25 個 ×4)」;没缩放返回 null
+const printScaleText = (item, lang) => {
+  const p = item && item._printScale;
+  if (!p) return null;
+  const u = item.unit || "個";
+  return lang === "ja"
+    ? { main: `${fmtQty(p.to)} ${u} 仕込み`, sub: `(元 ${fmtQty(p.from)} ${u} ×${fmtQty(p.factor)})` }
+    : { main: `做 ${fmtQty(p.to)} ${u}`, sub: `(原 ${fmtQty(p.from)} ${u} ×${fmtQty(p.factor)})` };
+};
+
 // ─── 模板1：厨房操作台版（简洁1页，大字号） ─────────────
 function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
   const getName = (it) => {
@@ -7039,19 +7110,28 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   const name = getName(item);
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
+  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文(日文回退成中文时是同一个数组,不重复印)
+  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
+  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
   const notesText = getText(item.notesZh, item.notesJa);
+  const scaleText = printScaleText(item, lang);
+  const ingsSorted = printSortByBowl(item.ingredients);
 
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
       {/* 抬头：店名 + 配方名 / 右侧关键参数 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "2px solid #000", paddingBottom: "12px" }}>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: "11pt", letterSpacing: "0.26em", fontWeight: 400 }}>{brandName}</div>
           <div style={{ fontSize: "24pt", fontWeight: 700, marginTop: "8px", lineHeight: 1.1 }}>{name}</div>
           {item.nameFr && <div style={{ fontSize: "13pt", marginTop: "4px" }}>{item.nameFr}</div>}
+          {/* 2026-09-29 体检第 2 批:过敏原以前三个模板都不印 */}
+          {item.allergens && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "6px" }}>{lang === "ja" ? "アレルゲン" : "过敏原"}：{item.allergens}</div>}
         </div>
-        <div style={{ textAlign: "right", fontSize: "12pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 0 }}>
-          {item.yield && <div style={{ fontSize: "20pt", fontWeight: 700 }}>{item.yield} {item.unit || "個"}</div>}
+        {/* 2026-09-29 体检第 2 批:以前右栏不收缩不换行,温度时间写得长时把名字挤成一条、右边超出纸边 —— 限宽 55% 并允许换行 */}
+        <div style={{ textAlign: "right", fontSize: "12pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 1, maxWidth: "55%", overflowWrap: "anywhere" }}>
+          {item.yield && <div style={{ fontSize: "20pt", fontWeight: 700 }}>{scaleText ? scaleText.main : `${item.yield} ${item.unit || "個"}`}</div>}
+          {scaleText && <div style={{ fontSize: "10pt" }}>{scaleText.sub}</div>}
           {item.mold && <div>{item.mold}</div>}
           {(item.temp || item.baketime) && <div style={{ fontWeight: 700 }}>{[item.temp, item.baketime].filter(Boolean).join(" / ")}</div>}
         </div>
@@ -7073,7 +7153,7 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
               // 按盆分组后依次输出；每组只有第一行显示 ①②③ 编号
               const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
               let lastGroup = null;
-              return item.ingredients.map((ing, i) => {
+              return ingsSorted.map((ing, i) => {
                 const gk = ing.group && ing.group !== "none" ? ing.group : null;
                 const first = gk && gk !== lastGroup;
                 lastGroup = gk;
@@ -7107,7 +7187,10 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
             {steps.map((s, i) => (
               <div key={i} className="p-step">
                 <div className="p-step-n">{String(i + 1).padStart(2, "0")}</div>
-                <div className="p-step-t">{s}</div>
+                <div className="p-step-t">
+                  {s}
+                  {stepsSub && stepsSub[i] && stepsSub[i] !== s && <div className="p-sub" style={{ fontSize: "10pt", marginTop: "2px" }}>{stepsSub[i]}</div>}
+                </div>
               </div>
             ))}
           </div>
@@ -7124,7 +7207,7 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
       {/* 底部 */}
       <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
-        <div>{brandName} · {brandSubtitle} · {new Date().toLocaleDateString("zh-CN")}</div>
+        <div>{[brandName, brandSubtitle, new Date().toLocaleDateString("zh-CN")].filter(Boolean).join(" · ")}</div>
         <div>{lang === "ja" ? "ボウル ① → ⑤ の順に投入" : "盆序 ① → ⑤ 依次投料"}</div>
       </div>
     </div>
@@ -7147,7 +7230,13 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   const name = getName(item);
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
+  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
+  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
+  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
   const notesText = getText(item.notesZh, item.notesJa);
+  // 2026-09-29 体检第 2 批:过敏原和总耗时以前从不打印
+  const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} / ${ja}` : zh;
+  const timeText = printTimeText(item.time, lang === "ja" ? "ja" : "zh");
 
   return (
     <div style={{ position: "relative", zIndex: 1, fontFamily: 'Georgia, "Hiragino Mincho ProN", "游明朝", "PingFang SC", serif', color: "#2D1B0E" }}>
@@ -7156,7 +7245,7 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
         <img src={logoSrc} style={{ display: "block", width: "auto", height: "auto", maxWidth: "60mm", maxHeight: "30mm", margin: "0 auto 5mm" }} alt="LOGO" />
         {/* 默认 logo 就是「kororā」字标,再排一遍文字店名就重复了;换了自定义 logo 才排 */}
         {logoSrc !== LOGO_DATA_URI && <div style={{ fontFamily: "Georgia, serif", fontSize: "14pt", letterSpacing: "8pt", marginBottom: "2mm", color: "#2D1B0E", fontWeight: 500 }}>{brandName}</div>}
-        <div style={{ fontSize: "9pt", letterSpacing: "4pt", color: "#7A5F4A", fontStyle: "italic" }}>— {brandSubtitle} —</div>
+        {brandSubtitle && <div style={{ fontSize: "9pt", letterSpacing: "4pt", color: "#7A5F4A", fontStyle: "italic" }}>— {brandSubtitle} —</div>}
       </div>
 
       {/* 标题区 */}
@@ -7191,6 +7280,13 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
         </div>
       )}
 
+      {(item.allergens || timeText) && (
+        <div style={{ marginBottom: "8mm", textAlign: "center", fontSize: "10pt", color: "#444", display: "flex", justifyContent: "center", gap: "8mm", flexWrap: "wrap" }}>
+          {item.allergens && <span>{lb("过敏原", "アレルゲン")}：{item.allergens}</span>}
+          {timeText && <span>{lb("制作时间", "所要時間")}：{timeText}</span>}
+        </div>
+      )}
+
       {/* 制法 */}
       {sections.steps && steps.length > 0 && (
         <div style={{ marginBottom: "8mm" }}>
@@ -7199,7 +7295,10 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
             {steps.map((s, i) => (
               <li key={i} style={{ display: "flex", gap: "4mm", marginBottom: "3mm", fontSize: "10.5pt", lineHeight: 1.8 }}>
                 <span style={{ fontStyle: "italic", color: "#999", minWidth: "8mm", textAlign: "right", fontSize: "11pt" }}>{String(i + 1).padStart(2, "0")}</span>
-                <span>{s}</span>
+                <span>
+                  {s}
+                  {stepsSub && stepsSub[i] && stepsSub[i] !== s && <span style={{ display: "block", fontSize: "9.5pt", color: "#555" }}>{stepsSub[i]}</span>}
+                </span>
               </li>
             ))}
           </ol>
@@ -7208,7 +7307,7 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
 
       {/* 底部 */}
       <div style={{ marginTop: "15mm", paddingTop: "5mm", borderTop: "0.5px solid #1a1a1a", textAlign: "center", fontSize: "8pt", letterSpacing: 3, color: "#666" }}>
-        <div>{brandName} · {brandSubtitle}</div>
+        <div>{[brandName, brandSubtitle].filter(Boolean).join(" · ")}</div>
         <div style={{ marginTop: "1mm" }}>{new Date().toLocaleDateString("ja-JP")}</div>
       </div>
     </div>
@@ -7233,6 +7332,11 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   const stepsZh = (item.stepsZh && item.stepsZh.length) ? item.stepsZh : (item.steps || []);
   const stepsJa = (item.stepsJa && item.stepsJa.length) ? item.stepsJa : (item.steps || []);
   const notesText = getText(item.notesZh, item.notesJa);
+  // 2026-09-29 体检第 2 批:以前选「仅日文」时信息行 / 表头 / 页脚还是写死的中文(表头中日混排)—— 标签跟着打印语言走
+  const lb = (zh, ja) => lang === "ja" ? ja : zh;
+  const timeText = printTimeText(item.time, lang === "ja" ? "ja" : "zh");
+  const scaleText = printScaleText(item, lang);
+  const ingsSorted = printSortByBowl(item.ingredients);
 
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
@@ -7242,7 +7346,7 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
           <img src={logoSrc} style={{ width: "auto", height: "auto", maxWidth: "40mm", maxHeight: "12mm" }} alt="LOGO" />
           <div>
             {logoSrc !== LOGO_DATA_URI && <div style={{ fontFamily: "Georgia, serif", fontSize: "11pt", letterSpacing: "3pt", fontWeight: 500, color: "#2D1B0E" }}>{brandName}</div>}
-            <div style={{ fontSize: "7pt", letterSpacing: "2pt", color: "#7A5F4A", fontStyle: "italic" }}>{brandSubtitle}</div>
+            {brandSubtitle && <div style={{ fontSize: "7pt", letterSpacing: "2pt", color: "#7A5F4A", fontStyle: "italic" }}>{brandSubtitle}</div>}
           </div>
         </div>
         <div style={{ fontSize: "9pt", color: "#7A5F4A", letterSpacing: "1pt", textTransform: "uppercase" }}>
@@ -7257,12 +7361,14 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
         {/* 元信息 */}
         <div style={{ marginTop: "4mm", display: "flex", gap: "6mm", flexWrap: "wrap", fontSize: "9pt", color: "#555" }}>
-          {item.yield && <div><span style={{ color: "#999", letterSpacing: "0.5pt" }}>产量:</span> <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{item.yield}{item.unit || "個"}</strong></div>}
-          {item.temp && <div><span style={{ color: "#888" }}>温度:</span> <strong>{item.temp}</strong></div>}
-          {item.baketime && <div><span style={{ color: "#888" }}>时间:</span> <strong>{item.baketime}</strong></div>}
-          {item.mold && <div><span style={{ color: "#888" }}>模具:</span> <strong>{item.mold}</strong></div>}
-          {item.difficulty && <div><span style={{ color: "#888" }}>难度:</span> <strong>{item.difficulty}</strong></div>}
-          {item.storage && <div><span style={{ color: "#888" }}>保存:</span> <strong>{item.storage}</strong></div>}
+          {item.yield && <div><span style={{ color: "#999", letterSpacing: "0.5pt" }}>{lb("产量", "仕上がり")}:</span> <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{scaleText ? `${scaleText.main} ${scaleText.sub}` : `${item.yield}${item.unit || "個"}`}</strong></div>}
+          {item.temp && <div><span style={{ color: "#888" }}>{lb("温度", "温度")}:</span> <strong>{item.temp}</strong></div>}
+          {item.baketime && <div><span style={{ color: "#888" }}>{lb("烘烤时间", "焼成時間")}:</span> <strong>{item.baketime}</strong></div>}
+          {timeText && <div><span style={{ color: "#888" }}>{lb("制作时间", "所要時間")}:</span> <strong>{timeText}</strong></div>}
+          {item.mold && <div><span style={{ color: "#888" }}>{lb("模具", "型")}:</span> <strong>{item.mold}</strong></div>}
+          {item.difficulty && <div><span style={{ color: "#888" }}>{lb("难度", "難易度")}:</span> <strong>{item.difficulty}</strong></div>}
+          {item.storage && <div><span style={{ color: "#888" }}>{lb("保存", "保存")}:</span> <strong>{item.storage}</strong></div>}
+          {item.allergens && <div><span style={{ color: "#888" }}>{lb("过敏原", "アレルゲン")}:</span> <strong>{item.allergens}</strong></div>}
         </div>
       </div>
 
@@ -7275,15 +7381,15 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
           <table style={{ fontSize: "10pt" }}>
             <thead>
               <tr style={{ borderBottom: "0.5px solid #999" }}>
-                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>名称</th>
-                <th style={{ textAlign: "right", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "15mm" }}>用量</th>
-                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "8mm" }}>単位</th>
-                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "35mm" }}>ブランド</th>
-                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>备注</th>
+                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>{lb("名称", "材料名")}</th>
+                <th style={{ textAlign: "right", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "15mm" }}>{lb("用量", "分量")}</th>
+                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "8mm" }}>{lb("单位", "単位")}</th>
+                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "35mm" }}>{lb("品牌", "ブランド")}</th>
+                <th style={{ textAlign: "left", padding: "1.5mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>{lb("备注", "備考")}</th>
               </tr>
             </thead>
             <tbody>
-              {item.ingredients.map((ing, i) => {
+              {ingsSorted.map((ing, i) => {
                 const ingName = getName(ing);
                 const showGroup = ing.group && ing.group !== "none";
                 const groupInfo = showGroup ? GROUPS[ing.group] : null;
@@ -7345,7 +7451,7 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
       {/* 底部 */}
       <div style={{ marginTop: "10mm", paddingTop: "3mm", borderTop: "0.5px solid #999", display: "flex", justifyContent: "space-between", fontSize: "8pt", color: "#666" }}>
-        <div>{brandName} · {brandSubtitle} · 归档笔记</div>
+        <div>{[brandName, brandSubtitle, lb("归档笔记", "アーカイブ")].filter(Boolean).join(" · ")}</div>
         <div>{new Date().toLocaleDateString("zh-CN")}</div>
       </div>
     </div>
@@ -7468,6 +7574,8 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
             </div>
             {note && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{tx("用量原文", "原文")}：{note}</div>}
             {p.noUsed && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx("没填用量：下面是整批配方，没按个数算", "使用量未入力：全量レシピ")}</div>}
+            {/* 2026-09-29 体检第 2 批:「500g + 170g」这类用量屏幕上有黄色提醒,打印单上以前没有,员工照大号数字做会少做 */}
+            {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(`用量只认开头的数字，按 ${fmtQty(p.used)} g 一批算，请核对用量原文`, `先頭の数字 ${fmtQty(p.used)} g で計算。原文を確認`)}</div>}
             {p.stock ? (
               <div style={{ fontSize: "12pt", marginTop: "6px" }}>
                 {tx("从库存取", "ストックから")} <strong style={{ fontSize: "14pt" }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : ""}</strong>
@@ -7525,7 +7633,7 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
 
       {/* 底部 */}
       <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
-        <div>{brandName} · {brandSubtitle} · {new Date().toLocaleDateString("zh-CN")}</div>
+        <div>{[brandName, brandSubtitle, new Date().toLocaleDateString("zh-CN")].filter(Boolean).join(" · ")}</div>
         <div>{tx("盆序 ① → ⑤ 依次投料", "ボウル ① → ⑤ の順に投入")}</div>
       </div>
     </div>
@@ -16770,7 +16878,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={() => setPrintTarget({ type: "recipe", data: viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
         </div>
       )}
 
