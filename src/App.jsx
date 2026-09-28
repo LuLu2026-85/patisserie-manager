@@ -1352,6 +1352,146 @@ const calcLayerLiveCost = (l, materials, brands) => {
   return componentCost * (usedAmount / componentYield);
 };
 
+// BEGIN creation-follow helpers ──────────────────────────────────────────────
+// v17.8 (2026-09-28)「组合产品的部分默认跟组件库走」+「整体配方」。
+// creations[].layers[] 仍然存组件内容的副本 —— 成本 / 采购 / 材料用在哪 / 打印这些老读者一个字不用改。
+// 多了两个标记,由 App 里的一个 effect 把组件库的最新内容「写进」跟组件库走的部分(syncFollowingLayers):
+//   · follow: true        跟组件库走。组件一改,这一部分换成组件的最新内容;部分名 customName、用量 usedAmount 不动
+//   · localVariant: true  本产品专用。在这个产品里单独改过(编辑部分、改了内容、没点「↻ 同步回组件库」),不再跟组件库
+//   · 两个都没有 = 老数据。内容和组件库一样 → 标成 follow;不一样 → 原样不动,详情页提示「和组件库不一样」,
+//     点「用组件库的 / 保留(本产品专用)」才定。绝不悄悄换内容。
+// 比较只看部分编辑页能改的 + 名字 / 分类 / 备注。关联了百科的配料,单价 / 成本是打开编辑页时刷出来的快照
+// (成本本来就按百科实时算),不算内容;没关联的,手填的单价 / 币种 / 成本算内容。
+// matIds(现有材料 id 的 Set)用来把指向已删材料的 materialId 当成没关联 —— 部分编辑页保存时会清掉它们。
+// ⚠️ 改这一段先跑 .claude/scripts/creation_follow_probe.cjs(把这段抽出来对主数据全量跑)。
+const _normTxt = (v) => (v === undefined || v === null || (typeof v === "number" && !isFinite(v))) ? "" : String(v).trim();
+const _normNum = (v) => { const n = parseFloat(v); return isFinite(n) ? String(n) : _normTxt(v); };
+// 产出量:空 / 0 都是「没填」(组件编辑页存的是 0,老副本里是 "",成本算法两者一样)
+const _normYield = (v) => { const n = parseFloat(v); return (isFinite(n) && n > 0) ? String(n) : ""; };
+// 和 pickSteps 同一个回退:某语言是空数组 → 用老字段 steps
+const _effSteps = (x, L) => {
+  const a = (x && Array.isArray(x["steps" + L]) && x["steps" + L].length) ? x["steps" + L] : ((x && Array.isArray(x.steps)) ? x.steps : []);
+  return a;
+};
+const _ingContentKey = (ing, matIds) => {
+  const mid = (ing.materialId && (!matIds || matIds.has(ing.materialId))) ? String(ing.materialId) : "";
+  const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand)];
+  if (!mid) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
+  return k;
+};
+const layerContentKey = (x, matIds) => JSON.stringify(x ? [
+  _normTxt(x.nameZh), _normTxt(x.nameJa), _normTxt(x.nameFr), _normTxt(x.componentCategory),
+  _normYield(x.yield), _normTxt(x.unit) || "g",
+  (Array.isArray(x.ingredients) ? x.ingredients : []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => _ingContentKey(i, matIds)),
+  _effSteps(x, "Zh").map(_normTxt).filter(Boolean), _effSteps(x, "Ja").map(_normTxt).filter(Boolean),
+  _normTxt(x.notesZh), _normTxt(x.notesJa),
+] : null);
+const sameLayerContent = (layer, comp, matIds) => !!(layer && comp) && layerContentKey(layer, matIds) === layerContentKey(comp, matIds);
+// 组件 → 部分的内容字段。加部分(addLayerFromComponent)和跟组件库同步共用这一个
+const layerContentFromComponent = (comp) => ({
+  nameZh: comp.nameZh, nameJa: comp.nameJa, nameFr: comp.nameFr,
+  componentCategory: comp.componentCategory,
+  yield: comp.yield, unit: comp.unit,
+  ingredients: JSON.parse(JSON.stringify(comp.ingredients || [])),
+  stepsZh: [..._effSteps(comp, "Zh")],
+  stepsJa: [..._effSteps(comp, "Ja")],
+  steps: undefined,
+  notesZh: comp.notesZh || "", notesJa: comp.notesJa || "",
+  totalCost: comp.totalCost || 0,
+});
+// 幂等:什么都不用改时原样返回同一个数组(effect 靠这个不空转)
+const syncFollowingLayers = (creations, components, matIds) => {
+  if (!Array.isArray(creations) || creations.length === 0) return creations;
+  const compById = new Map();
+  (components || []).forEach(c => { if (c && c.id != null && !compById.has(c.id)) compById.set(c.id, c); });
+  const keyCache = new Map();
+  const compKey = (c) => { if (!keyCache.has(c)) keyCache.set(c, layerContentKey(c, matIds)); return keyCache.get(c); };
+  let any = false;
+  const next = creations.map(cr => {
+    const layers = (cr && Array.isArray(cr.layers)) ? cr.layers : null;
+    if (!layers || layers.length === 0) return cr;
+    let changed = false;
+    const newLayers = layers.map(l => {
+      if (!l || !l.sourceComponentId || l.localVariant) return l;
+      const comp = compById.get(l.sourceComponentId);
+      if (!comp) return l;                       // 组件删了:留着副本
+      const ck = compKey(comp);
+      if (layerContentKey(l, matIds) === ck) {
+        if (l.follow) return l;
+        changed = true;
+        return { ...l, follow: true };           // 老数据,内容和组件库一样 → 从此跟组件库走
+      }
+      if (!l.follow) return l;                   // 老数据,内容不一样 → 不动,页面上提示
+      const upd = { ...l, ...layerContentFromComponent(comp), follow: true };
+      if (layerContentKey(upd, matIds) !== ck) return l;  // 防御:抄完还对不上就别抄,免得 effect 来回写
+      changed = true;
+      return upd;
+    });
+    if (!changed) return cr;
+    any = true;
+    return { ...cr, layers: newLayers };
+  });
+  return any ? next : creations;
+};
+// manual 手搭的(不是从组件库来的)/ orphan 组件已删 / local 本产品专用 / follow 跟组件库 / differs 老数据和组件库不一样
+const layerLinkState = (l, components, matIds) => {
+  if (!l || !l.sourceComponentId) return "manual";
+  const comp = (components || []).find(c => c && c.id === l.sourceComponentId);
+  if (!comp) return "orphan";
+  if (l.localVariant) return "local";
+  if (l.follow) return "follow";
+  return sameLayerContent(l, comp, matIds) ? "follow" : "differs";
+};
+// 整体配方:做 n 个(叠层是 n 台)。用量 usedAmount 是按「制作个数」serves 这一批写的 —— 成本一直这么算
+// (总成本 ÷ serves = 单个成本)→ 做 n 个的需要量 = 用量 × n ÷ serves;配料缩放 = 需要量 ÷ 组件产出量。
+// 没填产出量的部分(手搭的),成本按整批算,这里也按「整批 × 倍数」。组件标了备货的,页面只给「从库存取多少」。
+const creationBatch = (c, n, components, materials, brands) => {
+  const serves = parseFloat(c && c.serves) > 0 ? parseFloat(c.serves) : 1;
+  const N = parseFloat(n) > 0 ? parseFloat(n) : serves;
+  const factor = N / serves;
+  const parts = ((c && c.layers) || []).map((l0, idx) => {
+    const l = l0 || {};
+    const comp = l.sourceComponentId ? (components || []).find(x => x && x.id === l.sourceComponentId) : null;
+    const used = parseFloat(l.usedAmount) || 0;
+    const yieldNum = parseFloat(l.yield) || 0;
+    const noUsed = yieldNum > 0 && !(used > 0);
+    const scale = yieldNum > 0 ? (used > 0 ? used * factor / yieldNum : null) : factor;
+    const needed = used > 0 ? used * factor : null;
+    const stock = !!(comp && comp.prepMode === "stock");
+    const ings = (l.ingredients || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => {
+      const q = parseFloat(i.qty);
+      return { ing: i, qty: (scale !== null && isFinite(q)) ? q * scale : null };
+    });
+    const cost = calcLayerLiveCost(l, materials, brands) * factor;
+    const missingIngs = ings.filter(({ ing }) => (parseFloat(ing.qty) || 0) > 0 && !(getIngLiveCost(ing, materials, brands, []) > 0)).map(x => x.ing);
+    return { layer: l, idx, comp, used, usedRaw: _normTxt(l.usedAmount), yieldNum, noUsed, scale, needed, stock, ings, cost, missingIngs, missingPrice: missingIngs.length > 0 };
+  });
+  const cost = parts.reduce((s, p) => s + p.cost, 0);
+  return { serves, N, factor, parts, cost, incomplete: parts.some(p => p.missingPrice || p.noUsed) };
+};
+// 称量用的数:100 以上取整(千位加逗号)、10 到 100 一位小数、10 以下两位小数,尾零去掉
+const fmtQty = (v) => {
+  const n = parseFloat(v);
+  if (!isFinite(n)) return "";
+  const a = Math.abs(n);
+  if (a >= 100) return Math.round(n).toLocaleString("en-US");
+  return (a >= 10 ? n.toFixed(1) : n.toFixed(2)).replace(/\.?0+$/, "");
+};
+// 用量原文不是纯数字(「约 30g」「35g×3」)时,页面在算出来的克数旁边照抄原文,免得读错
+const usedAmountNote = (raw) => {
+  const s = _normTxt(raw);
+  if (!s || /^\d+(\.\d+)?\s*(g|克)?$/i.test(s)) return "";
+  return s;
+};
+// 开头的数字后面紧跟 + / – / × / 到 这类(「500g + 170g」「60–80g」「35g×3」):只认开头那个数就算错了,要提醒;
+// 「12g（3 个，每个约 4 g）」这种括号里的说明不算
+const usedAmountAmbiguous = (raw) => {
+  const s = _normTxt(raw);
+  const m = s.match(/^\d+(?:\.\d+)?\s*(?:g|克)?\s*/i);
+  return !!m && /^[+＋\-–—~～×xX*到至]/.test(s.slice(m[0].length));
+};
+// END creation-follow helpers ────────────────────────────────────────────────
+
 
 // 根据输入的名字在cats里找匹配的大类（返回第一个匹配）
 const findCatByName = (name, cats) => {
@@ -3534,6 +3674,8 @@ function BulkMaterialLinkWizard({ recipes, components, creations, materials, bra
     });
     creations.forEach(cr => {
       (cr.layers || []).forEach((l, layerIdx) => {
+        // v17.8: 跟组件库走的部分不单独列 —— 关联组件里那一行就会带过来;在这里关联,下一次同步会被组件库的内容盖掉
+        if (layerLinkState(l, components) === "follow") return;
         (l.ingredients || []).forEach((ing, ingIdx) => {
           if (ing.materialId) return;
           if (!ing.nameZh && !ing.nameJa) return;
@@ -5078,6 +5220,13 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
                 </span>
               );
             })()}
+            {/* v17.8: 备货 = 整批做好存着,组合产品的整体配方里只写「从库存取多少」 */}
+            {c.prepMode === "stock" && (
+              <span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
+                style={{ background: "#FFFFFF", color: T.warning, border: `0.5px solid ${T.warning}`, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
+                {lang === "zh" ? "备货" : "作り置き"}
+              </span>
+            )}
           </div>
 
           <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -5453,6 +5602,15 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "单位" : "単位"}</label>
             <input value={form.unit} onChange={f("unit")} placeholder="g" style={inpStyle} />
+          </div>
+          {/* v17.8: 备货 = 整批做好存着(千层面团、泡芙壳这类),组合产品的整体配方里只写「从库存取多少」 */}
+          <div>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "备货" : "作り置き"}</label>
+            <label title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組立製品のレシピでは「ストックから何 g」だけ表示"}
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "8px 0", cursor: "pointer", color: T.textSecondary }}>
+              <input type="checkbox" checked={form.prepMode === "stock"} onChange={e => setForm(prev => ({ ...prev, prepMode: e.target.checked ? "stock" : undefined }))} />
+              {lang === "zh" ? "整批做好存着" : "まとめて仕込み"}
+            </label>
           </div>
         </div>
       </div>
@@ -6334,11 +6492,13 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
 }
 
 // ─── 家族详情（包含对比功能） ─────────────
-function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
+function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, onViewRecipe, onViewCreation }) {
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState([]);
 
   const familyRecipes = recipes.filter(r => r.familyId === family.id);
+  // v17.8: 挂了这个家族的组合产品(比如 Framboisier)也列出来;不参与原料对比
+  const familyCreations = (creations || []).filter(c => c && c.familyId === family.id);
   const fam = family;
   const famName = lang === "zh" ? (fam.nameZh || fam.nameJa) : (fam.nameJa || fam.nameZh);
   const color = FAMILY_COLORS[fam.colorIdx || 0];
@@ -6381,7 +6541,7 @@ function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
             <div style={{ fontSize: 24, fontWeight: 500 }}>{famName}</div>
             {fam.nameFr && <div style={{ fontSize: 13, color: "#888", fontStyle: "italic" }}>{fam.nameFr}</div>}
           </div>
-          <div style={{ background: color.bg, color: color.color, padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500 }}>{familyRecipes.length} 个变体</div>
+          <div style={{ background: color.bg, color: color.color, padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500 }}>{familyRecipes.length} 个变体{familyCreations.length > 0 ? ` · ${familyCreations.length} 个组合产品` : ""}</div>
         </div>
         {fam.description && <div style={{ marginTop: 10, padding: "10px 14px", background: "#F9FAFB", borderRadius: 8, fontSize: 13, lineHeight: 1.7, color: "#333", fontStyle: "italic" }}>「{fam.description}」</div>}
 
@@ -6411,12 +6571,12 @@ function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
         )}
       </div>
 
-      {familyRecipes.length === 0 ? (
+      {familyRecipes.length === 0 ? (familyCreations.length > 0 ? null : (
         <div style={{ background: "#F9FAFB", border: "1px dashed #CCC", borderRadius: 8, padding: "2rem", textAlign: "center", color: "#666", fontSize: 13 }}>
           这个家族还没有变体。<br />
           在配方一览里新建或编辑配方，选择归属到这个家族。
         </div>
-      ) : (
+      )) : (
         <div style={{ display: "grid", gap: 8, marginBottom: "1rem" }}>
           {familyRecipes.map(r => {
             const n = pickLang(r, "name", lang);
@@ -6439,6 +6599,23 @@ function FamilyDetail({ family, recipes, lang, onEdit, onBack, onViewRecipe }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* v17.8: 这个家族里的组合产品 */}
+      {familyCreations.length > 0 && (
+        <div style={{ marginBottom: "1rem" }}>
+          <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10 }}>🧩 {lang === "zh" ? "组合产品" : "組立製品"}（{familyCreations.length}）</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {familyCreations.map(cr => (
+              <div key={cr.id} onClick={() => onViewCreation && onViewCreation(cr.id)}
+                style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: 8, padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 10, color: T.info, border: `0.5px solid ${T.info}`, padding: "0 6px", borderRadius: T.radiusPill }}>{lang === "zh" ? "组合" : "組立"}</span>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{cr.nameFr && cr.nameFr !== pickLang(cr, "name", lang) ? `${cr.nameFr} · ` : ""}{pickLang(cr, "name", lang)}</span>
+                <span style={{ color: "#999", fontSize: 12 }}>→</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -6527,6 +6704,9 @@ function PrintModal({ onClose, onConfirm, itemType }) {
     { id: "showcase", icon: "✨", nameZh: "客户展示版",   desc: "精美排版·突出品牌故事·适合展示给客人或合作伙伴" },
     { id: "archive",  icon: "📔", nameZh: "归档笔记版",   desc: "详细多页·含完整笔记·适合收藏·类食谱书风格" },
   ];
+  // v17.8: 组合产品的整体配方只有一种版式(A4 生产单),只选语言和印不印做法 / 备注
+  const isCreation = itemType === "creation";
+  const [cSections, setCSections] = useState({ steps: true, notes: false });
 
   return (
     <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }} onClick={onClose}>
@@ -6536,8 +6716,14 @@ function PrintModal({ onClose, onConfirm, itemType }) {
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
         </div>
 
+        {isCreation && (
+          <div style={{ fontSize: 12, color: "#666", marginBottom: 16, lineHeight: 1.6 }}>
+            📘 整体配方 · A4 生产单：每部分的量和做法，最后是组装。个数按详情页里填的算。
+          </div>
+        )}
+
         {/* 模板选择 */}
-        <div style={{ marginBottom: 16 }}>
+        {!isCreation && <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📋 选择模板</div>
           <div style={{ display: "grid", gap: 8 }}>
             {templates.map(t => (
@@ -6553,7 +6739,7 @@ function PrintModal({ onClose, onConfirm, itemType }) {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* 语言选择 */}
         <div style={{ marginBottom: 16 }}>
@@ -6566,6 +6752,19 @@ function PrintModal({ onClose, onConfirm, itemType }) {
         </div>
 
         {/* 显示选项 */}
+        {isCreation ? (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📝 显示内容</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {[["steps", "做法（每部分的步骤 + 整体组装）"], ["notes", "备注"]].map(([k, label]) => (
+                <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!cSections[k]} onChange={e => setCSections(prev => ({ ...prev, [k]: e.target.checked }))} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : (
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📝 显示内容</div>
           <div style={{ display: "grid", gap: 6 }}>
@@ -6588,6 +6787,7 @@ function PrintModal({ onClose, onConfirm, itemType }) {
             </div>
           )}
         </div>
+        )}
 
         <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontSize: 11, color: "#854F0B", lineHeight: 1.6 }}>
           💡 点击「打印预览」后，使用浏览器的「打印」(Ctrl+P / ⌘+P) 进行实际打印，或保存为PDF。<br />
@@ -6596,7 +6796,7 @@ function PrintModal({ onClose, onConfirm, itemType }) {
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Btn onClick={onClose}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-          <Btn variant="primary" onClick={() => onConfirm({ template, lang, sections })}>🖨 打印预览</Btn>
+          <Btn variant="primary" onClick={() => onConfirm(isCreation ? { template: "creation", lang, sections: cSections } : { template, lang, sections })}>🖨 打印预览</Btn>
         </div>
       </div>
     </div>
@@ -6756,9 +6956,15 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
         {/* 水印 */}
         <div className="watermark">{brandName}</div>
 
-        {template === "kitchen" && <KitchenTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
-        {template === "showcase" && <ShowcaseTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
-        {template === "archive" && <ArchiveTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
+        {itemType === "creation" ? (
+          <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
+        ) : (
+          <>
+            {template === "kitchen" && <KitchenTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
+            {template === "showcase" && <ShowcaseTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
+            {template === "archive" && <ArchiveTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
+          </>
+        )}
       </div>
     </>
   );
@@ -6778,7 +6984,8 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   };
 
   const name = getName(item);
-  const steps = lang === "ja" ? (item.stepsJa || item.steps || []) : (item.stepsZh || item.steps || []);
+  // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
+  const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
   const notesText = getText(item.notesZh, item.notesJa);
 
   return (
@@ -6885,7 +7092,8 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   };
 
   const name = getName(item);
-  const steps = lang === "ja" ? (item.stepsJa || item.steps || []) : (item.stepsZh || item.steps || []);
+  // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
+  const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
   const notesText = getText(item.notesZh, item.notesJa);
 
   return (
@@ -6967,8 +7175,9 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   };
 
   const name = getName(item);
-  const stepsZh = item.stepsZh || item.steps || [];
-  const stepsJa = item.stepsJa || item.steps || [];
+  // 空数组也要回退到老字段 steps(和 pickSteps 同一个规则)
+  const stepsZh = (item.stepsZh && item.stepsZh.length) ? item.stepsZh : (item.steps || []);
+  const stepsJa = (item.stepsJa && item.stepsJa.length) ? item.stepsJa : (item.steps || []);
   const notesText = getText(item.notesZh, item.notesJa);
 
   return (
@@ -7064,7 +7273,7 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
             </table>
           ) : (
             <ol style={{ paddingLeft: "6mm", margin: 0, fontSize: "10pt", lineHeight: 1.8 }}>
-              {(lang === "ja" ? stepsJa : stepsZh).map((s, i) => (
+              {pickSteps(item, lang === "ja" ? "ja" : "zh").map((s, i) => (
                 <li key={i} style={{ marginBottom: "2mm" }}>{s}</li>
               ))}
             </ol>
@@ -7084,6 +7293,186 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
       <div style={{ marginTop: "10mm", paddingTop: "3mm", borderTop: "0.5px solid #999", display: "flex", justifyContent: "space-between", fontSize: "8pt", color: "#666" }}>
         <div>{brandName} PATISSERIE · {brandSubtitle} · 归档笔记</div>
         <div>{new Date().toLocaleDateString("zh-CN")}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 模板4：组合产品整体配方（v17.8，A4 生产单，黑白）─────────────
+// data = { creation, batch }:详情页「📘 配方」按个数算好的那一份(creationBatch),打印和屏幕一个数。
+// 沿用上面 PrintView 的 p-* 规范(纯黑白、盆用粗体编号、用量粗体),价格一律不印。
+function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubtitle }) {
+  const c = (data && data.creation) || {};
+  const batch = (data && data.batch) || { parts: [], N: 1, serves: 1, factor: 1 };
+  const L = lang === "ja" ? "ja" : "zh";
+  const W = creationWords(creationStructureOf(c), L);
+  const tx = (zhText, jaText) => lang === "ja" ? jaText : (lang === "both" ? `${zhText} · ${jaText}` : zhText);
+  const nameOf = (x) => {
+    if (!x) return "";
+    if (lang !== "both") return pickLang(x, "name", L);
+    const a = [x.nameZh, x.nameJa].filter(Boolean);
+    return a.filter((v, i) => a.indexOf(v) === i).join(" / ");
+  };
+  const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
+  const stepsBlock = (x) => {
+    const zhS = pickSteps(x, "zh"), jaS = pickSteps(x, "ja");
+    const main = L === "ja" ? jaS : zhS;
+    if (!main.length) return null;
+    const sub = lang === "both" && jaS !== main ? jaS : null;   // 日文回退成中文时是同一个数组,不重复印
+    return (
+      <div className="p-steps" style={{ marginTop: "6px" }}>
+        {main.map((s, i) => (
+          <div key={i} className="p-step">
+            <div className="p-step-n">{String(i + 1).padStart(2, "0")}</div>
+            <div className="p-step-t" style={{ fontSize: "10.5pt" }}>
+              {s}
+              {sub && sub[i] && <div className="p-sub" style={{ fontSize: "9.5pt", marginTop: "2px" }}>{sub[i]}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const notesOf = (x) => {
+    if (lang === "both") return [x.notesZh, x.notesJa].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join("\n—\n");
+    return pickLang(x, "notes", L) || x.notes || "";
+  };
+  const rowsOf = (p) => {
+    const rows = p.noUsed
+      ? (p.layer.ingredients || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => ({ ing: i, qty: isFinite(parseFloat(i.qty)) ? parseFloat(i.qty) : null }))
+      : p.ings;
+    const order = (r) => { const k = GROUPS[r.ing.group] ? r.ing.group : "none"; return GROUP_ORDER.indexOf(k); };
+    return rows.map((r, i) => ({ r, i })).sort((a, b) => (order(a.r) - order(b.r)) || (a.i - b.i)).map(x => x.r);
+  };
+  const qtyText = (r) => {
+    const raw = _normTxt(r.ing.qty);
+    if (r.qty !== null && r.qty > 0) return `${fmtQty(r.qty)} ${r.ing.unit || "g"}`;
+    return (raw && !isFinite(parseFloat(raw))) ? raw : "—";
+  };
+  const assemblyNotes = notesOf(c);
+
+  return (
+    <div style={{ position: "relative", zIndex: 1 }}>
+      {/* 抬头:店名 + 产品名 / 右侧做几个 */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "2px solid #000", paddingBottom: "12px" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "11pt", letterSpacing: "0.26em" }}>{brandName}</div>
+          <div style={{ fontSize: "24pt", fontWeight: 700, marginTop: "8px", lineHeight: 1.1 }}>{nameOf(c)}</div>
+          {c.nameFr && <div style={{ fontSize: "13pt", marginTop: "4px" }}>{c.nameFr}</div>}
+        </div>
+        <div style={{ textAlign: "right", fontSize: "11pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 0 }}>
+          <div style={{ fontSize: "20pt", fontWeight: 700 }}>{tx("做", "仕込み")} {fmtQty(batch.N)} {W.unit}</div>
+          <div>{tx(`用量按 ${fmtQty(batch.serves)} ${W.unit} 写 × ${fmtQty(batch.factor)}`, `基準 ${fmtQty(batch.serves)} × ${fmtQty(batch.factor)}`)}</div>
+          <div>{new Date().toLocaleDateString("zh-CN")}</div>
+        </div>
+      </div>
+
+      {/* 总览:每部分要多少、备货还是现做 */}
+      <table style={{ marginTop: "14px" }}>
+        <thead>
+          <tr>
+            <th className="p-th" style={{ width: "32px" }}>#</th>
+            <th className="p-th">{tx("部分", "パーツ")}</th>
+            <th className="p-th" style={{ width: "90px" }}>{tx("方式", "区分")}</th>
+            <th className="p-th" style={{ textAlign: "right", width: "110px" }}>{tx("需要", "必要量")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {batch.parts.map(p => (
+            <tr key={p.idx}>
+              <td className="p-td" style={{ padding: "5px 0", fontWeight: 700 }}>{String(p.idx + 1).padStart(2, "0")}</td>
+              <td className="p-td" style={{ padding: "5px 0" }}>
+                <span style={{ fontWeight: 700 }}>{p.layer.customName || nameOf(p.layer)}</span>
+                {p.layer.customName && nameOf(p.layer) && nameOf(p.layer) !== p.layer.customName && <span style={{ fontSize: "9.5pt", marginLeft: "6px" }}>{nameOf(p.layer)}</span>}
+              </td>
+              <td className="p-td" style={{ padding: "5px 0" }}>{p.stock ? tx("备货", "作り置き") : tx("现做", "当日")}</td>
+              <td className="p-td" style={{ padding: "5px 0", textAlign: "right", fontWeight: 700, fontSize: "12pt", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : (p.noUsed ? "?" : tx(`整批 ×${fmtQty(batch.factor)}`, `×${fmtQty(batch.factor)}`))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* 各部分 */}
+      {batch.parts.map(p => {
+        const l = p.layer;
+        const title = l.customName || nameOf(l);
+        const compName = nameOf(l);
+        const note = usedAmountNote(l.usedAmount);
+        const partNotes = sections.notes ? notesOf(l) : "";
+        const rows = p.stock ? [] : rowsOf(p);
+        let lastGroup = null;
+        return (
+          <div key={p.idx} style={{ marginTop: "20px" }}>
+            <div className="p-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "1.5px solid #000", paddingBottom: "4px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>
+              <div style={{ minWidth: 0 }}>
+                <span style={{ fontSize: "11pt", fontWeight: 700, marginRight: "6px" }}>{String(p.idx + 1).padStart(2, "0")}</span>
+                <span style={{ fontSize: "15pt", fontWeight: 700 }}>{title}</span>
+                {l.customName && compName && compName !== title && <span style={{ fontSize: "10pt", marginLeft: "8px" }}>{compName}</span>}
+                <span style={{ fontSize: "9pt", marginLeft: "8px", border: "1px solid #000", padding: "0 4px" }}>{p.stock ? tx("备货", "作り置き") : tx("现做", "当日")}</span>
+              </div>
+              <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : ""}</div>
+            </div>
+            {note && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{tx("用量原文", "原文")}：{note}</div>}
+            {p.noUsed && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx("没填用量：下面是整批配方，没按个数算", "使用量未入力：全量レシピ")}</div>}
+            {p.stock ? (
+              <div style={{ fontSize: "12pt", marginTop: "6px" }}>
+                {tx("从库存取", "ストックから")} <strong style={{ fontSize: "14pt" }}>{p.needed !== null ? `${fmtQty(p.needed)} g` : ""}</strong>
+              </div>
+            ) : (
+              <>
+                {rows.length > 0 && (
+                  <table style={{ marginTop: "4px" }}>
+                    <tbody>
+                      {rows.map((r, i) => {
+                        const gk = GROUPS[r.ing.group] && r.ing.group !== "none" ? r.ing.group : null;
+                        const first = gk && gk !== lastGroup;
+                        lastGroup = gk;
+                        const zhN = r.ing.nameZh || r.ing.nameJa || "";
+                        const jaN = r.ing.nameJa || "";
+                        return (
+                          <tr key={i}>
+                            <td className="p-td p-bowl" style={{ padding: "6px 0", fontSize: "12pt" }}>{first ? marks[gk] : ""}</td>
+                            <td className="p-td" style={{ padding: "6px 0" }}>
+                              <div className="p-name" style={{ fontSize: "12pt" }}>{L === "ja" ? (jaN || zhN) : zhN}</div>
+                              {lang === "both" && jaN && jaN !== zhN && <div className="p-sub" style={{ fontSize: "9.5pt" }}>{jaN}</div>}
+                              {r.ing.note && <div className="p-note" style={{ fontSize: "9pt" }}>{r.ing.note}</div>}
+                            </td>
+                            <td className="p-td p-qty" style={{ padding: "6px 0", fontSize: "14pt" }}>{qtyText(r)}</td>
+                            <td className="p-td" style={{ padding: "6px 0 6px 14px", width: "40px" }}><span className="p-check" /></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+                {sections.steps && stepsBlock(l)}
+              </>
+            )}
+            {partNotes && (
+              <div style={{ marginTop: "6px", border: "1px solid #000", padding: "6px 10px", fontSize: "9.5pt", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{partNotes}</div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* 整体组装 */}
+      {sections.steps && pickSteps(c, L).length > 0 && (
+        <div style={{ marginTop: "24px", borderTop: "2px solid #000", paddingTop: "10px" }}>
+          <div style={{ fontSize: "12pt", fontWeight: 700, letterSpacing: "0.1em" }}>{tx("整体组装", "組立")}</div>
+          {stepsBlock(c)}
+        </div>
+      )}
+      {sections.notes && assemblyNotes && (
+        <div style={{ marginTop: "14px", border: "1px solid #000", padding: "10px 14px", fontSize: "10pt", lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: "4px" }}>{tx("整体备注", "メモ")}</div>
+          <div style={{ whiteSpace: "pre-wrap" }}>{assemblyNotes}</div>
+        </div>
+      )}
+
+      {/* 底部 */}
+      <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
+        <div>{brandName} · {brandSubtitle} · {new Date().toLocaleDateString("zh-CN")}</div>
+        <div>{tx("盆序 ① → ⑤ 依次投料", "ボウル ① → ⑤ の順に投入")}</div>
       </div>
     </div>
   );
@@ -7215,7 +7604,7 @@ const creationWords = (structure, lang = "zh") => {
     partCount: (n) => stack ? `${n} ${zh ? "层" : "層"}` : `${n} ${zh ? "个部分" : "パーツ"}`,
     unit: stack ? "台" : (zh ? "个" : "個"),
     sectionTitle: stack ? (zh ? "🎂 层结构（自上而下）" : "🎂 層構成（上から下へ）") : (zh ? "🧩 组成部分" : "🧩 構成パーツ"),
-    sectionHint: stack ? "每层可设自定义名称、实际用量" : "每部分可设自定义名称、实际用量",
+    sectionHint: stack ? "每层可设自定义名称；用量按「制作台数」这一批写" : "每部分可设自定义名称；用量按「制作个数」这一批写",
     emptyDetail: stack ? "（尚未添加层）" : "（尚未添加组成部分）",
     emptyEdit: stack ? "还没有层。从组件库挑一个开始搭。" : "还没有组成部分。从组件库挑一个开始。",
     newBlank: stack ? (zh ? "+ 新建空白层" : "+ 空白層追加") : (zh ? "+ 新建空白部分" : "+ 空白パーツ追加"),
@@ -7225,16 +7614,49 @@ const creationWords = (structure, lang = "zh") => {
     servesLabel: stack ? "制作台数" : "制作个数",
     portionsLabel: stack ? "每台切几份" : "每个分几份",
     perUnitCost: stack ? "单台成本" : "单个成本",
-    tipFillUsed: `💡 提示：点击下方每${stack ? "层" : "部分"}「编辑」填写「本产品用量」，才能精确计算成本`,
+    tipFillUsed: `💡 提示：下方每${stack ? "层" : "部分"}填上用量（做「${stack ? "制作台数" : "制作个数"}」那么多时一共要多少克），才能算出成本和整体配方`,
     deleteConfirm: stack ? "删除这一层吗？" : "删除这一部分吗？",
     editTitle: stack ? "编辑层：" : "编辑部分：",
-    fromLib: `💡 这一${stack ? "层" : "部分"}来自组件库。你可以自由调整不影响组件库。如果调整后想同步回组件库，保存前点「↻ 同步回组件库」。`,
+    // v17.8: 部分编辑页顶上的说明,按这一部分和组件库的关系(layerLinkState)给
+    linkNote: (state) => {
+      const p = stack ? "层" : "部分";
+      if (state === "local") return `💡 这一${p}是本产品专用：改了只影响这个产品。想让组件库（和跟组件库走的其他产品）也这么改，点「↻ 同步回组件库」，之后这一${p}又跟组件库走。`;
+      if (state === "differs") return `💡 这一${p}和组件库现在的内容不一样（老数据）。在这里保存 = 本产品专用；点「↻ 同步回组件库」= 用这里的内容更新组件库。`;
+      if (state === "orphan") return `💡 原组件已从组件库删除，这里是当时的内容，只属于这个产品。`;
+      return `💡 这一${p}跟组件库走：组件库一改，这里跟着变。在这里改了内容、没点「↻ 同步回组件库」，保存后就变成「本产品专用」，不再跟组件库。想让组件库和其他产品一起改，点「↻ 同步回组件库」。`;
+    },
     saveBtn: stack ? (zh ? "保存层" : "レイヤー保存") : (zh ? "保存这部分" : "パーツ保存"),
   };
 };
 
+// v17.8: 部分和组件库的关系(layerLinkState)在页面上的标签。手搭的(manual)不打标签
+const LAYER_LINK_TAGS = {
+  follow:  { zh: "⟲ 跟组件库",   ja: "⟲ 部品庫と連動", color: T.success,       hint: "组件库一改，这一部分跟着变" },
+  local:   { zh: "本产品专用",    ja: "この製品専用",    color: T.info,          hint: "在这个产品里单独改过，不再跟组件库" },
+  differs: { zh: "和组件库不一样", ja: "部品庫と相違",    color: T.danger,        hint: "老数据：和组件库现在的内容不一样，在详情页选用哪个" },
+  orphan:  { zh: "组件已删除",    ja: "部品は削除済み",  color: T.textTertiary,  hint: "原组件已从组件库删除，这里保留当时的内容" },
+};
+// 老数据「和组件库不一样」时说清差在哪,按 layerContentKey 的顺序
+const LAYER_DIFF_FIELDS = [
+  ["名字", "名前"], ["名字", "名前"], ["名字", "名前"], ["分类", "分類"], ["产出量", "出来高"], ["单位", "単位"],
+  ["原料", "材料"], ["步骤", "工程"], ["步骤", "工程"], ["备注", "メモ"], ["备注", "メモ"],
+];
+const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
+  if (!l || !comp) return [];
+  const a = JSON.parse(layerContentKey(l, matIds)), b = JSON.parse(layerContentKey(comp, matIds));
+  const out = [];
+  LAYER_DIFF_FIELDS.forEach((f, i) => {
+    const label = lang === "zh" ? f[0] : f[1];
+    if (JSON.stringify(a[i]) !== JSON.stringify(b[i]) && !out.includes(label)) out.push(label);
+  });
+  return out;
+};
+
 // ─── 组合产品 View ───────────────────────────────────────────────
-function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge }) {
+function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
+  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList }) {
+  // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
+  const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
   if (editTarget !== null) {
     return (
       <CreationEditForm
@@ -7245,6 +7667,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         brands={brands}
         materials={materials}
         confirmDialog={confirmDialog}
+        showToast={showToast}
         onSave={(c) => {
           setCreations(prev => {
             const found = prev.find(x => x.id === c.id);
@@ -7286,7 +7709,11 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           brands={brands}
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(cr); setViewId(null); }}
-          onBack={() => setViewId(null)}
+          onBack={() => { if (returnToList && onReturnToList) onReturnToList(); else setViewId(null); }}
+          backLabel={returnToList ? (lang === "zh" ? "← 返回配方一览" : "← レシピ一覧へ") : null}
+          onUpdateCreation={updateCreation}
+          showToast={showToast}
+          onPrint={onPrintCreation}
         />
       );
     }
@@ -7329,12 +7756,13 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           const costPerPortion = totalCost / servesNum / portionsNum;
           const marginPct = priceNum > 0 && costPerPortion > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
 
-          // 状态映射
+          // 状态映射(key 和编辑页的下拉框一致:季節限定是日文汉字「節」;以前写成「节」、又漏了検討中,这两个状态都被显示成試作)
           const statusMap = {
             "試作":     { emoji: "🧪", label: lang === "zh" ? "试作" : "試作", color: "#A05A1E", bg: "#FBF0E0" },
             "定番":     { emoji: "⭐", label: lang === "zh" ? "定番" : "定番", color: "#2D6A4F", bg: "#E8F4EA" },
-            "季节限定": { emoji: "🌸", label: lang === "zh" ? "季限" : "季限", color: "#6B4568", bg: "#EDE4F0" },
+            "季節限定": { emoji: "🌸", label: lang === "zh" ? "季限" : "季限", color: "#6B4568", bg: "#EDE4F0" },
             "下架":     { emoji: "⏸",  label: lang === "zh" ? "下架" : "休止", color: "#7A5F4A", bg: T.bgMuted },
+            "検討中":   { emoji: "💭", label: lang === "zh" ? "考虑中" : "検討中", color: "#5B4A8C", bg: "#ECE8F4" },
           };
           const statusInfo = statusMap[c.status] || statusMap["試作"];
           const avatarLetter = (c.nameFr || name || "?").charAt(0).toUpperCase();
@@ -7342,7 +7770,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           return (
             <div
               key={c.id}
-              onClick={() => setViewId(c.id)}
+              onClick={() => { if (onOpenFromList) onOpenFromList(); setViewId(c.id); }}
               style={{
                 background: T.bgCard,
                 border: `0.5px solid ${T.border}`,
@@ -7470,13 +7898,240 @@ function LayerRecipeSteps({ steps, cat, lang }) {
   );
 }
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge }) {
+// ─── v17.8 组合产品「整体配方」(详情页「📘 配方」)────────────────────────────
+// 做 N 个:每部分需要多少;现做的配料按个数缩好(照组件的 ①②③ 盆分组)+ 做法;组件标了「备货」的只给「从库存取」,
+// 整批配方点开看;最后整体组装 + 这一批的成本。算法全在 creationBatch,打印用同一份结果。
+// rows: [{ ing, qty }],qty 是要显示的数(已缩放或原量),null / 0 时显示原文(「适量」之类)或「—」
+function SheetIngRows({ rows, lang }) {
+  const grouped = {};
+  GROUP_ORDER.forEach(g => { grouped[g] = []; });
+  rows.forEach(r => { grouped[GROUPS[r.ing.group] ? r.ing.group : "none"].push(r); });
+  return GROUP_ORDER.map(gk => {
+    const arr = grouped[gk];
+    if (!arr.length) return null;
+    const g = GROUPS[gk];
+    return (
+      <div key={gk}>
+        {gk !== "none" && (
+          <div style={{ padding: "6px 0 4px", fontSize: 11 }}>
+            <span style={{ display: "inline-block", padding: "1px 8px", borderRadius: T.radiusPill, border: `1px solid ${g.labelBorder}`, color: g.labelColor, fontWeight: 500 }}>{lang === "zh" ? g.zh : g.ja}</span>
+          </div>
+        )}
+        {arr.map((r, i) => {
+          const n = pickLang(r.ing, "name", lang);
+          const sub = rawLang(r.ing, "name", lang);
+          const raw = _normTxt(r.ing.qty);
+          const q = (r.qty !== null && r.qty > 0) ? fmtQty(r.qty) : ((raw && !isFinite(parseFloat(raw))) ? raw : "—");
+          return (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 88px 36px", gap: 6, padding: "6px 0", borderBottom: `0.5px solid ${T.lineFaint}`, alignItems: "baseline", borderLeft: gk !== "none" ? `3px solid ${g.border}` : "3px solid transparent", paddingLeft: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{n || sub}</span>
+                {sub && sub !== n && <span style={{ fontSize: 11, color: T.textTertiary, marginLeft: 6 }}>{sub}</span>}
+                {r.ing.note && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 2 }}>{r.ing.note}</div>}
+              </div>
+              <div style={{ textAlign: "right", fontSize: 15, fontWeight: 500, fontFamily: T.fontSerif, ...T.num }}>{q}</div>
+              <div style={{ fontSize: 12, color: T.textSecondary }}>{q === "—" || !isFinite(parseFloat(q.replace(/,/g, ""))) ? "" : (r.ing.unit || "g")}</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  });
+}
+
+function SheetSteps({ steps, lang }) {
+  if (!steps || steps.length === 0) return null;
+  return (
+    <ol style={{ margin: "8px 0 0", padding: 0, listStyle: "none" }}>
+      {steps.map((s, i) => (
+        <li key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0", fontSize: 12.5, lineHeight: 1.65 }}>
+          <span style={{ minWidth: 20, fontFamily: T.fontSerif, color: T.textTertiary, ...T.num }}>{String(i + 1).padStart(2, "0")}</span>
+          <span style={{ whiteSpace: "pre-wrap" }}>{s}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function CreationRecipeSheet({ c, lang, components = [], materials = [], brands = [], onPrint }) {
+  const zh = lang === "zh";
+  const W = creationWords(creationStructureOf(c), lang);
+  const serves = parseFloat(c.serves) > 0 ? parseFloat(c.serves) : 1;
+  const [nText, setNText] = useState(String(serves));
+  const [open, setOpen] = useState({});   // `${idx}:batch` / `${idx}:notes` → 展开
+  const toggle = (k) => setOpen(prev => ({ ...prev, [k]: !prev[k] }));
+  const n = parseFloat(nText) > 0 ? parseFloat(nText) : serves;
+  const batch = creationBatch(c, n, components, materials, brands);
+  const unit = W.unit;
+  const noUsedCount = batch.parts.filter(p => p.noUsed).length;
+  const missingNames = [...new Set(batch.parts.flatMap(p => p.missingIngs.map(i => pickLang(i, "name", lang))).filter(Boolean))];
+  const assembly = pickSteps(c, lang);
+  const overallNotes = pickLang(c, "notes", lang);
+  const box = { background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" };
+  const unscaledRows = (l) => (l.ingredients || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => ({ ing: i, qty: isFinite(parseFloat(i.qty)) ? parseFloat(i.qty) : null }));
+
+  return (
+    <div>
+      {/* 做几个 + 打印 */}
+      <div style={{ ...box, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
+          <span>{zh ? "做" : "仕込み"}</span>
+          <input type="number" min="1" step="1" inputMode="numeric" value={nText}
+            onChange={e => setNText(e.target.value)}
+            style={{ width: 72, padding: "6px 8px", fontSize: 16, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontFamily: T.fontSerif, textAlign: "right", ...T.num }} />
+          <span>{unit}</span>
+        </label>
+        <span style={{ fontSize: 12, color: T.textTertiary }}>
+          {zh ? `用量按「${W.servesLabel} ${serves}」这一批写，现在是它的 ${fmtQty(batch.factor)} 倍` : `使用量は仕込み数 ${serves} 基準、現在 ${fmtQty(batch.factor)} 倍`}
+        </span>
+        <div style={{ marginLeft: "auto" }}>
+          {onPrint && <Btn size="sm" onClick={() => onPrint({ creation: c, batch })}>{zh ? "🖨 打印" : "🖨 印刷"}</Btn>}
+        </div>
+      </div>
+
+      {/* 各部分 */}
+      {batch.parts.length === 0 && <div style={{ ...box, fontSize: 13, color: T.textTertiary }}>{W.emptyDetail}</div>}
+      {batch.parts.map(p => {
+        const l = p.layer;
+        const cat = getCompCat(l.componentCategory);
+        const compName = pickLang(l, "name", lang);
+        const title = l.customName || compName || (zh ? "未命名" : "無題");
+        const note = usedAmountNote(l.usedAmount);
+        const steps = pickSteps(l, lang);
+        const partNotes = pickLang(l, "notes", lang) || l.notes;
+        const showBatch = !!open[`${p.idx}:batch`];
+        return (
+          <div key={p.idx} style={{ ...box, borderLeft: `4px solid ${cat.color}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: T.fontSerif, fontSize: 12, color: cat.color, ...T.num }}>{String(p.idx + 1).padStart(2, "0")}</span>
+                  <span style={{ fontSize: 15, fontWeight: 500 }}>{title}</span>
+                  <span style={{ fontSize: 10, padding: "0 6px", border: `0.5px solid ${p.stock ? T.warning : T.border}`, color: p.stock ? T.warning : T.textTertiary, borderRadius: T.radiusPill }}>
+                    {p.stock ? (zh ? "备货" : "作り置き") : (zh ? "现做" : "当日仕込み")}
+                  </span>
+                </div>
+                {l.customName && compName && compName !== l.customName && (
+                  <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 2, marginLeft: 26 }}>{compName}</div>
+                )}
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                {p.needed !== null ? (
+                  <div style={{ fontFamily: T.fontSerif, fontSize: 20, fontWeight: 500, ...T.num }}>
+                    {fmtQty(p.needed)}<span style={{ fontSize: 12, marginLeft: 3, color: T.textSecondary }}>g</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: T.textTertiary }}>{p.yieldNum > 0 ? "" : (zh ? `整批 × ${fmtQty(batch.factor)}` : `全量 × ${fmtQty(batch.factor)}`)}</div>
+                )}
+              </div>
+            </div>
+            {note && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{zh ? "用量原文：" : "原文："}{note}</div>}
+
+            {p.noUsed && (
+              <div style={{ fontSize: 12, color: T.danger, marginTop: 8 }}>
+                ⚠ {zh ? "这一部分没填用量（或读不出数字），下面是组件的整批配方，没按个数算。去「编辑」里填上用量。" : "使用量が未入力のため、下は全量レシピです。"}
+              </div>
+            )}
+            {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && (
+              <div style={{ fontSize: 12, color: T.warning, marginTop: 8 }}>
+                ⚠ {zh ? `用量只认开头的数字，按 ${fmtQty(p.used)} g 一批算。不对的话去「编辑」改成纯数字。` : `先頭の数字 ${fmtQty(p.used)} g で計算しています。`}
+              </div>
+            )}
+
+            {p.stock ? (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 13 }}>
+                  {p.needed !== null ? (zh ? `从库存取 ${fmtQty(p.needed)} g` : `ストックから ${fmtQty(p.needed)} g`) : (zh ? "从库存取" : "ストックから")}
+                </div>
+                <button type="button" onClick={() => toggle(`${p.idx}:batch`)}
+                  style={{ marginTop: 6, background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: T.textSecondary, fontFamily: T.fontSans }}>
+                  {showBatch ? "▼" : "▶"} {zh ? `整批配方${p.yieldNum > 0 ? `（组件整批 ${fmtQty(p.yieldNum)} ${l.unit || "g"}）` : ""}` : "全量レシピ"}
+                </button>
+                {showBatch && (
+                  <div style={{ marginTop: 6 }}>
+                    <SheetIngRows rows={unscaledRows(l)} lang={lang} />
+                    <SheetSteps steps={steps} lang={lang} />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                <SheetIngRows rows={p.noUsed ? unscaledRows(l) : p.ings} lang={lang} />
+                <SheetSteps steps={steps} lang={lang} />
+              </div>
+            )}
+
+            {partNotes && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" onClick={() => toggle(`${p.idx}:notes`)}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: T.textTertiary, fontFamily: T.fontSans }}>
+                  {open[`${p.idx}:notes`] ? "▼" : "▶"} {zh ? "备注" : "メモ"}
+                </button>
+                {open[`${p.idx}:notes`] && <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.7, whiteSpace: "pre-wrap", marginTop: 4 }}>{partNotes}</div>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* 整体组装 */}
+      {assembly.length > 0 && (
+        <div style={box}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{zh ? `整体组装（${assembly.length} 步）` : `組立（${assembly.length} 工程）`}</div>
+          <SheetSteps steps={assembly} lang={lang} />
+        </div>
+      )}
+      {overallNotes && (
+        <div style={box}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{zh ? "整体备注" : "メモ"}</div>
+          <div style={{ fontSize: 12.5, lineHeight: 1.7, color: T.textSecondary, whiteSpace: "pre-wrap", marginTop: 6 }}>{overallNotes}</div>
+        </div>
+      )}
+
+      {/* 这一批的成本 */}
+      <div style={{ ...box, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
+        <span style={{ fontSize: 13 }}>{zh ? `这一批（${fmtQty(batch.N)} ${unit}）原料成本` : `原価（${fmtQty(batch.N)} ${unit}）`}
+          <strong style={{ fontFamily: T.fontSerif, fontSize: 17, marginLeft: 8, ...T.num }}>{fmtCost(batch.cost) || "¥0"}</strong></span>
+        <span style={{ fontSize: 12, color: T.textSecondary }}>{zh ? `单个 ${fmtCost(batch.cost / batch.N) || "¥0"}` : `1 ${unit} ${fmtCost(batch.cost / batch.N) || "¥0"}`}</span>
+        {batch.incomplete && (
+          <span style={{ fontSize: 11, color: T.warning, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusPill, padding: "1px 8px" }}
+            title={[missingNames.length ? `${zh ? "没价" : "価格なし"}：${missingNames.join("、")}` : "", noUsedCount ? (zh ? `${noUsedCount} 个部分没填用量` : `使用量未入力 ${noUsedCount}`) : ""].filter(Boolean).join("\n")}>
+            {zh ? "算不全" : "未確定"}{missingNames.length ? (zh ? `：${missingNames.length} 项原料没价` : `：価格なし ${missingNames.length}`) : ""}{noUsedCount ? (zh ? `，${noUsedCount} 个部分没填用量` : `、未入力 ${noUsedCount}`) : ""}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
   const name = pickLang(c, "name", lang);
   const description = c.description || "";
   const layers = c.layers || [];
   const W = creationWords(creationStructureOf(c), lang);  // 叠层 / 拼装的叫法
+
+  // v17.8: 每部分和组件库的关系 + 老数据「和组件库不一样」的处理按钮(先做 + 给撤销)
+  const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
+  const linkStates = layers.map(l => layerLinkState(l, components, matIds));
+  const differsIdx = linkStates.map((s, i) => s === "differs" ? i : -1).filter(i => i >= 0);
+  const layerTitle = (l) => l.customName || pickLang(l, "name", lang) || "";
+  const patchLayers = (patches, msg) => {
+    if (!onUpdateCreation) return;
+    const before = {};
+    Object.keys(patches).forEach(i => { before[i] = layers[i]; });
+    onUpdateCreation(c.id, cr => ({ ...cr, layers: (cr.layers || []).map((l, i) => patches[i] ? { ...l, ...patches[i] } : l) }));
+    if (showToast) showToast(msg, { undo: () => onUpdateCreation(c.id, cr => ({ ...cr, layers: (cr.layers || []).map((l, i) => before[i] !== undefined ? before[i] : l) })) });
+  };
+  const applyLib = (idxs) => {
+    const patches = {};
+    idxs.forEach(i => { patches[i] = { follow: true, localVariant: false }; });
+    patchLayers(patches, idxs.length === 1
+      ? `「${layerTitle(layers[idxs[0]])}」改成跟组件库走，内容换成组件库现在的`
+      : `${idxs.length} 个${W.isStack ? "层" : "部分"}改成跟组件库走，内容换成组件库现在的`);
+  };
+  const keepLocal = (i) => patchLayers({ [i]: { follow: false, localVariant: true } }, `「${layerTitle(layers[i])}」标成本产品专用，不再跟组件库`);
 
   // 🧮 单层实际成本:按这一层的配料实时算,不读存下来的 totalCost(没有币种,见 getIngsLiveCost)
   const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
@@ -7510,7 +8165,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={onBack}>{backLabel || (lang === "zh" ? "← 返回" : "← 戻る")}</Btn>
         </div>
       </div>
 
@@ -7677,10 +8332,29 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
         </div>
       )}
 
+      {/* 📘 配方模式 = 整体配方(v17.8):按个数算、能打印,组装步骤和整体备注也在里面 */}
+      {viewMode === "recipe" && (
+        <CreationRecipeSheet key={c.id} c={c} lang={lang} components={components} materials={materials} brands={brands} onPrint={onPrint} />
+      )}
+
       {/* 🎂 层结构（带示意图） */}
+      {viewMode !== "recipe" && (
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 12 }}>{W.sectionTitle}</div>
         {layers.length === 0 && <div style={{ fontSize: 13, color: "#999999" }}>{W.emptyDetail}</div>}
+        {/* v17.8: 老数据里和组件库现在的内容不一样的部分,先照旧显示产品里存的版本,点了才换 */}
+        {viewMode === "detail" && differsIdx.length > 0 && (
+          <div style={{ border: `0.5px solid ${T.danger}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200 }}>
+              {lang === "zh"
+                ? `${differsIdx.length} 个${W.isStack ? "层" : "部分"}和组件库现在的内容不一样（老数据）。现在显示的还是这个产品里存的版本，在下面逐个选用哪个。`
+                : `${differsIdx.length} 件が部品庫の現在の内容と異なります（旧データ）。下で個別に選択してください。`}
+            </span>
+            {differsIdx.length >= 2 && onUpdateCreation && (
+              <Btn size="sm" onClick={() => applyLib(differsIdx)}>{lang === "zh" ? "全部用组件库的" : "すべて部品庫に合わせる"}</Btn>
+            )}
+          </div>
+        )}
 
         {layers.length > 0 && (
           <div style={{ display: "grid", gridTemplateColumns: W.isStack ? "60px 1fr" : "1fr", gap: 12 }}>
@@ -7736,12 +8410,17 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
                         {viewMode === "detail" && (
                           <>
                             {usedAmount > 0 ? (
-                              <span>📏 {W.usedLabel} <strong>{usedAmount}g</strong></span>
+                              <span>📏 {W.usedLabel} <strong>{usedAmountNote(l.usedAmount) ? l.usedAmount : `${usedAmount}g`}</strong>{usedAmountAmbiguous(l.usedAmount) && <span style={{ color: "#CA8A04" }}>（按 {fmtQty(usedAmount)} g 算）</span>}</span>
                             ) : (
-                              <span style={{ color: "#CA8A04" }}>⚠ 未填用量</span>
+                              <span style={{ color: "#CA8A04" }}>⚠ {usedAmountNote(l.usedAmount) ? `用量读不出数字（${l.usedAmount}）` : "未填用量"}</span>
                             )}
                             <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
+                            {LAYER_LINK_TAGS[linkStates[i]] && linkStates[i] !== "differs" && (
+                              <span title={LAYER_LINK_TAGS[linkStates[i]].hint} style={{ color: LAYER_LINK_TAGS[linkStates[i]].color }}>
+                                {lang === "zh" ? LAYER_LINK_TAGS[linkStates[i]].zh : LAYER_LINK_TAGS[linkStates[i]].ja}
+                              </span>
+                            )}
                           </>
                         )}
                         {viewMode === "recipe" && (
@@ -7752,6 +8431,23 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
                         )}
                       </div>
                     </div>
+
+                    {/* v17.8: 和组件库不一样(老数据)→ 两个按钮;本产品专用 → 可改回跟组件库。都是先做 + 给撤销 */}
+                    {viewMode === "detail" && onUpdateCreation && linkStates[i] === "differs" && (
+                      <div style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.danger}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.danger }}>
+                          {lang === "zh" ? "和组件库现在的内容不一样" : "部品庫と相違"}
+                          {(() => { const comp = components.find(x => x && x.id === l.sourceComponentId); const d = layerDiffLabels(l, comp, matIds, lang); return d.length ? (lang === "zh" ? `（差在：${d.join("、")}）` : `（${d.join("・")}）`) : ""; })()}
+                        </span>
+                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "部品庫に合わせる"}</Btn>
+                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocal(i); }}>{lang === "zh" ? "保留（本产品专用）" : "この製品専用で残す"}</Btn>
+                      </div>
+                    )}
+                    {viewMode === "detail" && onUpdateCreation && linkStates[i] === "local" && isExpanded && (
+                      <div style={{ marginTop: 8, marginLeft: 22 }}>
+                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ 部品庫に戻す"}</Btn>
+                      </div>
+                    )}
 
                     {/* 展开详情（菜单模式不显示详情区） */}
                     {viewMode !== "menu" && isExpanded && (
@@ -7812,9 +8508,10 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
           </div>
         )}
       </div>
+      )}
 
-      {/* 🎂 整体组装工艺 (creation.stepsZh / stepsJa) — 多层组装的全局工艺步骤 */}
-      {viewMode !== "menu" && (() => {
+      {/* 🎂 整体组装工艺 (creation.stepsZh / stepsJa) — 多层组装的全局工艺步骤(配方模式在整体配方里) */}
+      {viewMode === "detail" && (() => {
         const overallSteps = pickSteps(c, lang);
         if (overallSteps.length === 0) return null;
         return (
@@ -7834,8 +8531,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
         );
       })()}
 
-      {/* 📝 整体备注 (creation.notesZh / notesJa) */}
-      {viewMode !== "menu" && (() => {
+      {/* 📝 整体备注 (creation.notesZh / notesJa)(配方模式在整体配方里) */}
+      {viewMode === "detail" && (() => {
         const overallNotes = pickLang(c, "notes", lang);
         if (!overallNotes) return null;
         return (
@@ -7902,8 +8599,9 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, knowledge = [], rec
 }
 
 // ─── 组合产品编辑 Form ───────────────────────────────────────────
-function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], onSave, onDelete, onBack, onUpdateComponent, confirmDialog, knowledge = [], lang = "zh" }) {
+function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh" }) {
   const isNew = !creation;
+  const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
   const [errorMsg, setErrorMsg] = useState("");
   const empty = {
     nameZh: "", nameJa: "", nameFr: "",
@@ -7927,6 +8625,11 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [showComponentPicker, setShowComponentPicker] = useState(false);
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
+  // v17.8: 编辑期间组件库变了(比如刚「↻ 同步回组件库」),表单里跟组件库走的部分也换成最新内容,
+  // 不然打开同组件的另一部分看到的是旧的,原样保存会被当成「改过」而变成本产品专用
+  useEffect(() => {
+    setForm(prev => syncFollowingLayers([prev], components, matIds)[0]);
+  }, [components, matIds]);
   const structure = creationStructureOf(form);
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法,切换只换文字和示意图,不动 layers
 
@@ -7948,25 +8651,15 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const fTasting = (key) => (e) => setForm(prev => ({ ...prev, tasting: { ...prev.tasting, [key]: e.target.value } }));
 
-  // 添加组件作为一层
+  // 添加组件作为一层 —— 内容字段和「跟组件库同步」共用 layerContentFromComponent,默认跟组件库走
   const addLayerFromComponent = (comp) => {
     const newLayer = {
       _lid: Date.now() + Math.random(),
       sourceComponentId: comp.id,
       customName: "", // 自定义层名（例：①顶层饼底）
-      usedAmount: "", // 本蛋糕实际用量
-      nameZh: comp.nameZh,
-      nameJa: comp.nameJa,
-      nameFr: comp.nameFr,
-      componentCategory: comp.componentCategory,
-      yield: comp.yield, // 组件原产出量（作为参考）
-      unit: comp.unit,
-      ingredients: JSON.parse(JSON.stringify(comp.ingredients || [])),
-      stepsZh: [...(comp.stepsZh || comp.steps || [])],
-      stepsJa: [...(comp.stepsJa || comp.steps || [])],
-      notesZh: comp.notesZh || "",
-      notesJa: comp.notesJa || "",
-      totalCost: comp.totalCost || 0,
+      usedAmount: "", // 这一批(制作个数)的用量
+      ...layerContentFromComponent(comp),
+      follow: true,
     };
     setForm(prev => ({ ...prev, layers: [...(prev.layers || []), newLayer] }));
     setShowComponentPicker(false);
@@ -8007,10 +8700,29 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     setForm(prev => ({ ...prev, layers: newLayers }));
   };
 
-  const updateLayer = (idx, updatedLayer) => {
+  // 保存部分时定标记:内容和组件库一样 → 跟组件库;不一样 → 本产品专用。
+  // opts.synced = 刚点了「↻ 同步回组件库」(组件库这一刻还没刷新到这里,不能拿来比),直接算跟组件库
+  const updateLayer = (idx, updatedLayer, opts = {}) => {
+    let next = updatedLayer;
+    if (updatedLayer && updatedLayer.sourceComponentId) {
+      const comp = components.find(c => c && c.id === updatedLayer.sourceComponentId);
+      if (opts.synced) {
+        next = { ...updatedLayer, follow: true, localVariant: false };
+      } else if (comp) {
+        if (sameLayerContent(updatedLayer, comp, matIds)) {
+          next = { ...updatedLayer, follow: true, localVariant: false };
+        } else {
+          next = { ...updatedLayer, follow: false, localVariant: true };
+          if (layerLinkState(form.layers[idx], components, matIds) === "follow" && showToast) {
+            const nm = updatedLayer.customName || updatedLayer.nameZh || updatedLayer.nameJa || "";
+            showToast(`「${nm}」改成了本产品专用，不再跟组件库。想让组件库也改，编辑这一部分时点「↻ 同步回组件库」。`, { ms: 6000 });
+          }
+        }
+      }
+    }
     setForm(prev => ({
       ...prev,
-      layers: prev.layers.map((l, i) => i === idx ? updatedLayer : l)
+      layers: prev.layers.map((l, i) => i === idx ? next : l)
     }));
     setEditingLayerIdx(null);
   };
@@ -8043,9 +8755,10 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         onUpdateCats={onUpdateCats}
         brands={brands}
         materials={materials}
-        onSave={(updated) => updateLayer(editingLayerIdx, updated)}
+        onSave={(updated, opts) => updateLayer(editingLayerIdx, updated, opts)}
         onBack={() => setEditingLayerIdx(null)}
         onUpdateComponent={onUpdateComponent}
+        linkState={layerLinkState(layer, components, matIds)}
         lang={lang}
       />
     );
@@ -8277,6 +8990,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                 const actualCost = calcLayerActualCost(layer);
                 const componentYield = parseFloat(layer.yield) || 0;
                 const usedAmount = parseFloat(layer.usedAmount) || 0;
+                const usedNote = usedAmountNote(layer.usedAmount);
+                const linkTag = LAYER_LINK_TAGS[layerLinkState(layer, components, matIds)];
                 const updateLayerField = (field, val) => setForm(prev => ({ ...prev, layers: prev.layers.map((l, i) => i === idx ? { ...l, [field]: val } : l) }));
                 return (
                   <div key={layer._lid || idx} style={{ borderLeft: `4px solid ${cat.color}`, background: cat.bg, padding: "10px 14px", marginBottom: 8, borderRadius: "0 6px 6px 0" }}>
@@ -8285,7 +9000,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
                         <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {cat.zh}</span>
                         <span style={{ fontSize: 13, color: cat.color }}>{name}</span>
-                        {layer.sourceComponentId && <span style={{ fontSize: 10, color: "#999" }}>⟲ 来自组件库</span>}
+                        {linkTag && <span title={linkTag.hint} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{linkTag.zh}</span>}
                       </div>
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                         <button onClick={() => moveLayer(idx, -1)} disabled={idx === 0} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: 12 }}>↑</button>
@@ -8303,11 +9018,15 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                         placeholder={W.customNamePh}
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
+                      {/* v17.8: 文字框 —— 老数据里有「約 60–80g(φ15 1 片)」这种带说明的用量,数字框会显示成空白;
+                          计算只认开头的数字(parseFloat),读不出数字时下面提示 */}
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="decimal"
                         value={layer.usedAmount || ""}
                         onChange={e => updateLayerField("usedAmount", e.target.value)}
-                        placeholder={componentYield > 0 ? `本产品用量(g)，原组件${componentYield}g` : "本产品用量(g)"}
+                        placeholder={componentYield > 0 ? `这一批的用量 g（组件整批 ${componentYield}g）` : "这一批的用量 g"}
+                        title={`用量 = 做「${W.servesLabel}」那么多${W.isStack ? "台" : "个"}时，这一部分一共要多少`}
                         style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #F59E0B", borderRadius: 4, background: "#FFFBEB", color: "#111", fontFamily: "system-ui, sans-serif" }}
                       />
                       <div style={{ padding: "5px 8px", fontSize: 11, color: "#666", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
@@ -8315,10 +9034,15 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                       </div>
                     </div>
 
-                    {/* 提示用量未填 */}
+                    {/* 提示用量未填 / 带说明的用量只认开头的数字 */}
                     {componentYield > 0 && !usedAmount && (
                       <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
-                        ⚠ 未填写用量，成本计算不准确
+                        {usedNote ? "⚠ 用量读不出数字，成本和整体配方都按 0 算。改成纯数字（克）" : "⚠ 未填写用量，成本计算不准确"}
+                      </div>
+                    )}
+                    {usedAmount > 0 && usedAmountAmbiguous(layer.usedAmount) && (
+                      <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
+                        ⚠ 只认开头的数字：按 {fmtQty(usedAmount)} g 算。不对的话改成纯数字（克）
                       </div>
                     )}
                   </div>
@@ -8443,7 +9167,7 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 }
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
-function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, lang = "zh", onUpdateCats }) {
+function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats }) {
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
@@ -8506,7 +9230,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   // 未关联材料对话框
   const [unlinkedDialog, setUnlinkedDialog] = useState(null);
 
-  const doSave = (finalIngs) => {
+  // opts.synced:刚同步回组件库,这一部分直接算「跟组件库」(见 CreationEditForm.updateLayer)
+  const doSave = (finalIngs, opts) => {
     const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
     const refreshedIngs = validIngs.map(i => {
       if (!i.materialId) return i;
@@ -8523,7 +9248,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
-    });
+    }, opts);
   };
 
   const handleSave = () => {
@@ -8566,7 +9291,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       totalCost: total,
       updatedAt: new Date().toISOString(),
     };
-    onUpdateComponent(updated);
+    // v17.8: 确认同步后顺手把这一部分也存上并标「跟组件库」—— 组件库刚被改成这里的内容,两边已经一样
+    onUpdateComponent(updated, () => doSave(ings, { synced: true }));
   };
 
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
@@ -8595,8 +9321,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       </div>
 
       {layer.sourceComponentId && (
-        <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "8px", padding: "10px 14px", marginBottom: "1rem", fontSize: 12, color: "#1E40AF" }}>
-          {W.fromLib}
+        <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "8px", padding: "10px 14px", marginBottom: "1rem", fontSize: 12, color: "#1E40AF", lineHeight: 1.6 }}>
+          {W.linkNote(linkState)}
         </div>
       )}
 
@@ -8794,7 +9520,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        {layer.sourceComponentId ? (
+        {layer.sourceComponentId && linkState !== "orphan" ? (
           <Btn variant="success" onClick={handleSyncBackToComponent}>↻ 同步回组件库</Btn>
         ) : <div />}
         <div style={{ display: "flex", gap: 8 }}>
@@ -13788,11 +14514,18 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
           : recipes.find(r => r.id === it.linkedId);
         if (!target) return;
         // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 planQty * it.qty 个单位 → multiplier = planQty * it.qty / yield
-        // creation: 每份 item 是一整个 creation,直接 planQty * it.qty
         const unit = parseFloat(it.qty) || 1;
-        const mult = it.linkedType === "creation"
-          ? planQty * unit
-          : (planQty * unit) / Math.max(1, parseFloat(target.yield) || 1);
+        if (it.linkedType === "creation") {
+          // v17.8: 组合产品要做 planQty * it.qty 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
+          // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
+          const b = creationBatch(target, planQty * unit, components, materials || [], brands || []);
+          b.parts.forEach(p => p.ings.forEach(({ ing, qty }) => {
+            if (!ing.materialId || !(qty > 0)) return;
+            grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
+          }));
+          return;
+        }
+        const mult = (planQty * unit) / Math.max(1, parseFloat(target.yield) || 1);
         collect(target, mult);
       });
     });
@@ -14102,6 +14835,9 @@ function App() {
   // 只是配方上的一个布尔,跟 products(可售单元 / 库存)是两回事,不联动。
   const toggleOnSale = (id) => setRecipes(prev => prev.map(r =>
     r.id === id ? { ...r, onSale: !r.onSale, updatedAt: new Date().toISOString() } : r));
+  // v17.8: 组合产品也能标「在售中」,和配方一起列在配方一览
+  const toggleCreationOnSale = (id) => setCreations(prev => prev.map(c =>
+    c.id === id ? { ...c, onSale: !c.onSale, updatedAt: new Date().toISOString() } : c));
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
@@ -14120,6 +14856,10 @@ function App() {
   const [compEditTarget, setCompEditTarget] = useState(null);
   const [creationViewId, setCreationViewId] = useState(null);
   const [creationEditTarget, setCreationEditTarget] = useState(null);
+  // v17.8: 从配方一览点进组合产品时记 "list",详情页「返回」回配方一览而不是组合产品列表。
+  // 离开组合产品 tab(点导航去别处)就作废,免得以后从组合产品列表点进去,返回却跳到配方一览
+  const [creationReturnTo, setCreationReturnTo] = useState(null);
+  useEffect(() => { if (tab !== "creations") setCreationReturnTo(null); }, [tab]);
   const [knowledgeViewId, setKnowledgeViewId] = useState(null);
   const [knowledgeEditTarget, setKnowledgeEditTarget] = useState(null);
   // Toast 队列（2a §09）：左下角、最多堆 3 条、5 秒消失、hover 暂停计时、可带「撤销」
@@ -14152,6 +14892,14 @@ function App() {
     }, 800);
     return () => clearTimeout(t);
   }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings]);
+
+  // v17.8: 组合产品里「跟组件库走」的部分 = 组件的最新内容(写进副本,见 syncFollowingLayers)。
+  // 组件 / 组合产品 / 材料一变就对一遍;没东西要改时原样返回同一个数组,setState 不会重渲染,不会空转。
+  // 老数据第一次打开时,和组件库一样的部分会被标上 follow(只加标记,内容不动)。
+  useEffect(() => {
+    const matIds = new Set((materials || []).map(m => m && m.id));
+    setCreations(prev => syncFollowingLayers(prev, components, matIds));
+  }, [components, creations, materials]);
 
   // showToast(msg) 保持旧签名可用；第二个参数可给 { undo, ms } 走「先做 + 给撤销」
   const showToast = (msg, opts = {}) => {
@@ -15436,10 +16184,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <FamilyDetail
                 family={fm}
                 recipes={recipes}
+                creations={creations}
                 lang={lang}
                 onEdit={() => { setFamilyEditTarget(fm); setFamilyViewId(null); }}
                 onBack={() => setFamilyViewId(null)}
                 onViewRecipe={(rid) => { setFamilyViewId(null); setViewId(rid); setTab("view"); }}
+                onViewCreation={(cid) => { setFamilyViewId(null); setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(cid); setTab("creations"); }}
               />
             </div>
           </div>
@@ -15533,7 +16283,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div>
               <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "zh" ? "配方一览" : "レシピ一覧"}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.m, marginTop: T.sp.s }}>
-                <div style={{ ...T.fs.titleL, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>{recipes.length}</div>
+                <div style={{ ...T.fs.titleL, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>{recipes.length + creations.length}</div>
                 {saved && <span style={{ ...T.fs.caption, color: T.success }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
               </div>
             </div>
@@ -15546,7 +16296,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div style={{ display: "flex", gap: T.sp.xxl, marginTop: T.sp.l, marginBottom: T.sp.xxl, alignItems: "center", flexWrap: "wrap" }}>
             {[
               ["flat", lang === "zh" ? "全部配方" : "全レシピ"],
-              ["onsale", `${lang === "zh" ? "在售中" : "販売中"}${recipes.filter(r => r.onSale).length ? " " + recipes.filter(r => r.onSale).length : ""}`],
+              ["onsale", (() => { const k = recipes.filter(r => r.onSale).length + creations.filter(c => c.onSale).length; return `${lang === "zh" ? "在售中" : "販売中"}${k ? " " + k : ""}`; })()],
               ["family", lang === "zh" ? "家族模式" : "ファミリー表示"],
             ].map(([m, label]) => (
               <button
@@ -15564,7 +16314,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             )}
           </div>
 
-          {recipes.length === 0 && (
+          {recipes.length === 0 && creations.length === 0 && (
             <EmptyState
               variant="first" lang={lang}
               title={lang === "zh" ? "还没有配方" : "まだレシピがありません"}
@@ -15579,10 +16329,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {/* 📋 平铺模式 —— 无卡片、无圆角、无阴影；行间只有 1px 发丝线，家族色 3px 左竖条 */}
           {/* v17: 「在售中」复用同一套行渲染,只换数据源 —— 平铺是「在售的排最前」,在售页是「只看在售」 */}
           {(familyViewMode === "flat" || familyViewMode === "onsale") && (() => {
-            const onSaleList = recipes.filter(r => r.onSale);
-            const listRecipes = familyViewMode === "onsale"
+            // v17.8: 组合产品和配方混在一起列(带「组合」标签),在售圆点、在售中一页一起算
+            const items = [...recipes.map(r => ({ kind: "recipe", x: r })), ...creations.map(c => ({ kind: "creation", x: c }))];
+            const onSaleList = items.filter(it => it.x.onSale);
+            const listItems = familyViewMode === "onsale"
               ? onSaleList
-              : [...recipes].sort((a, b) => (b.onSale ? 1 : 0) - (a.onSale ? 1 : 0));   // 稳定排序,同组内保持原顺序
+              : [...items].sort((a, b) => (b.x.onSale ? 1 : 0) - (a.x.onSale ? 1 : 0));   // 稳定排序,同组内保持原顺序
             if (familyViewMode === "onsale" && onSaleList.length === 0) {
               return (
                 <EmptyState
@@ -15595,7 +16347,80 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             }
             return (
             <div>
-              {listRecipes.map(r => {
+              {listItems.map(it => {
+                if (it.kind === "creation") {
+                  // 组合产品行:样式照配方行,多一个「组合」标签;单个成本 = 总成本 ÷ 制作个数 ÷ 每个分几份(和组合产品页同一口径)
+                  const c = it.x;
+                  const cName = pickLang(c, "name", lang);
+                  const cSub = lang === "zh" ? (c.nameJa || "") : (c.nameZh || "");
+                  const cFamily = productFamilies.find(fm => fm.id === c.familyId);
+                  const cFamColor = cFamily ? FAMILY_COLORS[cFamily.colorIdx || 0] : null;
+                  const Wc = creationWords(creationStructureOf(c), lang);
+                  const cTotal = (c.layers || []).reduce((s, l) => s + calcLayerLiveCost(l, materials, brands), 0);
+                  const cPer = cTotal / (parseFloat(c.serves) || 1) / (parseFloat(c.portions) || 1);
+                  const cPrice = toCNY(c.price, priceCurOf(c));
+                  const cMargin = cPrice > 0 && cPer > 0 ? ((cPrice - cPer) / cPrice) * 100 : 0;
+                  const openCreation = () => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); };
+                  return (
+                    <div
+                      key={"creation_row_" + c.id}
+                      className="k-row rc-recipe-row"
+                      onClick={openCreation}
+                      style={{
+                        display: "grid", gridTemplateColumns: "1fr 130px 110px",
+                        alignItems: "center", gap: T.sp.xl,
+                        padding: `18px 0 18px ${T.sp.xl}px`,
+                        borderBottom: `1px solid ${T.lineFaint}`,
+                        borderLeft: `3px solid ${cFamColor ? cFamColor.color : "transparent"}`,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div className="k-fluid">
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); toggleCreationOnSale(c.id); }}
+                            title={c.onSale
+                              ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
+                              : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
+                            style={{
+                              width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+                              cursor: "pointer", lineHeight: 1, fontSize: 13, alignSelf: "center",
+                              color: c.onSale ? T.success : T.line,
+                            }}
+                          >{c.onSale ? "●" : "○"}</button>
+                          {c.nameFr && (
+                            <span style={{ fontFamily: T.fontSerif, ...T.fs.titleS, color: T.ink, fontWeight: 400 }}>{c.nameFr}</span>
+                          )}
+                          <span style={{ fontSize: 14, fontWeight: 500, color: T.ink }}>{cName}</span>
+                          {cSub && cSub !== cName && (
+                            <span style={{ ...T.fs.caption, color: T.subtle }}>{cSub}</span>
+                          )}
+                          <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>
+                            {lang === "zh" ? "组合" : "組立"}
+                          </span>
+                          {cFamily && (
+                            <span style={{ ...T.fs.micro, color: cFamColor.color, border: `1px solid ${cFamColor.color}`, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>
+                              {lang === "zh" ? (cFamily.nameZh || cFamily.nameJa) : (cFamily.nameJa || cFamily.nameZh)}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ ...T.fs.label, color: T.muted, marginTop: 5, letterSpacing: "0.04em" }}>
+                          {[c.size || c.mold, c.serves ? `${c.serves} ${Wc.unit}` : null, (c.layers || []).length ? Wc.partCount(c.layers.length) : null, c.shelfLife].filter(Boolean).join("  ·  ")}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: cMargin >= 50 ? T.success : cMargin >= 30 ? T.warning : T.danger }}>
+                        {cPrice > 0 && cPer > 0 ? `${cMargin.toFixed(1)}%` : ""}
+                      </div>
+                      <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
+                        {cPrice > 0
+                          ? <span style={{ fontSize: 18 }}>{fmtSellPrice(c.price, c)}</span>
+                          : <span style={{ ...T.fs.micro, color: T.muted }}>{lang === "zh" ? "未定价" : "未設定"}</span>}
+                      </div>
+                    </div>
+                  );
+                }
+                const r = it.x;
                 const name = pickLang(r, "name", lang);
                 const nameSub = lang === "zh" ? (r.nameJa || "") : (r.nameZh || "");
                 const family = productFamilies.find(fm => fm.id === r.familyId);
@@ -15686,6 +16511,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               )}
               {productFamilies.map(fm => {
                 const famRecipes = recipes.filter(r => r.familyId === fm.id);
+                const famCreations = creations.filter(c => c.familyId === fm.id);   // v17.8
                 const famName = lang === "zh" ? (fm.nameZh || fm.nameJa) : (fm.nameJa || fm.nameZh);
                 const color = FAMILY_COLORS[fm.colorIdx || 0];
                 return (
@@ -15706,6 +16532,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       </div>
                       <span style={{ ...T.fs.label, color: T.muted, ...T.num }}>
                         {famRecipes.length} {lang === "zh" ? "个变体" : "バリエーション"}
+                        {famCreations.length > 0 && ` · ${famCreations.length} ${lang === "zh" ? "个组合" : "組立"}`}
                       </span>
                     </div>
                     {fm.description && (
@@ -15730,14 +16557,27 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                         )}
                       </div>
                     )}
+                    {famCreations.length > 0 && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: T.sp.s }}>
+                        {famCreations.slice(0, 5).map(c => (
+                          <span key={c.id} style={{ background: T.sunken, color: T.body, padding: "3px 10px", borderRadius: T.radius, ...T.fs.label }}>
+                            <span style={{ color: T.info, marginRight: 4 }}>{lang === "zh" ? "组合" : "組立"}</span>{pickLang(c, "name", lang)}
+                          </span>
+                        ))}
+                        {famCreations.length > 5 && (
+                          <span style={{ ...T.fs.label, color: T.muted, padding: "3px 6px" }}>+{famCreations.length - 5}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
 
-              {/* 未归属家族的配方（独立） */}
+              {/* 未归属家族的配方（独立）+ v17.8 没挂家族(或家族已删)的组合产品 */}
               {(() => {
                 const orphanRecipes = recipes.filter(r => !r.familyId);
-                if (orphanRecipes.length === 0) return null;
+                const orphanCreations = creations.filter(c => !c.familyId || !productFamilies.some(f => f.id === c.familyId));
+                if (orphanRecipes.length === 0 && orphanCreations.length === 0) return null;
                 return (
                   <div style={{ marginTop: T.sp.block }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 9, paddingBottom: 9 }}>
@@ -15745,7 +16585,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                         {lang === "zh" ? "未归属家族" : "独立"}
                       </span>
                       <span style={{ flex: 1, height: 1, background: T.line }} />
-                      <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{orphanRecipes.length}</span>
+                      <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{orphanRecipes.length + orphanCreations.length}</span>
                     </div>
                     <div>
                       {orphanRecipes.map(r => {
@@ -15756,6 +16596,14 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                           </div>
                         );
                       })}
+                      {orphanCreations.map(c => (
+                        <div key={"creation_row_" + c.id} className="k-row"
+                          onClick={() => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); }}
+                          style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
+                          <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "1px 5px", marginRight: 8, textTransform: "none", letterSpacing: "0.06em" }}>{lang === "zh" ? "组合" : "組立"}</span>
+                          {pickLang(c, "name", lang)}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 );
@@ -16054,16 +16902,25 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           showToast={showToast}
           saved={saved}
           confirmDialog={confirmDialog}
-          onUpdateComponent={(updated) => {
-            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n这不会影响其他已创建的组合产品，只会更新组件库里的原始配方。", () => {
+          onUpdateComponent={(updated, onDone) => {
+            // v17.8: 组件一改,「跟组件库走」的组合产品跟着变 —— 按 2a §09 把受影响的产品列出来
+            const matIds = new Set((materials || []).map(m => m && m.id));
+            const followers = creations.filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === updated.id && layerLinkState(l, components, matIds) === "follow"));
+            const refs = followers.map(cr => `${lang === "zh" ? "会跟着变" : "連動して変わる"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`);
+            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
               showToast("✓ 已更新回组件库");
-            }, { danger: false });
+              if (onDone) onDone();
+            }, { danger: false, refs });
           }}
           knowledge={knowledge}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
+          onPrintCreation={(payload) => setPrintTarget({ type: "creation", data: payload, stage: "settings" })}
+          returnToList={creationReturnTo === "list"}
+          onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
+          onOpenFromList={() => setCreationReturnTo(null)}
         />
       )}
 

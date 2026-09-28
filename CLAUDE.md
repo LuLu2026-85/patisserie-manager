@@ -160,6 +160,7 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 - `components` — reusable parts (biscuit, mousse, jelly, glaze, etc.) used inside `creations`. Seeded with `AGREABLE_MOUSSE`.
 - `creations` — 「组合产品」(2026-09-27 前叫「组合蛋糕」,实体 id 和 tab id 没改)that reference `components` as layers.
   `structure` 字段决定长相:`"stack"` 叠层(缺省,自上而下,蛋糕类)/ `"assembly"` 拼装(壳 / 馅 / 顶,不分上下,泡芙 / 塔 / 丹麦类),见下面「组合产品的结构」。
+  v17.8 起层默认跟组件库走、详情页出按个数算的整体配方,见下面「组合产品:整体配方 + 部分跟组件库走」。
 - `knowledge` — knowledge base entries with `tags` and a `relatedRecipes` free-text name array (matched by name, not id — four-tier rule, see 「知识 ↔ 配方 / 组件 / 蛋糕的名字关联」 below).
 - `cats` — **deprecated** old price table; UI hidden but kept for compat.
 
@@ -332,6 +333,44 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
   「本层用量」→「用量」、「制作台数 / 每台切几份」→「制作个数 / 每个分几份」、「单台成本」→「单个成本」。叫法全部从 `creationWords(structure, lang)`
   取(`CREATION_STRUCTURES` 表定义在 `CreationsView` 上方),列表 / 详情 / 编辑 / 层编辑四处共用,**别在页面里散写「层」「台」**。
   慕斯的夹心就是叠层里中间的一层(剖面图画法),刻意不另设类型。编辑页「结构」两个胶囊按钮切换,`LayerEditForm` 多收一个 `structure` prop。
+
+## 组合产品:整体配方 + 部分跟组件库走(v17.8, 2026-09-28)
+
+LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合成一个成品后还是需要一张整体的配方的不是么」。
+**改这一块之前先跑 `.claude/scripts/creation_follow_probe.cjs --data <最新导出> [--pkg <合并导入包>]`**
+(把 App.jsx 里的成本链 + `BEGIN/END creation-follow helpers` 那段原样抽出来,对全量数据查:老数据归一化、成本一分不变、
+同步幂等、「打开部分编辑页不改就保存」不会误判、改组件后跟着变、圣多诺黑做 12 个的数)。
+
+1. **用量口径**:`layers[].usedAmount` 是按「制作个数」`serves` 这一批写的(成本一直这么算:总成本 ÷ serves)。
+   做 N 个 → 需要量 = 用量 × N ÷ serves;配料缩放 = 需要量 ÷ 组件产出量;没产出量的手搭部分按「整批 × 倍数」。
+   **唯一算法是 `creationBatch`**,详情页「📘 配方」(`CreationRecipeSheet`)、打印(`CreationPrintTemplate`)、
+   采购页(`PurchaseView` 的组合产品分支)三处共用 —— 以前采购页按「每部分整批 × 个数」算,圣多诺黑做 12 个会算出 12 批千层。
+   用量是文字框(`type="text"`,老数据有「約 60–80g(φ15 1 片)」这种),**计算只认开头的数字**;「500g + 170g」这类
+   (`usedAmountAmbiguous`)页面会提醒「按 500 g 算」,读不出数字 = 没填。
+2. **跟组件库走 = 写进副本(propagate-on-write)**。`layers[]` 仍存组件内容的副本,所以成本 / 采购 / 材料用在哪 / 打印这些老读者
+   一行没改。App 里一个 effect 调 `syncFollowingLayers`:`follow: true` 的层内容 ≠ 组件时,整段换成组件的最新内容
+   (`layerContentFromComponent`,`customName` / `usedAmount` 不动);`localVariant: true`(本产品专用)、组件已删、手搭的层不动。
+   **幂等,没东西要改时原样返回同一个数组**,effect 不空转。`CreationEditForm` 里对表单也跑一遍(编辑中途同步回组件库,同组件的其他层要跟上)。
+   - 比较走 `layerContentKey`:名字 / 分类 / 产出量(空和 0 算一样)/ 单位 / 配料 / 中日步骤 / 备注。**关联了百科的配料不比单价 / 成本快照**
+     (打开编辑页会刷新,比了就一开一存变「本产品专用」);没关联的手填单价 / 币种 / 成本算内容。指向已删材料的 `materialId` 当没关联。
+   - **老数据**(两个标记都没有):内容一样 → 标 `follow`(只加标记);不一样 → 原样不动,详情页提示「和组件库不一样(差在:备注)」+
+     「用组件库的 / 保留(本产品专用)/ 全部用组件库的」,都是先做 + 撤销 toast。09-26 数据:Grand Gâteau 6 层差在备注(层里没带备注)、
+     热带水果慕斯 2 层差在分类、两个丹麦草稿差在内容。
+   - 编辑部分保存时(`CreationEditForm.updateLayer`)按内容定标记:和组件一样 → `follow`;不一样 → `localVariant` + toast。
+     「↻ 同步回组件库」确认后 `onUpdateComponent(updated, onDone)` 回调 `doSave(ings, { synced: true })`,这一层直接算 `follow`
+     (那一刻组件库还没刷新到表单里,不能拿来比);确认框按 2a §09 列出会跟着变的产品(`refs`)。
+   - **以后任何往 `creations.layers` 写内容的新代码**,要么走 `updateLayer` 定标记,要么想清楚:跟组件库走的层会被下一次同步盖掉。
+     批量关联向导(`BulkMaterialLinkWizard`,死代码)已跳过跟组件库的层 —— 关联组件那一行就会带过来。
+3. **备货 `components[].prepMode = "stock"`**(组件编辑页勾选,详情页有标签):整体配方里只写「从库存取 X g」,整批配方点开看。
+   **读组件本身,不抄进层**。备货的部分采购页照样算原料。
+4. **配方一览混排组合产品**(「组合」标签、单个成本 = 总成本 ÷ serves ÷ portions、售价、毛利率),圆点 `creations[].onSale`
+   (`toggleCreationOnSale`),「在售中」一起算;家族模式按 `familyId` 放(家族不存在 → 未归属),家族详情也列。
+   点进去记 `creationReturnTo = "list"`,详情页返回键变「← 返回配方一览」;离开组合产品 tab 就作废(effect 监听 `tab`)。
+5. **打印**:`printTarget.type = "creation"`,`data = { creation, batch }`(详情页当下算好的那一份)。`PrintModal` 对组合产品只给语言 +
+   「做法 / 备注」。三个老模板取步骤改成 `pickSteps`(以前 `stepsJa: []` 是真值,日文版步骤整段空白)。
+6. 顺带修:组合产品列表的状态表把「季節限定」写成「季节限定」、漏了「検討中」,这两个状态都被显示成試作。
+7. 新字段(`follow` / `localVariant` / `prepMode` / `creations.onSale`)缺省就是老行为,**payload `version` 仍是 17,不写迁移**
+   (老数据的归一化由 effect 做,只加标记)。
 
 ## RURU_*.json files at repo root
 
