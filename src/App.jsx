@@ -10450,8 +10450,11 @@ function getUsageScenes(material, recipes, components, creations) {
     const mn2 = (material.nameJa || "").trim().toLowerCase();
     const bn = (ing.brand || "").trim().toLowerCase();
     const mbn = (material.productBrandName || "").trim().toLowerCase();
-    const nameMatch = (mn1 && (n1.includes(mn1) || mn1.includes(n1))) ||
-                      (mn2 && (n2.includes(mn2) || mn2.includes(n2)));
+    // 2026-09-29 体检第 2 批:原来配料名为空(只填中文的行,日文名是 "")时 mn.includes("") 恒真,
+    // 名字短的配料(「水」「盐」)被材料名包含也算 → 1838 个材料里 1834 个显示「有使用」。
+    // 现在:配料名必须非空,而且只接受「配料名包含材料名」(含完全相等),不再反过来。
+    const nameMatch = (mn1 && n1 && n1.includes(mn1)) ||
+                      (mn2 && n2 && n2.includes(mn2));
     if (!nameMatch) return false;
     if (mbn && bn && !bn.includes(mbn) && !mbn.includes(bn)) return false;
     return true;
@@ -10472,8 +10475,11 @@ function getUsageScenes(material, recipes, components, creations) {
       if (isMatch(ing)) results.push({ type: "component", id: c.id, name: c.nameZh || c.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
     });
   });
+  // 2026-09-29 体检第 2 批:「跟组件库走」的部分是组件的副本,组件那一行已经列过,原来又按整批量再列一遍(重复计数)。
+  const _followCompIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
   creations.forEach(cr => {
     (cr.layers || []).forEach(l => {
+      if (l && l.sourceComponentId && l.follow && !l.localVariant && _followCompIds.has(l.sourceComponentId)) return;
       (l.ingredients || []).forEach(ing => {
         if (isMatch(ing)) results.push({ type: "creation", id: cr.id, name: cr.nameZh || cr.nameJa, layerName: l.nameZh || l.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
       });
@@ -10536,12 +10542,46 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
         setMaterialEditTarget(null);
       }}
       onDelete={() => {
-        confirmDialog("删除这个产品吗？", () => {
-          setMaterials(prev => prev.filter(x => x.id !== materialEditTarget.id));
-          showToast("已删除");
+        // 2026-09-29 体检第 2 批:原来只弹「删除这个产品吗?」,不说哪些配方 / 本店原料在用,删完成本悄悄变。
+        // 现在:有关联(配料行 materialId 指向它 / 本店原料挂着它)→ 把引用方列进 refs 再确认;没人用 → 直接删 + 撤销。
+        const snap = materials.find(x => x.id === materialEditTarget.id) || materialEditTarget;
+        const zh = lang === "zh";
+        const mName = (zh ? (snap.nameZh || snap.nameJa) : (snap.nameJa || snap.nameZh)) || snap.nameFr || "";
+        const linked = (ings) => (ings || []).some(i => i && i.materialId === snap.id);
+        const nm = (x) => (zh ? (x.nameZh || x.nameJa) : (x.nameJa || x.nameZh)) || x.nameFr || "";
+        const shopN = (shopMaterials || []).filter(s => s && s.materialId === snap.id).length;
+        const refs = [
+          ...(recipes || []).filter(r => r && linked(r.ingredients)).map(r => `${zh ? "配方" : "レシピ"}：${nm(r)}`),
+          ...(components || []).filter(c => c && linked(c.ingredients)).map(c => `${zh ? "组件" : "パーツ"}：${nm(c)}`),
+          ...(creations || []).filter(cr => cr && (cr.layers || []).some(l => l && linked(l.ingredients))).map(cr => `${zh ? "组合产品" : "組み合わせ"}：${nm(cr)}`),
+          ...(shopN > 0 ? [zh ? `本店原料：${shopN} 条进价挂在这个产品上(删后不再参与成本)` : `仕入れ原料：${shopN} 件(削除後は原価に反映されません)`] : []),
+        ];
+        const doDelete = () => {
+          const idx = materials.findIndex(x => x.id === snap.id);
+          setMaterials(prev => prev.filter(x => x.id !== snap.id));
           setMaterialEditTarget(null);
           setMaterialViewId(null);
-        });
+          showToast(zh ? `已删除「${mName}」` : `「${mName}」を削除しました`, {
+            undo: () => setMaterials(prev => {
+              if (prev.find(x => x.id === snap.id)) return prev;
+              const next = [...prev];
+              next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
+              return next;
+            }),
+          });
+        };
+        if (refs.length === 0) { doDelete(); return; }
+        confirmDialog(
+          zh ? "下面这些地方关联了这个产品。删除后,它们的成本会改用配料行里手写的单价或当初存下的成本快照,可能和现在不一样。"
+             : "以下がこの製品を参照しています。削除すると原価は手入力単価または保存時のスナップショットで計算されます。",
+          doDelete,
+          {
+            kicker: zh ? "删除产品" : "製品を削除",
+            title: zh ? `删除「${mName}」?` : `「${mName}」を削除?`,
+            refs,
+            confirmText: zh ? "仍然删除" : "削除する",
+          }
+        );
       }}
       onBack={() => setMaterialEditTarget(null)}
     />;
@@ -10646,20 +10686,29 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
 function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBrandViewId, setMaterialViewId, onManageBrands }) {
   const [searchQ, setSearchQ] = useState("");
   const q = searchQ.trim().toLowerCase();
+  // 2026-09-29 体检第 2 批:原来只取前 20 家 / 30 个,标题却写「匹配 30 产品」(黄油实际 37 个)。
+  // 现在先算全量、标题写真实总数,超出时提示「只显示前 N 个」+「显示全部」;记的是点「显示全部」时的搜索词,换词自动收起。
+  const [showAllQ, setShowAllQ] = useState(null);
+  const showAll = showAllQ !== null && showAllQ === q;
 
   // 计算搜索结果
   const searchResults = useMemo(() => {
-    if (!q) return { brands: [], materials: [] };
-    const matchedBrands = brands.filter(b => {
+    if (!q) return { brands: [], materials: [], brandTotal: 0, materialTotal: 0 };
+    const allBrands = brands.filter(b => {
       const hay = `${b.nameZh || ""} ${b.nameJa || ""} ${b.nameFr || ""} ${b.origin || ""}`.toLowerCase();
       return hay.includes(q);
-    }).slice(0, 20);
-    const matchedMaterials = materials.filter(m => {
+    });
+    const allMaterials = materials.filter(m => {
       const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
       return hay.includes(q);
-    }).slice(0, 30);
-    return { brands: matchedBrands, materials: matchedMaterials };
-  }, [q, brands, materials]);
+    });
+    return {
+      brands: showAll ? allBrands : allBrands.slice(0, 20),
+      materials: showAll ? allMaterials : allMaterials.slice(0, 30),
+      brandTotal: allBrands.length, materialTotal: allMaterials.length,
+    };
+  }, [q, brands, materials, showAll]);
+  const searchTruncated = searchResults.brands.length < searchResults.brandTotal || searchResults.materials.length < searchResults.materialTotal;
 
   // v57 性能优化:预聚合每个 category 的 brand/product 数量
   // 原来每次渲染 MATERIAL_CATEGORIES.map 里都 brands.filter().length,
@@ -10671,12 +10720,15 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
     const counts = {};
     const brandSets = {};
     const touch = (cat) => { if (!counts[cat]) counts[cat] = { brandCount: 0, productCount: 0 }; if (!brandSets[cat]) brandSets[cat] = new Set(); };
-    brands.forEach(b => { if (!b.categoryId) return; touch(b.categoryId); brandSets[b.categoryId].add(b.id); });
+    // 2026-09-29 体检第 2 批:原来按原始 categoryId 计数,misc / dairy / 旧编号(170 个材料)哪张卡都不算,「其他」显示 0。
+    // 现在统一走 getMaterialCat(...).id:认不出的归「其他」,和分类页、卡片颜色同一个口径。
+    brands.forEach(b => { if (!b.categoryId) return; const cid = getMaterialCat(b.categoryId).id; touch(cid); brandSets[cid].add(b.id); });
     materials.forEach(m => {
       if (!m.categoryId) return;
-      touch(m.categoryId);
-      counts[m.categoryId].productCount++;
-      if (m.brandId) brandSets[m.categoryId].add(m.brandId);
+      const cid = getMaterialCat(m.categoryId).id;
+      touch(cid);
+      counts[cid].productCount++;
+      if (m.brandId) brandSets[cid].add(m.brandId);
     });
     Object.keys(brandSets).forEach(cat => { counts[cat].brandCount = brandSets[cat].size; });
     return counts;
@@ -10738,9 +10790,20 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
         <div style={{ marginBottom: "1.5rem" }}>
           <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 10, fontWeight: 500 }}>
             {lang === "zh"
-              ? `🔎 搜索 「${searchQ}」· 匹配 ${searchResults.brands.length} 厂家、${searchResults.materials.length} 产品`
-              : `🔎 「${searchQ}」· ${searchResults.brands.length} 社 · ${searchResults.materials.length} 製品`
+              ? `🔎 搜索 「${searchQ}」· 匹配 ${searchResults.brandTotal} 厂家、${searchResults.materialTotal} 产品`
+              : `🔎 「${searchQ}」· ${searchResults.brandTotal} 社 · ${searchResults.materialTotal} 製品`
             }
+            {searchTruncated && (
+              <span style={{ fontWeight: 400, color: T.textTertiary, marginLeft: 8 }}>
+                {lang === "zh"
+                  ? `(只显示前 ${searchResults.brands.length} 家、${searchResults.materials.length} 个)`
+                  : `(先頭 ${searchResults.brands.length} 社・${searchResults.materials.length} 件のみ表示)`}
+                <button type="button" onClick={() => setShowAllQ(q)}
+                  style={{ marginLeft: 6, padding: 0, background: "none", border: "none", color: T.accent, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans, textDecoration: "underline" }}>
+                  {lang === "zh" ? "显示全部" : "すべて表示"}
+                </button>
+              </span>
+            )}
           </div>
 
           {/* 厂家结果 */}
@@ -11283,7 +11346,8 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
   // 过滤
   const filtered = useMemo(() => {
     let list = materials;
-    if (catFilter) list = list.filter(m => m.categoryId === catFilter);
+    // 2026-09-29 体检第 2 批:原来严格相等,misc / 旧编号的材料按分类筛不出来;认不出的归「其他」
+    if (catFilter) list = list.filter(m => m.categoryId && getMaterialCat(m.categoryId).id === catFilter);
     if (brandFilter) list = list.filter(m => m.brandId === brandFilter);
     if (q) {
       list = list.filter(m => {
@@ -11306,7 +11370,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
   const availableBrands = useMemo(() => {
     const brandIds = new Set();
     materials.forEach(m => {
-      if (!catFilter || m.categoryId === catFilter) brandIds.add(m.brandId);
+      if (!catFilter || (m.categoryId && getMaterialCat(m.categoryId).id === catFilter)) brandIds.add(m.brandId);
     });
     return brands.filter(b => brandIds.has(b.id))
       .sort((a, b) => (a.nameZh || a.nameJa || "").localeCompare(b.nameZh || b.nameJa || ""));
@@ -11655,7 +11719,8 @@ function CategoryDetailView({
   const hasSubcats = subcats.length > 1;
 
   // 当前大类下的全部产品
-  const allProducts = materials.filter(m => m.categoryId === categoryId);
+  // 2026-09-29 体检第 2 批:原来严格相等,misc / dairy / 旧编号的材料哪个分类页都进不去。认不出的归「其他」(和首页计数同口径)
+  const allProducts = materials.filter(m => m.categoryId && getMaterialCat(m.categoryId).id === cat.id);
 
   // 当前大类下的全部厂家(用于过滤器 dropdown)
   const brandsInCategory = useMemo(() => {
@@ -12488,7 +12553,8 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               <tbody>
                 <tr style={{ background: "#EDE9FE", fontWeight: 500 }}>
                   <td style={{ padding: "6px 10px" }}>→ {name} (当前)</td>
-                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{material.pricePerG ? `¥${material.pricePerG}` : "—"}</td>
+                  {/* 2026-09-29 体检第 2 批:原来直接拼 `¥${pricePerG}`(每克原值 + 一律写 ¥),表头却是「/100g」,差约 100 倍、日元也标成 ¥。改走 fmtUnitPrice + 实际取用的那条价 */}
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{(() => { const rp = getMaterialRawPrice(material); return fmtUnitPrice(rp.price, rp.currency) || "—"; })()}</td>
                   <td style={{ padding: "6px 10px", textAlign: "center", color: "#F59E0B" }}>{material.rating ? "★".repeat(material.rating) : "—"}</td>
                 </tr>
                 {compareWith.map(m => (
@@ -12505,7 +12571,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                       {lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)}
                       {m.isBest && <span style={{ color: "#059669", marginLeft: 4 }}>⭐</span>}
                     </td>
-                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{m.pricePerG ? `¥${m.pricePerG}` : "—"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{(() => { const rp = getMaterialRawPrice(m); return fmtUnitPrice(rp.price, rp.currency) || "—"; })()}</td>
                     <td style={{ padding: "6px 10px", textAlign: "center", color: "#F59E0B" }}>{m.rating ? "★".repeat(m.rating) : "—"}</td>
                   </tr>
                 ))}
@@ -12871,7 +12937,11 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
           // 价变了才动 asOf —— 它记的是「这个价是什么时候的」
           asOf: (_mid !== _oldMid) ? _thisMonth : ((form.priceRange && form.priceRange.asOf) || _thisMonth),
         }
-      : form.priceRange;
+      // 2026-09-29 体检第 2 批:原来单价删空时 priceRange.mid 原样留着,成本链照旧用旧价;再切人民币,旧日元数被当人民币放大约 21 倍。
+      // 现在:她删了价(原来有价)或切了币种 → mid 一起清空。原来就没填单价、币种也没动 → 不碰 priceRange(不替老数据做决定)。
+      : (form.priceRange && (String((material && material.pricePerG) ?? "").trim() !== "" || curOf(form) !== curOf(material || {})))
+        ? { ...form.priceRange, mid: "" }
+        : form.priceRange;
     onSave({
       ...form,
       priceRange: _priceRange,
@@ -12924,6 +12994,10 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>大分类</label>
             <select value={form.categoryId} onChange={(e) => setForm(prev => ({ ...prev, categoryId: e.target.value, subcategoryId: "other" }))} style={inpStyle}>
+              {/* 2026-09-29 体检第 2 批:老数据的分类(misc / dairy / 旧编号)不在列表里,下拉看着停在「黄油」,一保存就被改掉。补一项原样保留 */}
+              {form.categoryId && !MATERIAL_CATEGORIES.some(c => c.id === form.categoryId) && (
+                <option value={form.categoryId}>{lang === "zh" ? "(未归类)" : "(未分類)"}</option>
+              )}
               {MATERIAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.zh}</option>)}
             </select>
           </div>
@@ -12949,8 +13023,9 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
       {/* 规格与价格 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与价格</div>
+        {/* 2026-09-29 体检第 2 批:原来没传 textSpec,单包是数字框,「1KG」「200g/1KG」这类老规格(97%)显示成空框,重填会覆盖原文 */}
         <PackPriceFields packSize={form.packSize} casePack={form.casePack} pricePerG={form.pricePerG} currency={form.currency}
-          onChange={patch => setForm(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inpStyle} />
+          onChange={patch => setForm(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inpStyle} textSpec />
       </div>
 
       {/* 核心参数 */}
@@ -13051,6 +13126,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast }) {
   const isNew = !recipe;
   const [errorMsg, setErrorMsg] = useState("");
+  const [nameZhMissing, setNameZhMissing] = useState(false);   // 2026-09-29 体检第 2 批:点保存时中文名空 → 名字框旁边标红
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 当前要选材料的 ing._id
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联弹窗
@@ -13206,7 +13282,10 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const handleSave = () => {
     const nameZh = (form.nameZh || "").trim(), nameJa = (form.nameJa || "").trim();
     if (!nameZh) {
-      setErrorMsg("请输入配方名称");
+      // 2026-09-29 体检第 2 批:原来提示「中日文任一填写即可」,只填日文却被拦;报错只在页面最底下闪 3 秒。
+      // 现在按「录入只强制中文」统一成「中文名必填」,名字框旁边也标出来(填了中文名就消失)。
+      setNameZhMissing(true);
+      setErrorMsg(lang === "zh" ? "请填写中文配方名(在页面最上面)" : "中国語のレシピ名を入力してください(ページ上部)");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
@@ -13255,11 +13334,11 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中日文任一填写即可，不必两种都填。名字、备注、步骤都是如此。
+        💡 提示：配方名中文必填，日文可以不填。备注、步骤中日文任一填写即可，不必两种都填。
       </div>
 
       {card(<>
-        {grid("1fr 1fr", [fld("配方名（中文）", inp("nameZh", "费南雪")), fld("配方名（日本語）", inp("nameJa", "フィナンシェ"))])}
+        {grid("1fr 1fr", [fld("配方名（中文）*", <>{inp("nameZh", "费南雪", "text", nameZhMissing && !(form.nameZh || "").trim() ? { border: `1px solid ${T.danger}` } : {})}{nameZhMissing && !(form.nameZh || "").trim() && <div style={{ color: T.danger, fontSize: 12, marginTop: 4 }}>⚠ {lang === "zh" ? "中文名必填,填好再保存" : "中国語名は必須です"}</div>}</>), fld("配方名（日本語）", inp("nameJa", "フィナンシェ"))])}
         {grid("1fr 1fr", [fld("配方名（Français）", inp("nameFr", "Financier")), fld("分类", sel("category", ["焼き菓子","生菓子","パン・ヴィエノワズリー","ショコラ","アントルメ","タルト","その他"]))])}
         {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "SN1648 25連")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", "個")), fld("制作时间（分）", inp("time", "60", "number"))])}
         {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
@@ -13275,6 +13354,10 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>归属家族</label>
             <select value={form.familyId || ""} onChange={f("familyId")} style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans }}>
               <option value="">— 不归属任何家族 —</option>
+              {/* 2026-09-29 体检第 2 批:挂的家族已经不存在(5/1 丢的那几个)时,下拉看着是「不归属」,其实还挂着旧编号。补一项照实显示,保存也不会悄悄清掉 */}
+              {form.familyId && !productFamilies.some(fm => fm.id === form.familyId) && (
+                <option value={form.familyId}>⚠ 已丢失的家族（{form.familyId}）</option>
+              )}
               {productFamilies.map(fm => (
                 <option key={fm.id} value={fm.id}>{fm.nameZh || fm.nameJa}</option>
               ))}
