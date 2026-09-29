@@ -16903,8 +16903,11 @@ const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
     // 审查 r1:以前卖超 / 报损扣不到的件数当时没扣库存,重存时也不从后来生产的库存里扣(只扣这次多出来的)
     const prevShortSold = first ? Math.max(0, _num0(first.soldQty) - saleStockBackOf(first)) : 0;
     const prevShortWaste = first ? Math.max(0, wasteTotalOf(first) - _num0(first.wasteOut)) : 0;
-    const stockOut = _r3(Math.min(Math.max(0, soldFirst - prevShortSold), avail));
-    const wasteOut = _r3(Math.min(Math.max(0, wSum - prevShortWaste), avail - stockOut));
+    // 审查 r2:改小了先减没扣到的那部分(只留新总数还用得上的),别把没扣过的件数当成扣过的还回库存(卖超那天 12 改成 10,库存会凭空多 2)
+    const keepShort = Math.min(prevShortSold, Math.max(0, soldFirst - (first ? saleStockBackOf(first) : 0)));
+    const keepShortW = Math.min(prevShortWaste, Math.max(0, wSum - (first ? _num0(first.wasteOut) : 0)));
+    const stockOut = _r3(Math.min(Math.max(0, soldFirst - keepShort), avail));
+    const wasteOut = _r3(Math.min(Math.max(0, wSum - keepShortW), avail - stockOut));
     const stock1 = _r3(avail - stockOut - wasteOut);
     const hadWaste = !!(first && (first.waste !== undefined || first.wasteOut !== undefined));
     const wasteFields = (wSum > 0 || hadWaste) ? { waste: wFirst, wasteOut } : {};
@@ -16920,7 +16923,7 @@ const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
     if (stock1 !== (parseFloat(p.currentStock) || 0)) prods[pi] = { ...p, currentStock: stock1 };
     const tot = dayTotalsOf(log, pid, date);
     changed.push({ productId: pid, before: first, after, stockBefore: stock0, stockAfter: stock1,
-      oversell: _r3(Math.max(0, soldFirst - prevShortSold - stockOut)), wasteShort: _r3(Math.max(0, wSum - prevShortWaste - wasteOut)),
+      oversell: _r3(Math.max(0, soldFirst - keepShort - stockOut)), wasteShort: _r3(Math.max(0, wSum - keepShortW - wasteOut)),
       dupes: others.length, resultSold: tot.sold, resultWaste: tot.waste, target: { sold: tSold, waste: tWaste } });
     undo.push({ productId: pid, before: first, afterId: after.id, afterUpdatedAt: now, stockDelta: _r3(stock1 - stock0) });
   });
