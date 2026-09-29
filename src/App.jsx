@@ -15032,37 +15032,8 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 function ProductsView({ products, setProducts, recipes, creations, components = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
-  // v12: 销售/生产按天 upsert,同日累加。forDate 可指定补录日期
-  // 2026-09-29 体检第 2 批:卖出比库存多时库存停在 0,删记录却按整条数量加回 → 凭空多出库存。
-  // 现在销售记录另存 stockOut(实际扣掉的件数,同日累加),删除按它回滚;老记录没有这个字段 = 按卖出数。返回实际扣掉的件数
-  const logQty = (kind, productId, addQty, forDate) => {
-    const qn = parseFloat(addQty) || 0;
-    if (qn <= 0) return 0;
-    const d = forDate || today;
-    const qtyField = kind === "sale" ? "soldQty" : "batchQty";
-    const setter = kind === "sale" ? setSalesLog : setProductionLog;
-    const cur = products.find(p => p.id === productId);
-    const out = kind === "sale" ? Math.min(qn, Math.max(0, parseFloat(cur && cur.currentStock) || 0)) : qn;
-    setter(prev => {
-      const existing = (prev || []).find(x => x.productId === productId && x.date === d);
-      if (existing) {
-        return prev.map(x => x.id === existing.id ? { ...x, [qtyField]: (parseFloat(x[qtyField]) || 0) + qn,
-          ...(kind === "sale" ? { stockOut: (x.stockOut != null ? (parseFloat(x.stockOut) || 0) : (parseFloat(x.soldQty) || 0)) + out } : {}),
-          updatedAt: new Date().toISOString() } : x);
-      }
-      return [...(prev || []), {
-        id: (kind === "sale" ? "sale_" : "prod_log_") + Date.now() + Math.random().toString(36).slice(2, 6),
-        productId, date: d, [qtyField]: qn, ...(kind === "sale" ? { stockOut: out } : {}), createdAt: new Date().toISOString(),
-      }];
-    });
-    // 联动库存: 销售扣(只扣实际有的), 生产加
-    setProducts(prev => prev.map(p => {
-      if (p.id !== productId) return p;
-      const delta = kind === "sale" ? -out : qn;
-      return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
-    }));
-    return out;
-  };
+  // v12: 销售/生产按天 upsert,同日累加(2026-09-29 第 3 批:原样搬到模块顶层 makeLogQty,今日生产单「记入生产」用同一个)
+  const logQty = makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts });
   // 销售记录删掉时库存加回多少(老记录没有 stockOut = 按卖出数)
   const saleStockBack = (s) => s.stockOut != null ? (parseFloat(s.stockOut) || 0) : (parseFloat(s.soldQty) || 0);
   // v12: 删除一条销售/生产记录,反向回滚 currentStock
@@ -15256,7 +15227,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                   {low.map(p => {
                     const stock = p.currentStock || 0;
                     const th = p.threshold || 0;
-                    const suggest = Math.max(1, th - stock + Math.max(1, Math.ceil(th / 2))); // 推荐做: 补到 threshold+50% buffer
+                    const suggest = restockSuggest(p); // 推荐做: 补到 threshold+50% buffer(第 3 批搬到模块顶层,今日生产单共用)
                     return (
                       <div key={p.id} onClick={() => setViewId(p.id)} style={{ cursor: "pointer", background: T.bgCard, padding: "8px 12px", borderRadius: T.radiusSm, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
                         <span style={{ fontWeight: 500 }}>{mLabel(p)}</span>
@@ -15797,28 +15768,14 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
   const today = localDateStr();
-  const plus = (d, days) => { const [y, m, dd] = String(d).split("-").map(Number); return localDateStr(new Date(y, m - 1, dd + days)); };
+  const plus = plusDaysStr;
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(plus(today, 7));
   const days = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
 
-  // 历史均值: 过去 30 天日均
-  // 2026-09-29 体检第 2 批:以前分母固定 30,开业第 7 天卖了 700 个只算成每天 23 个。
-  // 现在分母 = min(30, 从这个商品最早一条记录到今天的天数),不足 30 天在「建议」旁标「按最近 X 天」
-  const salesSpan = (productId) => {
-    const since = plus(today, -30);
-    const all = (salesLog || []).filter(s => s.productId === productId);
-    const list = all.filter(s => s.date >= since);
-    // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
-    const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
-    const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
-    return { list, span: Math.min(30, Math.max(1, span || 1)) };
-  };
-  const avgPerDay = (productId) => {
-    const { list, span } = salesSpan(productId);
-    const total = list.reduce((a, s) => a + (parseFloat(s.soldQty) || 0), 0);
-    return total / span;
-  };
+  // 历史均值: 过去 30 天日均(2026-09-29 第 3 批:算法原样搬到模块顶层 salesSpanOf / avgDailySales,今日生产单共用)
+  const salesSpan = (productId) => salesSpanOf(salesLog, productId, today);
+  const avgPerDay = (productId) => avgDailySales(salesLog, productId, today);
   const suggestQty = (productId) => Math.ceil(avgPerDay(productId) * days * 1.2);
 
   // 每个 product 计划数量(可改)
@@ -15845,58 +15802,10 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
   const inputStyle = { padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary };
 
   const compute = () => {
-    const grams = {}; // materialId -> 总克数
-    // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
-    // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
-    const skipped = new Map();
-    const skip = (reason, src, name) => {
-      const k = reason + "\u0000" + src;
-      if (!skipped.has(k)) skipped.set(k, { reason, src, names: new Set() });
-      if (name) skipped.get(k).names.add(name);
-    };
-    const ingName = (ing) => mLabel(ing) || ing.nameFr || "";
-    const collect = (obj, multiplier, src) => {
-      (obj.ingredients || []).forEach(ing => {
-        if (!ing) return;
-        const q = parseFloat(ing.qty) || 0;
-        const nm = ingName(ing);
-        if (!ing.materialId) { if (nm) skip("unlinked", src, nm); return; }
-        if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-        grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
-      });
-      (obj.layers || []).forEach(l => collect(l, multiplier, src));
-    };
-    (products || []).forEach(p => {
-      const planQty = parseFloat(plan[p.id]) || 0;
-      if (planQty <= 0) return;
-      if ((p.items || []).length === 0) skip("noItems", mLabel(p));
-      (p.items || []).forEach(it => {
-        // [B6 修复] 支持 component(组件)
-        const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId)
-          : it.linkedType === "component" ? components.find(c => c.id === it.linkedId)
-          : recipes.find(r => r.id === it.linkedId);
-        if (!target) { skip("missing", mLabel(p)); return; }
-        const src = mLabel(target) || target.nameFr || "";
-        // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 planQty * it.qty 个单位 → multiplier = planQty * it.qty / yield
-        const unit = parseFloat(it.qty) || 1;
-        if (it.linkedType === "creation") {
-          // v17.8: 组合产品要做 planQty * it.qty 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
-          // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
-          const b = creationBatch(target, planQty * unit, components, materials || [], brands || []);
-          b.parts.forEach(p => {
-            if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
-            p.ings.forEach(({ ing, qty }) => {
-              if (!ing.materialId) { skip("unlinked", src, ingName(ing)); return; }
-              if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-              grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
-            });
-          });
-          return;
-        }
-        const mult = (planQty * unit) / Math.max(1, parseFloat(target.yield) || 1);
-        collect(target, mult, src);
-      });
-    });
+    // 2026-09-29 第 3 批:汇总原料的算法原样搬到模块顶层 computeMaterialNeeds(今日生产单用它的生产模式);
+    // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
+    const { grams, skipped } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
+      { products, recipes, creations, components, materials, brands, lang });
     // 按 supplier 分组
     const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
     Object.entries(grams).forEach(([materialId, g]) => {
@@ -15907,7 +15816,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     });
     // 每组排序: 按克数降序
     Object.values(bySupplier).forEach(arr => arr.sort((a, b) => b.grams - a.grams));
-    setComputed({ grams, bySupplier, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })), computedAt: new Date().toISOString() });
+    setComputed({ grams, bySupplier, skipped, computedAt: new Date().toISOString() });
   };
 
   // 闭店窗口判定(YYYY-MM-DD 绝对日期, v16+)
@@ -16111,6 +16020,186 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     </div>
   );
 }
+
+// ─── 第 3 批(2026-09-29)共用纯函数:采购页 / 商品页 / 今日生产单 ─────────────────────
+// 下面四个是从 PurchaseView / ProductsView 里原样搬出来的,两边的行为一个字节不变
+// (.claude/scripts/batch3/f1_tests.cjs 拿 65858db 的旧版和新版跑同一组输入对比)。改它们等于同时改采购页、商品页和今日生产单。
+
+// 按本地日历加减天数(PurchaseView 原来的 plus)
+const plusDaysStr = (d, days) => { const [y, m, dd] = String(d).split("-").map(Number); return localDateStr(new Date(y, m - 1, dd + days)); };
+// 历史均值: 过去 30 天日均
+// 2026-09-29 体检第 2 批:以前分母固定 30,开业第 7 天卖了 700 个只算成每天 23 个。
+// 现在分母 = min(30, 从这个商品最早一条记录到今天的天数),不足 30 天在「建议」旁标「按最近 X 天」
+const salesSpanOf = (salesLog, productId, today) => {
+  const since = plusDaysStr(today, -30);
+  const all = (salesLog || []).filter(s => s.productId === productId);
+  const list = all.filter(s => s.date >= since);
+  // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
+  const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
+  const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
+  return { list, span: Math.min(30, Math.max(1, span || 1)) };
+};
+const avgDailySales = (salesLog, productId, today) => {
+  const { list, span } = salesSpanOf(salesLog, productId, today);
+  const total = list.reduce((a, s) => a + (parseFloat(s.soldQty) || 0), 0);
+  return total / span;
+};
+// 商品页「今日要做」红框:低库存(补货线 > 0 且库存 ≤ 补货线)建议做几个 = 补到补货线 + 50% 余量,至少 1
+const isLowStock = (p) => (p.threshold || 0) > 0 && (p.currentStock || 0) <= p.threshold;
+const restockSuggest = (p) => {
+  const stock = p.currentStock || 0;
+  const th = p.threshold || 0;
+  return Math.max(1, th - stock + Math.max(1, Math.ceil(th / 2)));
+};
+// 商品页的「记录卖出 / 记录生产」(ProductsView 原来的 logQty)。v12: 销售/生产按天 upsert,同日累加。forDate 可指定补录日期
+// 2026-09-29 体检第 2 批:卖出比库存多时库存停在 0,删记录却按整条数量加回 → 凭空多出库存。
+// 现在销售记录另存 stockOut(实际扣掉的件数,同日累加),删除按它回滚;老记录没有这个字段 = 按卖出数。返回实际扣掉的件数
+// products 是渲染时拿到的快照(算卖出最多扣几件用),所以一次要改很多商品时不能循环调它
+const makeLogQty = ({ products, today, setSalesLog, setProductionLog, setProducts }) => (kind, productId, addQty, forDate) => {
+  const qn = parseFloat(addQty) || 0;
+  if (qn <= 0) return 0;
+  const d = forDate || today;
+  const qtyField = kind === "sale" ? "soldQty" : "batchQty";
+  const setter = kind === "sale" ? setSalesLog : setProductionLog;
+  const cur = products.find(p => p.id === productId);
+  const out = kind === "sale" ? Math.min(qn, Math.max(0, parseFloat(cur && cur.currentStock) || 0)) : qn;
+  setter(prev => {
+    const existing = (prev || []).find(x => x.productId === productId && x.date === d);
+    if (existing) {
+      return prev.map(x => x.id === existing.id ? { ...x, [qtyField]: (parseFloat(x[qtyField]) || 0) + qn,
+        ...(kind === "sale" ? { stockOut: (x.stockOut != null ? (parseFloat(x.stockOut) || 0) : (parseFloat(x.soldQty) || 0)) + out } : {}),
+        updatedAt: new Date().toISOString() } : x);
+    }
+    return [...(prev || []), {
+      id: (kind === "sale" ? "sale_" : "prod_log_") + Date.now() + Math.random().toString(36).slice(2, 6),
+      productId, date: d, [qtyField]: qn, ...(kind === "sale" ? { stockOut: out } : {}), createdAt: new Date().toISOString(),
+    }];
+  });
+  // 联动库存: 销售扣(只扣实际有的), 生产加
+  setProducts(prev => prev.map(p => {
+    if (p.id !== productId) return p;
+    const delta = kind === "sale" ? -out : qn;
+    return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
+  }));
+  return out;
+};
+
+// 汇总原料(PurchaseView 原来的 compute 前半段)。
+// lines = [{ kind: "product" | "recipe" | "creation" | "component", id, qty, obj? }](obj 给了就不按 id 找)
+//   商品:每个组成项做 qty × 组成项个数 个;配方 / 组件:倍数 = 个数 ÷ max(1, 产出量);组合产品走 creationBatch(用量 × 个数 ÷ 制作个数)
+// ctx = { products, recipes, creations, components, materials, brands, lang }
+// 采购模式(默认):按材料 id 累加 grams(不管单位,和以前一样);没关联百科 / 用量读不出 / 没填用量的部分 / 没挂配方 / 挂的已删 → skipped
+// 生产模式(opts.production):另外给
+//   weigh    今天要称的:关联了的按材料 + 单位、没关联的按名字 + 单位汇总,克 / 毫升一类(isGramUnit)
+//   nonGram  按 本 / 個 这类单位的,单列(不能和克加在一起)
+//   fromStock 组件标了备货的部分:只写「从库存取 X」,不展开原料
+const _prodUnitOf = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
+  if (isGramUnit(u)) return /^(?:ml|毫升)$/i.test(u) ? "ml" : "g";
+  return u;
+};
+const _prodNameKey = (s) => String(s || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+const computeMaterialNeeds = (lines, ctx, opts = {}) => {
+  const { products, recipes, creations, components = [], materials, brands, lang } = ctx || {};
+  const prodMode = !!(opts && opts.production);
+  const mLabel = (o) => o ? (lang === "zh" ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) : "";
+  const grams = {}; // materialId -> 总克数
+  // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
+  // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
+  const skipped = new Map();
+  const skip = (reason, src, name) => {
+    const k = reason + "\u0000" + src;
+    if (!skipped.has(k)) skipped.set(k, { reason, src, names: new Set() });
+    if (name) skipped.get(k).names.add(name);
+  };
+  const ingName = (ing) => mLabel(ing) || ing.nameFr || "";
+  // 生产模式的累加
+  const weigh = new Map();
+  const fromStock = [];
+  const addWeigh = (ing, qty, src) => {
+    const unit = _prodUnitOf(ing.unit);
+    const mat = ing.materialId ? (materials || []).find(m => m && m.id === ing.materialId) : null;
+    const key = ing.materialId ? `m\u0000${ing.materialId}\u0000${unit}` : `n\u0000${_prodNameKey(ing.nameZh || ing.nameJa || ing.nameFr)}\u0000${unit}`;
+    if (!weigh.has(key)) weigh.set(key, { key, materialId: ing.materialId || null, name: (mat && mLabel(mat)) || ingName(ing), unit, gram: isGramUnit(ing.unit), qty: 0, srcs: new Set() });
+    const w = weigh.get(key);
+    w.qty += qty;
+    if (src) w.srcs.add(src);
+  };
+  const collect = (obj, multiplier, src) => {
+    (obj.ingredients || []).forEach(ing => {
+      if (!ing) return;
+      const q = parseFloat(ing.qty) || 0;
+      const nm = ingName(ing);
+      if (!ing.materialId) {
+        if (!prodMode) { if (nm) skip("unlinked", src, nm); return; }
+        if (!nm) return;
+        if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+        addWeigh(ing, q * multiplier, src);
+        return;
+      }
+      if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+      grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
+      if (prodMode) addWeigh(ing, q * multiplier, src);
+    });
+    (obj.layers || []).forEach(l => collect(l, multiplier, src));
+  };
+  // count = 要做几个(配方 / 组件按它们自己的单位,组合产品按个 / 台)
+  const addTarget = (linkedType, target, count, src) => {
+    if (linkedType === "creation") {
+      // v17.8: 组合产品要做 count 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
+      // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
+      const b = creationBatch(target, count, components, materials || [], brands || []);
+      b.parts.forEach(p => {
+        // 生产单:备货的部分不展开原料,只写「从库存取多少」
+        if (prodMode && p.stock) { fromStock.push({ src, name: p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`, unit: p.layer.unit || "g", qty: p.needed, noUsed: p.noUsed }); return; }
+        if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
+        p.ings.forEach(({ ing, qty }) => {
+          if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
+          if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+          if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
+          if (prodMode) addWeigh(ing, qty, src);
+        });
+      });
+      return;
+    }
+    // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 count 个单位 → multiplier = count / yield
+    const mult = count / Math.max(1, parseFloat(target.yield) || 1);
+    collect(target, mult, src);
+  };
+  const findTarget = (type, id) => type === "creation" ? creations.find(c => c.id === id)
+    : type === "component" ? components.find(c => c.id === id)
+    : recipes.find(r => r.id === id);
+  (lines || []).forEach(line => {
+    if (!line) return;
+    const planQty = parseFloat(line.qty) || 0;
+    if (planQty <= 0) return;
+    if (line.kind !== "product") {
+      const target = line.obj || findTarget(line.kind, line.id);
+      if (!target) { skip("missingDirect", String(line.id)); return; }
+      addTarget(line.kind, target, planQty, mLabel(target) || target.nameFr || "");
+      return;
+    }
+    const p = line.obj || (products || []).find(x => x.id === line.id);
+    if (!p) { skip("missingDirect", String(line.id)); return; }
+    if ((p.items || []).length === 0) skip("noItems", mLabel(p));
+    (p.items || []).forEach(it => {
+      // [B6 修复] 支持 component(组件)
+      const target = findTarget(it.linkedType, it.linkedId);
+      if (!target) { skip("missing", mLabel(p)); return; }
+      const src = mLabel(target) || target.nameFr || "";
+      const unit = parseFloat(it.qty) || 1;
+      addTarget(it.linkedType, target, planQty * unit, src);
+    });
+  });
+  const out = { grams, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })) };
+  if (prodMode) {
+    const all = [...weigh.values()].map(w => ({ ...w, srcs: [...w.srcs] })).sort((a, b) => b.qty - a.qty);
+    out.weigh = all.filter(w => w.gram);
+    out.nonGram = all.filter(w => !w.gram);
+    out.fromStock = fromStock;
+  }
+  return out;
+};
 
 // ─── 🔒 v1 内部テスト密码门 (LuLu 改这一行换密码) ─────────────────────
 const RURU_V1_PWD = "ruru2026";
