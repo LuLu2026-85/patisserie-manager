@@ -5779,6 +5779,7 @@ const ING_TABLE_TXT = {
     matTitle: (n) => `✓ 百科关联:${n}`,
     catTitle: (n) => `✓ 已关联「${n}」`,
     drift: "价格表已更新,点击同步",
+    priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、個、kg …)按每个单位填",
   },
   ja: {
     headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
@@ -5789,6 +5790,7 @@ const ING_TABLE_TXT = {
     matTitle: (n) => `✓ 材料事典:${n}`,
     catTitle: (n) => `✓ 価格表「${n}」に連動`,
     drift: "価格表の値に更新",
+    priceTh: "g / ml の行は 100g(100ml)あたりで入力。その他の単位(本・個・kg など)は 1 単位あたり",
   },
 };
 // 三页之间还剩的差异。datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id)
@@ -5806,6 +5808,45 @@ const ING_TABLE_VARIANTS = {
     trackPrice: false,
   },
 };
+
+// ─── 配料行单价:按「每 100 g」填(2026-09-29 第 2 批 2b C5)─────────────────────
+// 人民币每克价全是 0.008 这种读不动的小数,供货商报价、材料百科、本店原料显示的又都是每 100 g。
+// 所以单位是 g / ml / 空(以及 克 / 毫升)的行,输入框显示「存的每克价 × 100」,填进去的数 ÷ 100 再存;
+// 其他单位(kg / 本 / 個 / 枚 / L …)按「每单位」原样填 —— 成本 = 用量 × 单价,不换算单位。
+// **存储永远是每单位价(unitPrice),/100g 只在这个输入框里**。
+const isGramUnit = (unit) => /^(?:g|ml|克|毫升)?$/i.test(String(unit === undefined || unit === null ? "" : unit).trim());
+const ingPriceBasis = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).trim();
+  if (isGramUnit(u)) return { per100: true, label: /^(?:ml|毫升)$/i.test(u) ? "100ml" : "100g" };
+  return { per100: false, label: u };
+};
+// 存的每单位价 → 输入框里显示的数。toPrecision(12) 去掉 0.1 × 100 = 10.000000000000002 这种浮点尾巴
+const ingPriceShown = (stored, per100) => {
+  if (!stored) return "";
+  if (!per100) return String(stored);
+  const n = parseFloat(stored);
+  return isFinite(n) ? String(Number((n * 100).toPrecision(12))) : "";
+};
+// 输入框里填的数 → 存的每单位价
+const ingPriceStored = (text, per100) => {
+  if (!per100 || text === "") return text;
+  const n = parseFloat(text);
+  return isFinite(n) ? String(Number((n / 100).toPrecision(12))) : "";
+};
+// 单价输入框。draft = 她正在敲的原文:「1.」「0.50」这种换算一次就会变样(敲「1.」被吃成「1」),
+// 所以只要存下去的值还是这份原文算出来的那个,就照原文显示;失焦、或者值被别处改了(↺ / 选材料 / 切币种 / 改单位)就按存的值重算
+function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
+  const { per100 } = ingPriceBasis(ing.unit);
+  const [draft, setDraft] = useState(null);
+  const cur = ing.unitPrice === undefined || ing.unitPrice === null ? "" : ing.unitPrice;
+  const shown = (draft && draft.stored === cur && draft.per100 === per100) ? draft.text : ingPriceShown(cur, per100);
+  return (
+    <input type="number" placeholder={placeholder} value={shown}
+      onChange={e => { const text = e.target.value; const stored = ingPriceStored(text, per100); setDraft({ text, stored, per100 }); onChangeStored(stored); }}
+      onBlur={() => setDraft(null)}
+      style={style} />
+  );
+}
 
 // 配料表本体:「原材料」标题行(🤖 批量关联 / + 追加)+ 分组图例(配方)+ 表格 + 名字 / 品牌的 datalist。
 // 表格下面的成本汇总三页各不一样,留在编辑页里。
@@ -5889,7 +5930,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
           <thead>
             <tr style={{ background: "#F5F5F5" }}>
               {tx.headers.map((h, i) => (
-                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h}</th>
+                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }} title={i === 7 ? tx.priceTh : undefined}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -5954,6 +5995,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                 }));
               };
               const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
+              const basis = ingPriceBasis(ing.unit);   // 单价按每 100g 还是每单位填
+              const curBtnShown = !ing.materialId;     // ¥ / 円 切换按钮只给手写价的行
               // 检查价格是否和价格表当前值不一致
               const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                 Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
@@ -6000,9 +6043,14 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   </td>
                   <td style={{ padding: "3px 4px", position: "relative" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <input type="number" placeholder={curOf(ing) === "CNY" ? "¥/g" : "円/g"} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...ist, width: 52, ...(v.trackPrice ? { borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined } : {}) }} />
+                      {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
+                      <IngPriceInput ing={ing} placeholder={`${curOf(ing) === "CNY" ? "¥" : "円"}/${basis.label}`}
+                        onChangeStored={p=>{updateIng(ing._id,"unitPrice",p);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(p)).toFixed(1));}}
+                        style={{ ...ist, width: 52, ...(v.trackPrice ? { borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined } : {}) }} />
                       {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
-                      {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
+                      {curBtnShown && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
+                      {/* 口径小字:填好数以后占位符看不见了,这里一直写着按什么填 */}
+                      <span style={{ fontSize: 10, color: T.textTertiary, whiteSpace: "nowrap" }}>{curBtnShown ? "" : (curOf(ing) === "CNY" ? "¥" : "円")}/{basis.label}</span>
                       {v.trackPrice && ing._priceModified && (
                         <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                       )}
