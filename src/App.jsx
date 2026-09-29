@@ -8475,7 +8475,9 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
         {/* 水印 */}
         <div className="watermark">{brandName}</div>
 
-        {itemType === "creation" ? (
+        {itemType === "prodSheet" ? (
+          <ProductionSheetTemplate data={item} lang={lang} brandName={brandName} />
+        ) : itemType === "creation" ? (
           <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
         ) : (
           <>
@@ -15029,40 +15031,11 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 //        currentStock, threshold, leadTimeDays, sellPrice, note }
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components 参数,商品可关联组件
-function ProductsView({ products, setProducts, recipes, creations, components = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog }) {
+function ProductsView({ products, setProducts, recipes, creations, components = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
-  // v12: 销售/生产按天 upsert,同日累加。forDate 可指定补录日期
-  // 2026-09-29 体检第 2 批:卖出比库存多时库存停在 0,删记录却按整条数量加回 → 凭空多出库存。
-  // 现在销售记录另存 stockOut(实际扣掉的件数,同日累加),删除按它回滚;老记录没有这个字段 = 按卖出数。返回实际扣掉的件数
-  const logQty = (kind, productId, addQty, forDate) => {
-    const qn = parseFloat(addQty) || 0;
-    if (qn <= 0) return 0;
-    const d = forDate || today;
-    const qtyField = kind === "sale" ? "soldQty" : "batchQty";
-    const setter = kind === "sale" ? setSalesLog : setProductionLog;
-    const cur = products.find(p => p.id === productId);
-    const out = kind === "sale" ? Math.min(qn, Math.max(0, parseFloat(cur && cur.currentStock) || 0)) : qn;
-    setter(prev => {
-      const existing = (prev || []).find(x => x.productId === productId && x.date === d);
-      if (existing) {
-        return prev.map(x => x.id === existing.id ? { ...x, [qtyField]: (parseFloat(x[qtyField]) || 0) + qn,
-          ...(kind === "sale" ? { stockOut: (x.stockOut != null ? (parseFloat(x.stockOut) || 0) : (parseFloat(x.soldQty) || 0)) + out } : {}),
-          updatedAt: new Date().toISOString() } : x);
-      }
-      return [...(prev || []), {
-        id: (kind === "sale" ? "sale_" : "prod_log_") + Date.now() + Math.random().toString(36).slice(2, 6),
-        productId, date: d, [qtyField]: qn, ...(kind === "sale" ? { stockOut: out } : {}), createdAt: new Date().toISOString(),
-      }];
-    });
-    // 联动库存: 销售扣(只扣实际有的), 生产加
-    setProducts(prev => prev.map(p => {
-      if (p.id !== productId) return p;
-      const delta = kind === "sale" ? -out : qn;
-      return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
-    }));
-    return out;
-  };
+  // v12: 销售/生产按天 upsert,同日累加(2026-09-29 第 3 批:原样搬到模块顶层 makeLogQty,今日生产单「记入生产」用同一个)
+  const logQty = makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts });
   // 销售记录删掉时库存加回多少(老记录没有 stockOut = 按卖出数)
   const saleStockBack = (s) => s.stockOut != null ? (parseFloat(s.stockOut) || 0) : (parseFloat(s.soldQty) || 0);
   // v12: 删除一条销售/生产记录,反向回滚 currentStock
@@ -15248,15 +15221,17 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
             if (low.length === 0) return null;
             return (
               <div style={{ background: T.dangerBg, border: `2px solid ${T.danger}`, borderRadius: T.radiusLg, padding: "16px 20px", marginBottom: 16, boxShadow: "0 2px 8px rgba(220, 38, 38, 0.15)" }}>
-                <div style={{ fontSize: 16, fontWeight: 600, color: T.danger, marginBottom: 10, fontFamily: T.fontSerif, display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: T.danger, marginBottom: 10, fontFamily: T.fontSerif, display: "flex", alignItems: "center", gap: 8, ...(onOpenProdSheet ? { flexWrap: "wrap" } : {}) }}>
                   <span style={{ fontSize: 22 }}>⚠️</span>
                   <span>{lang === "zh" ? `今日要做 · ${low.length} 个商品低库存` : `今日の予定 · ${low.length} 件補充必要`}</span>
+                  {/* 第 3 批 F1:带着建议数跳到「今日」的生产单 */}
+                  {onOpenProdSheet && <span style={{ marginLeft: "auto" }}><Btn size="sm" variant="primary" onClick={() => onOpenProdSheet(low.map(p => ({ kind: "product", id: p.id, qty: restockSuggest(p) })))}>{lang === "zh" ? "→ 生成今日生产单" : "→ 本日の製造リストへ"}</Btn></span>}
                 </div>
                 <div style={{ display: "grid", gap: 6 }}>
                   {low.map(p => {
                     const stock = p.currentStock || 0;
                     const th = p.threshold || 0;
-                    const suggest = Math.max(1, th - stock + Math.max(1, Math.ceil(th / 2))); // 推荐做: 补到 threshold+50% buffer
+                    const suggest = restockSuggest(p); // 推荐做: 补到 threshold+50% buffer(第 3 批搬到模块顶层,今日生产单共用)
                     return (
                       <div key={p.id} onClick={() => setViewId(p.id)} style={{ cursor: "pointer", background: T.bgCard, padding: "8px 12px", borderRadius: T.radiusSm, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
                         <span style={{ fontWeight: 500 }}>{mLabel(p)}</span>
@@ -15797,28 +15772,14 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
   const today = localDateStr();
-  const plus = (d, days) => { const [y, m, dd] = String(d).split("-").map(Number); return localDateStr(new Date(y, m - 1, dd + days)); };
+  const plus = plusDaysStr;
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(plus(today, 7));
   const days = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
 
-  // 历史均值: 过去 30 天日均
-  // 2026-09-29 体检第 2 批:以前分母固定 30,开业第 7 天卖了 700 个只算成每天 23 个。
-  // 现在分母 = min(30, 从这个商品最早一条记录到今天的天数),不足 30 天在「建议」旁标「按最近 X 天」
-  const salesSpan = (productId) => {
-    const since = plus(today, -30);
-    const all = (salesLog || []).filter(s => s.productId === productId);
-    const list = all.filter(s => s.date >= since);
-    // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
-    const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
-    const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
-    return { list, span: Math.min(30, Math.max(1, span || 1)) };
-  };
-  const avgPerDay = (productId) => {
-    const { list, span } = salesSpan(productId);
-    const total = list.reduce((a, s) => a + (parseFloat(s.soldQty) || 0), 0);
-    return total / span;
-  };
+  // 历史均值: 过去 30 天日均(2026-09-29 第 3 批:算法原样搬到模块顶层 salesSpanOf / avgDailySales,今日生产单共用)
+  const salesSpan = (productId) => salesSpanOf(salesLog, productId, today);
+  const avgPerDay = (productId) => avgDailySales(salesLog, productId, today);
   const suggestQty = (productId) => Math.ceil(avgPerDay(productId) * days * 1.2);
 
   // 每个 product 计划数量(可改)
@@ -15845,58 +15806,10 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
   const inputStyle = { padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary };
 
   const compute = () => {
-    const grams = {}; // materialId -> 总克数
-    // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
-    // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
-    const skipped = new Map();
-    const skip = (reason, src, name) => {
-      const k = reason + "\u0000" + src;
-      if (!skipped.has(k)) skipped.set(k, { reason, src, names: new Set() });
-      if (name) skipped.get(k).names.add(name);
-    };
-    const ingName = (ing) => mLabel(ing) || ing.nameFr || "";
-    const collect = (obj, multiplier, src) => {
-      (obj.ingredients || []).forEach(ing => {
-        if (!ing) return;
-        const q = parseFloat(ing.qty) || 0;
-        const nm = ingName(ing);
-        if (!ing.materialId) { if (nm) skip("unlinked", src, nm); return; }
-        if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-        grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
-      });
-      (obj.layers || []).forEach(l => collect(l, multiplier, src));
-    };
-    (products || []).forEach(p => {
-      const planQty = parseFloat(plan[p.id]) || 0;
-      if (planQty <= 0) return;
-      if ((p.items || []).length === 0) skip("noItems", mLabel(p));
-      (p.items || []).forEach(it => {
-        // [B6 修复] 支持 component(组件)
-        const target = it.linkedType === "creation" ? creations.find(c => c.id === it.linkedId)
-          : it.linkedType === "component" ? components.find(c => c.id === it.linkedId)
-          : recipes.find(r => r.id === it.linkedId);
-        if (!target) { skip("missing", mLabel(p)); return; }
-        const src = mLabel(target) || target.nameFr || "";
-        // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 planQty * it.qty 个单位 → multiplier = planQty * it.qty / yield
-        const unit = parseFloat(it.qty) || 1;
-        if (it.linkedType === "creation") {
-          // v17.8: 组合产品要做 planQty * it.qty 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
-          // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
-          const b = creationBatch(target, planQty * unit, components, materials || [], brands || []);
-          b.parts.forEach(p => {
-            if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
-            p.ings.forEach(({ ing, qty }) => {
-              if (!ing.materialId) { skip("unlinked", src, ingName(ing)); return; }
-              if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-              grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
-            });
-          });
-          return;
-        }
-        const mult = (planQty * unit) / Math.max(1, parseFloat(target.yield) || 1);
-        collect(target, mult, src);
-      });
-    });
+    // 2026-09-29 第 3 批:汇总原料的算法原样搬到模块顶层 computeMaterialNeeds(今日生产单用它的生产模式);
+    // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
+    const { grams, skipped } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
+      { products, recipes, creations, components, materials, brands, lang });
     // 按 supplier 分组
     const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
     Object.entries(grams).forEach(([materialId, g]) => {
@@ -15907,7 +15820,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     });
     // 每组排序: 按克数降序
     Object.values(bySupplier).forEach(arr => arr.sort((a, b) => b.grams - a.grams));
-    setComputed({ grams, bySupplier, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })), computedAt: new Date().toISOString() });
+    setComputed({ grams, bySupplier, skipped, computedAt: new Date().toISOString() });
   };
 
   // 闭店窗口判定(YYYY-MM-DD 绝对日期, v16+)
@@ -16108,6 +16021,854 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// ─── 第 3 批(2026-09-29)共用纯函数:采购页 / 商品页 / 今日生产单 ─────────────────────
+// 下面四个是从 PurchaseView / ProductsView 里原样搬出来的,两边的行为一个字节不变
+// (.claude/scripts/batch3/f1_tests.cjs 拿 65858db 的旧版和新版跑同一组输入对比)。改它们等于同时改采购页、商品页和今日生产单。
+
+// 按本地日历加减天数(PurchaseView 原来的 plus)
+const plusDaysStr = (d, days) => { const [y, m, dd] = String(d).split("-").map(Number); return localDateStr(new Date(y, m - 1, dd + days)); };
+// 历史均值: 过去 30 天日均
+// 2026-09-29 体检第 2 批:以前分母固定 30,开业第 7 天卖了 700 个只算成每天 23 个。
+// 现在分母 = min(30, 从这个商品最早一条记录到今天的天数),不足 30 天在「建议」旁标「按最近 X 天」
+const salesSpanOf = (salesLog, productId, today) => {
+  const since = plusDaysStr(today, -30);
+  const all = (salesLog || []).filter(s => s.productId === productId);
+  const list = all.filter(s => s.date >= since);
+  // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
+  const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
+  const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
+  return { list, span: Math.min(30, Math.max(1, span || 1)) };
+};
+const avgDailySales = (salesLog, productId, today) => {
+  const { list, span } = salesSpanOf(salesLog, productId, today);
+  const total = list.reduce((a, s) => a + (parseFloat(s.soldQty) || 0), 0);
+  return total / span;
+};
+// 商品页「今日要做」红框:低库存(补货线 > 0 且库存 ≤ 补货线)建议做几个 = 补到补货线 + 50% 余量,至少 1
+const isLowStock = (p) => (p.threshold || 0) > 0 && (p.currentStock || 0) <= p.threshold;
+const restockSuggest = (p) => {
+  const stock = p.currentStock || 0;
+  const th = p.threshold || 0;
+  return Math.max(1, th - stock + Math.max(1, Math.ceil(th / 2)));
+};
+// 商品页的「记录卖出 / 记录生产」(ProductsView 原来的 logQty)。v12: 销售/生产按天 upsert,同日累加。forDate 可指定补录日期
+// 2026-09-29 体检第 2 批:卖出比库存多时库存停在 0,删记录却按整条数量加回 → 凭空多出库存。
+// 现在销售记录另存 stockOut(实际扣掉的件数,同日累加),删除按它回滚;老记录没有这个字段 = 按卖出数。返回实际扣掉的件数
+// products 是渲染时拿到的快照(算卖出最多扣几件用),所以一次要改很多商品时不能循环调它
+const makeLogQty = ({ products, today, setSalesLog, setProductionLog, setProducts }) => (kind, productId, addQty, forDate) => {
+  const qn = parseFloat(addQty) || 0;
+  if (qn <= 0) return 0;
+  const d = forDate || today;
+  const qtyField = kind === "sale" ? "soldQty" : "batchQty";
+  const setter = kind === "sale" ? setSalesLog : setProductionLog;
+  const cur = products.find(p => p.id === productId);
+  const out = kind === "sale" ? Math.min(qn, Math.max(0, parseFloat(cur && cur.currentStock) || 0)) : qn;
+  setter(prev => {
+    const existing = (prev || []).find(x => x.productId === productId && x.date === d);
+    if (existing) {
+      return prev.map(x => x.id === existing.id ? { ...x, [qtyField]: (parseFloat(x[qtyField]) || 0) + qn,
+        ...(kind === "sale" ? { stockOut: (x.stockOut != null ? (parseFloat(x.stockOut) || 0) : (parseFloat(x.soldQty) || 0)) + out } : {}),
+        updatedAt: new Date().toISOString() } : x);
+    }
+    return [...(prev || []), {
+      id: (kind === "sale" ? "sale_" : "prod_log_") + Date.now() + Math.random().toString(36).slice(2, 6),
+      productId, date: d, [qtyField]: qn, ...(kind === "sale" ? { stockOut: out } : {}), createdAt: new Date().toISOString(),
+    }];
+  });
+  // 联动库存: 销售扣(只扣实际有的), 生产加
+  setProducts(prev => prev.map(p => {
+    if (p.id !== productId) return p;
+    const delta = kind === "sale" ? -out : qn;
+    return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
+  }));
+  return out;
+};
+
+// 汇总原料(PurchaseView 原来的 compute 前半段)。
+// lines = [{ kind: "product" | "recipe" | "creation" | "component", id, qty, obj? }](obj 给了就不按 id 找)
+//   商品:每个组成项做 qty × 组成项个数 个;配方 / 组件:倍数 = 个数 ÷ max(1, 产出量);组合产品走 creationBatch(用量 × 个数 ÷ 制作个数)
+// ctx = { products, recipes, creations, components, materials, brands, lang }
+// 采购模式(默认):按材料 id 累加 grams(不管单位,和以前一样);没关联百科 / 用量读不出 / 没填用量的部分 / 没挂配方 / 挂的已删 → skipped
+// 生产模式(opts.production):另外给
+//   weigh    今天要称的:关联了的按材料 + 单位、没关联的按名字 + 单位汇总,克 / 毫升一类(isGramUnit)
+//   nonGram  按 本 / 個 这类单位的,单列(不能和克加在一起)
+//   fromStock 组件标了备货的部分:只写「从库存取 X」,不展开原料
+const _prodUnitOf = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
+  if (isGramUnit(u)) return /^(?:ml|毫升)$/i.test(u) ? "ml" : "g";
+  return u;
+};
+const _prodNameKey = (s) => String(s || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+const computeMaterialNeeds = (lines, ctx, opts = {}) => {
+  const { products, recipes, creations, components = [], materials, brands, lang } = ctx || {};
+  const prodMode = !!(opts && opts.production);
+  const mLabel = (o) => o ? (lang === "zh" ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) : "";
+  const grams = {}; // materialId -> 总克数
+  // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
+  // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
+  const skipped = new Map();
+  const skip = (reason, src, name) => {
+    const k = reason + "\u0000" + src;
+    if (!skipped.has(k)) skipped.set(k, { reason, src, names: new Set() });
+    if (name) skipped.get(k).names.add(name);
+  };
+  const ingName = (ing) => mLabel(ing) || ing.nameFr || "";
+  // 生产模式的累加
+  const weigh = new Map();
+  const fromStock = [];
+  const addWeigh = (ing, qty, src) => {
+    const unit = _prodUnitOf(ing.unit);
+    const mat = ing.materialId ? (materials || []).find(m => m && m.id === ing.materialId) : null;
+    const key = ing.materialId ? `m\u0000${ing.materialId}\u0000${unit}` : `n\u0000${_prodNameKey(ing.nameZh || ing.nameJa || ing.nameFr)}\u0000${unit}`;
+    if (!weigh.has(key)) weigh.set(key, { key, materialId: ing.materialId || null, name: (mat && mLabel(mat)) || ingName(ing), unit, gram: isGramUnit(ing.unit), qty: 0, srcs: new Set() });
+    const w = weigh.get(key);
+    w.qty += qty;
+    if (src) w.srcs.add(src);
+  };
+  const collect = (obj, multiplier, src) => {
+    (obj.ingredients || []).forEach(ing => {
+      if (!ing) return;
+      const q = parseFloat(ing.qty) || 0;
+      const nm = ingName(ing);
+      if (!ing.materialId) {
+        if (!prodMode) { if (nm) skip("unlinked", src, nm); return; }
+        if (!nm) return;
+        if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+        addWeigh(ing, q * multiplier, src);
+        return;
+      }
+      if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+      grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
+      if (prodMode) addWeigh(ing, q * multiplier, src);
+    });
+    (obj.layers || []).forEach(l => collect(l, multiplier, src));
+  };
+  // count = 要做几个(配方 / 组件按它们自己的单位,组合产品按个 / 台)
+  const addTarget = (linkedType, target, count, src) => {
+    if (linkedType === "creation") {
+      // v17.8: 组合产品要做 count 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
+      // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
+      const b = creationBatch(target, count, components, materials || [], brands || []);
+      b.parts.forEach(p => {
+        // 生产单:备货的部分不展开原料,只写「从库存取多少」
+        if (prodMode && p.stock) { fromStock.push({ src, name: p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`, unit: p.layer.unit || "g", qty: p.needed, noUsed: p.noUsed }); return; }
+        if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
+        p.ings.forEach(({ ing, qty }) => {
+          if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
+          if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
+          if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
+          if (prodMode) addWeigh(ing, qty, src);
+        });
+      });
+      return;
+    }
+    // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 count 个单位 → multiplier = count / yield
+    const mult = count / Math.max(1, parseFloat(target.yield) || 1);
+    collect(target, mult, src);
+  };
+  const findTarget = (type, id) => type === "creation" ? creations.find(c => c.id === id)
+    : type === "component" ? components.find(c => c.id === id)
+    : recipes.find(r => r.id === id);
+  (lines || []).forEach(line => {
+    if (!line) return;
+    const planQty = parseFloat(line.qty) || 0;
+    if (planQty <= 0) return;
+    if (line.kind !== "product") {
+      const target = line.obj || findTarget(line.kind, line.id);
+      if (!target) { skip("missingDirect", String(line.id)); return; }
+      addTarget(line.kind, target, planQty, mLabel(target) || target.nameFr || "");
+      return;
+    }
+    const p = line.obj || (products || []).find(x => x.id === line.id);
+    if (!p) { skip("missingDirect", String(line.id)); return; }
+    if ((p.items || []).length === 0) skip("noItems", mLabel(p));
+    (p.items || []).forEach(it => {
+      // [B6 修复] 支持 component(组件)
+      const target = findTarget(it.linkedType, it.linkedId);
+      if (!target) { skip("missing", mLabel(p)); return; }
+      const src = mLabel(target) || target.nameFr || "";
+      const unit = parseFloat(it.qty) || 1;
+      addTarget(it.linkedType, target, planQty * unit, src);
+    });
+  });
+  const out = { grams, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })) };
+  if (prodMode) {
+    const all = [...weigh.values()].map(w => ({ ...w, srcs: [...w.srcs] })).sort((a, b) => b.qty - a.qty);
+    out.weigh = all.filter(w => w.gram);
+    out.nonGram = all.filter(w => !w.gram);
+    out.fromStock = fromStock;
+  }
+  return out;
+};
+
+// ─── 第 3 批 F1:今日生产单(2026-09-29,LuLu:「都做了吧」)─────────────────────
+// 「今日」tab 的「生产单」子页:今天做哪几样、每样做几个 → 每样的配料按个数缩好、模具 / 炉温 / 时间、今天总共要称多少、打印、记入生产。
+// 当天计划存 appSettings.prodPlan = { date, lines, updatedAt }(放进已有对象 —— 顶层新键会被旧版 app 打开时删掉)。
+//   lines = [{ uid, kind: "product" | "recipe" | "creation" | "component", id, qty(她敲的原样字符串), done?, logged? }]
+//   done = 这一样做完了(打勾);logged = 这一行今天已经「记入生产」了几件(只商品行有,防止点两次记两遍)
+//   换了日期就当没有:读的时候按今天算空的,她第一次改动时整份换成今天的(旧的那天不删,可以「照那天的再来一份」)
+// 每一步改动立刻写进 appSettings(自动保存),页面上没有「没保存的改动」,所以不接 useDirtyGuard。
+// 页面和打印单都不显示任何价格 / 成本(员工模式 F4 也要用这一页)。
+const PROD_KINDS = ["product", "recipe", "creation", "component"];
+const prodPlanForToday = (raw, today) => {
+  if (!raw || typeof raw !== "object" || raw.date !== today || !Array.isArray(raw.lines)) return { date: today, lines: [] };
+  return { date: today, lines: raw.lines.filter(l => l && PROD_KINDS.includes(l.kind) && l.uid), updatedAt: raw.updatedAt };
+};
+const newProdLine = (kind, id, qty) => ({ uid: "pl_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), kind, id, qty: String(qty) });
+// 往单子上加:同一样(种类 + id)已经在单子上的不重复加,原来的数量不动
+const mergeProdLines = (lines, adds) => {
+  const out = [...(lines || [])];
+  let added = 0, existed = 0;
+  (adds || []).forEach(a => {
+    if (!a || !PROD_KINDS.includes(a.kind)) return;
+    if (out.some(l => l.kind === a.kind && String(l.id) === String(a.id))) { existed++; return; }
+    out.push(newProdLine(a.kind, a.id, a.qty));
+    added++;
+  });
+  return { lines: out, added, existed };
+};
+// 数量 ± 1,去掉浮点尾巴,不小于 0
+const stepProdQty = (qty, d) => String(Math.max(0, Math.round(((parseFloat(qty) || 0) + d) * 1000) / 1000));
+// 选配方 / 组合产品 / 组件时默认做一批:配方 / 组件 = 产出量,组合产品 = 制作个数
+const defaultProdQty = (kind, obj) => {
+  const n = parseFloat(obj && (kind === "creation" ? obj.serves : obj.yield));
+  return n > 0 ? n : 1;
+};
+const _prodFind = (list, id) => (list || []).find(x => x && String(x.id) === String(id));
+const _prodIngRows = (ings, scale) => (ings || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => {
+  const q = parseFloat(i.qty);
+  return { ing: i, qty: (scale !== null && isFinite(q)) ? q * scale : null };
+});
+// 读不出的用量(「适量」「少々」、没填、0):页面照抄原文并标出来,总量里也列进「这些没算进来」
+const _prodBadRows = (rows) => rows.filter(r => !(r.qty !== null && r.qty > 0));
+// 一个要做的东西(配方 / 组件 / 组合产品)做 need 个。配方 / 组件按「need ÷ max(1, 产出量)」缩放 —— 和采购页 / computeMaterialNeeds 同一个倍数;
+// 组合产品走 creationBatch(用量 × 个数 ÷ 制作个数,备货的部分只写从库存取)。模具 / 炉温 / 时间:配方自己没写就用家族通用参数(fam 标出来)
+const prodBlockOf = (type, target, need, ctx) => {
+  if (!target) return { type, missing: true, need };
+  if (type === "creation") {
+    const batch = creationBatch(target, need, ctx.components || [], ctx.materials || [], ctx.brands || []);
+    const bad = [];
+    batch.parts.forEach(p => { if (!p.stock && !p.noUsed) _prodBadRows(p.ings).forEach(r => bad.push(r)); });
+    return { type, target, need, batch, bad, mold: { v: _normTxt(target.mold), fam: false }, size: _normTxt(target.size) };
+  }
+  const yieldNum = parseFloat(target.yield) || 0;
+  const scale = need / Math.max(1, yieldNum || 1);
+  const rows = _prodIngRows(target.ingredients, scale);
+  const fam = type === "recipe" && target.familyId ? _prodFind(ctx.productFamilies, target.familyId) : null;
+  const pickP = (own, famv) => _normTxt(own) ? { v: _normTxt(own), fam: false } : (fam && _normTxt(famv) ? { v: _normTxt(famv), fam: true } : { v: "", fam: false });
+  return {
+    type, target, need, scale, yieldNum, unit: _normTxt(target.unit) || (type === "component" ? "g" : ""), rows, bad: _prodBadRows(rows),
+    mold: pickP(target.mold, fam && fam.commonMold),
+    temp: type === "recipe" ? pickP(target.temp, fam && fam.commonTemp) : { v: "", fam: false },
+    time: type === "recipe" ? pickP(target.baketime, fam && fam.commonTime) : { v: "", fam: false },
+  };
+};
+// 整张单子:每行解析成要显示的块。ctx = { products, recipes, creations, components, materials, brands, productFamilies }
+const buildProdSheet = (lines, ctx) => (lines || []).map(line => {
+  const qty = parseFloat(line.qty) || 0;
+  if (line.kind === "product") {
+    const p = _prodFind(ctx.products, line.id);
+    if (!p) return { line, qty, missing: true, blocks: [] };
+    const base = { line, qty, obj: p, leadTimeDays: parseFloat(p.leadTimeDays) || 0, noItems: (p.items || []).length === 0 };
+    if (!(qty > 0)) return { ...base, zero: true, blocks: [] };
+    const blocks = (p.items || []).map(it => {
+      const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
+      const list = type === "creation" ? ctx.creations : type === "component" ? ctx.components : ctx.recipes;
+      const per = parseFloat(it.qty) || 1;
+      return { ...prodBlockOf(type, _prodFind(list, it.linkedId), qty * per, ctx), per };
+    });
+    return { ...base, blocks };
+  }
+  const list = line.kind === "creation" ? ctx.creations : line.kind === "component" ? ctx.components : ctx.recipes;
+  const target = _prodFind(list, line.id);
+  if (!target) return { line, qty, missing: true, blocks: [] };
+  if (!(qty > 0)) return { line, qty, obj: target, zero: true, blocks: [] };
+  return { line, qty, obj: target, blocks: [prodBlockOf(line.kind, target, qty, ctx)] };
+});
+// 今天总共要称多少(computeMaterialNeeds 的生产模式)
+const prodSheetTotals = (sheet, ctx) => computeMaterialNeeds(
+  (sheet || []).map(s => ({ kind: s.line.kind, id: s.line.id, qty: s.qty, obj: s.obj })), ctx, { production: true });
+
+const PROD_TXT = {
+  zh: {
+    title: "生产单", kinds: { product: "商品", recipe: "配方", creation: "组合", component: "组件" },
+    addProducts: "＋ 从商品加", addPick: "＋ 配方 / 组合产品", addOnSale: "＋ 在售中", print: "🖨 打印", clearAll: "清空",
+    emptyTitle: "今天的生产单还是空的", emptyHint: "从商品加(按库存和最近的销量给建议数),或者直接选配方 / 组合产品 / 在售中的。数量随时能改,改了马上存。",
+    lead: (n) => `需提前 ${n} 天`, done: "做完", logBtn: (n) => `记入生产 +${n}`, logged: (n) => `✓ 已记入 ${n}`, logMore: (n) => `再记 +${n}`,
+    logHint: "记入生产 = 商品页「记录生产」同一写法,库存照加",
+    removed: (n) => `已从生产单删掉「${n}」`, cleared: (n) => `生产单清空了(${n} 样)`,
+    added: (a, e) => a > 0 ? `✓ 加了 ${a} 样${e > 0 ? `,${e} 样已经在单子上(数量没动)` : ""}` : `这 ${e} 样已经在单子上了(数量没动)`,
+    stale: (d) => `上次的单子是 ${d} 的,换了日期自动清空。`, copyStale: (d) => `↺ 照 ${d} 的单子再来一份`,
+    missing: "这一样已经删掉了(商品 / 配方 / 组合产品找不到)", zero: "数量是 0,不做", noItems: "这个商品没挂配方 / 组合产品,只能记入生产",
+    batchOf: (k, y, u) => `约 ${k} 批(一批 ${y}${u})`, per: (n, u) => `每件含 ${n}${u}`,
+    mold: "模具", temp: "炉温", time: "时间", fam: "家族通用", size: "尺寸",
+    bad: "这几项用量读不出数字,按原文做:", badEmpty: "没填",
+    partNeed: "需要", fromStock: "从库存取", noUsed: "这一部分没填用量,下面是组件的整批配方,没按个数算", ambiguous: (n, u) => `用量只认开头的数字,按 ${n} ${u} 一批算`,
+    whole: (f) => `整批 × ${f}`, collapse: "收起", expand: "展开配料",
+    totals: "今天总共要称多少", totalsHint: "关联了材料百科的按材料合并,没关联的按名字 + 单位合并。组件标了「备货」的部分不展开,只写从库存取多少。",
+    nonGram: "按个 / 本 这类单位的(不能和克加在一起)", stockTitle: "从库存取(备货的部分)", skippedTitle: (n) => `这些没算进来(${n} 项)`,
+    reasons: { noItems: "商品没挂任何配方 / 组合产品 / 组件", missing: "商品挂的配方 / 组合产品 / 组件已删除", missingDirect: "这一行的东西已删除", noUsed: "这几个部分没填「用量」,整部分没算", badQty: "用量没填或不是数字", unlinked: "没关联材料百科" },
+    close: "收起", pickProducts: "从商品加", lowAll: (n) => `＋ 低库存的全加(${n} 个)`, stockOf: (s, t) => `库存 ${s} · 补货线 ${t}`, avg: (a) => `近 30 天日均 ${a}`,
+    addRestock: (n) => `＋ ${n}(补库存)`, addAvg: (n) => `＋ ${n}(按日均)`, addOne: "＋ 加入", onSheet: "已在单子上",
+    noProducts: "还没有商品(去「商品」页新建)", onSaleTitle: "在售中的配方 / 组合产品", noOnSale: "还没有标「在售中」的(在配方一览里点行首的圆点)",
+    sources: "来源", unitPiece: "件",
+  },
+  ja: {
+    title: "製造リスト", kinds: { product: "商品", recipe: "レシピ", creation: "組立", component: "パーツ" },
+    addProducts: "＋ 商品から", addPick: "＋ レシピ / 組立製品", addOnSale: "＋ 販売中", print: "🖨 印刷", clearAll: "クリア",
+    emptyTitle: "本日の製造リストは空です", emptyHint: "商品(在庫と販売実績から推奨数)・レシピ / 組立製品・販売中から追加。数量はいつでも変更でき、すぐ保存されます。",
+    lead: (n) => `${n} 日前から仕込み`, done: "完了", logBtn: (n) => `製造記録 +${n}`, logged: (n) => `✓ 記録済み ${n}`, logMore: (n) => `追加記録 +${n}`,
+    logHint: "製造記録 = 商品ページの「製造記録」と同じ(在庫に加算)",
+    removed: (n) => `「${n}」を削除しました`, cleared: (n) => `リストをクリア(${n} 件)`,
+    added: (a, e) => a > 0 ? `✓ ${a} 件追加${e > 0 ? `(${e} 件は既にあり)` : ""}` : `${e} 件は既にリストにあります`,
+    stale: (d) => `前回のリストは ${d} のものです(日付が変わると空になります)。`, copyStale: (d) => `↺ ${d} と同じ内容で作る`,
+    missing: "削除済み(見つかりません)", zero: "数量 0", noItems: "レシピ未関連の商品(製造記録のみ)",
+    batchOf: (k, y, u) => `約 ${k} バッチ(1 バッチ ${y}${u})`, per: (n, u) => `1 個あたり ${n}${u}`,
+    mold: "型", temp: "温度", time: "時間", fam: "ファミリー共通", size: "サイズ",
+    bad: "分量が数字でない項目(原文どおり):", badEmpty: "未入力",
+    partNeed: "必要量", fromStock: "ストックから", noUsed: "使用量未入力のため全量レシピ", ambiguous: (n, u) => `先頭の数字 ${n} ${u} で計算`,
+    whole: (f) => `全量 × ${f}`, collapse: "閉じる", expand: "材料を表示",
+    totals: "本日の計量合計", totalsHint: "材料事典に関連付けた材料は材料ごと、未関連は名前 + 単位ごとに合計。作り置きのパーツは展開せず、ストックから取る量のみ。",
+    nonGram: "個 / 本 などの単位(g と合算不可)", stockTitle: "ストックから(作り置き)", skippedTitle: (n) => `計算に含まれていないもの(${n} 件)`,
+    reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連" },
+    close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a) => `30 日平均 ${a}/日`,
+    addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
+    noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組立製品", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
+    sources: "使用先", unitPiece: "個",
+  },
+};
+const prodTxt = (lang) => PROD_TXT[lang === "ja" ? "ja" : "zh"];
+const prodName = (o, lang) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
+// 生产单(和以后的员工视图)不显示钱:配料备注里夹着的价格(09-26 数据:「全换黄油；¥1300/25kg(厨房老虎 2026-09)」)
+// 按「;」/ 换行分段,带钱的那段整段去掉,其余照印
+const PROD_MONEY_RE = /[¥￥円]|\d\s*元|价格|価格|成本|原価|毛利|利润|利益/;
+const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
+const prodRowsNoMoney = (rows) => (rows || []).map(r => (r.ing && r.ing.note) ? { ...r, ing: { ...r.ing, note: prodNote(r.ing.note) } } : r);
+
+// 配料行 + 读不出的用量提示(不改 SheetIngRows,它是组合产品整体配方共用的)
+function ProdIngList({ rows, bad, lang }) {
+  const X = prodTxt(lang);
+  return (
+    <div>
+      <SheetIngRows rows={prodRowsNoMoney(rows)} lang={lang} />
+      {bad && bad.length > 0 && (
+        <div style={{ ...T.fs.caption, color: T.warning, marginTop: 6 }}>
+          ⚠ {X.bad}{bad.map(r => `${prodName(r.ing, lang)}(${_normTxt(r.ing.qty) || X.badEmpty})`).join("、")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 模具 / 炉温 / 时间一行(家族通用参数标出来)
+function ProdMeta({ b, lang }) {
+  const X = prodTxt(lang);
+  const items = [["mold", X.mold], ["temp", X.temp], ["time", X.time]].filter(([k]) => b[k] && b[k].v)
+    .map(([k, label]) => ({ label, v: b[k].v, fam: b[k].fam }));
+  if (b.size) items.push({ label: X.size, v: b.size, fam: false });
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "flex", gap: "4px 14px", flexWrap: "wrap", ...T.fs.caption, color: T.body, marginTop: 4 }}>
+      {items.map((it, i) => (
+        <span key={i}><span style={{ color: T.subtle }}>{it.label}</span> {it.v}{it.fam && <span style={{ color: T.subtle }}>({X.fam})</span>}</span>
+      ))}
+    </div>
+  );
+}
+
+// 一个要做的东西的块:配方 / 组件 = 缩好的配料;组合产品 = 每部分要多少 + 缩好的配料,备货的只写从库存取
+function ProdBlock({ b, lang, showHead }) {
+  const X = prodTxt(lang);
+  const zh = lang !== "ja";
+  if (b.missing) return <div style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>⚠ {X.missing}</div>;
+  const name = prodName(b.target, lang);
+  if (b.type === "creation") {
+    const W = creationWords(creationStructureOf(b.target), lang);
+    const batch = b.batch;
+    return (
+      <div style={{ marginTop: 10 }}>
+        {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds.creation} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)} {W.unit}</span></div>}
+        <ProdMeta b={b} lang={lang} />
+        {batch.parts.map(p => {
+          const l = p.layer;
+          const title = l.customName || prodName(l, lang) || `#${p.idx + 1}`;
+          const u = l.unit || "g";
+          return (
+            <div key={p.idx} style={{ borderLeft: `2px solid ${T.lineFaint}`, paddingLeft: 10, marginTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                <span style={{ ...T.fs.small, fontWeight: 500, minWidth: 0 }}>{String(p.idx + 1).padStart(2, "0")} {title}{p.stock && <span style={{ ...T.fs.label, color: T.warning, marginLeft: 6 }}>{zh ? "备货" : "作り置き"}</span>}</span>
+                <span style={{ ...T.fs.small, ...T.num }}>{p.needed !== null ? `${X.partNeed} ${fmtQty(p.needed)} ${u}` : (p.yieldNum > 0 ? "" : X.whole(fmtQty(batch.factor)))}</span>
+              </div>
+              {p.noUsed && <div style={{ ...T.fs.caption, color: T.danger, marginTop: 4 }}>⚠ {X.noUsed}</div>}
+              {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
+              {p.stock ? (
+                <div style={{ ...T.fs.small, marginTop: 4 }}>{X.fromStock} <strong style={{ ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : ""}</strong></div>
+              ) : (
+                <ProdIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings}
+                  bad={p.noUsed ? [] : _prodBadRows(p.ings)} lang={lang} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  const u = b.unit;
+  return (
+    <div style={{ marginTop: 10 }}>
+      {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)}{u ? " " + u : ""}</span></div>}
+      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), u ? " " + u : "")}</div>
+      <ProdMeta b={b} lang={lang} />
+      <ProdIngList rows={b.rows} bad={b.bad} lang={lang} />
+    </div>
+  );
+}
+
+// 生产单的一行
+function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, onDone, onLog }) {
+  const X = prodTxt(lang);
+  const l = s.line;
+  const isProduct = l.kind === "product";
+  const name = s.obj ? prodName(s.obj, lang) : String(l.id);
+  const unit = isProduct ? ((s.obj && s.obj.unit) || X.unitPiece)
+    : l.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), lang).unit : "")
+    : ((s.obj && s.obj.unit) || (l.kind === "component" ? "g" : ""));
+  const logged = parseFloat(l.logged) || 0;
+  const pending = Math.round((s.qty - logged) * 1000) / 1000;
+  const sq = { width: 36, height: 36, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, cursor: "pointer", fontSize: 18, lineHeight: 1, color: T.body, flexShrink: 0, fontFamily: T.fontSans };
+  return (
+    <div data-prodline={l.uid} style={{ borderTop: `1px solid ${l.done ? T.success : T.border}`, borderRight: `1px solid ${l.done ? T.success : T.border}`, borderBottom: `1px solid ${l.done ? T.success : T.border}`, borderLeft: `3px solid ${l.done ? T.success : T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button type="button" onClick={onDone} aria-pressed={!!l.done} title={X.done}
+          style={{ ...sq, width: 28, height: 28, fontSize: 15, color: l.done ? T.paper : T.body, background: l.done ? T.success : T.paper, border: `1px solid ${l.done ? T.success : T.border}` }}>{l.done ? "✓" : ""}</button>
+        <div style={{ flex: "1 1 160px", minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[l.kind]}</span>
+            <span style={{ ...T.fs.strong, textDecoration: l.done ? "line-through" : "none", overflowWrap: "anywhere" }}>{name}</span>
+            {s.leadTimeDays > 0 && <span style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, padding: "0 6px", borderRadius: T.radius }}>{X.lead(fmtQty(s.leadTimeDays))}</span>}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button type="button" onClick={() => onStep(-1)} style={sq} aria-label="-1">−</button>
+          <input type="text" inputMode="decimal" value={l.qty} onChange={e => onQty(e.target.value)}
+            style={{ width: 64, height: 36, textAlign: "center", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
+          <button type="button" onClick={() => onStep(1)} style={sq} aria-label="+1">+</button>
+          <span style={{ ...T.fs.caption, color: T.subtle, minWidth: 16 }}>{unit}</span>
+          <button type="button" onClick={onRemove} title="✕" style={{ ...sq, border: "none", background: "transparent", color: T.subtle }}>✕</button>
+        </div>
+      </div>
+      {isProduct && s.obj && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {logged > 0 && <span style={{ ...T.fs.caption, color: T.success }}>{X.logged(fmtQty(logged))}</span>}
+          {/* 两种按钮给不同的 key:同一个 Btn 换 variant 会在重画时混用 border / borderColor(React 警告) */}
+          {pending > 0 && (logged > 0
+            ? <Btn key="more" size="sm" onClick={onLog} title={X.logHint}>{X.logMore(fmtQty(pending))}</Btn>
+            : <Btn key="first" size="sm" variant="success" onClick={onLog} title={X.logHint}>{X.logBtn(fmtQty(pending))}</Btn>)}
+        </div>
+      )}
+      {s.missing && <div style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>⚠ {X.missing}</div>}
+      {!s.missing && s.zero && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.zero}</div>}
+      {!s.missing && !s.zero && s.noItems && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.noItems}</div>}
+      {s.blocks.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button type="button" onClick={onToggleOpen}
+            style={{ background: "none", border: "none", padding: "4px 0", cursor: "pointer", ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
+            {open ? "▼ " + X.collapse : "▶ " + X.expand}
+          </button>
+          {open && s.blocks.map((b, i) => <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 今天总共要称多少
+function ProdTotals({ totals, lang }) {
+  const X = prodTxt(lang);
+  const row = (w, i) => (
+    <div key={w.key || i} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, padding: "7px 0", borderBottom: `1px solid ${T.lineFaint}`, alignItems: "baseline" }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ ...T.fs.small, fontWeight: 500, overflowWrap: "anywhere" }}>{w.name}</div>
+        {w.srcs && w.srcs.length > 0 && <div style={{ ...T.fs.label, color: T.subtle, letterSpacing: 0, overflowWrap: "anywhere" }}>{w.srcs.join("、")}</div>}
+      </div>
+      <div style={{ ...T.fs.strong, fontFamily: T.fontSerif, ...T.num, whiteSpace: "nowrap" }}>{fmtQty(w.qty)} <span style={{ ...T.fs.caption, color: T.body }}>{w.unit}</span></div>
+    </div>
+  );
+  const box = { border: `1px solid ${T.border}`, background: T.bgCard, padding: "12px 14px", marginTop: 12 };
+  const skippedN = totals.skipped.reduce((a, x) => a + Math.max(1, x.names.length), 0);
+  return (
+    <div data-prodtotals="1" style={{ marginTop: 20 }}>
+      <div style={{ ...T.fs.titleS, fontFamily: T.fontSerif }}>{X.totals}</div>
+      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{X.totalsHint}</div>
+      <div style={box}>{totals.weigh.length ? totals.weigh.map(row) : <div style={{ ...T.fs.caption, color: T.subtle }}>—</div>}</div>
+      {totals.nonGram.length > 0 && (
+        <div style={box}><div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.nonGram}</div>{totals.nonGram.map(row)}</div>
+      )}
+      {totals.fromStock.length > 0 && (
+        <div style={box}>
+          <div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.stockTitle}</div>
+          {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.name, srcs: [f.src], qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
+        </div>
+      )}
+      {totals.skipped.length > 0 && (
+        <div style={{ ...box, border: "none", borderTop: `1px solid ${T.warning}`, borderRight: `1px solid ${T.warning}`, borderBottom: `1px solid ${T.warning}`, borderLeft: `3px solid ${T.warning}` }}>
+          <div style={{ ...T.fs.small, fontWeight: 500, color: T.warning }}>⚠ {X.skippedTitle(skippedN)}</div>
+          {totals.skipped.map((x, i) => (
+            <div key={i} style={{ ...T.fs.caption, color: T.body, marginTop: 4, overflowWrap: "anywhere" }}>
+              <span style={{ fontWeight: 500 }}>「{x.src}」</span><span style={{ color: T.warning, margin: "0 6px" }}>{X.reasons[x.reason] || x.reason}</span>{x.names.join("、")}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 从商品加:每个商品给「补库存」(低库存时,同商品页红框)和「按日均」(近 30 天日均 × 1.2,同采购页一天的口径)两个建议数
+function ProdAddProducts({ products, salesLog, lines, today, lang, onAdd, onClose }) {
+  const X = prodTxt(lang);
+  const on = new Set((lines || []).filter(l => l.kind === "product").map(l => String(l.id)));
+  const low = (products || []).filter(p => isLowStock(p) && !on.has(String(p.id)));
+  return (
+    <div style={{ border: `1px solid ${T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.pickProducts}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {low.length > 0 && <Btn size="sm" variant="primary" onClick={() => onAdd(low.map(p => ({ kind: "product", id: p.id, qty: restockSuggest(p) })))}>{X.lowAll(low.length)}</Btn>}
+          <Btn size="sm" onClick={onClose}>{X.close}</Btn>
+        </div>
+      </div>
+      {(products || []).length === 0 && <div style={{ ...T.fs.caption, color: T.subtle }}>{X.noProducts}</div>}
+      {(products || []).map(p => {
+        const avg = avgDailySales(salesLog, p.id, today);
+        const avgSug = Math.ceil(avg * 1.2);
+        const isLow = isLowStock(p);
+        const already = on.has(String(p.id));
+        return (
+          <div key={p.id} data-addproduct={p.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+            <div style={{ flex: "1 1 150px", minWidth: 0 }}>
+              <div style={{ ...T.fs.small, fontWeight: 500, overflowWrap: "anywhere" }}>{prodName(p, lang)}{p.leadTimeDays > 0 && <span style={{ ...T.fs.label, color: T.warning, marginLeft: 6 }}>{X.lead(fmtQty(p.leadTimeDays))}</span>}</div>
+              <div style={{ ...T.fs.label, color: isLow ? T.danger : T.subtle, letterSpacing: 0, ...T.num }}>{X.stockOf(p.currentStock || 0, p.threshold || 0)}{avg > 0 ? " · " + X.avg(fmtQty(avg)) : ""}</div>
+            </div>
+            {already ? <span style={{ ...T.fs.caption, color: T.success }}>{X.onSheet}</span> : (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {isLow && <Btn size="sm" onClick={() => onAdd([{ kind: "product", id: p.id, qty: restockSuggest(p) }])}>{X.addRestock(restockSuggest(p))}</Btn>}
+                {avgSug > 0 && <Btn size="sm" onClick={() => onAdd([{ kind: "product", id: p.id, qty: avgSug }])}>{X.addAvg(avgSug)}</Btn>}
+                {!isLow && !(avgSug > 0) && <Btn size="sm" onClick={() => onAdd([{ kind: "product", id: p.id, qty: 1 }])}>{X.addOne}</Btn>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
+  const X = prodTxt(lang);
+  const on = new Set((lines || []).map(l => l.kind + "\u0000" + String(l.id)));
+  const items = [
+    ...(recipes || []).filter(r => r && r.onSale).map(r => ({ kind: "recipe", obj: r })),
+    ...(creations || []).filter(c => c && c.onSale).map(c => ({ kind: "creation", obj: c })),
+  ];
+  return (
+    <div style={{ border: `1px solid ${T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.onSaleTitle}</div>
+        <Btn size="sm" onClick={onClose}>{X.close}</Btn>
+      </div>
+      {items.length === 0 && <div style={{ ...T.fs.caption, color: T.subtle }}>{X.noOnSale}</div>}
+      {items.map(({ kind, obj }) => {
+        const already = on.has(kind + "\u0000" + String(obj.id));
+        const q = defaultProdQty(kind, obj);
+        const u = kind === "creation" ? creationWords(creationStructureOf(obj), lang).unit : (obj.unit || "");
+        return (
+          <div key={kind + obj.id} data-addonsale={kind + ":" + obj.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}`, flexWrap: "wrap" }}>
+            <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[kind]}</span>
+            <span style={{ ...T.fs.small, flex: "1 1 140px", minWidth: 0, overflowWrap: "anywhere" }}>{prodName(obj, lang)}</span>
+            {already ? <span style={{ ...T.fs.caption, color: T.success }}>{X.onSheet}</span>
+              : <Btn size="sm" onClick={() => onAdd([{ kind, id: obj.id, qty: q }])}>{`＋ ${fmtQty(q)}${u ? " " + u : ""}`}</Btn>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 生产单页面。plan 的读写都在 App(updatePlan),这里只拿今天的那份来显示
+function ProductionSheetView({ products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [], salesLog = [],
+  rawPlan, today, updatePlan, onLogProduction, onPrint, lang, showToast }) {
+  const X = prodTxt(lang);
+  const plan = prodPlanForToday(rawPlan, today);
+  const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
+  const sheet = buildProdSheet(plan.lines, ctx);
+  const totals = prodSheetTotals(sheet, ctx);
+  const [adding, setAdding] = useState(null);      // null | "products" | "pick" | "onsale"
+  const [closed, setClosed] = useState({});         // uid → true(收起了配料)
+  const stale = rawPlan && typeof rawPlan === "object" && rawPlan.date && rawPlan.date !== today && Array.isArray(rawPlan.lines) && rawPlan.lines.length > 0 && plan.lines.length === 0;
+  const addLines = (adds) => {
+    const r = mergeProdLines(plan.lines, adds);
+    updatePlan(lines => mergeProdLines(lines, adds).lines);
+    if (showToast) showToast(X.added(r.added, r.existed));
+  };
+  const setLine = (uid, patch) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, ...patch } : l));
+  const remove = (uid) => {
+    const idx = plan.lines.findIndex(l => l.uid === uid);
+    if (idx < 0) return;
+    const gone = plan.lines[idx];
+    const s = sheet[idx];
+    updatePlan(lines => lines.filter(l => l.uid !== uid));
+    if (showToast) showToast(X.removed(s && s.obj ? prodName(s.obj, lang) : String(gone.id)), { undo: () => updatePlan(lines => {
+      if (lines.some(l => l.uid === uid)) return lines;
+      const next = [...lines]; next.splice(Math.min(idx, next.length), 0, gone); return next;
+    }) });
+  };
+  const clearAll = () => {
+    const before = plan.lines;
+    if (!before.length) return;
+    updatePlan(() => []);
+    if (showToast) showToast(X.cleared(before.length), { undo: () => updatePlan(lines => lines.length ? [...before.filter(b => !lines.some(l => l.uid === b.uid)), ...lines] : before) });
+  };
+  const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty)));
+  const mLabel = (o) => prodName(o, lang);
+
+  if (adding === "pick") {
+    return <ProductItemPicker recipes={recipes} components={components} creations={creations} mLabel={mLabel} lang={lang}
+      onPick={(id, type) => {
+        const list = type === "creation" ? creations : type === "component" ? components : recipes;
+        addLines([{ kind: type, id, qty: defaultProdQty(type, _prodFind(list, id)) }]);
+        setAdding(null);
+      }}
+      onCancel={() => setAdding(null)} />;
+  }
+
+  return (
+    <div data-prodsheet="1">
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        <Btn size="sm" onClick={() => setAdding(adding === "products" ? null : "products")}>{X.addProducts}</Btn>
+        <Btn size="sm" onClick={() => setAdding("pick")}>{X.addPick}</Btn>
+        <Btn size="sm" onClick={() => setAdding(adding === "onsale" ? null : "onsale")}>{X.addOnSale}</Btn>
+        <div style={{ flex: 1 }} />
+        <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint({ date: today, sheet, totals, lang })}>{X.print}</Btn>
+        <Btn size="sm" variant="ghost" disabled={!plan.lines.length} onClick={clearAll}>{X.clearAll}</Btn>
+      </div>
+      {adding === "products" && <ProdAddProducts products={products} salesLog={salesLog} lines={plan.lines} today={today} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
+      {adding === "onsale" && <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
+      {stale && (
+        <div style={{ ...T.fs.caption, color: T.body, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span>{X.stale(rawPlan.date)}</span>
+          <Btn size="sm" variant="ghost" onClick={copyStale}>{X.copyStale(rawPlan.date)}</Btn>
+        </div>
+      )}
+      {plan.lines.length === 0 ? (
+        <EmptyState variant="first" title={X.emptyTitle} hint={X.emptyHint} lang={lang}
+          actions={[{ label: X.addProducts, onClick: () => setAdding("products") }, { label: X.addPick, onClick: () => setAdding("pick") }]} />
+      ) : (
+        <>
+          {sheet.map(s => (
+            <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
+              onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
+              onQty={(v) => setLine(s.line.uid, { qty: v })}
+              onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d) })}
+              onRemove={() => remove(s.line.uid)}
+              onDone={() => setLine(s.line.uid, { done: !s.line.done })}
+              onLog={() => onLogProduction && onLogProduction(s.line.uid)} />
+          ))}
+          <ProdTotals totals={totals} lang={lang} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// 「今日」tab:生产单 | 日结。日结(F2)下一步做,先占位
+const TODAY_SUBS = [{ id: "sheet", zh: "生产单", ja: "製造リスト" }, { id: "close", zh: "日结", ja: "日次締め" }];
+function DailyClosePlaceholder({ lang }) {
+  return <EmptyState variant="first" lang={lang}
+    title={lang === "ja" ? "日次締めは準備中です" : "日结还在做"}
+    hint={lang === "ja" ? "次の版で、商品ごとに当日の販売数とロス(焼き損じ / 期限切れ / 試食 / まかない)を入力して一度に保存できるようになります。今は「商品」ページで記録してください。"
+      : "下一版在这里:每个商品一行,填当天卖出和报损(烤坏 / 过期 / 试吃 / 员工餐),一次保存。现在卖出还是在「商品」页记。"} />;
+}
+function TodayView(props) {
+  const { lang, today } = props;
+  const [sub, setSub] = useState("sheet");
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingBottom: T.sp.l, borderBottom: `1px solid ${T.ink}`, flexWrap: "wrap", gap: T.sp.m, marginBottom: T.sp.l }}>
+        <div>
+          <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "ja" ? "本日" : "今日"}</div>
+          <div style={{ ...T.fs.title, fontFamily: T.fontSerif, ...T.num, color: T.ink, marginTop: T.sp.xs }}>{today}</div>
+        </div>
+        <div role="tablist" style={{ display: "flex", border: `1px solid ${T.ink}` }}>
+          {TODAY_SUBS.map((t, i) => (
+            <button key={t.id} type="button" role="tab" aria-selected={sub === t.id} onClick={() => setSub(t.id)}
+              style={{ padding: "8px 18px", minHeight: 40, border: "none", borderLeft: i ? `1px solid ${T.ink}` : "none", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.small,
+                background: sub === t.id ? T.ink : T.paper, color: sub === t.id ? T.paper : T.ink }}>
+              {lang === "ja" ? t.ja : t.zh}
+            </button>
+          ))}
+        </div>
+      </div>
+      {sub === "sheet" ? <ProductionSheetView {...props} /> : <DailyClosePlaceholder lang={lang} />}
+    </div>
+  );
+}
+
+// 打印:生产单(A4)。每一样一块(配料按个数缩好 + 模具 / 炉温 / 时间)+ 今天总共要称多少 + 记录栏(计划 / 实做 / 开始 / 出炉 / 核温 / 签名)+ 当日备注。
+// ⚠️ 不能出现任何价格 / 成本(员工拿着这张单子干活)
+function ProductionSheetTemplate({ data, lang, brandName }) {
+  const L = lang === "ja" ? "ja" : "zh";
+  const X = prodTxt(L);
+  const zh = L === "zh";
+  const sheet = (data && data.sheet) || [];
+  const totals = (data && data.totals) || { weigh: [], nonGram: [], fromStock: [], skipped: [] };
+  const date = (data && data.date) || "";
+  const qtyText = (r) => {
+    const raw = _normTxt(r.ing.qty);
+    if (r.qty !== null && r.qty > 0) return `${fmtQty(r.qty)} ${r.ing.unit || "g"}`;
+    return raw ? `${raw} ⚠` : `— ⚠`;
+  };
+  const ingTable = (rows) => {
+    const sorted = rows.map((r, i) => ({ r, i })).sort((a, b) => {
+      const oa = GROUP_ORDER.indexOf(GROUPS[a.r.ing.group] ? a.r.ing.group : "none"), ob = GROUP_ORDER.indexOf(GROUPS[b.r.ing.group] ? b.r.ing.group : "none");
+      return (oa - ob) || (a.i - b.i);
+    }).map(x => x.r);
+    const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
+    return (
+      <table style={{ marginTop: "4px" }}>
+        <tbody>
+          {sorted.map((r, i) => (
+            <tr key={i}>
+              <td className="p-td" style={{ width: "26px", padding: "4px 0", fontWeight: 700 }}>{marks[r.ing.group] || ""}</td>
+              <td className="p-td" style={{ padding: "4px 0" }}>
+                <span style={{ fontSize: "12pt", fontWeight: 700 }}>{prodName(r.ing, L)}</span>
+                {prodNote(r.ing.note) && <span style={{ fontSize: "9pt", marginLeft: "6px" }}>{prodNote(r.ing.note)}</span>}
+              </td>
+              <td className="p-td" style={{ padding: "4px 0", textAlign: "right", fontSize: "13pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{qtyText(r)}</td>
+              <td className="p-td" style={{ width: "30px", padding: "4px 0 4px 8px" }}><span className="p-check" style={{ width: "16px", height: "16px" }} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+  const metaText = (b) => [[b.mold, X.mold], [b.temp, X.temp], [b.time, X.time]].filter(([v]) => v && v.v).map(([v, lab]) => `${lab} ${v.v}${v.fam ? `(${X.fam})` : ""}`).concat(b.size ? [`${X.size} ${b.size}`] : []).join("   ");
+  const block = (b, showHead, key) => {
+    if (b.missing) return <div key={key} style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {X.missing}</div>;
+    const name = prodName(b.target, L);
+    if (b.type === "creation") {
+      const W = creationWords(creationStructureOf(b.target), L);
+      return (
+        <div key={key} style={{ marginTop: "6px" }}>
+          {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds.creation} · {name} × {fmtQty(b.need)} {W.unit}</div>}
+          {metaText(b) && <div style={{ fontSize: "10pt" }}>{metaText(b)}</div>}
+          {b.batch.parts.map(p => {
+            const l = p.layer;
+            const u = l.unit || "g";
+            return (
+              <div key={p.idx} style={{ marginTop: "6px", paddingLeft: "8px", borderLeft: "1.5px solid #000" }}>
+                <div className="p-row" style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11pt" }}>
+                  <span style={{ fontWeight: 700 }}>{String(p.idx + 1).padStart(2, "0")} {l.customName || prodName(l, L)}{p.stock ? `(${zh ? "备货" : "作り置き"})` : ""}</span>
+                  <span style={{ fontWeight: 700, ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : (p.yieldNum > 0 ? "" : X.whole(fmtQty(b.batch.factor)))}</span>
+                </div>
+                {p.noUsed && <div style={{ fontSize: "9.5pt", fontWeight: 700 }}>⚠ {X.noUsed}</div>}
+                {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "9.5pt", fontWeight: 700 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
+                {p.stock ? <div style={{ fontSize: "11pt" }}>{X.fromStock} <strong>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : ""}</strong></div>
+                  : ingTable(p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings)}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    return (
+      <div key={key} style={{ marginTop: "6px" }}>
+        {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)}{b.unit ? " " + b.unit : ""}</div>}
+        <div style={{ fontSize: "10pt" }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), b.unit ? " " + b.unit : "")}{metaText(b) ? "   " + metaText(b) : ""}</div>
+        {ingTable(b.rows)}
+      </div>
+    );
+  };
+  const lineName = (s) => s.obj ? prodName(s.obj, L) : String(s.line.id);
+  const lineUnit = (s) => s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
+    : s.line.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), L).unit : "") : ((s.obj && s.obj.unit) || (s.line.kind === "component" ? "g" : ""));
+  const recCols = zh ? ["品名", "计划", "实做", "开始", "出炉", "核温", "签名"] : ["品名", "計画", "実績", "開始", "焼き上がり", "芯温", "サイン"];
+  const totalRow = (w, i) => (
+    <tr key={i}>
+      <td className="p-td" style={{ padding: "4px 0", fontSize: "11pt", fontWeight: 700 }}>{w.name}</td>
+      <td className="p-td" style={{ padding: "4px 0", fontSize: "9pt" }}>{(w.srcs || []).join("、")}</td>
+      <td className="p-td" style={{ padding: "4px 0", textAlign: "right", fontSize: "12pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{w.qty !== null && w.qty !== undefined ? `${fmtQty(w.qty)} ${w.unit}` : ""}</td>
+      <td className="p-td" style={{ width: "30px", padding: "4px 0 4px 8px" }}><span className="p-check" style={{ width: "16px", height: "16px" }} /></td>
+    </tr>
+  );
+  return (
+    <div data-prodsheet-print="1" style={{ position: "relative", zIndex: 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "2px solid #000", paddingBottom: "10px" }}>
+        <div>
+          <div style={{ fontSize: "11pt", letterSpacing: "0.26em" }}>{brandName}</div>
+          <div style={{ fontSize: "22pt", fontWeight: 700, marginTop: "6px" }}>{X.title}</div>
+        </div>
+        <div style={{ textAlign: "right", fontSize: "11pt", lineHeight: 1.7 }}>
+          <div style={{ fontSize: "16pt", fontWeight: 700, ...T.num }}>{date}</div>
+          <div>{zh ? `共 ${sheet.length} 样` : `${sheet.length} 品目`}</div>
+        </div>
+      </div>
+
+      {sheet.map((s, i) => (
+        <div key={s.line.uid || i} style={{ marginTop: "16px" }}>
+          <div className="p-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>
+            <div>
+              <span className="p-check" style={{ display: "inline-block", width: "16px", height: "16px", marginRight: "8px", verticalAlign: "-2px" }} />
+              <span style={{ fontSize: "9pt", marginRight: "6px" }}>{X.kinds[s.line.kind]}</span>
+              <span style={{ fontSize: "15pt", fontWeight: 700 }}>{lineName(s)}</span>
+              {s.leadTimeDays > 0 && <span style={{ fontSize: "9pt", marginLeft: "8px", border: "1px solid #000", padding: "0 4px" }}>{X.lead(fmtQty(s.leadTimeDays))}</span>}
+            </div>
+            <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{fmtQty(s.qty)} {lineUnit(s)}</div>
+          </div>
+          {s.missing && <div style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.missing}</div>}
+          {!s.missing && s.zero && <div style={{ fontSize: "10pt" }}>{X.zero}</div>}
+          {!s.missing && !s.zero && s.noItems && <div style={{ fontSize: "10pt" }}>{X.noItems}</div>}
+          {s.blocks.map((b, j) => block(b, s.line.kind === "product", j))}
+        </div>
+      ))}
+
+      <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{X.totals}</div>
+      <table><tbody>{totals.weigh.map(totalRow)}</tbody></table>
+      {totals.nonGram.length > 0 && (<>
+        <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.nonGram}</div>
+        <table><tbody>{totals.nonGram.map(totalRow)}</tbody></table>
+      </>)}
+      {totals.fromStock.length > 0 && (<>
+        <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.stockTitle}</div>
+        <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.name, srcs: [f.src], qty: f.qty, unit: f.unit }, i))}</tbody></table>
+      </>)}
+      {totals.skipped.length > 0 && (
+        <div style={{ marginTop: "10px", fontSize: "9.5pt" }}>
+          <div style={{ fontWeight: 700 }}>⚠ {X.skippedTitle(totals.skipped.reduce((a, x) => a + Math.max(1, x.names.length), 0))}</div>
+          {totals.skipped.map((x, i) => <div key={i} className="p-row">「{x.src}」{X.reasons[x.reason] || x.reason} {x.names.join("、")}</div>)}
+        </div>
+      )}
+
+      <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{zh ? "生产记录" : "製造記録"}</div>
+      <table>
+        <thead><tr>{recCols.map((c, i) => <th key={i} className="p-th" style={{ textAlign: i === 0 ? "left" : "center" }}>{c}</th>)}</tr></thead>
+        <tbody>
+          {sheet.map((s, i) => (
+            <tr key={i}>
+              <td className="p-td" style={{ fontSize: "11pt", fontWeight: 700, height: "30px" }}>{lineName(s)}</td>
+              <td className="p-td" style={{ textAlign: "center", fontSize: "11pt", ...T.num }}>{fmtQty(s.qty)}</td>
+              {[0, 1, 2, 3, 4].map(k => <td key={k} className="p-td" style={{ borderLeft: "1px solid #D8D8D8" }} />)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="p-row" style={{ marginTop: "16px", border: "1.5px solid #000", padding: "8px 10px", minHeight: "36mm" }}>
+        <div style={{ fontSize: "10pt", fontWeight: 700 }}>{zh ? "当日备注" : "本日のメモ"}</div>
+      </div>
     </div>
   );
 }
@@ -16896,9 +17657,52 @@ function App() {
     );
   };
 
+  // ─── 第 3 批 F1:今日生产单 ───
+  // 当天计划 appSettings.prodPlan = { date, lines, updatedAt }。fn 收到今天的 lines(换了日期就是空的),返回新的 lines
+  const updateProdPlan = (fn) => setAppSettings(prev => {
+    const today = localDateStr();
+    const cur = prodPlanForToday(prev.prodPlan, today);
+    const lines = fn(cur.lines);
+    if (lines === cur.lines) return prev;
+    return { ...prev, prodPlan: { date: today, lines, updatedAt: new Date().toISOString() } };
+  });
+  // 商品页「今日要做」红框 →「生成今日生产单」:低库存的带着建议数加进今天的单子(已经在单子上的不动),跳到今日 tab
+  const openProdSheetWith = (adds) => {
+    const r = mergeProdLines(prodPlanForToday(appSettings.prodPlan, localDateStr()).lines, adds);
+    updateProdPlan(lines => mergeProdLines(lines, adds).lines);
+    goTab("today");
+    showToast(prodTxt(lang).added(r.added, r.existed));
+  };
+  // 「记入生产」:和商品页「记录生产」同一个写法(makeLogQty),库存照加。只记这一行还没记过的那部分(logged),给撤销
+  const logProdFromSheet = (uid) => {
+    const today = localDateStr();
+    const line = prodPlanForToday(appSettings.prodPlan, today).lines.find(l => l.uid === uid);
+    if (!line || line.kind !== "product") return;
+    const p = products.find(x => String(x.id) === String(line.id));
+    if (!p) return;
+    const add = Math.round(((parseFloat(line.qty) || 0) - (parseFloat(line.logged) || 0)) * 1000) / 1000;
+    if (!(add > 0)) return;
+    makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add);
+    updateProdPlan(lines => lines.map(l => l.uid === uid ? { ...l, logged: Math.round(((parseFloat(l.logged) || 0) + add) * 1000) / 1000 } : l));
+    const nm = pickLang(p, "name", lang) || p.nameZh || "";
+    showToast(lang === "zh" ? `✓ 已记入生产「${nm}」+${fmtQty(add)}(库存 +${fmtQty(add)})` : `✓ 製造記録「${nm}」+${fmtQty(add)}`, { undo: () => {
+      // 撤销 = 从今天那条生产记录里扣回这次加的(扣到 0 就删掉这条),库存扣回
+      setProductionLog(prev => {
+        const cur = (prev || []).find(x => x.productId === p.id && x.date === today);
+        if (!cur) return prev;
+        const left = Math.round(((parseFloat(cur.batchQty) || 0) - add) * 1000) / 1000;
+        return left > 0 ? prev.map(x => x === cur ? { ...x, batchQty: left, updatedAt: new Date().toISOString() } : x) : prev.filter(x => x !== cur);
+      });
+      setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - add) } : x));
+      updateProdPlan(lines => lines.map(l => l.uid === uid ? { ...l, logged: Math.max(0, Math.round(((parseFloat(l.logged) || 0) - add) * 1000) / 1000) } : l));
+    } });
+  };
+
   // 10 个 tab 的配置（数据化：桌面顶栏 / 手机底栏 / 「更多」抽屉复用同一份）
   // mZh / mJa 是手机底栏用的短标签（底栏只有 5 格，塞不下「材料百科」四个字）
+  // 第 3 批:加「今日」(生产单 | 日结),手机不进底栏、在「更多」抽屉里
   const NAV = [
+    { id: "today", zh: "今日", ja: "本日" },
     { id: "products", zh: "商品", ja: "商品", mZh: "商品", mJa: "商品", badge: () => products.filter(p => (p.currentStock || 0) <= (p.threshold || 0)).length },
     { id: "purchase", zh: "采购", ja: "仕入" },
     { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
@@ -18525,6 +19329,28 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setSalesLog={setSalesLog}
           productionLog={productionLog}
           setProductionLog={setProductionLog}
+          onOpenProdSheet={openProdSheetWith}
+        />
+      )}
+
+      {/* 📋 今日:生产单 | 日结(第 3 批 F1) */}
+      {tab === "today" && (
+        <TodayView
+          lang={lang}
+          today={localDateStr()}
+          products={products}
+          recipes={recipes}
+          creations={creations}
+          components={components}
+          materials={materials}
+          brands={brands}
+          productFamilies={productFamilies}
+          salesLog={salesLog}
+          rawPlan={appSettings.prodPlan}
+          updatePlan={updateProdPlan}
+          onLogProduction={logProdFromSheet}
+          onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
+          showToast={showToast}
         />
       )}
 
