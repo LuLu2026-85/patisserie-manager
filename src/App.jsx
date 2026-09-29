@@ -16720,8 +16720,9 @@ function App() {
     else if (kind === "creation") { setCreationEditTarget(target); setTab("creations"); }
     // 材料百科的查看状态(看过的材料 / 厂家详情、从配方点进来的返回键)在 App 里,切 tab 不清;跳进编辑页前清掉,保存 / 返回后才不冒出以前看过的另一条
     else if (kind === "material") { setBrandEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setMaterialEditTarget(target); setTab("materialsPedia"); }
-    else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
-    else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandEditTarget(target); setTab("materialsPedia"); }
+    // 厂家详情(brandViewId)也清掉:以前看过的厂家留着,从这里跳过去再点「返回」会落到那家不相关的厂家页(复查发现)
+    else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setBrandViewId(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
+    else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setBrandEditTarget(target); setTab("materialsPedia"); }
     else if (kind === "knowledge") { setKnowledgeEditTarget(target); setTab("knowledge"); }
   };
   // 一键改:先改 + 撤销(2a §09)。按对象身份换:改的是面板上看到的那一个对象;撤销时换回原对象,

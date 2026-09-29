@@ -474,6 +474,21 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
 10. **测试尺子**:`.claude/scripts/editor_probe/editor_probe_v2.cjs`(86 例 / 3137 步快照,`--diff` 对比)+ `b2b/` 下 extra_tests(82)/ extra_tests_r3(107)/
     round1_tests(81)/ c9_tests(120)/ c11_tests(59),全用 `--root <项目根> --data <导出>` 跑;`summ.cjs a b` 按模式汇总快照差异。**改配料表前后各跑一次。**
 
+## 2026-09-29 体检第 2 批 2c:「🩺 数据体检」页
+
+施工说明 `.claude/batch2c/plan.md`。数据 tab 最上面一张卡片 → 全屏面板 `DataHealthPanel`;检查逻辑全在模块级纯函数 `computeDataHealth(data)`(不改传入对象,1838 条材料约 14 ms)。
+
+1. 检查项 id 对应体检报告 data-N:H1 本店原料没写币种(带「看数量级像人民币」提示)/ H2 材料和厂家分类认不出 / H3 配方、组合产品挂着已删的家族 /
+   H5 单位对不上的关联配料 / H6 组合产品用量读不出或读不准 / H7 组合产品里内容是空的部分 / H9 知识按钮找不到或同名 / H10 疑似重复材料 /
+   H12 步骤没翻完 / H13 规格读不出或读得不确定 / H14 旧价格表还在 / H15 过敏原没填或写的是日文 / H16 打印设置(只是说明)。
+   **不做**:照片编号撞车(data-4)、没价的配料(data-8)、没挂配方的商品(data-11)。
+2. 一键改都在 App 的 `dataHealthFix` 里:改完就生效 + 撤销 toast,只写要改的字段 + `updatedAt`;改过的行留在原位打 ✓(连点第二下不会落到下一行);
+   H2 改分类时小分类照厂家管理页 `changeCat` 的规则跟着换;H14 清旧价格表前先 `pinBackupNow("clear-cats")`,双击只清一次。
+3. 「去改」「去看」走 App 的 `jumpToItem({ kind, id })`:先关面板,**把材料百科留下的查看状态(材料 / 厂家详情、从配方点进来的返回键)清掉**,再设编辑对象 + 切 tab。
+4. 面板顶上有「别的窗口改过」红条或「新版本」提示条时,面板从提示条下沿开始(`[data-app-banner]`);标题行 sticky,列表底下也有「关闭」(iPad 没有 Esc)。
+5. 顺带修:删家族时组合产品的 `familyId` 也清掉(以前只清配方)。
+6. 测试:`.claude/scripts/data_health/data_health_tests.cjs`(236)、`r2_tests.cjs`、`r3_tests.cjs`,用 `--quiet 1 --root <项目根> --data <导出>` 跑。
+
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
