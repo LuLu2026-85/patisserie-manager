@@ -5768,57 +5768,42 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
 // 部分编辑页没有 FR / 分组 / 竖条 …)第一步一律原样保留,写在下面这张表里;第二步再逐条统一。
 // 约定:ings / setIngs 状态留在编辑页里(useDirtyGuard 靠它判断改没改),这里只收 props;
 // 选材料 / 批量关联两个弹窗由 IngredientLinkModals 渲染在编辑页根元素里(位置和以前一样)。
+// 表头 / 占位符 / title 三页同一套,跟中日文走(2026-09-29 第 2 批 2b C4;以前三页各写各的,配方页中文界面也是日文表头)
+const ING_TABLE_TXT = {
+  zh: {
+    headers: ["🔗", "中文名", "日文名", "法文名", "用量", "单位", "品牌", "单价", "成本", "分组", "备注", ""],
+    nameZh: "中文名", nameJa: "日文名", brand: "品牌", cost: "自动", note: "备注・用途",
+    bulkTitle: "扫描所有没关联材料百科的原料,推荐匹配", bulkLabel: "🤖 批量关联百科",
+    pick: "从材料百科选择(自动填名 / 价 / 品牌)",
+    linked: (n) => `✓ 关联:${n}\n点击修改或解除关联`,
+    matTitle: (n) => `✓ 百科关联:${n}`,
+    catTitle: (n) => `✓ 已关联「${n}」`,
+    drift: "价格表已更新,点击同步",
+  },
+  ja: {
+    headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
+    nameZh: "中国語名", nameJa: "日本語名", brand: "ブランド", cost: "自動", note: "備考・用途メモ",
+    bulkTitle: "未関連の材料を材料事典と一括マッチ", bulkLabel: "🤖 一括関連",
+    pick: "材料事典から選択(名前・単価・ブランドを自動入力)",
+    linked: (n) => `✓ 連動中:${n}\nクリックで変更・解除`,
+    matTitle: (n) => `✓ 材料事典:${n}`,
+    catTitle: (n) => `✓ 価格表「${n}」に連動`,
+    drift: "価格表の値に更新",
+  },
+};
+// 三页之间还剩的差异。datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id)
 const ING_TABLE_VARIANTS = {
   recipe: {
-    bulkTitle: { zh: "AI 扫描所有未关联材料并推荐匹配", ja: "AI で未関連材料を一括マッチ" },
-    bulkLabel: { zh: "🤖 批量关联百科", ja: "🤖 一括関連" },
-    headers: ["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","@note",""],
-    linkTitleSuffixZh: "\n点击修改或解除关联",
-    pickTitleZh: "从材料百科选择(自动填名/价/品牌)",
-    nameTdRelative: false,
     listIds: { zh: "autoNameZhR", ja: "autoNameJaR", brand: "autoBrandR" },
-    namePlaceholder: { zh: "名（中）", ja: "名（日）" },
-    nameWidth: 110,
-    matTitlePrefix: "✓ 百科关联:",
     trackPrice: true,                  // 改价追踪:_priceModified / 黄框 / ↺ 撤销
-    pricePlaceholder: (ing) => curOf(ing) === "CNY" ? "¥/g" : "円/g",
-    driftTitleZh: "价格表已更新,点击同步",
-    costPlaceholder: "自動",
-    delPad: true,
   },
   component: {
-    bulkTitle: { zh: "AI 扫描批量关联百科", ja: "一括関連" },
-    bulkLabel: { zh: "🤖 批量关联", ja: "🤖 一括" },
-    headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组","@note",""],
-    linkTitleSuffixZh: "",
-    pickTitleZh: "从材料百科选择",
-    nameTdRelative: true,
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
-    namePlaceholder: { zh: "中文", ja: "日本語" },
-    nameWidth: 100,
-    matTitlePrefix: "✓ 百科:",
     trackPrice: false,
-    pricePlaceholder: () => "单价",
-    driftTitleZh: "价格表已更新为此值,点击同步",
-    costPlaceholder: "自动",
-    delPad: false,
   },
   layer: {
-    bulkTitle: { zh: "AI 批量关联百科", ja: "一括関連" },
-    bulkLabel: { zh: "🤖 批量关联", ja: "🤖 一括" },
-    headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组","@note",""],
-    linkTitleSuffixZh: "",
-    pickTitleZh: "从材料百科选择",
-    nameTdRelative: false,
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
-    namePlaceholder: { zh: "中文", ja: "日本語" },
-    nameWidth: 110,
-    matTitlePrefix: "✓ 百科:",
     trackPrice: false,
-    pricePlaceholder: () => "单价",
-    driftTitleZh: "价格表已更新,点击同步",
-    costPlaceholder: "自动",
-    delPad: false,
   },
 };
 
@@ -5827,6 +5812,7 @@ const ING_TABLE_VARIANTS = {
 // nextIdRef = 编辑页的 useRef(ings.length),新行 _id 从它取(_id 可能是 0,判断一律 !== null)。
 function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, brands, lang, onPickMaterial, onOpenBulk }) {
   const v = ING_TABLE_VARIANTS[variant];
+  const tx = ING_TABLE_TXT[lang === "zh" ? "zh" : "ja"];
 
   // 🧪 原料自动补全数据源：从价格表 cats 取双语名称和品牌
   const autoCompleteData = useMemo(() => {
@@ -5875,8 +5861,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
         <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "原材料" : "原材料"}</div>
         <div style={{ display: "flex", gap: 6 }}>
           {materials && materials.length > 0 && (
-            <Btn size="sm" onClick={onOpenBulk} title={lang === "zh" ? v.bulkTitle.zh : v.bulkTitle.ja}>
-              {lang === "zh" ? v.bulkLabel.zh : v.bulkLabel.ja}
+            <Btn size="sm" onClick={onOpenBulk} title={tx.bulkTitle}>
+              {tx.bulkLabel}
             </Btn>
           )}
           <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIdRef.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
@@ -5885,12 +5871,14 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
 
       {/* 分组图例(2026-09-29 第 2 批 2b C2:以前只有配方页有,组件 / 部分编辑页也有分组列了,三页都给) */}
       <div style={{ fontSize: 12, color: "#666666", marginBottom: 10 }}>
-        <span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span>
+        {lang === "zh"
+          ? <><span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span></>
+          : <><span>グループ = </span><strong>同じボウル/鍋</strong><span>にまとめて計量できる材料、同じ色の線 = 同じ容器</span></>}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
           {Object.entries(GROUPS).filter(([k]) => k !== "none").map(([k, g]) => (
             <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block" }} />
-              {g.zh}
+              {lang === "zh" ? g.zh : g.ja}
             </span>
           ))}
         </div>
@@ -5900,8 +5888,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
           <thead>
             <tr style={{ background: "#F5F5F5" }}>
-              {v.headers.map((h, i) => (
-                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h === "@note" ? (lang === "zh" ? "备注" : "備考") : h}</th>
+              {tx.headers.map((h, i) => (
+                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -5975,9 +5963,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}>
                     <button
                       onClick={() => onPickMaterial(ing._id)}
-                      title={linkedMat
-                        ? (lang === "zh" ? `✓ 关联:${linkedMat.nameZh || linkedMat.nameJa}${v.linkTitleSuffixZh}` : `✓ 連動中`)
-                        : (lang === "zh" ? v.pickTitleZh : "材料事典から選択")}
+                      title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang)) : tx.pick}
                       style={{
                         padding: "3px 6px", fontSize: 13, cursor: "pointer",
                         background: linkedMat ? "#059669" : T.bgCard,
@@ -5989,10 +5975,10 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       }}
                     >🔗</button>
                   </td>
-                  <td style={{ padding: "3px 4px", ...(v.nameTdRelative ? { position: "relative" } : {}) }}>
-                    <input list={v.listIds.zh} placeholder={v.namePlaceholder.zh} value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{ ...ist, width: v.nameWidth, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? `${v.matTitlePrefix}${linkedMat.nameZh || linkedMat.nameJa}` : (linked ? `✓ 已关联「${getCatName(linkedCat, lang)}」` : "")} />
+                  <td style={{ padding: "3px 4px" }}>
+                    <input list={v.listIds.zh} placeholder={tx.nameZh} value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
                   </td>
-                  <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={v.namePlaceholder.ja} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: v.nameWidth, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={tx.nameJa} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...ist, width: 36 }} /></td>
@@ -6009,12 +5995,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                         {linkedCat.brands.map((b, bi) => <option key={bi} value={bi}>{getBrandName(b, lang)}</option>)}
                       </select>
                     ) : (
-                      <input list={v.listIds.brand} placeholder="品牌" value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{ ...ist, width: 66 }} />
+                      <input list={v.listIds.brand} placeholder={tx.brand} value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{ ...ist, width: 66 }} />
                     )}
                   </td>
                   <td style={{ padding: "3px 4px", position: "relative" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                      <input type="number" placeholder={v.pricePlaceholder(ing)} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...ist, width: 52, ...(v.trackPrice ? { borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined } : {}) }} />
+                      <input type="number" placeholder={curOf(ing) === "CNY" ? "¥/g" : "円/g"} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...ist, width: 52, ...(v.trackPrice ? { borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined } : {}) }} />
                       {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
                       {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
                       {v.trackPrice && ing._priceModified && (
@@ -6028,10 +6014,10 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                           const q = parseFloat(i.qty) || 0;
                           return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
                         }));
-                      }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? v.driftTitleZh : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
+                      }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={tx.drift}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                     )}
                   </td>
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={v.costPlaceholder} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
                     <select value={GROUPS[ing.group] ? ing.group : "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
@@ -6039,8 +6025,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     </select>
                   </td>
                   {/* 备注:三页都有(2026-09-29 第 2 批 2b C1,以前组件 / 部分编辑页看不见,组件 106 行、部分 61 行备注改不了) */}
-                  <td style={{ padding: "3px 4px" }}><input placeholder={lang === "zh" ? "备注・用途" : "備考・用途メモ"} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, ...(v.delPad ? { padding: "2px 4px" } : {}) }}>×</button></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder={tx.note} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "2px 4px" }}>×</button></td>
                 </tr>
               );
             })}
