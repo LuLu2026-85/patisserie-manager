@@ -4912,7 +4912,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 }
 
 // ─── 组件仓库 View ───────────────────────────────────────────────
-function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
+function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
@@ -4929,6 +4929,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         cats={cats}
         brands={brands}
         materials={materials}
+        setShopMaterials={setShopMaterials}
+        showToast={showToast}
         onSave={(c) => {
           setComponents(prev => {
             const found = prev.find(x => x.id === c.id);
@@ -5797,15 +5799,12 @@ const ING_TABLE_TXT = {
 const ING_TABLE_VARIANTS = {
   recipe: {
     listIds: { zh: "autoNameZhR", ja: "autoNameJaR", brand: "autoBrandR" },
-    trackPrice: true,                  // 改价追踪:_priceModified / 黄框 / ↺ 撤销
   },
   component: {
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
-    trackPrice: false,
   },
   layer: {
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
-    trackPrice: false,
   },
 };
 
@@ -5878,22 +5877,25 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
   const updateIng = (id, field, val) => setIngs(prev => prev.map(i => {
     if (i._id !== id) return i;
     const next = { ...i, [field]: val };
-    // v11: 改 unitPrice 时判 dirty(配方页的改价追踪)
-    if (v.trackPrice && field === "unitPrice") {
-      const origP = parseFloat(i._originalPrice);
-      const newP = parseFloat(val);
-      const origNormalized = isNaN(origP) ? "" : String(origP);
-      const newNormalized = isNaN(newP) ? "" : String(newP);
-      next._priceModified = origNormalized !== newNormalized && newNormalized !== "";
+    // 改价追踪(v11 配方页起;2026-09-29 第 2 批 2b C6 三页都做,体检 #21):
+    // 只有「关联了材料百科、材料还在」的行改了单价才标 _priceModified(黄框 + ↺ + 底下「保存到本店原料」);
+    // 改回原价 / 清空 / 没关联的行一律不留这个键 —— 留着 false,未保存判定会一直算「改过」
+    if (field === "unitPrice") {
+      const linkedOk = !!(i.materialId && (materials || []).some(m => m && m.id === i.materialId));
+      const o = parseFloat(i._originalPrice), n = parseFloat(val);
+      const changed = isFinite(n) && !(isFinite(o) && Math.abs(o - n) <= 1e-9 * Math.max(1, Math.abs(o)));
+      if (linkedOk && changed) next._priceModified = true; else delete next._priceModified;
     }
     return next;
   }));
-  // v11: 单行撤销改价,恢复到 _originalPrice(配方页)
+  // v11: 单行撤销改价,恢复到 _originalPrice。关联的材料有价时原价是按人民币刷出来的,币种也放回 CNY
   const revertPrice = (id) => setIngs(prev => prev.map(i => {
     if (i._id !== id) return i;
     const q = parseFloat(i.qty) || 0;
     const op = parseFloat(i._originalPrice) || 0;
-    return { ...i, unitPrice: i._originalPrice || "", cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost, _priceModified: false };
+    const m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
+    const { _priceModified, ...rest } = i;
+    return { ...rest, unitPrice: i._originalPrice || "", ...(m && getMaterialEffectivePrice(m) > 0 ? { currency: "CNY" } : {}), cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost };
   }));
 
   return (
@@ -6046,12 +6048,13 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
                       <IngPriceInput ing={ing} placeholder={`${curOf(ing) === "CNY" ? "¥" : "円"}/${basis.label}`}
                         onChangeStored={p=>{updateIng(ing._id,"unitPrice",p);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(p)).toFixed(1));}}
-                        style={{ ...ist, width: 52, ...(v.trackPrice ? { borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined } : {}) }} />
+                        // 改过价:黄框黄底。两个键一直都在(没改过时写回和 ist 一样的值):键时有时无,React 会先清掉 borderColor,把 border 简写里的颜色也清掉
+                        style={{ ...ist, width: 52, borderColor: ing._priceModified ? "#F59E0B" : "#CCCCCC", background: ing._priceModified ? "#FFFBEB" : "#FFFFFF" }} />
                       {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
                       {curBtnShown && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
                       {/* 口径小字:填好数以后占位符看不见了,这里一直写着按什么填 */}
                       <span style={{ fontSize: 10, color: T.textTertiary, whiteSpace: "nowrap" }}>{curBtnShown ? "" : (curOf(ing) === "CNY" ? "¥" : "円")}/{basis.label}</span>
-                      {v.trackPrice && ing._priceModified && (
+                      {ing._priceModified && (
                         <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                       )}
                     </div>
@@ -6101,8 +6104,11 @@ function linkMaterialToIng(i, mat, brands, lang) {
   const b = brands.find(x => x.id === mat.brandId);
   const pp = getMaterialEffectivePrice(mat);
   const q = parseFloat(i.qty) || 0;
+  const ok = !isNaN(pp) && pp > 0;
+  // C6:换了材料 = 价格重新从百科来,之前的改价标记作废,↺ 的原价也换成这次写进去的价(以前配方页选完材料一直是黄的)
+  const { _priceModified, ...rest } = i;
   return {
-    ...i,
+    ...rest,
     materialId: mat.id,
     nameZh: i.nameZh || mat.nameZh || "",
     nameJa: i.nameJa || mat.nameJa || "",
@@ -6113,7 +6119,75 @@ function linkMaterialToIng(i, mat, brands, lang) {
     // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
     currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
     cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
+    _originalPrice: (ok ? String(pp) : i.unitPrice) || "",
   };
+}
+
+// C6:改了价的关联行写进本店原料(三个编辑页保存时共用;写法同 v11 配方页:有就改价,没有就新建一条,带币种和修改时间)。
+// rows 是保存时刷新过的行;返回写了几条
+function saveIngPricesToShop(rows, setShopMaterials) {
+  const toUpsert = rows.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0);
+  if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return 0;
+  setShopMaterials(prev => {
+    const next = [...prev];
+    toUpsert.forEach(ing => {
+      const idx = next.findIndex(sm => sm.materialId === ing.materialId);
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
+      } else {
+        next.push({
+          id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
+          materialId: ing.materialId,
+          pricePerG: String(parseFloat(ing.unitPrice)),
+          currency: curOf(ing),   // v17
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+    return next;
+  });
+  return toUpsert.length;
+}
+
+// 保存时刷新关联行的价(三个编辑页共用):材料已删 → 清掉关联;改过价的行保留她填的价(C6,以前只有配方页这样);
+// 其余按材料百科(本店价优先)的最新价刷新。pp 是人民币,必须标 CNY
+function refreshIngForSave(i, materials) {
+  if (!i.materialId) return i;
+  const m = (materials || []).find(x => x.id === i.materialId);
+  if (!m) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
+  if (i._priceModified) return i;
+  const pp = getMaterialEffectivePrice(m);
+  if (isNaN(pp) || pp <= 0) return i;
+  const q = parseFloat(i.qty) || 0;
+  return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+}
+
+// C6:改了「关联材料百科」的行的单价 → 提示条 + 「同时保存到本店原料」(默认勾上)。三个编辑页共用
+function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
+  const mod = ings.filter(i => i._priceModified);
+  if (mod.length === 0) return null;
+  const ok = mod.filter(i => i.materialId && parseFloat(i.unitPrice) > 0).length;
+  const zh = lang === "zh";
+  return (
+    <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12, marginBottom: 8 }}>
+      <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
+        🟡 {zh ? `你改了 ${mod.length} 项关联材料百科的原料单价。` : `材料事典に連動した ${mod.length} 件の単価を変更しました。`}
+      </div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: ok > 0 ? "pointer" : "not-allowed", opacity: ok > 0 ? 1 : 0.5 }}>
+        <input type="checkbox" checked={saveToShop} onChange={e => setSaveToShop(e.target.checked)} disabled={ok === 0} style={{ marginTop: 2 }} />
+        <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
+          {zh
+            ? (ok > 0 ? <>同时保存到本店原料（<b>{ok}</b> 项。存了以后，所有用到这个材料的配方 / 组件都按这个价算成本）</> : <>单价要大于 0 才能保存到本店原料</>)
+            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / コンポーネントの原価がこの単価になります）</> : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>)}
+        </div>
+      </label>
+      {!(saveToShop && ok > 0) && (
+        <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
+          {zh ? "不存的话，这几行保存后还是按材料百科的价算。" : "保存しない場合、これらの行は保存後も材料事典の単価で計算されます。"}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // 配料表的两个弹窗。渲染在编辑页根元素里(useDirtyGuard 靠根元素的捕获阶段拍快照),位置和以前一样。
@@ -6132,7 +6206,7 @@ function IngredientLinkModals({ ings, setIngs, materials, brands, lang, pickerTa
           onSelect={(mat) => {
             setIngs(prev => prev.map(i => {
               if (i._id !== pickerTargetIngId) return i;
-              if (mat === null) return { ...i, materialId: null };   // 取消关联
+              if (mat === null) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }   // 取消关联(改价标记跟着作废)
               return linkMaterialToIng(i, mat, brands, lang);
             }));
             setPickerTargetIngId(null);
@@ -6166,7 +6240,7 @@ function IngredientLinkModals({ ings, setIngs, materials, brands, lang, pickerTa
 
 
 // ─── 组件编辑 Form ────────────────────────────────────────────────
-function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats }) {
+function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast }) {
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 材料选择弹窗
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
@@ -6197,13 +6271,14 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             const pp = getMaterialEffectivePrice(m);
             if (!isNaN(pp) && pp > 0) {
               const q = parseFloat(linked.qty) || 0;
-              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
+              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
             }
           }
         }
-        return { ...linked, _id: idx };
+        return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };   // C6:_originalPrice = 改价追踪 / ↺ 的原价(保存时去掉)
       })
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", catId: null, brandIdx: null }]);
+  const [saveToShop, setSaveToShop] = useState(true);   // C6:改了关联材料的价 → 保存时同时写本店原料(默认勾上)
 
   // 兼容老数据：如果只有 steps 字段，从它初始化 stepsJa
   const initStepsZh = component?.stepsZh || [];
@@ -6227,16 +6302,12 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
   const doSave = (finalIngs) => {
     const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    // 🔗 自动用材料百科最新价刷新有 materialId 的 ing
-    const refreshedIngs = validIngs.map(i => {
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null };
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    // 🔗 自动用材料百科最新价刷新有 materialId 的 ing;改过价的保留她填的价(C6)
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+    }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const stepsZh = steps.map(s => s.textZh.trim()).filter(Boolean);
     const stepsJa = steps.map(s => s.textJa.trim()).filter(Boolean);
@@ -6244,7 +6315,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       ...form,
       id: (component && component.id) ? component.id : "comp_" + Date.now(),
       yield: parseFloat(form.yield) || 0,
-      ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       stepsZh,
       stepsJa,
       steps: undefined,
@@ -6485,6 +6556,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           </div>
         </div>
       )}
+
+      {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -8291,7 +8365,7 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 };
 
 // ─── 组合产品 View ───────────────────────────────────────────────
-function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
+function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
   onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [] }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
@@ -8305,6 +8379,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         onUpdateCats={onUpdateCats}
         brands={brands}
         materials={materials}
+        setShopMaterials={setShopMaterials}
         confirmDialog={confirmDialog}
         showToast={showToast}
         onSave={(c) => {
@@ -9343,7 +9418,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
 }
 
 // ─── 组合产品编辑 Form ───────────────────────────────────────────
-function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh" }) {
+function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], setShopMaterials, onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh" }) {
   const isNew = !creation;
   const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -9507,6 +9582,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         onUpdateComponent={onUpdateComponent}
         linkState={layerLinkState(layer, components, matIds)}
         lang={lang}
+        setShopMaterials={setShopMaterials}
+        showToast={showToast}
       />
     );
   }
@@ -9922,7 +9999,7 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 }
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
-function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats }) {
+function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats, setShopMaterials, showToast }) {
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
@@ -9936,12 +10013,13 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
         const pp = getMaterialEffectivePrice(m);
         if (!isNaN(pp) && pp > 0) {
           const q = parseFloat(linked.qty) || 0;
-          return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
+          return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
         }
       }
     }
-    return { ...linked, _id: idx };
+    return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };   // C6:_originalPrice = 改价追踪 / ↺ 的原价(保存 / 同步回组件库时去掉)
   }));
+  const [saveToShop, setSaveToShop] = useState(true);   // C6:改了关联材料的价 → 保存时同时写本店原料(默认勾上)
   // 层从组件带来的是 stepsZh / stepsJa(addLayerFromComponent);以前这里只读老字段 steps,打开就是空的。
   // 和组件编辑页同一套:中日两栏,老数据只有 steps 时放进日文栏
   const initStepsZh = layer.stepsZh || [];
@@ -9972,19 +10050,16 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   // opts.synced:刚同步回组件库,这一部分直接算「跟组件库」(见 CreationEditForm.updateLayer)
   const doSave = (finalIngs, opts) => {
     const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    const refreshedIngs = validIngs.map(i => {
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null };
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    // 改过价的关联行保留她填的价(C6);勾着「保存到本店原料」就同时写进去
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+    }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     onSave({
       ...form,
-      ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
     }, opts);
@@ -10009,7 +10084,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       nameZh: form.nameZh, nameJa: form.nameJa,
       componentCategory: form.componentCategory,
       yield: form.yield, unit: form.unit,
-      ingredients: validIngs.map(({ _id, ...rest }) => rest),
+      ingredients: validIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
       updatedAt: new Date().toISOString(),
@@ -10127,6 +10202,9 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
           </div>
         ))}
       </div>
+
+      {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {layer.sourceComponentId && linkState !== "orphan" ? (
@@ -13483,8 +13561,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };
       })
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none", note: "", catId: null, brandIdx: null, _originalPrice: "" }]);
-  // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示
-  const [saveToShop, setSaveToShop] = useState(false);
+  // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示。C6:默认勾上(改了关联材料的价,多半就是本店进价)
+  const [saveToShop, setSaveToShop] = useState(true);
 
   // 兼容老数据：老 recipes 可能只有单一 steps 字段
   const initStepsZh = recipe?.stepsZh || [];
@@ -13508,51 +13586,19 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const margin = price > 0 ? ((price - unitCost) / price) * 100 : 0;
   const mc = margin >= 50 ? "green" : margin >= 30 ? "amber" : "red";
 
-  // 改单价追踪(_priceModified)和 ↺ 撤销改价在共用配料表 IngredientTable 里(ING_TABLE_VARIANTS.recipe.trackPrice)
+  // 改单价追踪(_priceModified)和 ↺ 撤销改价在共用配料表 IngredientTable 里;提示条是 PriceChangeBanner,写本店原料是 saveIngPricesToShop
 
   // 未关联材料对话框
   const [unlinkedDialog, setUnlinkedDialog] = useState(null);
 
   const doSave = (finalIngs) => {
     const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    // 🔗 用材料百科最新价刷新有 materialId 的 ing
-    // v11: _priceModified 的 ing 跳过 refresh,保留用户改的 unitPrice
-    const refreshedIngs = validIngs.map(i => {
-      if (i._priceModified) return i; // 用户手改过,不覆盖
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null }; // 材料已被删除,清除关联
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    // 🔗 用材料百科最新价刷新有 materialId 的 ing;改过价的(_priceModified)保留她填的价
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
-    if (saveToShop && typeof setShopMaterials === "function") {
-      const toUpsert = refreshedIngs.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0);
-      if (toUpsert.length > 0) {
-        setShopMaterials(prev => {
-          const next = [...prev];
-          toUpsert.forEach(ing => {
-            const idx = next.findIndex(sm => sm.materialId === ing.materialId);
-            if (idx >= 0) {
-              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
-            } else {
-              next.push({
-                id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
-                materialId: ing.materialId,
-                pricePerG: String(parseFloat(ing.unitPrice)),
-                currency: curOf(ing),   // v17
-                updatedAt: new Date().toISOString(),
-              });
-            }
-          });
-          return next;
-        });
-        if (typeof showToast === "function") {
-          showToast(lang === "zh" ? `✓ ${toUpsert.length} 项已保存到本店原料` : `✓ ${toUpsert.length} 件を仕入れ原料に保存`);
-        }
-      }
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
@@ -13746,32 +13792,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         </div>
       )}
 
-      {/* v11: 改价提示条 — 至少一行 ing 被改过单价才显示 */}
-      {(() => {
-        const modCount = ings.filter(i => i._priceModified).length;
-        const upsertable = ings.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0).length;
-        if (modCount === 0) return null;
-        return (
-          <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12 }}>
-            <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
-              🟡 {lang === "zh" ? `你修改了 ${modCount} 项原料单价。` : `${modCount} 項の単価を変更しました。`}
-            </div>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: upsertable > 0 ? "pointer" : "not-allowed", opacity: upsertable > 0 ? 1 : 0.5 }}>
-              <input type="checkbox" checked={saveToShop} onChange={e => setSaveToShop(e.target.checked)} disabled={upsertable === 0} style={{ marginTop: 2 }} />
-              <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
-                {lang === "zh"
-                  ? (upsertable > 0
-                      ? <>保存到本店原料（其中 <b>{upsertable}</b> 项可落盘，下次打开直接用此价；{modCount - upsertable > 0 ? `其余 ${modCount - upsertable} 项没关联材料百科只存到本配方` : ""}）</>
-                      : <>这些原料没关联材料百科，改价只存到本配方（要批量保存到本店原料需先用"🤖 批量关联"挂材料百科）</>)
-                  : (upsertable > 0
-                      ? <>仕入れ原料に保存（<b>{upsertable}</b> 件が永続化可能）</>
-                      : <>材料百科リンクなし、このレシピのみに保存</>)
-                }
-              </div>
-            </label>
-          </div>
-        );
-      })()}
+      {/* v11: 改价提示条 — 至少一行关联材料百科的 ing 被改过单价才显示(C6 起三页共用 PriceChangeBanner) */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -17549,6 +17571,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           brands={brands}
           materials={materials}
           setMaterials={setMaterials}
+          setShopMaterials={setShopMaterials}
           lang={lang} setLang={setLang}
           viewId={compViewId} setViewId={setCompViewId}
           editTarget={compEditTarget} setEditTarget={setCompEditTarget}
@@ -17585,6 +17608,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onUpdateCats={setCats}
           brands={brands}
           materials={materials}
+          setShopMaterials={setShopMaterials}
           lang={lang} setLang={setLang}
           viewId={creationViewId} setViewId={setCreationViewId}
           editTarget={creationEditTarget} setEditTarget={setCreationEditTarget}
