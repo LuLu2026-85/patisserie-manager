@@ -6365,30 +6365,47 @@ const pickMaterialForRow = (setIngs, rowId, mat, brands, lang) =>
 const ingHasName = (i) => !!i && !!(String(i.nameZh == null ? "" : i.nameZh).trim() || String(i.nameJa == null ? "" : i.nameJa).trim());
 
 // C6:改了价的关联行写进本店原料(三个编辑页保存时共用;写法同 v11 配方页:有就改价,没有就新建一条,带币种和修改时间)。
-// rows 是保存时刷新过的行;返回写了几条
+// rows 是保存时刷新过的行;返回 { n: 写了几条, undo }。
+// 审查第 2 轮:默认勾着会直接盖掉本店原料原来的进货价,所以给撤销(2a §09「先做 + 给撤销」):
+// 改掉的条目记下原样、新建的记下 id;撤销时只动「还是这次写的那个价」的条目,之后她又改过的不碰
 function saveIngPricesToShop(rows, setShopMaterials) {
   // 只存按克计量的行:本店原料 pricePerG 是每克价,「本 / 個 / kg」行填的是每单位价,存进去会把每克价放大几十上千倍(审查第 1 轮)
   const toUpsert = rows.filter(i => i._priceModified && i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0);
-  if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return 0;
+  if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return { n: 0, undo: null };
+  // 新 id 和时间在 updater 外面定好:开发模式 StrictMode 会把 updater 跑两遍,两遍结果要一样
+  const now = new Date().toISOString();
+  const plan = toUpsert.map(ing => ({ ing, newId: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6) }));
+  let prevById = {}, written = {}, addedIds = new Set();
   setShopMaterials(prev => {
+    prevById = {}; written = {}; addedIds = new Set();   // updater 可能跑两遍,每遍从头记
     const next = [...prev];
-    toUpsert.forEach(ing => {
+    plan.forEach(({ ing, newId }) => {
       const idx = next.findIndex(sm => sm.materialId === ing.materialId);
       if (idx >= 0) {
-        next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
+        const old = next[idx];
+        if (!addedIds.has(old.id) && !(old.id in prevById)) prevById[old.id] = old;   // 同一材料两行时只记最早的原样
+        next[idx] = { ...old, pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: now };   // v17: 币种跟手写价走;修改时间给合并导入用
+        written[old.id] = next[idx];
       } else {
         next.push({
-          id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
+          id: newId,
           materialId: ing.materialId,
           pricePerG: String(parseFloat(ing.unitPrice)),
           currency: curOf(ing),   // v17
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         });
+        addedIds.add(newId);
+        written[newId] = next[next.length - 1];
       }
     });
     return next;
   });
-  return toUpsert.length;
+  // 还是这次写进去的那个价(没被她之后再改过)才撤
+  const untouched = (sm) => { const w = written[sm.id]; return !!w && sm.pricePerG === w.pricePerG && curOf(sm) === curOf(w) && sm.updatedAt === w.updatedAt; };
+  const undo = () => setShopMaterials(prev => prev
+    .filter(sm => !(addedIds.has(sm.id) && untouched(sm)))
+    .map(sm => (prevById[sm.id] && untouched(sm)) ? prevById[sm.id] : sm));
+  return { n: toUpsert.length, undo };
 }
 
 // 保存时刷新关联行的价(三个编辑页共用):材料已删 → 清掉关联;改过价的行保留她填的价(C6,以前只有配方页这样);
@@ -6551,8 +6568,8 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
     // 🔗 自动用材料百科最新价刷新有 materialId 的 ing;改过价的保留她填的价(C6)
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
-      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
-      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
@@ -10302,9 +10319,9 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     // 改过价的关联行保留她填的价(C6);勾着「保存到本店原料」就同时写进去
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
-      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
       // 审查第 2 轮:部分保存时本店原料就写进去了,不等组合产品保存;提示写明,免得她以为「不保存离开」能撤回
-      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料(立即生效,组合产品不保存也会保留)` : `✓ ${n} 件を仕入れ原料に保存(すぐ反映・組み合わせを保存しなくても残ります)`);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料(立即生效,组合产品不保存也会保留)` : `✓ ${n} 件を仕入れ原料に保存(すぐ反映・組み合わせを保存しなくても残ります)`, { undo });
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     onSave({
@@ -13854,8 +13871,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
     if (saveToShop) {
-      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
-      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
