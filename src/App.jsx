@@ -19648,6 +19648,9 @@ function App() {
     if (tab === "edit") setTab("list");
     setEditTarget(null); setCompEditTarget(null); setCreationEditTarget(null); setKnowledgeEditTarget(null);
     setProductEditTarget(null); setSupplierEditTarget(null); setBrandEditTarget(null); setMaterialEditTarget(null);
+    // 审查 r2:老板开着没点的确认框(比如「清除全部数据」)也关掉 —— 别的窗口进员工模式时它会留在员工界面上,员工点一下「确定」就执行了。
+    // P3 两个对话框在员工模式里不渲染(状态留着,退出后照旧),见下面 !staffMode
+    setConfirmState(null);
   };
   // 审查 r1:员工模式的开关只存在这台设备的 localStorage。同一台设备上别的标签页 / 已安装的 app 窗口进入或退出时,这一页跟着切
   // (以前只在打开时读一次:店里 iPad 一个标签页进了员工模式,另一个标签页还是老板界面,价格、编辑、删除都在)。
@@ -20680,7 +20683,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       )}
 
       {/* 📥 P3 v2 候选审查 dialog */}
-      {p3ImportQueue && p3ImportQueue.materials[p3ImportQueue.currentIdx] && (
+      {!staffMode && p3ImportQueue && p3ImportQueue.materials[p3ImportQueue.currentIdx] && (
         <P3CandidateReviewDialog
           queue={p3ImportQueue}
           onSelect={(c) => p3WriteCandidate('select', c)}
@@ -20692,7 +20695,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         />
       )}
       {/* 📥 P3 v2 批次完成总结 dialog (含 L1 撤销本批) */}
-      {p3ImportReport && (
+      {!staffMode && p3ImportReport && (
         <P3ImportReportDialog
           report={p3ImportReport}
           canUndo={p3LastBatchWrites.length > 0}
