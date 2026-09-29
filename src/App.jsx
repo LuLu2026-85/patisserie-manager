@@ -10303,7 +10303,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
       const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
-      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+      // 审查第 2 轮:部分保存时本店原料就写进去了,不等组合产品保存;提示写明,免得她以为「不保存离开」能撤回
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料(立即生效,组合产品不保存也会保留)` : `✓ ${n} 件を仕入れ原料に保存(すぐ反映・組み合わせを保存しなくても残ります)`);
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     onSave({
