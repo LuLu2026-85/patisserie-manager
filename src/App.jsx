@@ -6004,10 +6004,13 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
     document.addEventListener("mousedown", away);
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
+    const vvp = window.visualViewport;   // 键盘弹起 / 收起、页面被推着平移时重新摆
+    if (vvp) { vvp.addEventListener("resize", place); vvp.addEventListener("scroll", place); }
     return () => {
       document.removeEventListener("mousedown", away);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
+      if (vvp) { vvp.removeEventListener("resize", place); vvp.removeEventListener("scroll", place); }
     };
   }, [open]);
   const choose = (m) => { touchingBox.current = false; setOpen(false); setHi(-1); onPickMaterial(m); };
@@ -6033,7 +6036,12 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
     const vh = (typeof window !== "undefined" && window.innerHeight) || 768;
     const w = Math.max(160, Math.min(320, vw - 16));
     const left = Math.max(8, Math.min(rect.left, vw - w - 8));
-    const below = vh - rect.bottom - 8, above = rect.top - 8;
+    // 上下还有多少地方按「看得见的那一块」(visualViewport)量:iPad / iPhone 键盘弹起来只缩 visualViewport,innerHeight 还算着键盘底下,
+    // 以前靠下的行照样往下开、整个下拉躲在键盘后面。摆放仍按 innerHeight(position:fixed 认的是它)
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const visTop = vv && vv.height > 0 ? (vv.offsetTop || 0) : 0;
+    const visBottom = vv && vv.height > 0 ? visTop + vv.height : vh;
+    const below = visBottom - rect.bottom - 8, above = rect.top - visTop - 8;
     const up = below < 180 && above > below;   // 输入框靠近屏幕底下(手机键盘弹起来时常见)就往上开
     const pos = up ? { bottom: vh - rect.top + 2, maxHeight: Math.max(120, Math.min(380, above)) } : { top: rect.bottom + 2, maxHeight: Math.max(120, Math.min(380, below)) };
     box = (
