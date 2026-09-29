@@ -1812,6 +1812,8 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
 }
 // 标签和页面上的那行小字(打印时可关)。不写「已合规」「符合国标」这类字。
 const LABEL_DRAFT_NOTE = "标签草稿:店内现做现卖的产品国标不强制;自己装袋 / 礼盒算散装还是现制现售要问朝阳区市场监管。过敏原强制标示 2027-03-16 起。";
+// 标签弹窗存进 printSettings 的本店经营者信息(IP 分发包不带;合并导入只补本机空着的)
+const LABEL_SHOP_KEYS = ["labelShopName", "labelAddress", "labelPhone"];
 // END allergen helpers ───────────────────────────────────────────────────────
 
 
@@ -19715,7 +19717,8 @@ function App() {
       recipes, components, creations, knowledge,
       brands,
       materials: stripCrawlImages(materials),  // v15: 剥离 source='crawl' 来源（版权外溢防护）
-      printSettings, customCompCats, productFamilies,
+      // 审查 r2:标签的经营者名称 / 地址 / 电话是本店的,不进 IP 分发包(以前买家覆盖导入后,标签弹窗预填的是 kororā 的经营者)
+      printSettings: Object.fromEntries(Object.entries(printSettings || {}).filter(([k]) => !LABEL_SHOP_KEYS.includes(k))), customCompCats, productFamilies,
       cats,                     // 老价格表保留(里面也可能有价,用户自决是否清理 cats)
       // shopMaterials 不导出 ← IP 保护核心
       exportedAt: new Date().toISOString(),
@@ -20109,7 +20112,11 @@ function App() {
             if (d.printSettings && typeof d.printSettings === "object") {
               setPrintSettings(prev => {
                 const isDefault = !prev || (prev.brandName === "RURU" && !prev.logoUrl && prev.brandSubtitle === "PATISSERIE");
-                return isDefault ? d.printSettings : prev;
+                const base = isDefault ? d.printSettings : prev;
+                // 审查 r2:标签的经营者名称 / 地址 / 电话:本机填过的不动,本机空着的从文件补(另一台电脑填过的,以前合并导入永远带不过来)
+                const pick = {};
+                LABEL_SHOP_KEYS.forEach(k => { const v = _normTxt(prev && prev[k]) ? prev[k] : _normTxt(d.printSettings[k]) ? d.printSettings[k] : undefined; if (v !== undefined && v !== base[k]) pick[k] = v; });
+                return Object.keys(pick).length ? { ...base, ...pick } : base;
               });
             }
 
