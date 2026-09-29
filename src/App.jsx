@@ -5899,9 +5899,10 @@ const confirmLeave = (isDirty, confirmDialog, lang, go) => {
 // 所以单位是 g / ml / 空(以及 克 / 毫升)的行,输入框显示「存的每克价 × 100」,填进去的数 ÷ 100 再存;
 // 其他单位(kg / 本 / 個 / 枚 / L …)按「每单位」原样填 —— 成本 = 用量 × 单价,不换算单位。
 // **存储永远是每单位价(unitPrice),/100g 只在这个输入框里**。
-const isGramUnit = (unit) => /^(?:g|ml|克|毫升)?$/i.test(String(unit === undefined || unit === null ? "" : unit).trim());
+// 审查第 7 轮:先 NFKC —— 输入法全角模式敲出来的「ｇ」「ｍｌ」「㎖」也算克 / 毫升(以前当成「本」这类单位:黄框说成本算错、改价存不进本店原料);「㎏」归一成 kg,仍不是克。存的单位不改
+const isGramUnit = (unit) => /^(?:g|ml|克|毫升)?$/i.test(String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim());
 const ingPriceBasis = (unit) => {
-  const u = String(unit === undefined || unit === null ? "" : unit).trim();
+  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
   if (isGramUnit(u)) return { per100: true, label: /^(?:ml|毫升)$/i.test(u) ? "100ml" : "100g" };
   return { per100: false, label: u };
 };
