@@ -3356,18 +3356,6 @@ function useDirtyGuard(getState) {
   Object.defineProperty(bind, "isDirty", { enumerable: false, value: () => { try { return initial.current !== null && JSON.stringify(latest.current()) !== initial.current; } catch (e) { return true; } } });
   return bind;
 }
-// C15:编辑页自己的「← 返回」「取消」—— 这一页有没保存的改动先问一句(文字同切页的 goTab);没传 confirmDialog 就直接走
-const confirmLeave = (isDirty, confirmDialog, lang, go) => {
-  if (typeof confirmDialog === "function" && typeof isDirty === "function" && isDirty()) {
-    confirmDialog(
-      lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
-      go,
-      { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
-    );
-    return;
-  }
-  go();
-};
 
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
 // 2026-09-29 体检第 2 批:以前删掉的预置条目刷新后又被补回来。dismissed = appSettings.dismissedSeedIds 的 Set,
@@ -5828,6 +5816,21 @@ const ING_TABLE_VARIANTS = {
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
     where: { zh: "这一部分", ja: "このパーツ" },
   },
+};
+
+// C15:三个配料表编辑页(和组合产品编辑页)自己的「← 返回」「取消」—— 这一页有没保存的改动先问一句,文字同切页的 goTab;
+// 没传 confirmDialog 就直接走。用 useDirtyGuard 的 bind.isDirty(只看这一页),不用 anyEditorDirty:
+// 部分编辑页开着时外层组合产品编辑页也挂着,外层改过名字、这一部分没改,点「← 取消」不该问
+const confirmLeave = (isDirty, confirmDialog, lang, go) => {
+  if (typeof confirmDialog === "function" && typeof isDirty === "function" && isDirty()) {
+    confirmDialog(
+      lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+      go,
+      { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
+    );
+    return;
+  }
+  go();
 };
 
 // ─── 配料行单价:按「每 100 g」填(2026-09-29 第 2 批 2b C5)─────────────────────
