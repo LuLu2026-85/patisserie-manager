@@ -1557,6 +1557,235 @@ const usedAmountAmbiguous = (raw) => {
 };
 // END creation-follow helpers ────────────────────────────────────────────────
 
+// BEGIN allergen helpers ─────────────────────────────────────────────────────
+// 第 3 批 F3(2026-09-29):过敏原 + 配料表草稿。
+// 过敏原记在材料百科的条目上(materials[]),配方 / 组件 / 组合产品 / 商品按配料行的关联材料汇总;配方上手写的 allergens 字符串不动。
+//   materials[].allergenCodes      string[]  含有(下面 ALLERGENS 的 code)
+//   materials[].mayContainCodes    string[]  可能含有(背标写了「可能含有」/ 同一条产线)
+//   materials[].allergenChecked    "YYYY-MM-DD" | ""   空 = 还没核对;核对过、确实没有过敏原也要勾(靠它区分「没有」和「没填」)
+//   materials[].labelNameZh        标签用规范名(可选,百科名字常带品牌)
+//   materials[].labelIngredientsZh 复配原料背标上的配料原文(可选,巧克力这类),配料表草稿里放进括号
+// 都放在已有的材料对象里:旧版编辑页 {...material}、mergeByNewer、导出都原样带着。缺省 = 没核对,老数据不迁移。
+// 名称照 GB 7718-2025 第 4.12.1 条原文(八大类,2027-03-16 起预包装食品强制标示);芝麻 / 椰子按卫健委问答第三十八条是自愿标示。
+const ALLERGENS = [
+  { code: "gluten",     zh: "含有麸质的谷物及其制品", short: "麸质", label: "麸质谷物", ja: "グルテンを含む穀物", jaShort: "小麦等", mandatory: true },
+  { code: "crustacean", zh: "甲壳纲类动物及其制品",   short: "甲壳", label: "甲壳类",   ja: "甲殻類",             jaShort: "甲殻類", mandatory: true },
+  { code: "fish",       zh: "鱼类及其制品",           short: "鱼",   label: "鱼类",     ja: "魚類",               jaShort: "魚",     mandatory: true },
+  { code: "egg",        zh: "蛋类及其制品",           short: "蛋",   label: "蛋类",     ja: "卵類",               jaShort: "卵",     mandatory: true },
+  { code: "peanut",     zh: "花生及其制品",           short: "花生", label: "花生",     ja: "落花生",             jaShort: "落花生", mandatory: true },
+  { code: "soy",        zh: "大豆及其制品",           short: "大豆", label: "大豆",     ja: "大豆",               jaShort: "大豆",   mandatory: true },
+  { code: "milk",       zh: "乳及乳制品(包括乳糖)",   short: "乳",   label: "乳制品",   ja: "乳・乳製品(乳糖を含む)", jaShort: "乳",  mandatory: true },
+  { code: "nuts",       zh: "坚果及其果仁类制品",     short: "坚果", label: "坚果",     ja: "木の実(ナッツ)",     jaShort: "ナッツ", mandatory: true },
+  { code: "sesame",     zh: "芝麻",                   short: "芝麻", label: "芝麻",     ja: "ごま",               jaShort: "ごま",   mandatory: false },
+  { code: "coconut",    zh: "椰子",                   short: "椰子", label: "椰子",     ja: "ココナッツ",         jaShort: "ココナッツ", mandatory: false },
+];
+const ALLERGEN_CODES = ALLERGENS.map(a => a.code);
+const allergenByCode = (code) => ALLERGENS.find(a => a.code === code) || null;
+// 数组里认得的 code(将来版本多出来的认不得的不显示,但编辑时原样保留)
+const allergenCodesOf = (arr) => Array.isArray(arr) ? arr.filter(c => ALLERGEN_CODES.includes(c)) : [];
+const sortAllergenCodes = (codes) => ALLERGEN_CODES.filter(c => codes.has ? codes.has(c) : codes.includes(c));
+const allergenShort = (code, lang) => { const a = allergenByCode(code); return a ? (lang === "ja" ? a.jaShort : a.short) : String(code); };
+const allergenChecked = (m) => !!(m && _normTxt(m.allergenChecked));
+// 配料行的重量:克 / 毫升 / 空(配料表默认克)按 1,kg / 千克 / 公斤 / L / 升 按 1000;其他单位(本 / 個 / 片)返回 0 = 不能按重量算
+const ingWeightFactor = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
+  if (/^(?:g|ml|克|毫升)?$/i.test(u)) return 1;
+  if (/^(?:kg|千克|公斤|l|升)$/i.test(u)) return 1000;
+  return 0;
+};
+const ingGramsOf = (ing) => {
+  const f = ingWeightFactor(ing && ing.unit);
+  const q = parseFloat(ing && ing.qty);
+  return (f > 0 && isFinite(q) && q >= 0) ? q * f : null;
+};
+const _ingDisplayName = (ing) => _normTxt(ing && ing.nameZh) || _normTxt(ing && ing.nameJa) || _normTxt(ing && ing.nameFr);
+const _entityNameZh = (e) => _normTxt(e && e.nameZh) || _normTxt(e && e.nameJa) || _normTxt(e && e.nameFr);
+const _partNameZh = (l, comp) => _normTxt(l && l.nameZh) || _entityNameZh(comp) || _normTxt(l && l.customName) || _normTxt(l && l.nameJa) || "(未命名部分)";
+const _findLinked = (kind, id, ctx) => {
+  const list = kind === "creation" ? ctx.creations : kind === "component" ? ctx.components : ctx.recipes;
+  return (list || []).find(x => x && String(x.id) === String(id)) || null;
+};
+const _matMap = (ctx) => {
+  if (!ctx._matById) ctx._matById = new Map((ctx.materials || []).filter(Boolean).map(m => [m.id, m]));
+  return ctx._matById;
+};
+
+// 汇总一个配方 / 组件 / 组合产品 / 商品的过敏原。
+// 返回 { contains, mayContain, unknown, sources, maySources, lines, complete }
+//   · contains / mayContain:ALLERGENS 顺序的 code;可能含有里不再重复含有的
+//   · unknown:没法确认的配料 [{ name, part, reason, unit, count }],reason:
+//       unlinked 没关联材料 / missingMaterial 关联的材料已删 / unchecked 材料还没核对过敏原 /
+//       nonGram 单位不是克(本 / 個 / 片) / missingItem 商品组成里的配方已删 / noIngredients 一行配料都没有
+//   · complete = unknown 为空。**只要 complete 是 false,页面和标签都绝不能说「无过敏原」。**
+// 没核对的材料如果已经勾了几项,照样算进 contains(宁可多报),同时列进 unknown。
+function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
+  const matById = _matMap(ctx);
+  const contains = new Set(), may = new Set(), sources = {}, maySources = {};
+  const unknownMap = new Map();
+  let lines = 0;
+  const addSrc = (bag, code, name) => { if (!bag[code]) bag[code] = []; if (name && !bag[code].includes(name)) bag[code].push(name); };
+  const pushUnknown = (u) => {
+    const key = [u.name, u.part || "", u.reason, u.unit || ""].join("\u0001");
+    const prev = unknownMap.get(key);
+    if (prev) prev.count += (u.count || 1); else unknownMap.set(key, { part: "", unit: "", ...u, count: u.count || 1 });
+  };
+  const visitIngs = (ings, part) => {
+    (ings || []).forEach(ing => {
+      if (!ing) return;
+      const name = _ingDisplayName(ing);
+      if (!name && !ing.materialId) return;       // 空行
+      lines++;
+      const disp = name || "(没写名字)";
+      if (!ing.materialId) { pushUnknown({ name: disp, part, reason: "unlinked" }); return; }
+      const m = matById.get(ing.materialId);
+      if (!m) { pushUnknown({ name: disp, part, reason: "missingMaterial" }); return; }
+      allergenCodesOf(m.allergenCodes).forEach(c => { contains.add(c); addSrc(sources, c, disp); });
+      allergenCodesOf(m.mayContainCodes).forEach(c => { may.add(c); addSrc(maySources, c, disp); });
+      if (!allergenChecked(m)) { pushUnknown({ name: disp, part, reason: "unchecked", materialId: m.id }); return; }
+      if (ingWeightFactor(ing.unit) === 0) pushUnknown({ name: disp, part, reason: "nonGram", unit: _normTxt(ing.unit) });
+    });
+  };
+  const e = entity || {};
+  if (kind === "creation") {
+    (e.layers || []).forEach(l0 => {
+      const l = l0 || {};
+      const comp = l.sourceComponentId ? (ctx.components || []).find(x => x && x.id === l.sourceComponentId) : null;
+      visitIngs(l.ingredients, _partNameZh(l, comp));
+    });
+  } else if (kind === "product") {
+    (e.items || []).forEach(it => {
+      if (!it) return;
+      const t = _depth < 4 ? _findLinked(it.linkedType, it.linkedId, ctx) : null;
+      if (!t) { lines++; pushUnknown({ name: String(it.linkedId === undefined ? "" : it.linkedId), reason: "missingItem" }); return; }
+      const sub = allergenSummaryOf(it.linkedType === "creation" ? "creation" : it.linkedType === "component" ? "component" : "recipe", t, ctx, _depth + 1);
+      lines += sub.lines;
+      sub.contains.forEach(c => { contains.add(c); (sub.sources[c] || []).forEach(n => addSrc(sources, c, n)); });
+      sub.mayContain.forEach(c => { may.add(c); (sub.maySources[c] || []).forEach(n => addSrc(maySources, c, n)); });
+      const tName = _entityNameZh(t);
+      sub.unknown.forEach(u => pushUnknown({ ...u, part: u.reason === "noIngredients" ? "" : [tName, u.part].filter(Boolean).join(" · "), name: u.reason === "noIngredients" ? tName : u.name }));
+    });
+  } else {
+    visitIngs(e.ingredients, "");
+  }
+  if (lines === 0 && !unknownMap.size) pushUnknown({ name: _entityNameZh(e), reason: "noIngredients" });
+  const containsArr = sortAllergenCodes(contains);
+  const mayArr = sortAllergenCodes(may).filter(c => !contains.has(c));
+  const unknown = [...unknownMap.values()];
+  return { contains: containsArr, mayContain: mayArr, unknown, sources, maySources, lines, complete: unknown.length === 0 };
+}
+const ALLERGEN_UNKNOWN_REASONS = {
+  unlinked:        { zh: "没关联材料",           ja: "材料未リンク" },
+  missingMaterial: { zh: "关联的材料已删除",     ja: "リンク先の材料が削除済み" },
+  unchecked:       { zh: "材料还没核对过敏原",   ja: "材料のアレルゲン未確認" },
+  nonGram:         { zh: "单位不是克",           ja: "単位がグラムでない" },
+  missingItem:     { zh: "组成里的配方已删除",   ja: "構成のレシピが削除済み" },
+  noIngredients:   { zh: "还没有配料",           ja: "材料が未入力" },
+};
+
+// 配方上手写的过敏原(「小麦・卵・乳・ナッツ」「乳(バター)、ナッツ(アーモンド)、小麦」)→ code。
+// 认不出的词(アルコール、亜硫酸塩)放 others,不算不一致。只用来和算出来的并排比,**不写回数据**。
+const ALLERGEN_TEXT_PATTERNS = [
+  ["gluten", /小麦|麦|麸质|麩質|グルテン|wheat|gluten/i],
+  ["crustacean", /甲壳|甲殻|虾|蝦|海老|エビ|えび|蟹|カニ|かに|shrimp|crab/i],
+  ["fish", /鱼|魚|fish/i],
+  ["egg", /蛋|卵(?!磷)|たまご|タマゴ|玉子|egg/i],
+  ["peanut", /花生|ピーナッツ|peanut/i],
+  ["soy", /大豆|黄豆|豆乳|豆浆|きな粉|きなこ|卵磷脂|レシチン|soy/i],
+  ["milk", /乳(?!化)|奶|ミルク|バター|チーズ|黄油|芝士|奶酪|milk|dairy|lactose/i],
+  ["nuts", /坚果|堅果|ナッツ|杏仁|アーモンド|榛|ヘーゼル|くるみ|クルミ|胡桃|核桃|开心果|ピスタチオ|腰果|カシュー|碧根|ペカン|マカダミア|夏威夷果|nut|almond|hazelnut|pistachio/i],
+  ["sesame", /芝麻|胡麻|ごま|ゴマ|sesame/i],
+  ["coconut", /椰|ココナッツ|coconut/i],
+];
+function parseAllergenText(s) {
+  const codes = new Set(), others = [];
+  const text = Array.isArray(s) ? s.join("、") : String(s === undefined || s === null ? "" : s);
+  text.split(/[・、,，/／;；\s]+/).map(t => t.trim()).filter(Boolean).forEach(tok => {
+    let hit = false;
+    ALLERGEN_TEXT_PATTERNS.forEach(([code, re]) => {
+      if (!re.test(tok)) return;
+      if (code === "milk" && /椰|ココナッツ|coconut/i.test(tok) && !/牛|乳/.test(tok)) return;   // 椰奶不是乳
+      if (code === "nuts" && /花生|ピーナッツ|peanut/i.test(tok) && !/杏仁|アーモンド|榛|胡桃|核桃|ナッツ|坚果/.test(tok)) return;
+      codes.add(code); hit = true;
+    });
+    if (!hit) others.push(tok);
+  });
+  return { codes: sortAllergenCodes(codes), others };
+}
+
+// 配料表草稿:按投料重量从多到少(GB 7718-2025 第 4.3.2 条「按制造或加工食品时加入量(以质量计)的递减顺序」)。
+// 名字用材料的 labelNameZh,没有就用配料名;材料填了 labelIngredientsZh(复配原料的背标配料)就放进括号。
+// 同名的配料合并重量。单位不是克的行、组合产品里没填用量的部分放进 nonGram(「无法按重量排序」),文字里排在最后。
+// 组合产品:每个部分作复合配料「部分名(子配料…)」,重量 = creationBatch 按「制作个数」这一批算的需要量(没产出量的手搭部分按整批)。
+// 商品:只有一样组成 = 那一样的配料表;几样组成(礼盒)= 每样一个复合配料,重量按采购页同一口径(× qty ÷ 产出)。
+// 返回 { items: [{ name, text, grams, compound }], nonGram: [{ name, text, qty, unit, reason }], text, totalGrams }
+const _stripIngredientLead = (s) => _normTxt(s).replace(/^(?:配料表?|原料|配料[与和]辅料)\s*[:：]\s*/, "").replace(/[。.]\s*$/, "");
+function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
+  const matById = _matMap(ctx);
+  const items = new Map(), nonGram = new Map();
+  const addItem = (name, text, grams, compound) => {
+    const prev = items.get(text);
+    if (prev) prev.grams += grams; else items.set(text, { name, text, grams, compound: !!compound });
+  };
+  const addNon = (name, text, qty, unit, reason) => {
+    const key = text + "\u0001" + (unit || "") + "\u0001" + reason;
+    const prev = nonGram.get(key);
+    const q = parseFloat(qty);
+    if (prev) { if (isFinite(q) && isFinite(prev.qty)) prev.qty += q; else prev.qty = NaN; }
+    else nonGram.set(key, { name, text, qty: isFinite(q) ? q : NaN, unit: unit || "", reason });
+  };
+  const e = entity || {};
+  const visitIngs = (ings) => {
+    (ings || []).forEach(ing => {
+      if (!ing) return;
+      const m = ing.materialId ? matById.get(ing.materialId) : null;
+      const name = (m && _normTxt(m.labelNameZh)) || _ingDisplayName(ing);
+      if (!name) return;
+      const exp = m ? _stripIngredientLead(m.labelIngredientsZh) : "";
+      const text = exp ? `${name}(${exp})` : name;
+      const g = ingGramsOf(ing);
+      if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty");
+      else addItem(name, text, g, !!exp);
+    });
+  };
+  if (kind === "creation") {
+    const batch = creationBatch(e, null, ctx.components, ctx.materials, ctx.brands);
+    batch.parts.forEach(p => {
+      const name = _partNameZh(p.layer, p.comp);
+      const sub = draftIngredientList("component", p.layer, ctx, _depth + 1);
+      const text = sub.text ? `${name}(${sub.text})` : name;
+      let g = p.needed;
+      if (g === null && !(p.yieldNum > 0)) g = sub.totalGrams * (p.scale || 1);   // 手搭、没产出量的部分:按整批
+      if (g === null || !(g > 0)) addNon(name, text, NaN, "", p.noUsed ? "noUsed" : "nonGram");
+      else addItem(name, text, g, !!sub.text);
+    });
+  } else if (kind === "product") {
+    const valid = (e.items || []).filter(Boolean).map(it => ({ it, t: _depth < 4 ? _findLinked(it.linkedType, it.linkedId, ctx) : null }));
+    const kindOf = (it) => it.linkedType === "creation" ? "creation" : it.linkedType === "component" ? "component" : "recipe";
+    if (valid.length === 1 && valid[0].t) return draftIngredientList(kindOf(valid[0].it), valid[0].t, ctx, _depth + 1);
+    valid.forEach(({ it, t }) => {
+      if (!t) { addNon(String(it.linkedId === undefined ? "" : it.linkedId), String(it.linkedId === undefined ? "" : it.linkedId), NaN, "", "missingItem"); return; }
+      const k = kindOf(it);
+      const name = _entityNameZh(t);
+      const sub = draftIngredientList(k, t, ctx, _depth + 1);
+      const text = sub.text ? `${name}(${sub.text})` : name;
+      const qty = parseFloat(it.qty) > 0 ? parseFloat(it.qty) : 1;
+      let g;
+      if (k === "creation") { const serves = parseFloat(t.serves) > 0 ? parseFloat(t.serves) : 1; g = sub.totalGrams * qty / serves; }
+      else g = sub.totalGrams * qty / Math.max(1, parseFloat(t.yield) || 0);
+      if (g > 0) addItem(name, text, g, !!sub.text); else addNon(name, text, NaN, "", "nonGram");
+    });
+  } else {
+    visitIngs(e.ingredients);
+  }
+  const sorted = [...items.values()].map((x, i) => ({ x, i })).sort((a, b) => (b.x.grams - a.x.grams) || (a.i - b.i)).map(o => o.x);
+  const ng = [...nonGram.values()];
+  const totalGrams = sorted.reduce((s, x) => s + x.grams, 0);
+  return { items: sorted, nonGram: ng, text: [...sorted.map(x => x.text), ...ng.map(x => x.text)].join("、"), totalGrams };
+}
+// 标签和页面上的那行小字(打印时可关)。不写「已合规」「符合国标」这类字。
+const LABEL_DRAFT_NOTE = "标签草稿:店内现做现卖的产品国标不强制;自己装袋 / 礼盒算散装还是现制现售要问朝阳区市场监管。过敏原强制标示 2027-03-16 起。";
+// END allergen helpers ───────────────────────────────────────────────────────
+
 
 // 根据输入的名字在cats里找匹配的大类（返回第一个匹配）
 const findCatByName = (name, cats) => {
@@ -5152,7 +5381,7 @@ function StickySaveBar({ onSave, label = "保存" }) {
 }
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
-function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast }) {
+function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel }) {
   const name = pickLang(r, "name", lang);
   const nameOther = rawLang(r, "name", lang);
 
@@ -5518,17 +5747,19 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         );
       })()}
 
+      {/* 过敏原汇总 + 配料表草稿(第 3 批 F3)。手写的 allergens 在卡片里和算出来的并排,下面的备注块不再重复显示 */}
+      <AllergenSummaryCard kind="recipe" entity={r} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} handwritten={r.allergens} onPrintLabel={onPrintLabel} flat />
+
       {(() => {
         const displayNotes = pickLang(r, "notes", lang) || r.notes;
-        return (r.storage || r.allergens || displayNotes) && (
+        return (r.storage || displayNotes) && (
           <div style={{ marginBottom: T.sp.gap }}>
             <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
               {lang === "zh" ? "备注" : "メモ"}
             </div>
-            {(r.storage || r.allergens) && (
+            {r.storage && (
               <div style={{ ...T.fs.caption, color: T.body, display: "flex", gap: T.sp.xxl, flexWrap: "wrap", padding: "12px 0", borderBottom: displayNotes ? `1px solid ${T.lineFaint}` : "none" }}>
-                {r.storage && <span>{lang === "zh" ? "保存：" : "保存方法："}{r.storage}</span>}
-                {r.allergens && <span>{lang === "zh" ? "过敏原：" : "アレルゲン："}{r.allergens}</span>}
+                <span>{lang === "zh" ? "保存：" : "保存方法："}{r.storage}</span>
               </div>
             )}
             {displayNotes && <div style={{ ...T.fs.body, color: T.body, whiteSpace: "pre-wrap", fontFamily: T.fontSans, paddingTop: 12 }}>{displayNotes}</div>}
@@ -6317,6 +6548,9 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
           )}
         </div>
       )}
+
+      {/* 过敏原汇总 + 配料表草稿(第 3 批 F3)。组件不单卖,不给打印标签 */}
+      <AllergenSummaryCard kind="component" entity={c} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} />
 
       {/* 原料 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -8366,6 +8600,9 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           /* 底色转白、描边转实黑 */
           .print-area * { background: transparent !important; box-shadow: none !important; }
           .print-area .p-hide-print { display: none !important; }
+          /* 标签页(第 3 批 F3):@page 已留 15mm 边,不再加内边距;两页之间屏幕上的间隔不带进打印 */
+          .print-area.k-label-area { padding: 0 !important; }
+          .print-area .k-label-page { margin-bottom: 0 !important; }
         }
         .print-area {
           background: white;
@@ -8471,12 +8708,14 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
       )}
 
       {/* 打印区域（实际打印内容） */}
-      <div className="print-area" style={{ padding: "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
-        {/* 水印 */}
-        <div className="watermark">{brandName}</div>
+      <div className={itemType === "label" ? "print-area k-label-area" : "print-area"} style={{ padding: itemType === "label" ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
+        {/* 水印(标签不印) */}
+        {itemType !== "label" && <div className="watermark">{brandName}</div>}
 
         {itemType === "prodSheet" ? (
           <ProductionSheetTemplate data={item} lang={lang} brandName={brandName} />
+        ) : itemType === "label" ? (
+          <LabelTemplate data={item} printSettings={printSettings} />
         ) : itemType === "creation" ? (
           <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
         ) : (
@@ -9068,6 +9307,387 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
 
 // ═══════════════════════════════════════════════════════════════
 // （打印模块结束）
+// ─── 第 3 批 F3:过敏原卡片 / 材料编辑页的过敏原卡 / 标签打印 ─────────────────
+// 纯函数在 BEGIN allergen helpers 那段(allergenSummaryOf / draftIngredientList / parseAllergenText)。
+// 手写的 allergens 和算出来的比:missing = 算出来有、手写没写;extra = 手写有、已核对的原料里没找到(还有没确认的就可能在那几项里)
+const allergenTextMismatch = (summary, text) => {
+  const parsed = parseAllergenText(text);
+  const known = new Set([...(summary.contains || []), ...(summary.mayContain || [])]);
+  return {
+    parsed,
+    missing: (summary.contains || []).filter(c => !parsed.codes.includes(c)),
+    extra: parsed.codes.filter(c => !known.has(c)),
+  };
+};
+const _allergenUnknownText = (u, zh) => {
+  const r = ALLERGEN_UNKNOWN_REASONS[u.reason] || { zh: u.reason, ja: u.reason };
+  const why = zh ? r.zh : r.ja;
+  const unit = u.reason === "nonGram" && u.unit ? (zh ? `「${u.unit}」` : `「${u.unit}」`) : "";
+  const where = u.part ? `${u.part} · ` : "";
+  return `${where}${u.name || ""}${u.count > 1 ? ` ×${u.count}` : ""}(${why}${unit})`;
+};
+
+// 一排可点的过敏原小方块(材料编辑页用)
+function AllergenChips({ value, onToggle, lang, tone = "ink" }) {
+  const on = new Set(Array.isArray(value) ? value : []);
+  const color = tone === "warn" ? T.warning : T.ink;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {ALLERGENS.map(a => {
+        const sel = on.has(a.code);
+        return (
+          <button key={a.code} type="button" className="k-btn" aria-pressed={sel} title={lang === "ja" ? a.ja : a.zh}
+            onClick={() => onToggle(a.code)}
+            style={{ padding: "5px 10px", fontSize: 12, borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans,
+              border: `1px solid ${sel ? color : T.border}`, background: sel ? color : T.surface, color: sel ? T.surface : T.body }}>
+            {sel ? "✓ " : ""}{lang === "ja" ? a.jaShort : a.short}{a.mandatory ? "" : (lang === "ja" ? "(任意)" : "(自愿)")}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// 材料编辑页:过敏原与标签卡片。只在她点了之后才往 form 里写字段 —— 打开不改就保存,材料对象一个字段都不多
+function AllergenEditCard({ form, setForm, lang, inpStyle }) {
+  const zh = lang !== "ja";
+  const toggleIn = (key) => (code) => setForm(prev => {
+    const cur = Array.isArray(prev[key]) ? prev[key] : [];
+    return { ...prev, [key]: cur.includes(code) ? cur.filter(c => c !== code) : [...cur, code] };
+  });
+  const checked = allergenChecked(form);
+  const hasAny = allergenCodesOf(form.allergenCodes).length > 0 || allergenCodesOf(form.mayContainCodes).length > 0;
+  const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" };
+  return (
+    <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 6, color: T.textPrimary }}>⚠️ {zh ? "过敏原与标签" : "アレルゲンとラベル"}</div>
+      <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.7, marginBottom: 12 }}>
+        {zh
+          ? "照原料背标的「致敏物质」和配料表勾。前八项是 GB 7718-2025 第 4.12.1 条的八大类(预包装食品 2027-03-16 起强制标示),芝麻、椰子是自愿标示。附录 D.4:小麦淀粉、麦芽糊精、葡萄糖浆、精炼大豆油、大豆磷脂、鱼明胶、乳糖醇这类深度加工的配料可以免于致敏物质标示,但仍要写进配料表。"
+          : "原料の裏ラベル(アレルゲン表示・原材料名)を見て選んでください。最初の 8 項目は中国 GB 7718-2025 第 4.12.1 条の 8 大類、ごま・ココナッツは任意表示。附録 D.4 の高度加工品(小麦でん粉、マルトデキストリン、ぶどう糖シロップ、精製大豆油、大豆レシチン、魚ゼラチン、ラクチトール等)はアレルゲン表示を省略できますが、原材料名には書きます。"}
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <span style={lab}>{zh ? "含有" : "含む"}</span>
+        <AllergenChips value={form.allergenCodes} onToggle={toggleIn("allergenCodes")} lang={lang} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <span style={lab}>{zh ? "可能含有(背标写了「可能含有」/ 同一条产线也加工)" : "コンタミの可能性(裏ラベルの「同一ライン」表示)"}</span>
+        <AllergenChips value={form.mayContainCodes} onToggle={toggleIn("mayContainCodes")} lang={lang} tone="warn" />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 4 }}>
+        <input type="checkbox" checked={checked} onChange={e => setForm(prev => ({ ...prev, allergenChecked: e.target.checked ? localDateStr() : "" }))} />
+        <span style={{ fontWeight: 500 }}>{zh ? "已核对(背标看过了;没有过敏原也要勾)" : "確認済み(裏ラベル確認済み。アレルゲンなしでもチェック)"}</span>
+        {checked && <span style={{ fontSize: 11, color: T.textTertiary, ...T.num }}>{form.allergenChecked}</span>}
+      </label>
+      {!checked && (
+        <div style={{ fontSize: 11, color: T.warning, marginBottom: 8, lineHeight: 1.6 }}>
+          {hasAny
+            ? (zh ? "还没勾「已核对」—— 用到它的配方会一直把它算成「未确认」。" : "「確認済み」未チェック —— 使うレシピでは「未確認」扱いのままです。")
+            : (zh ? "没勾「已核对」= 还没看过背标。用到它的配方不会显示「无过敏原」。" : "未チェック = まだ確認していない扱い。使うレシピで「アレルゲンなし」とは表示されません。")}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 8 }}>
+        <div>
+          <label style={lab}>{zh ? "标签用名(可选)" : "ラベル用名称(任意)"}</label>
+          <input value={form.labelNameZh || ""} onChange={e => { const v = e.target.value; setForm(prev => ({ ...prev, labelNameZh: v })); }}
+            placeholder={zh ? "例:小麦粉 / 无盐黄油(百科名字常带品牌)" : "例:小麦粉 / 無塩バター"} style={inpStyle} />
+        </div>
+        <div>
+          <label style={lab}>{zh ? "复配原料的背标配料(可选,巧克力这类)" : "複合原料の原材料名(任意、チョコ等)"}</label>
+          <textarea value={form.labelIngredientsZh || ""} onChange={e => { const v = e.target.value; setForm(prev => ({ ...prev, labelIngredientsZh: v })); }}
+            placeholder={zh ? "例:可可液块、白砂糖、可可脂、大豆磷脂、香兰素" : "例:カカオマス、砂糖、ココアバター、大豆レシチン、香料"}
+            style={{ ...inpStyle, minHeight: 52, resize: "vertical" }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 材料详情页的一行摘要
+function MaterialAllergenSummary({ material: m, lang }) {
+  const zh = lang !== "ja";
+  const cont = allergenCodesOf(m.allergenCodes), may = allergenCodesOf(m.mayContainCodes);
+  const checked = allergenChecked(m);
+  const names = (codes) => codes.map(c => allergenShort(c, lang)).join(zh ? "、" : "・");
+  return (
+    <div style={{ background: T.bgCard, border: `0.5px solid ${checked ? T.border : T.warning}`, borderRadius: T.radiusLg, padding: "0.9rem 1.5rem", marginBottom: "1rem", fontSize: 13, lineHeight: 1.7 }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, color: T.textPrimary, marginBottom: 4 }}>⚠️ {zh ? "过敏原" : "アレルゲン"}</div>
+      {checked ? (
+        <div style={{ color: T.body }}>
+          {cont.length ? <span>{zh ? "含有:" : "含む:"}<b>{names(cont)}</b></span> : <span>{zh ? "含有:无(已核对)" : "含む:なし(確認済み)"}</span>}
+          {may.length > 0 && <span style={{ marginLeft: 12 }}>{zh ? "可能含有:" : "コンタミ:"}{names(may)}</span>}
+          <span style={{ marginLeft: 12, fontSize: 11, color: T.textTertiary, ...T.num }}>{zh ? "核对于 " : "確認日 "}{m.allergenChecked}</span>
+        </div>
+      ) : (
+        <div style={{ color: T.warning }}>
+          {zh ? "还没核对过敏原" : "アレルゲン未確認"}
+          {(cont.length > 0 || may.length > 0) && <span style={{ color: T.body, marginLeft: 8 }}>({zh ? "已勾:" : "選択済み:"}{names([...cont, ...may.filter(c => !cont.includes(c))])})</span>}
+          <span style={{ color: T.textTertiary, marginLeft: 8, fontSize: 11 }}>{zh ? "点「编辑」看背标后勾选" : "「編集」で裏ラベルを見て選択"}</span>
+        </div>
+      )}
+      {(_normTxt(m.labelNameZh) || _normTxt(m.labelIngredientsZh)) && (
+        <div style={{ fontSize: 12, color: T.textSecondary, marginTop: 4 }}>
+          {_normTxt(m.labelNameZh) && <span>{zh ? "标签用名:" : "ラベル名:"}{m.labelNameZh}</span>}
+          {_normTxt(m.labelIngredientsZh) && <span style={{ marginLeft: _normTxt(m.labelNameZh) ? 12 : 0 }}>{zh ? "背标配料:" : "原材料名:"}{_stripIngredientLead(m.labelIngredientsZh)}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 配方 / 组件 / 组合产品 / 商品详情页的汇总卡片。handwritten = 配方上手写的 allergens(只有配方有),并排显示、不一致标出来,不改它
+function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], handwritten, onPrintLabel, flat = false }) {
+  const zh = lang !== "ja";
+  const [showAllUnknown, setShowAllUnknown] = useState(false);
+  const [showDraft, setShowDraft] = useState(false);
+  const { summary, draft } = useMemo(() => {
+    const ctx = { materials, brands, components, recipes, creations };
+    return { summary: allergenSummaryOf(kind, entity, ctx), draft: draftIngredientList(kind, entity, ctx) };
+  }, [kind, entity, materials, brands, components, recipes, creations]);
+  const hw = _normTxt(Array.isArray(handwritten) ? handwritten.join("、") : handwritten);
+  const mm = hw ? allergenTextMismatch(summary, hw) : null;
+  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const sep = zh ? "、" : "・";
+  const chip = (code, tone) => {
+    const src = (tone === "warn" ? summary.maySources : summary.sources)[code] || [];
+    return (
+      <span key={code} title={src.length ? (zh ? "来自:" : "由来:") + src.join(sep) : ""}
+        style={{ display: "inline-block", padding: "2px 8px", marginRight: 6, marginBottom: 4, fontSize: 12, borderRadius: T.radius,
+          border: `1px solid ${tone === "warn" ? T.warning : T.ink}`, color: tone === "warn" ? T.warning : T.ink, fontWeight: 500 }}>
+        {allergenShort(code, lang)}
+      </span>
+    );
+  };
+  const box = flat
+    ? { marginBottom: T.sp.gap }
+    : { background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" };
+  const rowLab = { fontSize: 11, color: T.textTertiary, minWidth: 64, paddingTop: 3 };
+  const unknownShown = showAllUnknown ? summary.unknown : summary.unknown.slice(0, 6);
+  return (
+    <div style={box} data-k-allergen-card={kind}>
+      <div style={flat
+        ? { ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }
+        : { fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span>{zh ? "⚠️ 过敏原 · 配料表草稿" : "⚠️ アレルゲン・原材料表示(下書き)"}</span>
+        {onPrintLabel && <Btn size="sm" onClick={() => onPrintLabel(kind, entity)}>{zh ? "🏷 打印标签" : "🏷 ラベル印刷"}</Btn>}
+      </div>
+      <div style={{ paddingTop: flat ? 12 : 0, fontSize: 13, color: T.body }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          <span style={rowLab}>{zh ? "含有" : "含む"}</span>
+          <div style={{ flex: 1 }}>
+            {summary.contains.length > 0 ? summary.contains.map(c => chip(c, "ink"))
+              : summary.complete
+                ? <span>{zh ? "无(配料全部核对过,没有八大类和芝麻 / 椰子)" : "なし(全材料確認済み)"}</span>
+                : <span style={{ color: T.warning }}>{zh ? "已核对的原料里没有 —— 但还有没确认的,不能说「无过敏原」" : "確認済みの材料にはなし —— 未確認があるため「なし」とは言えません"}</span>}
+          </div>
+        </div>
+        {summary.mayContain.length > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            <span style={rowLab}>{zh ? "可能含有" : "コンタミ"}</span>
+            <div style={{ flex: 1 }}>{summary.mayContain.map(c => chip(c, "warn"))}</div>
+          </div>
+        )}
+        {!summary.complete && (
+          <div style={{ border: `1px solid ${T.warning}`, borderRadius: T.radius, padding: "8px 12px", margin: "6px 0 8px", fontSize: 12, lineHeight: 1.7 }}>
+            <div style={{ color: T.warning, fontWeight: 500 }}>
+              {zh ? `⚠ ${unknownN} 项没确认,不能说「无过敏原」` : `⚠ 未確認 ${unknownN} 件 —— 「アレルゲンなし」とは言えません`}
+            </div>
+            <div style={{ color: T.body }}>{unknownShown.map(u => _allergenUnknownText(u, zh)).join(sep)}</div>
+            {summary.unknown.length > 6 && (
+              <button type="button" onClick={() => setShowAllUnknown(v => !v)} style={{ background: "none", border: "none", padding: 0, marginTop: 2, color: T.info, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans }}>
+                {showAllUnknown ? (zh ? "收起" : "閉じる") : (zh ? `展开全部 ${summary.unknown.length} 条` : `全 ${summary.unknown.length} 件を表示`)}
+              </button>
+            )}
+            <div style={{ color: T.textTertiary, marginTop: 2 }}>
+              {zh ? "怎么补:配料行点 🔗 关联材料百科;到材料编辑页看背标勾过敏原并勾「已核对」;按「本 / 個」记的行改成克。" : "対処:行の 🔗 で材料をリンク → 材料編集でアレルゲンを選び「確認済み」に。「本・個」の行はグラムに。"}
+            </div>
+          </div>
+        )}
+        {hw && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            <span style={rowLab}>{zh ? "手写" : "手入力"}</span>
+            <div style={{ flex: 1 }}>
+              <span>{hw}</span>
+              {mm && (mm.missing.length > 0 || mm.extra.length > 0) && (
+                <div style={{ color: T.danger, fontSize: 12, marginTop: 2, lineHeight: 1.6 }}>
+                  {zh ? "⚠ 和按原料算的不一致:" : "⚠ 材料からの計算と不一致:"}
+                  {mm.missing.length > 0 && <span>{zh ? `原料里有、手写没写 ${mm.missing.map(c => allergenShort(c, lang)).join(sep)}` : `材料にあり・手入力になし ${mm.missing.map(c => allergenShort(c, lang)).join(sep)}`}</span>}
+                  {mm.missing.length > 0 && mm.extra.length > 0 && <span>{zh ? ";" : "。"}</span>}
+                  {mm.extra.length > 0 && <span>{zh ? `手写有、已核对的原料里没找到 ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}` : `手入力にあり・確認済み材料になし ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}`}{!summary.complete ? (zh ? "(可能在没确认的那几项里)" : "(未確認の材料かも)") : ""}</span>}
+                  <span style={{ color: T.textTertiary }}>{zh ? "。手写的不会被自动改。" : "。手入力は自動で書き換えません。"}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        <div style={{ marginTop: 6 }}>
+          <button type="button" onClick={() => setShowDraft(v => !v)} aria-expanded={showDraft}
+            style={{ background: "none", border: "none", padding: 0, color: T.info, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans }}>
+            {showDraft ? "▾ " : "▸ "}{zh ? "配料表草稿(按投料重量排)" : "原材料表示の下書き(配合量順)"}
+          </button>
+          {showDraft && (
+            <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.8 }}>
+              <div style={{ color: T.ink }}><b>{zh ? "配料:" : "原材料:"}</b>{draft.items.map(x => x.text).join("、") || (zh ? "(还没有能按重量排的配料)" : "(重量で並べられる材料なし)")}</div>
+              {draft.nonGram.length > 0 && (
+                <div style={{ color: T.warning }}>
+                  {zh ? "无法按重量排序(排在最后,要人工放位置):" : "重量で並べられない(末尾に置いています):"}
+                  {draft.nonGram.map(x => `${x.text}${isFinite(x.qty) ? ` ${fmtQty(x.qty)}${x.unit ? " " + x.unit : ""}` : (x.reason === "noUsed" ? (zh ? "(用量没填)" : "(使用量未入力)") : x.reason === "missingItem" ? (zh ? "(已删除)" : "(削除済み)") : "")}`).join("、")}
+                </div>
+              )}
+              <div style={{ color: T.textTertiary, marginTop: 4 }}>
+                {zh
+                  ? "按投料时的加入量从多到少排(GB 7718-2025 第 4.3.2 条),烘烤失水不扣;加入量不超过 2% 的可以不按顺序;本店自制的部分已按「部分名(子配料)」展开,外购的复合原料只有在材料里填了背标配料才展开;复合配料 25% 规则、水、食品添加剂的写法、归类名称(如「食糖」)都要人工核对。"
+                  : "投入量の多い順(GB 7718-2025 第 4.3.2 条)。焼成の水分減少は考慮していません。2% 以下は順不同可。複合原材料の 25% ルール・水・添加物・分類名は人の確認が必要です。"}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>{LABEL_DRAFT_NOTE}</div>
+      </div>
+    </div>
+  );
+}
+
+// 标签打印前的设置弹窗(品名 / 净含量 / 保质期 / 贮存条件 / 经营者信息 / 张数 / 尺寸 / 草稿提示开关)
+const labelDefaultsOf = (kind, e, ctx) => {
+  let src = e || {};
+  if (kind === "product") {
+    const items = ((e && e.items) || []).filter(Boolean);
+    if (items.length === 1) src = _findLinked(items[0].linkedType, items[0].linkedId, ctx) || src;
+  }
+  return { shelfLife: _normTxt(src.shelfLife), storage: _normTxt(src.storage) };
+};
+function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], printSettings = {}, onClose, onConfirm, onUpdateSettings }) {
+  const zh = lang !== "ja";
+  const { summary, draft, defaults } = useMemo(() => {
+    const ctx = { materials, brands, components, recipes, creations };
+    return { summary: allergenSummaryOf(kind, entity, ctx), draft: draftIngredientList(kind, entity, ctx), defaults: labelDefaultsOf(kind, entity, ctx) };
+  }, [kind, entity, materials, brands, components, recipes, creations]);
+  const [name, setName] = useState(_entityNameZh(entity));
+  const [net, setNet] = useState("");
+  const [shelf, setShelf] = useState(defaults.shelfLife);
+  const [storage, setStorage] = useState(defaults.storage);
+  const [count, setCount] = useState("10");
+  const [size, setSize] = useState(() => draft.text.length > LABEL_FIT.small ? "large" : "small");   // 配料表长的默认大一号
+  const [showNote, setShowNote] = useState(true);
+  const [shopName, setShopName] = useState(printSettings.labelShopName || "");
+  const [address, setAddress] = useState(printSettings.labelAddress || "");
+  const [phone, setPhone] = useState(printSettings.labelPhone || "");
+  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const tooLong = draft.text.length > LABEL_FIT[size === "large" ? "large" : "small"];
+  const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
+  const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 4 };
+  const confirm = () => {
+    const shop = { labelShopName: shopName.trim(), labelAddress: address.trim(), labelPhone: phone.trim() };
+    if (onUpdateSettings && (shop.labelShopName !== (printSettings.labelShopName || "") || shop.labelAddress !== (printSettings.labelAddress || "") || shop.labelPhone !== (printSettings.labelPhone || ""))) onUpdateSettings(shop);
+    const n = Math.min(60, Math.max(1, parseInt(count, 10) || 1));
+    onConfirm({
+      name: name.trim(), ingredientsText: draft.text,
+      contains: summary.contains.map(c => allergenByCode(c).label), mayContain: summary.mayContain.map(c => allergenByCode(c).label),
+      unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
+      count: n, size: size === "large" ? "large" : "small", showNote,
+    });
+  };
+  return (
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: T.z.modal, padding: 16 }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.25rem 1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>🏷 {zh ? "打印标签(草稿)" : "ラベル印刷(下書き)"}</div>
+          <button type="button" onClick={onClose} aria-label={zh ? "关闭" : "閉じる"} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, marginBottom: 12 }}>{LABEL_DRAFT_NOTE}</div>
+        {!summary.complete && (
+          <div style={{ marginBottom: 12 }}>
+            <InlineError title={zh ? `过敏原还有 ${unknownN} 项没确认` : `アレルゲン未確認 ${unknownN} 件`}
+              detail={(zh ? "标签上会印「(还有 N 项原料没核对过敏原)」,不会写成没有。没确认的:" : "ラベルには未確認の件数を印刷します。未確認:") + summary.unknown.slice(0, 8).map(u => _allergenUnknownText(u, zh)).join("、") + (summary.unknown.length > 8 ? " …" : "")} />
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 10 }}>
+          <div><label style={lab}>{zh ? "品名" : "品名"}</label><input value={name} onChange={e => setName(e.target.value)} style={inp} /></div>
+          <div><label style={lab}>{zh ? "净含量(可空,空着印横线手写)" : "内容量(空欄可)"}</label><input value={net} onChange={e => setNet(e.target.value)} placeholder={zh ? "例:6 枚 / 120 g" : "例:6 枚"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "保质期" : "賞味期限"}</label><input value={shelf} onChange={e => setShelf(e.target.value)} placeholder={zh ? "例:常温 5 天" : "例:常温 5 日"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "贮存条件" : "保存方法"}</label><input value={storage} onChange={e => setStorage(e.target.value)} placeholder={zh ? "例:0 到 4℃冷藏保存" : "例:要冷蔵 0〜4℃"} style={inp} /></div>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 500, margin: "4px 0 6px" }}>{zh ? "经营者信息(存下来,下次自动带出)" : "事業者情報(保存されます)"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 10 }}>
+          <div><label style={lab}>{zh ? "名称" : "名称"}</label><input value={shopName} onChange={e => setShopName(e.target.value)} placeholder={zh ? "填营业执照上的名称" : "営業許可証の名称"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "地址" : "住所"}</label><input value={address} onChange={e => setAddress(e.target.value)} placeholder={zh ? "填营业执照上的地址" : "営業許可証の住所"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "电话" : "電話"}</label><input value={phone} onChange={e => setPhone(e.target.value)} style={inp} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+          <div style={{ width: 100 }}><label style={lab}>{zh ? "张数" : "枚数"}</label><input type="number" min="1" max="60" inputMode="numeric" value={count} onChange={e => setCount(e.target.value)} style={inp} /></div>
+          <div>
+            <label style={lab}>{zh ? "尺寸" : "サイズ"}</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["small", zh ? "88×48 mm · 每页 10 张" : "88×48 mm・10 枚/頁"], ["large", zh ? "88×80 mm · 每页 6 张" : "88×80 mm・6 枚/頁"]].map(([v, t]) => (
+                <button key={v} type="button" onClick={() => setSize(v)} aria-pressed={size === v}
+                  style={{ padding: "7px 10px", fontSize: 12, border: `1.5px solid ${size === v ? "#111111" : "#E5E5E5"}`, background: size === v ? "#111111" : "#FFFFFF", color: size === v ? "#FFFFFF" : "#111111", borderRadius: 8, cursor: "pointer" }}>{t}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>
+          <input type="checkbox" checked={showNote} onChange={e => setShowNote(e.target.checked)} />
+          {zh ? "标签底部印「标签草稿」那行小字" : "ラベル下部に「下書き」の注記を印刷"}
+        </label>
+        <div style={{ background: T.bgMuted, padding: "8px 12px", fontSize: 12, lineHeight: 1.7, marginBottom: 10 }}>
+          <div><b>{zh ? "配料:" : "原材料:"}</b>{draft.text || "—"}</div>
+          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12 }}>{zh ? "打印时选「实际大小 / 100%」,别选「适合页面」。" : "印刷は「実際のサイズ(100%)」で。"}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Btn onClick={onClose}>{zh ? "取消" : "キャンセル"}</Btn>
+          <Btn variant="primary" onClick={confirm}>{zh ? "🖨 打印预览" : "🖨 印刷プレビュー"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 一张标签大约放得下多少字的配料表(按 6.5pt、82 mm 宽一行约 34 字估的;印之前弹窗按它提醒、默认挑尺寸)。超出的部分会被裁掉,所以宁可估小
+const LABEL_FIT = { small: 60, large: 360 };
+// A4 标签页:88×48 mm 每页 2×5 张(或 88×80 mm 每页 2×3 张)。只印中文(强制标示事项用规范汉字)。不印水印、不印价格
+function LabelTemplate({ data, printSettings = {} }) {
+  const d = data || {};
+  const large = d.size === "large";
+  const perPage = large ? 6 : 10;
+  const h = large ? 80 : 48;
+  const n = Math.min(60, Math.max(1, parseInt(d.count, 10) || 1));
+  const pages = [];
+  for (let i = 0; i < n; i += perPage) pages.push(Array.from({ length: Math.min(perPage, n - i) }, (_, k) => i + k));
+  const blank = (w) => <span style={{ display: "inline-block", minWidth: w, borderBottom: "0.2mm solid #000" }}>{" "}</span>;
+  const row = { fontSize: "7pt", lineHeight: 1.3 };
+  const ingSize = (d.ingredientsText || "").length > (large ? 280 : 45) ? "6.5pt" : "7pt";
+  const shopName = _normTxt(printSettings.labelShopName), address = _normTxt(printSettings.labelAddress), phone = _normTxt(printSettings.labelPhone);
+  const contains = Array.isArray(d.contains) ? d.contains : [], may = Array.isArray(d.mayContain) ? d.mayContain : [];
+  const one = (key) => (
+    <div key={key} className="k-label" style={{ width: "88mm", height: h + "mm", boxSizing: "border-box", border: "0.25mm solid #000", padding: "1.8mm 2.6mm", overflow: "hidden", display: "flex", flexDirection: "column", gap: "0.4mm", breakInside: "avoid", pageBreakInside: "avoid", color: "#000" }}>
+      <div style={{ fontSize: "10pt", fontWeight: 700, lineHeight: 1.25 }}>{d.name || blank("40mm")}</div>
+      <div style={{ fontSize: ingSize, lineHeight: 1.3, flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}><b>配料:</b>{d.ingredientsText || blank("50mm")}</div>
+      {(contains.length > 0 || d.unknownCount > 0) && (
+        <div style={{ ...row, fontWeight: 700 }}>
+          致敏物质提示:{contains.length > 0 ? `含有${contains.join("、")}。` : ""}{d.unknownCount > 0 ? `(还有 ${d.unknownCount} 项原料没核对过敏原)` : ""}
+        </div>
+      )}
+      {may.length > 0 && <div style={row}>可能含有{may.join("、")}。</div>}
+      <div style={row}>净含量:{d.netContent || blank("16mm")}{"　"}生产日期:{blank("8mm")}年{blank("5mm")}月{blank("5mm")}日</div>
+      <div style={row}>保质期:{d.shelfLife || blank("16mm")}{"　"}贮存条件:{d.storage || blank("20mm")}</div>
+      <div style={row}>经营者:{shopName || blank("40mm")}</div>
+      <div style={row}>地址:{address || blank("36mm")}{"　"}电话:{phone || blank("18mm")}</div>
+      {d.showNote && <div style={{ fontSize: "6pt", lineHeight: 1.25 }}>{LABEL_DRAFT_NOTE}</div>}
+    </div>
+  );
+  return (
+    <div className="k-label-sheet">
+      {pages.map((pg, pi) => (
+        <div key={pi} className="k-label-page" style={{ display: "grid", gridTemplateColumns: "88mm 88mm", gridAutoRows: h + "mm", gap: "3mm 3mm", justifyContent: "center", breakAfter: pi < pages.length - 1 ? "page" : "auto", pageBreakAfter: pi < pages.length - 1 ? "always" : "auto", marginBottom: pi < pages.length - 1 ? "10mm" : 0 }}>
+          {pg.map(i => one(i))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 
 // ─── 快速知识点录入浮层 ─────────────────────────────────────────
@@ -9261,7 +9881,7 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 
 // ─── 组合产品 View ───────────────────────────────────────────────
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
-  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [] }) {
+  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
   const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
@@ -9353,6 +9973,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           onUpdateCreation={updateCreation}
           showToast={showToast}
           onPrint={onPrintCreation}
+          onPrintLabel={onPrintLabel}
         />
       );
     }
@@ -9782,7 +10403,7 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   };
 };
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge }) {
+function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge, onPrintLabel }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
   const name = pickLang(c, "name", lang);
@@ -9991,6 +10612,11 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           </div>
         </div>
       </div>
+
+      {/* 过敏原汇总 + 配料表草稿(第 3 批 F3,仅详细模式) */}
+      {viewMode === "detail" && (
+        <AllergenSummaryCard kind="creation" entity={c} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} onPrintLabel={onPrintLabel} />
+      )}
 
       {/* 💰 成本与毛利分析（仅详细模式） */}
       {viewMode === "detail" && (
@@ -13699,6 +14325,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
         )}
       </div>
 
+      {/* 过敏原摘要(第 3 批 F3) */}<MaterialAllergenSummary material={material} lang={lang} />
       {/* 规格和价格 - RURU */}
       {(material.packSize || material.pricePerG) && (
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -14337,6 +14964,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
         )}
       </div>
 
+      {/* 过敏原与标签(第 3 批 F3):只在她点了之后才写字段 */}<AllergenEditCard form={form} setForm={setForm} lang={lang} inpStyle={inpStyle} />
       {/* 规格与价格 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与价格</div>
@@ -15031,7 +15659,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 //        currentStock, threshold, leadTimeDays, sellPrice, note }
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components 参数,商品可关联组件
-function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet }) {
+function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet, onPrintLabel }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
   // v12: 销售/生产按天 upsert,同日累加(2026-09-29 第 3 批:原样搬到模块顶层 makeLogQty,今日生产单「记入生产」用同一个)
@@ -15177,6 +15805,8 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
             </div>
           )}
         </div>
+        {/* 过敏原汇总 + 配料表草稿(第 3 批 F3):按组成里的配方 / 组合产品 / 组件汇总 */}
+        <AllergenSummaryCard kind="product" entity={p} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} onPrintLabel={onPrintLabel} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {/* v12: 销售录入(扣库存) */}
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem" }}>
@@ -17449,6 +18079,8 @@ function App() {
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
+  // 第 3 批 F3:详情页过敏原卡片的「🏷 打印标签」→ 先弹 LabelPrintModal(填净含量 / 经营者信息等),确认后 data 换成算好的标签内容
+  const openLabelPrint = (kind, entity) => setPrintTarget({ type: "label", data: { kind, entity }, stage: "settings" });
   const [tab, setTab] = useState("list");
   const [lang, setLang] = useState("zh"); // v17 中文优先: 默认中文启动 (LuLu 主要国内中文录入)
   const [moreOpen, setMoreOpen] = useState(false); // 手机端「更多」抽屉
@@ -18887,7 +19519,19 @@ function App() {
       )}
 
       {/* 🖨 打印设置弹窗 */}
-      {printTarget && printTarget.stage === "settings" && (
+      {printTarget && printTarget.stage === "settings" && printTarget.type === "label" && (
+        <LabelPrintModal
+          kind={printTarget.data.kind}
+          entity={printTarget.data.entity}
+          lang={lang}
+          materials={materials} brands={brands} components={components} recipes={recipes} creations={creations}
+          printSettings={printSettings}
+          onClose={() => setPrintTarget(null)}
+          onUpdateSettings={(patch) => setPrintSettings(prev => ({ ...prev, ...patch }))}
+          onConfirm={(label) => setPrintTarget({ type: "label", data: label, stage: "preview", lang: "zh" })}
+        />
+      )}
+      {printTarget && printTarget.stage === "settings" && printTarget.type !== "label" && (
         <PrintModal
           itemType={printTarget.type}
           onClose={() => setPrintTarget(null)}
@@ -18906,7 +19550,7 @@ function App() {
             sections={printTarget.sections}
             printSettings={printSettings}
             onClose={() => setPrintTarget(null)}
-            onUpdateSettings={(newSettings) => setPrintSettings(newSettings)}
+            onUpdateSettings={(newSettings) => setPrintSettings(prev => ({ ...prev, ...newSettings }))}
           />
         </div>
       )}
@@ -19623,7 +20267,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} />
         </div>
       )}
 
@@ -19770,6 +20414,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           productionLog={productionLog}
           setProductionLog={setProductionLog}
           onOpenProdSheet={openProdSheetWith}
+          onPrintLabel={openLabelPrint}
         />
       )}
 
@@ -19961,6 +20606,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           returnToList={creationReturnTo === "list"}
           onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
           onOpenFromList={() => setCreationReturnTo(null)}
+          onPrintLabel={openLabelPrint}
         />
       )}
 
