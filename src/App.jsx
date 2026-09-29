@@ -4422,6 +4422,7 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   // 一开始只展开「会算错钱」的几类;其他点标题展开
   const [open, setOpen] = useState(() => { const o = {}; checks.forEach(c => { o[c.id] = c.level === "money" && c.items.length > 0; }); return o; });
   const [showAll, setShowAll] = useState({});
+  const panelRef = useRef(null);
   // 一键改过的行留在原位置,按钮换成「✓ 已改好」(面板开着就一直留着)。以前改好的行立刻消失、下面的行顶上来,
   // 双击 / 连点的第二下落在下一行同一个按钮上,没看就改了(H1 把日元的本店原料标成人民币,成本差 20 倍)
   const [done, setDone] = useState({});
@@ -4437,7 +4438,12 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   useEffect(() => {
     const orig = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    // 面板上面还开着确认框(「备份没存上」)时,Esc 只关确认框(它自己听 Esc),面板不跟着关
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if ([...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].some(d => d !== panelRef.current)) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = orig; window.removeEventListener("keydown", onKey); };
   }, []);
@@ -4483,7 +4489,7 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   };
   const info = checks.find(c => c.level === "info");
   return (
-    <div className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
+    <div ref={panelRef} className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
       style={{ position: "fixed", top: topOff, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
       <div style={{ maxWidth: 920, margin: "0 auto", padding: "16px 16px 96px", boxSizing: "border-box" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: T.sp.l }}>
