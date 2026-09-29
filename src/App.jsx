@@ -17129,7 +17129,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   setFamilyEditTarget(null);
                 });
               }}
-              onBack={() => setFamilyEditTarget(null)}
+              onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setFamilyEditTarget(null))}
             />
           </div>
         </div>
