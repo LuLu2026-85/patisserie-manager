@@ -17185,6 +17185,7 @@ const PROD_TXT = {
     emptyTitle: "今天的生产单还是空的", emptyHint: "从商品加(按库存和最近的销量给建议数),或者直接选配方 / 组合产品 / 在售中的。数量随时能改,改了马上存。",
     lead: (n) => `需提前 ${n} 天`, done: "做完", logBtn: (n) => `记入生产 +${n}`, logged: (n) => `✓ 已记入 ${n}`, logMore: (n) => `再记 +${n}`,
     logHint: "记入生产 = 商品页「记录生产」同一写法,库存照加",
+    todayLogged: (n) => `⚠ 今天已经记入生产 ${n}(商品页或删掉的行记的),再点会再加一遍`,
     removed: (n) => `已从生产单删掉「${n}」`, cleared: (n) => `生产单清空了(${n} 样)`,
     added: (a, e) => a > 0 ? `✓ 加了 ${a} 样${e > 0 ? `,${e} 样已经在单子上(数量没动)` : ""}` : `这 ${e} 样已经在单子上了(数量没动)`,
     stale: (d) => `上次的单子是 ${d} 的,换了日期自动清空。`, copyStale: (d) => `↺ 照 ${d} 的单子再来一份`,
@@ -17211,6 +17212,7 @@ const PROD_TXT = {
     emptyTitle: "本日の製造リストは空です", emptyHint: "商品(在庫と販売実績から推奨数)・レシピ / 組立製品・販売中から追加。数量はいつでも変更でき、すぐ保存されます。",
     lead: (n) => `${n} 日前から仕込み`, done: "完了", logBtn: (n) => `製造記録 +${n}`, logged: (n) => `✓ 記録済み ${n}`, logMore: (n) => `追加記録 +${n}`,
     logHint: "製造記録 = 商品ページの「製造記録」と同じ(在庫に加算)",
+    todayLogged: (n) => `⚠ 本日すでに製造記録 ${n}(商品ページ・削除した行の分)。押すとさらに加算`,
     removed: (n) => `「${n}」を削除しました`, cleared: (n) => `リストをクリア(${n} 件)`,
     added: (a, e) => a > 0 ? `✓ ${a} 件追加${e > 0 ? `(${e} 件は既にあり)` : ""}` : `${e} 件は既にリストにあります`,
     stale: (d) => `前回のリストは ${d} のものです(日付が変わると空になります)。`, copyStale: (d) => `↺ ${d} と同じ内容で作る`,
@@ -17328,7 +17330,7 @@ function ProdBlock({ b, lang, showHead, onKitchen }) {
 }
 
 // 生产单的一行
-function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, onDone, onLog, readOnly = false, onKitchen }) {
+function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, onDone, onLog, readOnly = false, onKitchen, todayLogged = 0 }) {
   const X = prodTxt(lang);
   const l = s.line;
   const isProduct = l.kind === "product";
@@ -17371,6 +17373,8 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       {isProduct && s.obj && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
           {logged > 0 && <span style={{ ...T.fs.caption, color: T.success }}>{X.logged(fmtQty(logged))}</span>}
+          {/* 审查 r1:这一行删过 / 清空过又加回来,logged 从 0 开始 —— 按今天的生产记录提醒,免得同一批记两遍 */}
+          {pending > 0 && todayLogged > logged && <span data-prod-todaylogged="1" style={{ ...T.fs.caption, color: T.warning }}>{X.todayLogged(fmtQty(todayLogged))}</span>}
           {/* 两种按钮给不同的 key:同一个 Btn 换 variant 会在重画时混用 border / borderColor(React 警告) */}
           {pending > 0 && (logged > 0
             ? <Btn key="more" size="sm" onClick={onLog} title={X.logHint}>{X.logMore(fmtQty(pending))}</Btn>
@@ -17508,7 +17512,7 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
 }
 
 // 生产单页面。plan 的读写都在 App(updatePlan),这里只拿今天的那份来显示
-function ProductionSheetView({ products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [], salesLog = [],
+function ProductionSheetView({ products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [], salesLog = [], productionLog = [],
   rawPlan, today, updatePlan, onLogProduction, onPrint, lang, showToast, staff = false, onOpenKitchen }) {
   // staff = 员工模式(F4):只看、打勾、记入生产、打印;不能加 / 删 / 清空 / 改数量,也不给「照那天的再来一份」
   const X = prodTxt(lang);
@@ -17592,7 +17596,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
               onRemove={() => remove(s.line.uid)}
               onDone={() => setLine(s.line.uid, { done: !s.line.done })}
               onLog={() => onLogProduction && onLogProduction(s.line.uid)}
-              readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined} />
+              readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined}
+              todayLogged={s.line.kind === "product" ? (productionLog || []).filter(x => x && String(x.productId) === String(s.line.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0) : 0} />
           ))}
           <ProdTotals totals={totals} lang={lang} noYieldNames={prodNoYieldNames(sheet, lang)} />
         </>
@@ -18625,7 +18630,7 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
       <div className="rc-container k-staffmain">
         {page === "sheet" && (
           <ProductionSheetView staff lang={lang} today={today} products={products} recipes={recipes} creations={creations} components={components}
-            materials={materials} brands={brands} productFamilies={productFamilies} salesLog={salesLog}
+            materials={materials} brands={brands} productFamilies={productFamilies} salesLog={salesLog} productionLog={productionLog}
             rawPlan={rawPlan} updatePlan={updatePlan} onLogProduction={onLogProduction} onPrint={onPrint} showToast={showToast} onOpenKitchen={openKitchen} />
         )}
         {page === "kitchen" && (kitchenItem
