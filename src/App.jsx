@@ -16721,6 +16721,8 @@ function App() {
     for (let j = 0; j < i; j++) if (arr[j] && arr[j].sourceComponentId === sid) k++;
     return `${sid}#${k}`;
   };
+  // H14 正在存备份 / 清旧价格表:这段时间再点(双击)不再清第二次(以前两次都清,先出的那条提示点撤销会说「之后又改过」)
+  const dhClearCatsBusy = useRef(false);
   const dataHealthFix = {
     // H1:本店原料是哪种钱。数不变,只写币种
     shopCurrency: (item, cur) => {
@@ -16788,11 +16790,15 @@ function App() {
           setTimeout(() => { if (!back) dhNoUndo(); }, 0);
         } });
       };
-      if (await pinBackupNow("clear-cats")) doClear(true);
-      else confirmDialog(
-        zh ? "清之前的固定备份没存上(浏览器的数据库用不了)。仍然清掉旧价格表吗?清掉后 5 秒内还能撤销。" : "削除前の固定バックアップを保存できませんでした。それでも削除しますか?",
-        () => doClear(false),
-        { title: zh ? "备份没存上" : "バックアップ失敗", confirmText: zh ? "仍然清掉" : "削除する", refs: [zh ? `旧价格表:${orig.length} 条(已停用,成本不读它)` : `旧価格表:${orig.length} 件`] });
+      if (dhClearCatsBusy.current) return;
+      dhClearCatsBusy.current = true;
+      try {
+        if (await pinBackupNow("clear-cats")) doClear(true);
+        else confirmDialog(
+          zh ? "清之前的固定备份没存上(浏览器的数据库用不了)。仍然清掉旧价格表吗?清掉后 5 秒内还能撤销。" : "削除前の固定バックアップを保存できませんでした。それでも削除しますか?",
+          () => doClear(false),
+          { title: zh ? "备份没存上" : "バックアップ失敗", confirmText: zh ? "仍然清掉" : "削除する", refs: [zh ? `旧价格表:${orig.length} 条(已停用,成本不读它)` : `旧価格表:${orig.length} 件`] });
+      } finally { dhClearCatsBusy.current = false; }
     },
   };
 
