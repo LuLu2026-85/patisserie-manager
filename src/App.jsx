@@ -1620,7 +1620,9 @@ const _matMap = (ctx) => {
 // 没核对的材料如果已经勾了几项,照样算进 contains(宁可多报),同时列进 unknown。
 function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
   const matById = _matMap(ctx);
-  const contains = new Set(), may = new Set(), sources = {}, maySources = {};
+  // 审查 r3:sourcesJa / maySourcesJa 和 unknown[].nameJa / partJa 给日文界面显示用(去重和标签仍按中文名)。
+  // 以前日文界面的卡片列「杏仁粉（马可纳）(材料のアレルゲン未確認)」,正上方的配料表却是「アーモンドパウダー」
+  const contains = new Set(), may = new Set(), sources = {}, maySources = {}, sourcesJa = {}, maySourcesJa = {};
   const unknownMap = new Map();
   let lines = 0;
   const addSrc = (bag, code, name) => { if (!bag[code]) bag[code] = []; if (name && !bag[code].includes(name)) bag[code].push(name); };
@@ -1629,20 +1631,22 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
     const prev = unknownMap.get(key);
     if (prev) prev.count += (u.count || 1); else unknownMap.set(key, { part: "", unit: "", ...u, count: u.count || 1 });
   };
-  const visitIngs = (ings, part) => {
+  const visitIngs = (ings, part, partJa) => {
     (ings || []).forEach(ing => {
       if (!ing) return;
       const name = _ingDisplayName(ing);
       if (!name && !ing.materialId) return;       // 空行
       lines++;
       const disp = name || "(没写名字)";
-      if (!ing.materialId) { pushUnknown({ name: disp, part, reason: "unlinked" }); return; }
+      const dispJa = _normTxt(ing.nameJa) || disp;
+      const U = { name: disp, nameJa: dispJa, part, partJa: partJa || part };
+      if (!ing.materialId) { pushUnknown({ ...U, reason: "unlinked" }); return; }
       const m = matById.get(ing.materialId);
-      if (!m) { pushUnknown({ name: disp, part, reason: "missingMaterial" }); return; }
-      allergenCodesOf(m.allergenCodes).forEach(c => { contains.add(c); addSrc(sources, c, disp); });
-      allergenCodesOf(m.mayContainCodes).forEach(c => { may.add(c); addSrc(maySources, c, disp); });
-      if (!allergenChecked(m)) { pushUnknown({ name: disp, part, reason: "unchecked", materialId: m.id }); return; }
-      if (ingWeightFactor(ing.unit) === 0) pushUnknown({ name: disp, part, reason: "nonGram", unit: _normTxt(ing.unit) });
+      if (!m) { pushUnknown({ ...U, reason: "missingMaterial" }); return; }
+      allergenCodesOf(m.allergenCodes).forEach(c => { contains.add(c); addSrc(sources, c, disp); addSrc(sourcesJa, c, dispJa); });
+      allergenCodesOf(m.mayContainCodes).forEach(c => { may.add(c); addSrc(maySources, c, disp); addSrc(maySourcesJa, c, dispJa); });
+      if (!allergenChecked(m)) { pushUnknown({ ...U, reason: "unchecked", materialId: m.id }); return; }
+      if (ingWeightFactor(ing.unit) === 0) pushUnknown({ ...U, reason: "nonGram", unit: _normTxt(ing.unit) });
     });
   };
   const e = entity || {};
@@ -1651,10 +1655,11 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
       const l = l0 || {};
       const comp = l.sourceComponentId ? (ctx.components || []).find(x => x && x.id === l.sourceComponentId) : null;
       const pn = _partNameZh(l, comp);
+      const pnJa = _normTxt(l.nameJa) || _normTxt(comp && comp.nameJa) || pn;
       const before = lines;
-      visitIngs(l.ingredients, pn);
+      visitIngs(l.ingredients, pn, pnJa);
       // 审查 r1:某个部分一行配料都没有(或全是空行)→ 这一部分没法确认,整个组合产品不能算「全部核对过」
-      if (lines === before) pushUnknown({ name: pn, reason: "noIngredients", partLevel: true });
+      if (lines === before) pushUnknown({ name: pn, nameJa: pnJa, reason: "noIngredients", partLevel: true });
     });
   } else if (kind === "product") {
     (e.items || []).forEach(it => {
@@ -1663,19 +1668,20 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
       if (!t) { lines++; pushUnknown({ name: String(it.linkedId === undefined ? "" : it.linkedId), reason: "missingItem" }); return; }
       const sub = allergenSummaryOf(it.linkedType === "creation" ? "creation" : it.linkedType === "component" ? "component" : "recipe", t, ctx, _depth + 1);
       lines += sub.lines;
-      sub.contains.forEach(c => { contains.add(c); (sub.sources[c] || []).forEach(n => addSrc(sources, c, n)); });
-      sub.mayContain.forEach(c => { may.add(c); (sub.maySources[c] || []).forEach(n => addSrc(maySources, c, n)); });
-      const tName = _entityNameZh(t);
-      sub.unknown.forEach(u => { const whole = u.reason === "noIngredients" && !u.partLevel; pushUnknown({ ...u, part: whole ? "" : [tName, u.part].filter(Boolean).join(" · "), name: whole ? tName : u.name }); });
+      sub.contains.forEach(c => { contains.add(c); (sub.sources[c] || []).forEach(n => addSrc(sources, c, n)); (sub.sourcesJa[c] || []).forEach(n => addSrc(sourcesJa, c, n)); });
+      sub.mayContain.forEach(c => { may.add(c); (sub.maySources[c] || []).forEach(n => addSrc(maySources, c, n)); (sub.maySourcesJa[c] || []).forEach(n => addSrc(maySourcesJa, c, n)); });
+      const tName = _entityNameZh(t), tNameJa = _normTxt(t.nameJa) || tName;
+      sub.unknown.forEach(u => { const whole = u.reason === "noIngredients" && !u.partLevel; pushUnknown({ ...u, part: whole ? "" : [tName, u.part].filter(Boolean).join(" · "), name: whole ? tName : u.name,
+        partJa: whole ? "" : [tNameJa, u.partJa || u.part].filter(Boolean).join(" · "), nameJa: whole ? tNameJa : (u.nameJa || u.name) }); });
     });
   } else {
     visitIngs(e.ingredients, "");
   }
-  if (lines === 0 && !unknownMap.size) pushUnknown({ name: _entityNameZh(e), reason: "noIngredients" });
+  if (lines === 0 && !unknownMap.size) pushUnknown({ name: _entityNameZh(e), nameJa: _normTxt(e.nameJa) || _entityNameZh(e), reason: "noIngredients" });
   const containsArr = sortAllergenCodes(contains);
   const mayArr = sortAllergenCodes(may).filter(c => !contains.has(c));
   const unknown = [...unknownMap.values()];
-  return { contains: containsArr, mayContain: mayArr, unknown, sources, maySources, lines, complete: unknown.length === 0 };
+  return { contains: containsArr, mayContain: mayArr, unknown, sources, maySources, sourcesJa, maySourcesJa, lines, complete: unknown.length === 0 };
 }
 const ALLERGEN_UNKNOWN_REASONS = {
   unlinked:        { zh: "没关联材料",           ja: "材料未リンク" },
@@ -9376,8 +9382,9 @@ const _allergenUnknownText = (u, zh) => {
   const r = ALLERGEN_UNKNOWN_REASONS[u.reason] || { zh: u.reason, ja: u.reason };
   const why = zh ? r.zh : r.ja;
   const unit = u.reason === "nonGram" && u.unit ? (zh ? `「${u.unit}」` : `「${u.unit}」`) : "";
-  const where = u.part ? `${u.part} · ` : "";
-  return `${where}${u.name || ""}${u.count > 1 ? ` ×${u.count}` : ""}(${why}${unit})`;
+  const part = zh ? u.part : (u.partJa || u.part);   // 审查 r3:日文界面用日文名
+  const where = part ? `${part} · ` : "";
+  return `${where}${(zh ? u.name : (u.nameJa || u.name)) || ""}${u.count > 1 ? ` ×${u.count}` : ""}(${why}${unit})`;
 };
 
 // 一排可点的过敏原小方块(材料编辑页用)
@@ -9504,7 +9511,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
   const unknownN = summary.unknown.length;   // 审查 r2:按几种原料算(同一个部分用在 4 层也只算一种,每条后面的 ×N 写着用了几处);以前加 ×N,Framboisier 写「66 项」、展开却是 25 条
   const sep = zh ? "、" : "・";
   const chip = (code, tone) => {
-    const src = (tone === "warn" ? summary.maySources : summary.sources)[code] || [];
+    const src = (zh ? (tone === "warn" ? summary.maySources : summary.sources) : ((tone === "warn" ? summary.maySourcesJa : summary.sourcesJa) || {}))[code] || [];
     return (
       <span key={code} title={src.length ? (zh ? "来自:" : "由来:") + src.join(sep) : ""}
         style={{ display: "inline-block", padding: "2px 8px", marginRight: 6, marginBottom: 4, fontSize: 12, borderRadius: T.radius,
