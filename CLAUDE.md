@@ -279,7 +279,7 @@ The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `ma
 - Color scheme is forced light (`colorScheme: "light"` on the root) because the app is deployed into surfaces where OS dark mode would otherwise break the inline colors. Keep this in mind when picking colors.
 - Group colors (`GROUPS`) use a transparent background with a colored left border + pill border so they render identically in light and dark embeds.
  五个盆的色相刻意分散、明度统一压在 32~42%,**转灰度打印仍能分出 3 档以上**,红绿色觉障碍也能靠明度区分 —— 改这五个色值前先想清楚这条。
-- 配料表列宽只在模块常量 `ING_COLS` 定义一次,表头 / 数据行 / 汇总条三处共用。
+- **配方详情页**的配料表列宽只在模块常量 `ING_COLS` 定义一次,表头 / 数据行 / 汇总条三处共用。(编辑页的配料表是另一份:`IngredientTable`,见下面「体检第 2 批 2b」。)
 - **配料行 / 组合蛋糕层的成本显示走 `fmtCost(v)`**(不到 1 元两位小数、1 到 10 元一位、10 元以上整数,尾零去掉,
   小于 1 分显示「<¥0.01」;没价返回空串)。**别再手写 `toFixed(0)`** —— 盐 1g 的 0.03 元会显示成「¥0」,和没价的空白分不清
   (2026-09-14 LuLu 提的)。批次总成本 / 单个成本数大,仍是整数或一位小数,不走这里。
@@ -438,6 +438,41 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
 13. 编辑页提示统一「中文名必填,日文可以不填」(和保存校验一致);配方编辑页 `familyId` 指向已删家族时下拉多一项「⚠ 已丢失的家族」,保存不悄悄清掉。
 14. `creation_follow_probe.cjs` 抽代码时截到 `toCNY` 的结尾(中间插了 `localDateStr`,旧写法截到第一个 `};` 会漏掉 toCNY)。
     **App.jsx 工作副本是 CRLF 换行**(git 存 LF、autocrlf 转换),脚本里拼字符串匹配要用 `\r\n` 或按 `/\r?\n/` 切行。
+
+## 2026-09-29 体检第 2 批 2b:三个编辑页的配料表合成一个(改配料表前先看)
+
+施工说明 `.claude/batch2b/plan.md`,改前现状地图 `.claude/batch2b/understand_raw.json`。
+
+1. **配料表只有一份代码 `IngredientTable`**(模块顶层),配方(`EditForm`)/ 组件(`ComponentEditForm`)/ 组合产品的部分(`LayerEditForm`)
+   三页都用它;三页还剩的差异只在 `ING_TABLE_VARIANTS`(datalist id、批量关联「本配方 / 本组件 / 这一部分」的说法),文字全在 `ING_TABLE_TXT`(跟中日文走)。
+   `ings` / `setIngs` 仍放在编辑页里(离开保护靠它),选材料 / 批量关联两个弹窗走 `IngredientLinkModals`,**要渲染在编辑页根元素里面**。
+   子组件一律定义在模块顶层,**别在渲染函数里定义组件**(每敲一个字输入框重新挂载、光标丢)。`_id` 可能是 0,判断写 `!== null`。
+2. 三页的列统一:🔗 / 中文名 / 日文名 / 法文名 / 用量 / 单位 / 品牌 / 单价 / 成本 / 分组 / 备注。组件 106 行、部分 61 行的**备注以前看不见**,现在三页都能看能改。
+   认不出的分组值(导入的 bowl6 之类)显示成「未分组」、不改数据(以前配方页白屏)。关联了百科的行品牌格三页都锁住。
+3. **单价框按「每 100 g」填**(`IngPriceInput`):单位是 g / ml / 空 / 克 / 毫升 → 显示 `unitPrice × 100`,填的数 ÷ 100 存;其他单位按每单位填。
+   **存储仍是每单位价 `unitPrice`**,别把 /100g 写进任何字段。判断「是不是克」走 `isGramUnit`(先 NFKC,全角「ｇ」「ｍｌ」也算)。
+   关联了**有价**材料、单位却是本 / 個的行,框里是打开时刷新来的材料每克价,口径写「¥/g」(不写「¥/本」,香草荚 1.29 读着像一根 1.29 元)。输入框有本地草稿(敲「1.」不被吃掉),失焦 / 外部改值时按存的值重算,显示去浮点尾巴。
+4. **关联了百科的行改单价**(体检 #21):三页都追踪 `_priceModified`(只标「关联了、材料还在」的行,标 false 时删键),出提示条
+   `PriceChangeBanner`,「保存到本店原料」**默认勾上**,保存时 `saveIngPricesToShop` upsert 本店原料(带 currency / updatedAt),toast 带**撤销**。
+   **单位不是克的关联行(本 / 個 / kg)不写本店原料**(本店原料按克计价;以前每本 15 元会被当成每克 15 元,贵 10 倍),
+   而且这种行改的价**不参与成本**(成本仍按材料百科每克价算,见 C10 黄框),要按每本算得先取消关联。
+   手改过价的关联行单位在克 / 非克之间换了,丢掉手改的价回到百科价 —— **在离开单位框(blur)时拿点进去之前的单位比**,不在每次按键时判断
+   (g 改 ml 敲到「m」、拼音打「毫升」敲到「h」都会误判);整个窗口失焦(切去微信)触发的 blur 不算。部分编辑页保存就写本店原料(立即生效,组合产品不保存也留着,toast 写明)。
+   🔗 重新选材料 / 批量关联写价时同时重置 `_originalPrice`、去掉 `_priceModified`。
+5. **名字联想**(`IngNameInput` + `suggestMaterialsForIng`):中文 / 日文名框打字出下拉(最多 8 条,本店原料排前带价),点一条 = 🔗 选材料同一个写法
+   (`applyMaterialPick`),外加把正在打字的那个框换成材料的名字。旧价格表 cats 的名字 datalist 去掉,**打字不再自动绑旧价格表**,
+   但「改名解绑 catId」和打开时的 `autoLinkIng` 保留(去掉会改变组件 / 部分的内容比较)。下拉 `position: fixed`、选项用 `onMouseDown`、输入法组词时不响应 Enter;往上还是往下开按 `visualViewport`(iPad 键盘弹起只缩它)。
+6. **跟组件库走的比较 `_ingContentKey` 现在包括配料的备注和法文名**(以前组件里改的备注到不了组合产品,部分里改的会被悄悄盖掉)。
+   **打开 / 保存时不整理没关联百科的行**(补 currency、改精度、清 "NaN" 都不行):组件的行原样深拷进跟组件库的部分,内容一变「打开不改就保存」就变本产品专用。
+7. 清空用量 / 单价时成本写 ""(以前写字符串 "NaN");老数据里已有的 "NaN" 不在打开时清。名字只有空格的行保存时丢掉(`ingHasName`)。
+   数字框滚轮一来就失焦(`blurOnWheel`)。关联材料被删掉的行也显示 ¥/円 切换。单位不符(关联了按克计价的材料但单位是本 / 個 / kg)单位格黄框。
+8. **步骤中日按行对齐**(体检 #31):保存时中间一种语言空着的留 "",两边都空的行不存;显示走 `stepRows` / `pickSteps` 按行回退到另一种语言。
+9. **离开保护**:所有编辑页(配方 / 组件 / 组合产品 / 部分 / 家族 / 知识 / 材料 / 厂家 / 商品 / 供货商 / 本店原料)都接 `useDirtyGuard`,
+   页内「← 返回」「取消」有改动先问(`confirmLeave` 用本页的 `bind.isDirty()`;`confirmLeaveEditor` 用 `anyEditorDirty()`,文字同 goTab)。
+   比较时 "" / null / [] / false 当成没有这个字段、数字按字符串比(`_dirtyNorm`;老数据的年份 / 库存是数字,敲了又删会变成字符串),敲了又删不白问。
+   单价框敲回一开始显示的数,原样还回原值(刷新来的 0.12727999999999998 显示成 12.728,敲 1 再删掉不算改过)。离开知识库 / 商品 / 供货商 / 材料百科页时关掉编辑页(商品编辑页开着切去卖货,回来保存会用旧库存盖掉新的)。
+10. **测试尺子**:`.claude/scripts/editor_probe/editor_probe_v2.cjs`(86 例 / 3137 步快照,`--diff` 对比)+ `b2b/` 下 extra_tests(82)/ extra_tests_r3(107)/
+    round1_tests(81)/ c9_tests(120)/ c11_tests(59),全用 `--root <项目根> --data <导出>` 跑;`summ.cjs a b` 按模式汇总快照差异。**改配料表前后各跑一次。**
 
 ## RURU_*.json files at repo root
 
