@@ -1054,14 +1054,36 @@ const pickLang = (obj, base, lang) => {
   return primary || fallback || "";
 };
 
-// steps 数组: 当前语言为空数组 → 回退另一语言 → 都空返回 []。兼容老数据 obj.steps
-const pickSteps = (obj, lang) => {
+// 步骤按行对齐(2026-09-29 体检 #31 / 第 2 批 2b C11):stepsZh[i] 和 stepsJa[i] 是同一步的两种语言。
+// 存(stepsForSave):某一语言空着的行在那一语言里留 "",两种语言都空的行不存,每种语言末尾的 "" 去掉。
+// 读(stepRows / pickSteps):第 i 行当前语言空 → 用另一语言的第 i 行;两边都空的行跳过;序号按显示出来的顺序数。
+// 以前保存时两种语言各自把空行删掉,中间空一行,后面的步骤就整体错位一行(中文第 3 步对上日文第 4 步)。
+// 某语言是空数组 → 用老字段 steps(兼容老数据,和 _effSteps 同一个规则)
+const _stepStr = (s) => (s === undefined || s === null) ? "" : (typeof s === "string" ? s : String(s));
+const _stepArr = (obj, L) => (Array.isArray(obj["steps" + L]) && obj["steps" + L].length) ? obj["steps" + L] : (Array.isArray(obj.steps) ? obj.steps : []);
+// 返回 [{ zh, ja }],一行一步,已跳过两边都空的行;某一语言空着是 ""(不回退,双语并排用)
+const stepRows = (obj) => {
   if (!obj) return [];
-  const zh = (obj.stepsZh && obj.stepsZh.length) ? obj.stepsZh : (obj.steps || []);
-  const ja = (obj.stepsJa && obj.stepsJa.length) ? obj.stepsJa : (obj.steps || []);
-  const primary = lang === "zh" ? zh : ja;
-  const fallback = lang === "zh" ? ja : zh;
-  return (primary && primary.length) ? primary : ((fallback && fallback.length) ? fallback : []);
+  const zh = _stepArr(obj, "Zh"), ja = _stepArr(obj, "Ja");
+  const rows = [];
+  for (let i = 0, n = Math.max(zh.length, ja.length); i < n; i++) {
+    const z = _stepStr(zh[i]), j = _stepStr(ja[i]);
+    const zOk = z.trim() !== "", jOk = j.trim() !== "";
+    if (zOk || jOk) rows.push({ zh: zOk ? z : "", ja: jOk ? j : "" });
+  }
+  return rows;
+};
+// 显示用:一步一个字符串,当前语言这一行空着就用另一语言
+const pickSteps = (obj, lang) => stepRows(obj).map(r => lang === "zh" ? (r.zh || r.ja) : (r.ja || r.zh));
+// 编辑页保存:rows = 编辑页的步骤行 [{ textZh, textJa }](三个编辑页共用)
+const stepsForSave = (rows) => {
+  const zh = [], ja = [];
+  (Array.isArray(rows) ? rows : []).forEach(s => {
+    const z = _stepStr(s && s.textZh).trim(), j = _stepStr(s && s.textJa).trim();
+    if (z || j) { zh.push(z); ja.push(j); }
+  });
+  const trimEnd = (a) => { let n = a.length; while (n > 0 && !a[n - 1]) n--; return a.slice(0, n); };
+  return { stepsZh: trimEnd(zh), stepsJa: trimEnd(ja) };
 };
 
 // 取「另一语言」原始值、不回退 — 专供双语并排的副行(否则回退会显示成「中文·中文」)
@@ -1396,6 +1418,19 @@ const _effSteps = (x, L) => {
   const a = (x && Array.isArray(x["steps" + L]) && x["steps" + L].length) ? x["steps" + L] : ((x && Array.isArray(x.steps)) ? x.steps : []);
   return a;
 };
+// 步骤比较(C11):老写法是两种语言各自去掉空串后比。步骤按行对齐存以后,某一语言「中间」空一行,
+// 老写法就看不出这一行对着哪一步(中文 [a,"",c] 和 [a,c] 比成一样)—— 只在这种时候再补一项逐行对照。
+// 没有中间空行的数据(09-26 的全部数据都是)比较结果和以前一字不差,「打开部分编辑页不改就保存」不会变成本产品专用
+const _stepsKeyTail = (x) => {
+  const zh = _effSteps(x, "Zh").map(_normTxt), ja = _effSteps(x, "Ja").map(_normTxt);
+  const rows = [];
+  for (let i = 0, n = Math.max(zh.length, ja.length); i < n; i++) {
+    const z = zh[i] || "", j = ja[i] || "";
+    if (z || j) rows.push([z, j]);
+  }
+  const gap = (k) => { let blank = false; for (const r of rows) { if (!r[k]) blank = true; else if (blank) return true; } return false; };
+  return (gap(0) || gap(1)) ? [rows] : [];
+};
 const _ingContentKey = (ing, matIds) => {
   const mid = (ing.materialId && (!matIds || matIds.has(ing.materialId))) ? String(ing.materialId) : "";
   const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand)];
@@ -1408,6 +1443,7 @@ const layerContentKey = (x, matIds) => JSON.stringify(x ? [
   (Array.isArray(x.ingredients) ? x.ingredients : []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => _ingContentKey(i, matIds)),
   _effSteps(x, "Zh").map(_normTxt).filter(Boolean), _effSteps(x, "Ja").map(_normTxt).filter(Boolean),
   _normTxt(x.notesZh), _normTxt(x.notesJa),
+  ..._stepsKeyTail(x),
 ] : null);
 const sameLayerContent = (layer, comp, matIds) => !!(layer && comp) && layerContentKey(layer, matIds) === layerContentKey(comp, matIds);
 // 组件 → 部分的内容字段。加部分(addLayerFromComponent)和跟组件库同步共用这一个
@@ -3350,7 +3386,11 @@ function useDirtyGuard(getState) {
     return () => { _dirtyChecks.delete(check); };
   }, []);
   const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current()); } catch (e) { initial.current = ""; } } };
-  return { onPointerDownCapture: arm, onKeyDownCapture: arm };
+  const bind = { onPointerDownCapture: arm, onKeyDownCapture: arm };
+  // 2026-09-29 第 2 批 2b C15:bind.isDirty() = 只看这一页自己改过没有(编辑页里的「← 返回」「取消」用;
+  // anyEditorDirty 会把外层的组合产品编辑页也算进去)。不可枚举,{...bind} 挂到 div 上时不会被带成 DOM 属性
+  Object.defineProperty(bind, "isDirty", { enumerable: false, value: () => { try { return initial.current !== null && JSON.stringify(latest.current()) !== initial.current; } catch (e) { return true; } } });
+  return bind;
 }
 
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
@@ -4912,7 +4952,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 }
 
 // ─── 组件仓库 View ───────────────────────────────────────────────
-function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
+function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
@@ -4929,6 +4969,9 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         cats={cats}
         brands={brands}
         materials={materials}
+        setShopMaterials={setShopMaterials}
+        showToast={showToast}
+        confirmDialog={confirmDialog}
         onSave={(c) => {
           setComponents(prev => {
             const found = prev.find(x => x.id === c.id);
@@ -5762,8 +5805,659 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
   );
 }
 
+// ─── 配料表(配方 / 组件 / 组合产品的部分 三个编辑页共用)────────────────────
+// 2026-09-29 体检第 2 批 2b 第一步:三个编辑页原来各抄一份配料表(约 150 行 × 3),改一处漏两处。
+// 现在只有这一份。三页之间现有的差异(列、占位符、title、宽度、datalist id、配方独有的改价追踪 / ↺ / 品牌锁 / 分组图例、
+// 部分编辑页没有 FR / 分组 / 竖条 …)第一步一律原样保留,写在下面这张表里;第二步再逐条统一。
+// 约定:ings / setIngs 状态留在编辑页里(useDirtyGuard 靠它判断改没改),这里只收 props;
+// 选材料 / 批量关联两个弹窗由 IngredientLinkModals 渲染在编辑页根元素里(位置和以前一样)。
+// 表头 / 占位符 / title 三页同一套,跟中日文走(2026-09-29 第 2 批 2b C4;以前三页各写各的,配方页中文界面也是日文表头)
+const ING_TABLE_TXT = {
+  zh: {
+    headers: ["🔗", "中文名", "日文名", "法文名", "用量", "单位", "品牌", "单价", "成本", "分组", "备注", ""],
+    nameZh: "中文名", nameJa: "日文名", brand: "品牌", cost: "自动", note: "备注・用途",
+    bulkTitle: "扫描所有没关联材料百科的原料,推荐匹配", bulkLabel: "🤖 批量关联百科",
+    pick: "从材料百科选择(自动填名 / 价 / 品牌)",
+    linked: (n) => `✓ 关联:${n}\n点击修改或解除关联`,
+    matTitle: (n) => `✓ 百科关联:${n}`,
+    catTitle: (n) => `✓ 已关联「${n}」`,
+    drift: "价格表已更新,点击同步",
+    priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、個、kg …)按每个单位填",
+    unitMismatch: (u) => `这一行按「${u}」计量,但关联的材料按克计价,成本会算错。改成克,或者取消关联后直接填每${u}的价`,
+  },
+  ja: {
+    headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
+    nameZh: "中国語名", nameJa: "日本語名", brand: "ブランド", cost: "自動", note: "備考・用途メモ",
+    bulkTitle: "未関連の材料を材料事典と一括マッチ", bulkLabel: "🤖 一括関連",
+    pick: "材料事典から選択(名前・単価・ブランドを自動入力)",
+    linked: (n) => `✓ 連動中:${n}\nクリックで変更・解除`,
+    matTitle: (n) => `✓ 材料事典:${n}`,
+    catTitle: (n) => `✓ 価格表「${n}」に連動`,
+    drift: "価格表の値に更新",
+    priceTh: "g / ml の行は 100g(100ml)あたりで入力。その他の単位(本・個・kg など)は 1 単位あたり",
+    unitMismatch: (u) => `この行は「${u}」単位ですが、連動した材料はグラム単価です。原価が正しく計算されません。グラムに直すか、連動を外して 1${u}あたりの単価を入力してください`,
+  },
+};
+// 三页之间还剩的差异。品牌 datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id);
+// 名字的 datalist(旧价格表)C9 去掉了,换成材料百科联想
+const ING_TABLE_VARIANTS = {
+  recipe: {
+    listIds: { brand: "autoBrandR" },
+    where: { zh: "本配方", ja: "このレシピ" },
+  },
+  component: {
+    listIds: { brand: "autoBrand" },
+    where: { zh: "本组件", ja: "このコンポーネント" },
+  },
+  layer: {
+    listIds: { brand: "autoBrand" },
+    where: { zh: "这一部分", ja: "このパーツ" },
+  },
+};
+
+// C15:三个配料表编辑页(和组合产品编辑页)自己的「← 返回」「取消」—— 这一页有没保存的改动先问一句,文字同切页的 goTab;
+// 没传 confirmDialog 就直接走。用 useDirtyGuard 的 bind.isDirty(只看这一页),不用 anyEditorDirty:
+// 部分编辑页开着时外层组合产品编辑页也挂着,外层改过名字、这一部分没改,点「← 取消」不该问
+const confirmLeave = (isDirty, confirmDialog, lang, go) => {
+  if (typeof confirmDialog === "function" && typeof isDirty === "function" && isDirty()) {
+    confirmDialog(
+      lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+      go,
+      { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
+    );
+    return;
+  }
+  go();
+};
+
+// ─── 配料行单价:按「每 100 g」填(2026-09-29 第 2 批 2b C5)─────────────────────
+// 人民币每克价全是 0.008 这种读不动的小数,供货商报价、材料百科、本店原料显示的又都是每 100 g。
+// 所以单位是 g / ml / 空(以及 克 / 毫升)的行,输入框显示「存的每克价 × 100」,填进去的数 ÷ 100 再存;
+// 其他单位(kg / 本 / 個 / 枚 / L …)按「每单位」原样填 —— 成本 = 用量 × 单价,不换算单位。
+// **存储永远是每单位价(unitPrice),/100g 只在这个输入框里**。
+const isGramUnit = (unit) => /^(?:g|ml|克|毫升)?$/i.test(String(unit === undefined || unit === null ? "" : unit).trim());
+const ingPriceBasis = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).trim();
+  if (isGramUnit(u)) return { per100: true, label: /^(?:ml|毫升)$/i.test(u) ? "100ml" : "100g" };
+  return { per100: false, label: u };
+};
+// 存的每单位价 → 输入框里显示的数。toPrecision(12) 去掉 0.1 × 100 = 10.000000000000002 这种浮点尾巴
+const ingPriceShown = (stored, per100) => {
+  if (!stored) return "";
+  if (!per100) return String(stored);
+  const n = parseFloat(stored);
+  return isFinite(n) ? String(Number((n * 100).toPrecision(12))) : "";
+};
+// 输入框里填的数 → 存的每单位价
+const ingPriceStored = (text, per100) => {
+  if (!per100 || text === "") return text;
+  const n = parseFloat(text);
+  return isFinite(n) ? String(Number((n / 100).toPrecision(12))) : "";
+};
+// C14:数字框防误滚。聚焦的 number 输入框被滚轮扫过会一格一格改数(单价 0.03 滚一下变 1.03),
+// 滚轮一来就让它失焦,数不动、页面照常滚
+const blurOnWheel = (e) => { e.currentTarget.blur(); };
+
+// 单价输入框。draft = 她正在敲的原文:「1.」「0.50」这种换算一次就会变样(敲「1.」被吃成「1」),
+// 所以只要存下去的值还是这份原文算出来的那个,就照原文显示;失焦、或者值被别处改了(↺ / 选材料 / 切币种 / 改单位)就按存的值重算
+function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
+  const { per100 } = ingPriceBasis(ing.unit);
+  const [draft, setDraft] = useState(null);
+  const cur = ing.unitPrice === undefined || ing.unitPrice === null ? "" : ing.unitPrice;
+  const shown = (draft && draft.stored === cur && draft.per100 === per100) ? draft.text : ingPriceShown(cur, per100);
+  return (
+    <input type="number" placeholder={placeholder} value={shown}
+      onChange={e => { const text = e.target.value; const stored = ingPriceStored(text, per100); setDraft({ text, stored, per100 }); onChangeStored(stored); }}
+      onBlur={() => setDraft(null)}
+      onWheel={blurOnWheel}
+      style={style} />
+  );
+}
+
+// ─── 配料名字联想(2026-09-29 第 2 批 2b C9)─────────────────────────────
+// 以前中文名 / 日文名输入框联想的是旧价格表 cats(已停用),打字打到和价格表同名还会悄悄绑上价格表。
+// 现在联想本店原料 + 材料百科:打字时出下拉,最多 8 条,本店原料排前(带「本店」标签和每 100g 价);
+// 点一条 = 和 🔗 选材料弹窗一模一样的写法(pickMaterialForRow → applyMaterialPick);不点就是普通手填,什么都不关联。
+// 只按中 / 日 / 法文名找(同选材料弹窗),NFKC + 不分大小写 + 不管空格
+const normIngSuggest = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+const _ingSuggestNames = new WeakMap();   // 材料对象 → 归一化后的名字(材料一改就是新对象,缓存自然作废)
+function suggestMaterialsForIng(text, materials, limit = 8) {
+  const k = normIngSuggest(text);
+  if (!k || !Array.isArray(materials)) return [];
+  const shopIds = new Set(_shopMaterials.map(s => s && s.materialId).filter(Boolean));
+  const hits = [];
+  for (const m of materials) {
+    if (!m || !m.id) continue;
+    let names = _ingSuggestNames.get(m);
+    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
+    // 0 = 名字完全一样,1 = 开头就是,2 = 名字里有
+    let rank = 3;
+    for (const n of names) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 3; if (r < rank) rank = r; }
+    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0 });
+  }
+  const nm = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
+  hits.sort((a, b) => (b.shop - a.shop) || (a.rank - b.rank)
+    || ((b.m.isBest ? 1 : 0) - (a.m.isBest ? 1 : 0)) || ((b.m.rating || 0) - (a.m.rating || 0))
+    || (nm(a.m).length - nm(b.m).length) || nm(a.m).localeCompare(nm(b.m)));
+  return hits.slice(0, limit).map(x => x.m);
+}
+
+// 中文名 / 日文名输入框 + 联想下拉(三个编辑页共用,IngredientTable 里用)。
+// 表格外层是 overflowX:auto,下拉用 position:fixed 按输入框的位置放,不会被裁掉;页面 / 表格滚动、改窗口大小时跟着挪,点别处收起。
+// 选项用 onMouseDown + preventDefault(输入框不失焦):用 onClick 的话输入框的 blur 先把面板关了,点不进来。
+// 键盘:↑↓ 挑、Enter 选挑着的那条(没挑过就只是收起,不会替她关联第一条)、Esc 收起;
+// 输入法组词时(isComposing / keyCode 229)一个键都不接 —— 那时的 Enter 是在选字;组词中也不出下拉,选完字再按整词找
+function IngNameInput({ value, placeholder, title, style, materials, brands, lang, onChangeText, onPickMaterial }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(-1);
+  const [rect, setRect] = useState(null);
+  const [composing, setComposing] = useState(false);
+  const inputRef = useRef(null);
+  const boxRef = useRef(null);
+  const touchingBox = useRef(false);   // 手指正按在下拉里(见 onBlur)
+  const zh = lang === "zh";
+  const text = value == null ? "" : String(value);
+  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials) : [], [open, composing, text, materials]);
+  const place = () => {
+    const el = inputRef.current;
+    if (!el || !el.getBoundingClientRect) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.top, bottom: r.bottom, left: r.left });
+  };
+  const openFor = (v) => { touchingBox.current = false; setHi(-1); if (String(v == null ? "" : v).trim()) { place(); setOpen(true); } else setOpen(false); };
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => {
+      const t = e.target;
+      if ((inputRef.current && inputRef.current.contains(t)) || (boxRef.current && boxRef.current.contains(t))) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+  const choose = (m) => { touchingBox.current = false; setOpen(false); setHi(-1); onPickMaterial(m); };
+  const shown = open && !composing && list.length > 0 && !!rect;
+  const onKeyDown = (e) => {
+    const ne = e.nativeEvent || {};
+    if (composing || ne.isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape") { if (open) { e.preventDefault(); e.stopPropagation(); setOpen(false); setHi(-1); } return; }
+    if (e.key === "ArrowDown") {
+      if (!open) { if (text.trim()) { e.preventDefault(); openFor(text); } return; }
+      if (list.length) { e.preventDefault(); setHi(h => Math.min(h + 1, list.length - 1)); }
+      return;
+    }
+    if (e.key === "ArrowUp") { if (shown) { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); } return; }
+    if (e.key === "Enter" && open) {
+      e.preventDefault();
+      if (hi >= 0 && hi < list.length) choose(list[hi]); else { setOpen(false); setHi(-1); }
+    }
+  };
+  let box = null;
+  if (shown) {
+    const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
+    const vh = (typeof window !== "undefined" && window.innerHeight) || 768;
+    const w = Math.max(160, Math.min(320, vw - 16));
+    const left = Math.max(8, Math.min(rect.left, vw - w - 8));
+    const below = vh - rect.bottom - 8, above = rect.top - 8;
+    const up = below < 180 && above > below;   // 输入框靠近屏幕底下(手机键盘弹起来时常见)就往上开
+    const pos = up ? { bottom: vh - rect.top + 2, maxHeight: Math.max(120, Math.min(380, above)) } : { top: rect.bottom + 2, maxHeight: Math.max(120, Math.min(380, below)) };
+    box = (
+      // 容器也 preventDefault:点到下拉的滚动条 / 底下那行提示时输入框不失焦(失焦会把下拉收掉)
+      <div ref={boxRef} role="listbox" onMouseDown={(e) => e.preventDefault()}
+        onTouchStart={() => { touchingBox.current = true; }}
+        onTouchEnd={() => { setTimeout(() => { touchingBox.current = false; }, 500); }}
+        onTouchCancel={() => { touchingBox.current = false; }}
+        style={{ position: "fixed", left, width: w, ...pos, overflowY: "auto", zIndex: T.z.popover, background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, boxShadow: T.sh.popover, textAlign: "left" }}>
+        {list.map((m, i) => {
+          const b = (brands || []).find(x => x && x.id === m.brandId);
+          const bName = b ? (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : "";
+          const pp = getMaterialEffectivePrice(m);
+          const price = pp > 0 ? fmtUnitPrice(pp, "CNY") : "";
+          const sub = [bName, price].filter(Boolean).join(" · ");
+          return (
+            <div key={m.id} role="option" aria-selected={i === hi}
+              onMouseDown={(e) => { e.preventDefault(); choose(m); }}
+              onMouseEnter={() => setHi(i)}
+              style={{ padding: "6px 10px", cursor: "pointer", background: i === hi ? T.bgMuted : "transparent", borderBottom: `0.5px solid ${T.borderSoft}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textPrimary }}>
+                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(zh ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) || m.nameFr || m.id}</span>
+                {isShopMaterialId(m.id) && <span title={zh ? "本店原料已有" : "仕入れ済み"} style={{ flex: "0 0 auto", fontSize: 9, letterSpacing: "0.1em", padding: "1px 5px", border: `1px solid ${T.success}`, color: T.success, whiteSpace: "nowrap" }}>{zh ? "本店" : "仕入"}</span>}
+              </div>
+              {sub && <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</div>}
+            </div>
+          );
+        })}
+        <div style={{ padding: "5px 10px", fontSize: 10, color: T.textTertiary, lineHeight: 1.5 }}>
+          {zh ? "点一条 = 关联材料百科(价格、品牌跟着填);不点就是手填" : "選ぶと材料事典に連動(単価・ブランドを自動入力)。選ばなければ手入力のまま"}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <input ref={inputRef} placeholder={placeholder} value={text} title={title} autoComplete="off"
+        onChange={e => {
+          const v = e.target.value;
+          onChangeText(v);
+          const ne = e.nativeEvent || {};
+          if (!composing && !ne.isComposing) openFor(v);
+        }}
+        onCompositionStart={() => { setComposing(true); }}
+        onCompositionEnd={e => { setComposing(false); openFor(e.target.value); }}
+        onKeyDown={onKeyDown}
+        onBlur={() => { if (touchingBox.current) return; setOpen(false); setHi(-1); }}
+        style={style} />
+      {box}
+    </>
+  );
+}
+
+// 配料表本体:「原材料」标题行(🤖 批量关联 / + 追加)+ 分组图例 + 表格(名字格带材料百科联想 IngNameInput)+ 品牌的 datalist。
+// 表格下面的成本汇总三页各不一样,留在编辑页里。
+// nextIdRef = 编辑页的 useRef(ings.length),新行 _id 从它取(_id 可能是 0,判断一律 !== null)。
+function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, brands, lang, onPickMaterial, onOpenBulk }) {
+  const v = ING_TABLE_VARIANTS[variant];
+  const tx = ING_TABLE_TXT[lang === "zh" ? "zh" : "ja"];
+
+  // 品牌格(没关联百科、也没关联旧价格表的行)的自动补全:旧价格表 cats 里的品牌名。
+  // 名字的补全 C9 换成了材料百科联想(IngNameInput),不再从 cats 取
+  const brandSuggestions = useMemo(() => {
+    const brandSet = new Set();
+    (cats || []).forEach(cat => {
+      (cat.brands || []).forEach(b => {
+        if (b.nameZh) brandSet.add(b.nameZh);
+        if (b.nameJa) brandSet.add(b.nameJa);
+      });
+    });
+    return Array.from(brandSet).sort();
+  }, [cats]);
+
+  const updateIng = (id, field, val) => setIngs(prev => prev.map(i => {
+    if (i._id !== id) return i;
+    const next = { ...i, [field]: val };
+    // 改价追踪(v11 配方页起;2026-09-29 第 2 批 2b C6 三页都做,体检 #21):
+    // 只有「关联了材料百科、材料还在」的行改了单价才标 _priceModified(黄框 + ↺ + 底下「保存到本店原料」);
+    // 改回原价 / 清空 / 没关联的行一律不留这个键 —— 留着 false,未保存判定会一直算「改过」
+    if (field === "unitPrice") {
+      const linkedOk = !!(i.materialId && (materials || []).some(m => m && m.id === i.materialId));
+      const o = parseFloat(i._originalPrice), n = parseFloat(val);
+      const changed = isFinite(n) && !(isFinite(o) && Math.abs(o - n) <= 1e-9 * Math.max(1, Math.abs(o)));
+      if (linkedOk && changed) next._priceModified = true; else delete next._priceModified;
+    }
+    return next;
+  }));
+  // 改用量 / 单价时顺手重算这一行的成本:另一个数 > 0 才算(没单价时手填的成本不动,老规矩)。
+  // C8:读不出数字(清空了)时成本写 "",以前会写成字符串 "NaN"。按这一刻的行算(以前拿渲染时的旧值)
+  const updateQtyOrPrice = (id, field, val) => {
+    updateIng(id, field, val);
+    setIngs(prev => prev.map(i => {
+      if (i._id !== id) return i;
+      const q = parseFloat(i.qty), p = parseFloat(i.unitPrice);
+      if (field === "qty" ? !(p > 0) : !(q > 0)) return i;
+      return { ...i, cost: (isFinite(q) && isFinite(p)) ? (q * p).toFixed(1) : "" };
+    }));
+  };
+  // v11: 单行撤销改价,恢复到 _originalPrice。关联的材料有价时原价是按人民币刷出来的,币种也放回 CNY
+  const revertPrice = (id) => setIngs(prev => prev.map(i => {
+    if (i._id !== id) return i;
+    const q = parseFloat(i.qty) || 0;
+    const op = parseFloat(i._originalPrice) || 0;
+    const m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
+    const { _priceModified, ...rest } = i;
+    return { ...rest, unitPrice: i._originalPrice || "", ...(m && getMaterialEffectivePrice(m) > 0 ? { currency: "CNY" } : {}), cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost };
+  }));
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "原材料" : "原材料"}</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {materials && materials.length > 0 && (
+            <Btn size="sm" onClick={onOpenBulk} title={tx.bulkTitle}>
+              {tx.bulkLabel}
+            </Btn>
+          )}
+          <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIdRef.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+        </div>
+      </div>
+
+      {/* 分组图例(2026-09-29 第 2 批 2b C2:以前只有配方页有,组件 / 部分编辑页也有分组列了,三页都给) */}
+      <div style={{ fontSize: 12, color: "#666666", marginBottom: 10 }}>
+        {lang === "zh"
+          ? <><span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span></>
+          : <><span>グループ = </span><strong>同じボウル/鍋</strong><span>にまとめて計量できる材料、同じ色の線 = 同じ容器</span></>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {Object.entries(GROUPS).filter(([k]) => k !== "none").map(([k, g]) => (
+            <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block" }} />
+              {lang === "zh" ? g.zh : g.ja}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+          <thead>
+            <tr style={{ background: "#F5F5F5" }}>
+              {tx.headers.map((h, i) => (
+                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }} title={i === 7 ? tx.priceTh : undefined}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ings.map(ing => {
+              const ist = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
+              // 行首盆色竖条。认不出的分组值(导入的 bowl6 之类)按「未分组」显示,数据里的值不动(以前配方页遇到会白屏)
+              const grp = (typeof ing.group === "string" && Object.prototype.hasOwnProperty.call(GROUPS, ing.group)) ? ing.group : "none";   // 只认 GROUPS 自己的键(bowl6 / 空 / 其他 → none)
+              const g = GROUPS[grp];
+              const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
+              const linked = !!linkedCat;
+              // 改名字:已绑旧价格表的行,名字对不上了就解绑(catId / brandIdx 清掉)。
+              // C9 起打字不再自动绑价格表(以前打到和价格表同名会悄悄绑上、补另一种语言的名字);打开时的 autoLinkIng 照旧
+              const onNameChange = (field, val) => {
+                const newIng = { ...ing, [field]: val };
+                // 清空品牌绑定(因为名字可能变了)
+                if (newIng.catId) {
+                  const currentCat = cats.find(c => c.id === newIng.catId);
+                  // 如果新名字和当前大类匹配则保持,否则解除
+                  if (!currentCat || (
+                    (currentCat.nameZh || "").toLowerCase() !== val.toLowerCase() &&
+                    (currentCat.nameJa || "").toLowerCase() !== val.toLowerCase() &&
+                    // 另一字段也可能是对应的,检查一下
+                    (field === "nameZh" ? (currentCat.nameJa || "") : (currentCat.nameZh || "")).toLowerCase() !== (field === "nameZh" ? newIng.nameJa : newIng.nameZh || "").toLowerCase()
+                  )) {
+                    newIng.catId = null;
+                    newIng.brandIdx = null;
+                  }
+                }
+                setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
+              };
+              // C9:在名字联想里点了一条材料 = 和 🔗 选材料弹窗选中同一个写法
+              const onSuggestPick = (mat) => pickMaterialForRow(setIngs, ing._id, mat, brands, lang);
+              // 品牌选择
+              const onBrandSelect = (idx) => {
+                setIngs(prev => prev.map(i => {
+                  if (i._id !== ing._id) return i;
+                  if (idx === "" || idx === null) {
+                    return { ...i, brandIdx: null, brand: "" };
+                  }
+                  const bi = parseInt(idx);
+                  const brand = linkedCat && linkedCat.brands[bi];
+                  if (!brand) return i;
+                  const price = parseFloat(brand.price) || 0;
+                  const q = parseFloat(i.qty) || 0;
+                  return {
+                    ...i,
+                    brandIdx: bi,
+                    brand: getBrandName(brand, lang),
+                    unitPrice: brand.price || "",
+                    // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
+                    // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
+                    ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
+                    cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
+                  };
+                }));
+              };
+              const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
+              const basis = ingPriceBasis(ing.unit);   // 单价按每 100g 还是每单位填
+              // C10:关联了材料(材料都按克计价)但单位不是 g / ml / 空 → 成本 = 用量 × 每克价,按「本」写的行只算出几分之一
+              const unitMismatch = !!linkedMat && !isGramUnit(ing.unit);
+              // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
+              // 材料被删掉的行价格其实是手写价在算,以前没有按钮,币种改不了
+              const curBtnShown = !linkedMat;
+              // 检查价格是否和价格表当前值不一致
+              const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
+                Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
+                ? parseFloat(linkedBrand.price) : null;
+              return (
+                <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
+                  <td style={{ padding: "3px 4px" }}>
+                    <button
+                      onClick={() => onPickMaterial(ing._id)}
+                      title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang)) : tx.pick}
+                      style={{
+                        padding: "3px 6px", fontSize: 13, cursor: "pointer",
+                        background: linkedMat ? "#059669" : T.bgCard,
+                        color: linkedMat ? "#FFFFFF" : T.textSecondary,
+                        border: `0.5px solid ${linkedMat ? "#059669" : T.border}`,
+                        borderRadius: 4,
+                        width: 30, height: 26,
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >🔗</button>
+                  </td>
+                  <td style={{ padding: "3px 4px" }}>
+                    <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
+                  </td>
+                  <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
+                  <td style={{ padding: "3px 4px" }}>
+                    {linkedMat ? (
+                      // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
+                      // 2026-09-29 第 2 批 2b C3:以前只有配方页锁,组件 / 部分编辑页关联了百科还能手改品牌,改了也不起作用
+                      <div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        🔗 {linkedMatBrand ? (lang === "zh" ? (linkedMatBrand.nameZh || linkedMatBrand.nameJa) : (linkedMatBrand.nameJa || linkedMatBrand.nameZh)) : (ing.brand || "—")}
+                      </div>
+                    ) : linked ? (
+                      <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{ ...ist, width: 78, padding: "4px 3px" }} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
+                        <option value="">{lang === "zh" ? "—未定—" : "—未定—"}</option>
+                        {linkedCat.brands.map((b, bi) => <option key={bi} value={bi}>{getBrandName(b, lang)}</option>)}
+                      </select>
+                    ) : (
+                      <input list={v.listIds.brand} placeholder={tx.brand} value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{ ...ist, width: 66 }} />
+                    )}
+                  </td>
+                  <td style={{ padding: "3px 4px", position: "relative" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                      {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
+                      <IngPriceInput ing={ing} placeholder={`${curOf(ing) === "CNY" ? "¥" : "円"}/${basis.label}`}
+                        onChangeStored={p=>updateQtyOrPrice(ing._id,"unitPrice",p)}
+                        // 改过价:黄框黄底。两个键一直都在(没改过时写回和 ist 一样的值):键时有时无,React 会先清掉 borderColor,把 border 简写里的颜色也清掉
+                        style={{ ...ist, width: 52, borderColor: ing._priceModified ? "#F59E0B" : "#CCCCCC", background: ing._priceModified ? "#FFFBEB" : "#FFFFFF" }} />
+                      {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
+                      {curBtnShown && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
+                      {/* 口径小字:填好数以后占位符看不见了,这里一直写着按什么填 */}
+                      <span style={{ fontSize: 10, color: T.textTertiary, whiteSpace: "nowrap" }}>{curBtnShown ? "" : (curOf(ing) === "CNY" ? "¥" : "円")}/{basis.label}</span>
+                      {ing._priceModified && (
+                        <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
+                      )}
+                    </div>
+                    {priceDrift !== null && (
+                      <button onClick={() => {
+                        setIngs(prev => prev.map(i => {
+                          if (i._id !== ing._id) return i;
+                          const q = parseFloat(i.qty) || 0;
+                          return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
+                        }));
+                      }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={tx.drift}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
+                    )}
+                  </td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
+                  <td style={{ padding: "3px 4px" }}>
+                    {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
+                    <select value={grp} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
+                      {Object.entries(GROUPS).map(([k, gv]) => <option key={k} value={k}>{lang === "zh" ? gv.zh : gv.ja}</option>)}
+                    </select>
+                  </td>
+                  {/* 备注:三页都有(2026-09-29 第 2 批 2b C1,以前组件 / 部分编辑页看不见,组件 106 行、部分 61 行备注改不了) */}
+                  <td style={{ padding: "3px 4px" }}><input placeholder={tx.note} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "2px 4px" }}>×</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {/* 品牌格的自动补全(旧价格表的品牌名) */}
+        <datalist id={v.listIds.brand}>
+          {brandSuggestions.map(n => <option key={n} value={n} />)}
+        </datalist>
+      </div>
+    </>
+  );
+}
+
+// 🔗 选材料 / 🤖 批量关联:把一条材料百科写进配料行(两个弹窗、三个编辑页共用同一个写法)
+function linkMaterialToIng(i, mat, brands, lang) {
+  const b = brands.find(x => x.id === mat.brandId);
+  const pp = getMaterialEffectivePrice(mat);
+  const q = parseFloat(i.qty) || 0;
+  const ok = !isNaN(pp) && pp > 0;
+  // C6:换了材料 = 价格重新从百科来,之前的改价标记作废,↺ 的原价也换成这次写进去的价(以前配方页选完材料一直是黄的)
+  const { _priceModified, ...rest } = i;
+  return {
+    ...rest,
+    materialId: mat.id,
+    nameZh: i.nameZh || mat.nameZh || "",
+    nameJa: i.nameJa || mat.nameJa || "",
+    nameFr: i.nameFr || mat.nameFr || "",
+    brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
+    unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
+    // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+    // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
+    currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
+    cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
+    _originalPrice: (ok ? String(pp) : i.unitPrice) || "",
+  };
+}
+
+// 🔗 选材料弹窗的 onSelect 和名字联想下拉(C9)共用的写法:mat = null 是取消关联(改价标记跟着作废),否则 linkMaterialToIng
+function applyMaterialPick(i, mat, brands, lang) {
+  if (mat === null) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
+  return linkMaterialToIng(i, mat, brands, lang);
+}
+const pickMaterialForRow = (setIngs, rowId, mat, brands, lang) =>
+  setIngs(prev => prev.map(i => i._id !== rowId ? i : applyMaterialPick(i, mat, brands, lang)));
+
+// 保存时哪些配料行留下:中文名或日文名去掉空格后不为空(2026-09-29 第 2 批 2b C13,三页统一)。
+// 以前按「有没有值」,只有空格的行也会存下来,但跟组件库比较(_ingContentKey)和整体配方 / 采购(creationBatch)又把它当空行,两边对不上
+const ingHasName = (i) => !!i && !!(String(i.nameZh == null ? "" : i.nameZh).trim() || String(i.nameJa == null ? "" : i.nameJa).trim());
+
+// C6:改了价的关联行写进本店原料(三个编辑页保存时共用;写法同 v11 配方页:有就改价,没有就新建一条,带币种和修改时间)。
+// rows 是保存时刷新过的行;返回写了几条
+function saveIngPricesToShop(rows, setShopMaterials) {
+  const toUpsert = rows.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0);
+  if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return 0;
+  setShopMaterials(prev => {
+    const next = [...prev];
+    toUpsert.forEach(ing => {
+      const idx = next.findIndex(sm => sm.materialId === ing.materialId);
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
+      } else {
+        next.push({
+          id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
+          materialId: ing.materialId,
+          pricePerG: String(parseFloat(ing.unitPrice)),
+          currency: curOf(ing),   // v17
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+    return next;
+  });
+  return toUpsert.length;
+}
+
+// 保存时刷新关联行的价(三个编辑页共用):材料已删 → 清掉关联;改过价的行保留她填的价(C6,以前只有配方页这样);
+// 其余按材料百科(本店价优先)的最新价刷新。pp 是人民币,必须标 CNY
+function refreshIngForSave(i, materials) {
+  if (!i.materialId) return i;
+  const m = (materials || []).find(x => x.id === i.materialId);
+  if (!m) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
+  if (i._priceModified) return i;
+  const pp = getMaterialEffectivePrice(m);
+  if (isNaN(pp) || pp <= 0) return i;
+  const q = parseFloat(i.qty) || 0;
+  return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+}
+
+// C6:改了「关联材料百科」的行的单价 → 提示条 + 「同时保存到本店原料」(默认勾上)。三个编辑页共用
+function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
+  const mod = ings.filter(i => i._priceModified);
+  if (mod.length === 0) return null;
+  const ok = mod.filter(i => i.materialId && parseFloat(i.unitPrice) > 0).length;
+  const zh = lang === "zh";
+  return (
+    <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12, marginBottom: 8 }}>
+      <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
+        🟡 {zh ? `你改了 ${mod.length} 项关联材料百科的原料单价。` : `材料事典に連動した ${mod.length} 件の単価を変更しました。`}
+      </div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: ok > 0 ? "pointer" : "not-allowed", opacity: ok > 0 ? 1 : 0.5 }}>
+        <input type="checkbox" checked={saveToShop} onChange={e => setSaveToShop(e.target.checked)} disabled={ok === 0} style={{ marginTop: 2 }} />
+        <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
+          {zh
+            ? (ok > 0 ? <>同时保存到本店原料（<b>{ok}</b> 项。存了以后，所有用到这个材料的配方 / 组件都按这个价算成本）</> : <>单价要大于 0 才能保存到本店原料</>)
+            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / コンポーネントの原価がこの単価になります）</> : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>)}
+        </div>
+      </label>
+      {!(saveToShop && ok > 0) && (
+        <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
+          {zh ? "不存的话，这几行保存后还是按材料百科的价算。" : "保存しない場合、これらの行は保存後も材料事典の単価で計算されます。"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 配料表的两个弹窗。渲染在编辑页根元素里(useDirtyGuard 靠根元素的捕获阶段拍快照),位置和以前一样。
+// pickerTargetIngId:要选材料的那一行的 _id(可能是 0,所以判断用 !== null)
+function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang, pickerTargetIngId, setPickerTargetIngId, showBulkMatch, setShowBulkMatch }) {
+  const where = (ING_TABLE_VARIANTS[variant] || ING_TABLE_VARIANTS.recipe).where;
+  return (
+    <>
+      {/* 🔗 材料百科选择弹窗 */}
+      {pickerTargetIngId !== null && (
+        <MaterialPickerModal
+          materials={materials}
+          brands={brands}
+          currentMaterialId={(ings.find(i => i._id === pickerTargetIngId) || {}).materialId || null}
+          lang={lang}
+          onClose={() => setPickerTargetIngId(null)}
+          onSelect={(mat) => {
+            pickMaterialForRow(setIngs, pickerTargetIngId, mat, brands, lang);   // 选中 / 取消关联;名字联想(C9)点一条也走这个
+            setPickerTargetIngId(null);
+          }}
+        />
+      )}
+
+      {/* 🤖 批量智能关联弹窗 */}
+      {showBulkMatch && (
+        <BulkMatchModal
+          ings={ings}
+          materials={materials}
+          brands={brands}
+          lang={lang}
+          where={lang === "zh" ? where.zh : where.ja}
+          onClose={() => setShowBulkMatch(false)}
+          onApply={(selections) => {
+            setIngs(prev => prev.map(i => {
+              const matId = selections[i._id];
+              if (matId == null) return i;
+              const mat = materials.find(m => m.id === matId);
+              if (!mat) return i;
+              return linkMaterialToIng(i, mat, brands, lang);
+            }));
+            setShowBulkMatch(false);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+
 // ─── 组件编辑 Form ────────────────────────────────────────────────
-function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats }) {
+function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast, confirmDialog }) {
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 材料选择弹窗
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
@@ -5794,33 +6488,14 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             const pp = getMaterialEffectivePrice(m);
             if (!isNaN(pp) && pp > 0) {
               const q = parseFloat(linked.qty) || 0;
-              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
+              return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
             }
           }
         }
-        return { ...linked, _id: idx };
+        return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };   // C6:_originalPrice = 改价追踪 / ↺ 的原价(保存时去掉)
       })
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", catId: null, brandIdx: null }]);
-
-  // 🧪 原料自动补全数据源：从价格表 cats 取双语名称和品牌
-  const autoCompleteData = useMemo(() => {
-    const zhSet = new Set();
-    const jaSet = new Set();
-    const brandSet = new Set();
-    (cats || []).forEach(cat => {
-      if (cat.nameZh) zhSet.add(cat.nameZh);
-      if (cat.nameJa) jaSet.add(cat.nameJa);
-      (cat.brands || []).forEach(b => {
-        if (b.nameZh) brandSet.add(b.nameZh);
-        if (b.nameJa) brandSet.add(b.nameJa);
-      });
-    });
-    return {
-      nameZh: Array.from(zhSet).sort(),
-      nameJa: Array.from(jaSet).sort(),
-      brand: Array.from(brandSet).sort(),
-    };
-  }, [cats]);
+  const [saveToShop, setSaveToShop] = useState(true);   // C6:改了关联材料的价 → 保存时同时写本店原料(默认勾上)
 
   // 兼容老数据：如果只有 steps 字段，从它初始化 stepsJa
   const initStepsZh = component?.stepsZh || [];
@@ -5836,33 +6511,28 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
-  const updateIng = (id, field, val) => setIngs(prev => prev.map(i => i._id === id ? { ...i, [field]: val } : i));
 
   // 未关联材料对话框 state
   const [unlinkedDialog, setUnlinkedDialog] = useState(null); // null | { items: [...] }
 
   const doSave = (finalIngs) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    // 🔗 自动用材料百科最新价刷新有 materialId 的 ing
-    const refreshedIngs = validIngs.map(i => {
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null };
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
+    // 🔗 自动用材料百科最新价刷新有 materialId 的 ing;改过价的保留她填的价(C6)
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+    }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
-    const stepsZh = steps.map(s => s.textZh.trim()).filter(Boolean);
-    const stepsJa = steps.map(s => s.textJa.trim()).filter(Boolean);
+    const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     onSave({
       ...form,
       id: (component && component.id) ? component.id : "comp_" + Date.now(),
       yield: parseFloat(form.yield) || 0,
-      ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       stepsZh,
       stepsJa,
       steps: undefined,
@@ -5907,7 +6577,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新增组件" : "コンポーネント追加") : (lang === "zh" ? "编辑组件" : "コンポーネント編集")}</div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -6031,165 +6701,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
       {/* 原料 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "原材料" : "原材料"}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {materials && materials.length > 0 && (
-              <Btn size="sm" onClick={() => setShowBulkMatch(true)} title={lang === "zh" ? "AI 扫描批量关联百科" : "一括関連"}>
-                {lang === "zh" ? "🤖 批量关联" : "🤖 一括"}
-              </Btn>
-            )}
-            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
-          </div>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
-            <thead>
-              <tr style={{ background: "#F5F5F5" }}>
-                {["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组",""].map((h, i) => (
-                  <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ings.map(ing => {
-                const ist = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
-                const g = GROUPS[ing.group || "none"] || GROUPS.none;
-                const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
-                const linked = !!linkedCat;
-                // 智能名字更新：输入后若匹配到价格表 cat,同步填充另一语言和 catId
-                const onNameChange = (field, val) => {
-                  const newIng = { ...ing, [field]: val };
-                  // 清空品牌绑定(因为名字可能变了)
-                  if (newIng.catId) {
-                    const currentCat = cats.find(c => c.id === newIng.catId);
-                    // 如果新名字和当前大类匹配则保持,否则解除
-                    if (!currentCat || (
-                      (currentCat.nameZh || "").toLowerCase() !== val.toLowerCase() &&
-                      (currentCat.nameJa || "").toLowerCase() !== val.toLowerCase() &&
-                      // 另一字段也可能是对应的,检查一下
-                      (field === "nameZh" ? (currentCat.nameJa || "") : (currentCat.nameZh || "")).toLowerCase() !== (field === "nameZh" ? newIng.nameJa : newIng.nameZh || "").toLowerCase()
-                    )) {
-                      newIng.catId = null;
-                      newIng.brandIdx = null;
-                    }
-                  }
-                  // 尝试匹配新 cat
-                  const matched = findCatByName(val, cats);
-                  if (matched && !newIng.catId) {
-                    newIng.catId = matched.id;
-                    newIng.brandIdx = null;
-                    // 同步填充另一语言名称(仅当为空时)
-                    if (field === "nameZh" && !newIng.nameJa && matched.nameJa) newIng.nameJa = matched.nameJa;
-                    if (field === "nameJa" && !newIng.nameZh && matched.nameZh) newIng.nameZh = matched.nameZh;
-                    if (!newIng.unit && matched.unit) newIng.unit = matched.unit;
-                  }
-                  setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
-                };
-                // 品牌选择
-                const onBrandSelect = (idx) => {
-                  setIngs(prev => prev.map(i => {
-                    if (i._id !== ing._id) return i;
-                    if (idx === "" || idx === null) {
-                      return { ...i, brandIdx: null, brand: "" };
-                    }
-                    const bi = parseInt(idx);
-                    const brand = linkedCat && linkedCat.brands[bi];
-                    if (!brand) return i;
-                    const price = parseFloat(brand.price) || 0;
-                    const q = parseFloat(i.qty) || 0;
-                    return {
-                      ...i,
-                      brandIdx: bi,
-                      brand: getBrandName(brand, lang),
-                      unitPrice: brand.price || "",
-                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
-                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
-                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
-                      cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
-                    };
-                  }));
-                };
-                const { material: linkedMat } = resolveIngMaterial(ing, materials, brands);
-                // 检查价格是否和价格表当前值不一致
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
-                  Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
-                  ? parseFloat(linkedBrand.price) : null;
-                return (
-                  <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
-                    <td style={{ padding: "3px 4px" }}>
-                      <button
-                        onClick={() => setPickerTargetIngId(ing._id)}
-                        title={linkedMat
-                          ? (lang === "zh" ? `✓ 关联:${linkedMat.nameZh || linkedMat.nameJa}` : `✓ 連動中`)
-                          : (lang === "zh" ? "从材料百科选择" : "材料事典から選択")}
-                        style={{
-                          padding: "3px 6px", fontSize: 13, cursor: "pointer",
-                          background: linkedMat ? "#059669" : T.bgCard,
-                          color: linkedMat ? "#FFFFFF" : T.textSecondary,
-                          border: `0.5px solid ${linkedMat ? "#059669" : T.border}`,
-                          borderRadius: 4,
-                          width: 30, height: 26,
-                          display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        }}
-                      >🔗</button>
-                    </td>
-                    <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <input list="autoNameZh" placeholder="中文" value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{...ist, width: 100, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC")}} title={linkedMat ? `✓ 百科:${linkedMat.nameZh || linkedMat.nameJa}` : (linked ? `✓ 已关联「${getCatName(linkedCat, lang)}」` : "")} />
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input list="autoNameJa" placeholder="日本語" value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{...ist, width: 100, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC")}} /></td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{...ist, width: 70}} /></td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{...ist, width: 52}} /></td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{...ist, width: 36}} /></td>
-                    <td style={{ padding: "3px 4px" }}>
-                      {linked ? (
-                        <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{...ist, width: 78, padding: "4px 3px"}} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
-                          <option value="">{lang === "zh" ? "—未定—" : "—未定—"}</option>
-                          {linkedCat.brands.map((b, bi) => <option key={bi} value={bi}>{getBrandName(b, lang)}</option>)}
-                        </select>
-                      ) : (
-                        <input list="autoBrand" placeholder="品牌" value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{...ist, width: 66}} />
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
-                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
-                      </div>
-                      {priceDrift !== null && (
-                        <button onClick={() => {
-                          setIngs(prev => prev.map(i => {
-                            if (i._id !== ing._id) return i;
-                            const q = parseFloat(i.qty) || 0;
-                            return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
-                          }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新为此值,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自动" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{...ist, width: 56, textAlign: "right"}} /></td>
-                    <td style={{ padding: "3px 4px" }}>
-                      <select value={ing.group || "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
-                        {Object.entries(GROUPS).map(([k,v]) => <option key={k} value={k}>{lang === "zh" ? v.zh : v.ja}</option>)}
-                      </select>
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15 }}>×</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          {/* 🧪 自动补全数据源 */}
-          <datalist id="autoNameZh">
-            {autoCompleteData.nameZh.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoNameJa">
-            {autoCompleteData.nameJa.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoBrand">
-            {autoCompleteData.brand.map(n => <option key={n} value={n} />)}
-          </datalist>
-        </div>
+        {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.component */}
+        <IngredientTable variant="component" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
         <div style={{ marginTop: 12, padding: "10px 14px", background: "#F5F5F5", borderRadius: 6, fontSize: 13 }}>
           总成本：<strong style={{ fontSize: 16 }}>¥{totalCost.toFixed(0)}</strong>
           {form.yield && parseFloat(form.yield) > 0 && <span style={{ color: "#666666", marginLeft: 16 }}>每{form.unit || "g"}成本：¥{(totalCost/parseFloat(form.yield)).toFixed(2)}</span>}
@@ -6260,9 +6774,12 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         </div>
       )}
 
+      {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
+
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存组件" : "コンポーネント保存"}</Btn>
       </div>
 
@@ -6278,75 +6795,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         />
       )}
 
-      {/* 🔗 材料百科选择弹窗 */}
-      {pickerTargetIngId !== null && (
-        <MaterialPickerModal
-          materials={materials}
-          brands={brands}
-          currentMaterialId={(ings.find(i => i._id === pickerTargetIngId) || {}).materialId || null}
-          lang={lang}
-          onClose={() => setPickerTargetIngId(null)}
-          onSelect={(mat) => {
-            setIngs(prev => prev.map(i => {
-              if (i._id !== pickerTargetIngId) return i;
-              if (mat === null) return { ...i, materialId: null };
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setPickerTargetIngId(null);
-          }}
-        />
-      )}
-
-      {/* 🤖 批量智能关联弹窗 */}
-      {showBulkMatch && (
-        <BulkMatchModal
-          ings={ings}
-          materials={materials}
-          brands={brands}
-          lang={lang}
-          onClose={() => setShowBulkMatch(false)}
-          onApply={(selections) => {
-            setIngs(prev => prev.map(i => {
-              const matId = selections[i._id];
-              if (matId == null) return i;
-              const mat = materials.find(m => m.id === matId);
-              if (!mat) return i;
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setShowBulkMatch(false);
-          }}
-        />
-      )}
+      {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
+      <IngredientLinkModals variant="component" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
@@ -7406,9 +7857,9 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   const name = getName(item);
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
-  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文(日文回退成中文时是同一个数组,不重复印)
-  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
-  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
+  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
+  // C11:按行对齐取这一行的日文;这一行中文空着(主行已经回退成日文)或日文空着就不重复印
+  const stepsSub = lang === "both" ? stepRows(item).map(r => r.ja) : null;
   const notesText = getText(item.notesZh, item.notesJa);
   const scaleText = printScaleText(item, lang);
   const ingsSorted = printSortByBowl(item.ingredients);
@@ -7527,8 +7978,8 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
   // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
-  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
-  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
+  // C11:按行对齐取这一行的日文;这一行中文空着(主行已经回退成日文)或日文空着就不重复印
+  const stepsSub = lang === "both" ? stepRows(item).map(r => r.ja) : null;
   const notesText = getText(item.notesZh, item.notesJa);
   // 2026-09-29 体检第 2 批:过敏原和总耗时以前从不打印
   const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} / ${ja}` : zh;
@@ -7626,9 +8077,9 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   };
 
   const name = getName(item);
-  // 空数组也要回退到老字段 steps(和 pickSteps 同一个规则)
-  const stepsZh = (item.stepsZh && item.stepsZh.length) ? item.stepsZh : (item.steps || []);
-  const stepsJa = (item.stepsJa && item.stepsJa.length) ? item.stepsJa : (item.steps || []);
+  // C11:步骤按行对齐(stepRows:空数组回退老字段 steps、两边都空的行跳过),双语并排时同一行的中日对在一起
+  const stepLines = stepRows(item);
+  const hasStepsZh = stepLines.some(r => r.zh), hasStepsJa = stepLines.some(r => r.ja);
   const notesText = getText(item.notesZh, item.notesJa);
   // 2026-09-29 体检第 2 批:以前选「仅日文」时信息行 / 表头 / 页脚还是写死的中文(表头中日混排)—— 标签跟着打印语言走
   const lb = (zh, ja) => lang === "ja" ? ja : zh;
@@ -7710,21 +8161,21 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
       )}
 
       {/* 制法 - 双语并列显示 */}
-      {sections.steps && (stepsZh.length > 0 || stepsJa.length > 0) && (
+      {sections.steps && stepLines.length > 0 && (
         <div style={{ marginBottom: "6mm" }}>
           <div style={{ fontSize: "12pt", fontWeight: 500, marginBottom: "3mm", paddingBottom: "1mm", borderBottom: "0.5px solid #666" }}>
             ─ {lang === "ja" ? "作り方" : lang === "zh" ? "制法" : "制法 / 作り方"} ─
           </div>
-          {lang === "both" && stepsZh.length > 0 && stepsJa.length > 0 ? (
+          {lang === "both" && hasStepsZh && hasStepsJa ? (
             <table style={{ fontSize: "9.5pt" }}>
               <thead>
                 <tr><th style={{ textAlign: "left", padding: "1mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "50%" }}>中文</th><th style={{ textAlign: "left", padding: "1mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>日本語</th></tr>
               </thead>
               <tbody>
-                {Array.from({ length: Math.max(stepsZh.length, stepsJa.length) }).map((_, i) => (
+                {stepLines.map((r, i) => (
                   <tr key={i} style={{ borderBottom: "0.25px solid #DDD" }}>
-                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{stepsZh[i] || ""}</td>
-                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{stepsJa[i] || ""}</td>
+                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{r.zh}</td>
+                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{r.ja}</td>
                   </tr>
                 ))}
               </tbody>
@@ -7773,10 +8224,11 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
   };
   const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
   const stepsBlock = (x) => {
-    const zhS = pickSteps(x, "zh"), jaS = pickSteps(x, "ja");
-    const main = L === "ja" ? jaS : zhS;
+    // C11:按行对齐。主行 = 当前语言,这一行空着用另一语言;双语时这一行中文有字才在下面印日文(中文空着时主行已经是日文,不重复印)
+    const rows = stepRows(x);
+    const main = rows.map(r => L === "ja" ? (r.ja || r.zh) : (r.zh || r.ja));
     if (!main.length) return null;
-    const sub = lang === "both" && jaS !== main ? jaS : null;   // 日文回退成中文时是同一个数组,不重复印
+    const sub = lang === "both" ? rows.map(r => r.zh ? r.ja : "") : null;
     return (
       <div className="p-steps" style={{ marginTop: "6px" }}>
         {main.map((s, i) => (
@@ -8118,6 +8570,7 @@ const LAYER_LINK_TAGS = {
 const LAYER_DIFF_FIELDS = [
   ["名字", "名前"], ["名字", "名前"], ["名字", "名前"], ["分类", "分類"], ["产出量", "出来高"], ["单位", "単位"],
   ["原料", "材料"], ["步骤", "工程"], ["步骤", "工程"], ["备注", "メモ"], ["备注", "メモ"],
+  ["步骤", "工程"],   // C11:步骤中间有空行时补的逐行对照(_stepsKeyTail),只差在对齐也要说「步骤」
 ];
 const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
   if (!l || !comp) return [];
@@ -8131,7 +8584,7 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 };
 
 // ─── 组合产品 View ───────────────────────────────────────────────
-function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
+function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
   onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [] }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
@@ -8145,6 +8598,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         onUpdateCats={onUpdateCats}
         brands={brands}
         materials={materials}
+        setShopMaterials={setShopMaterials}
         confirmDialog={confirmDialog}
         showToast={showToast}
         onSave={(c) => {
@@ -9183,7 +9637,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
 }
 
 // ─── 组合产品编辑 Form ───────────────────────────────────────────
-function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh" }) {
+function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], setShopMaterials, onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh" }) {
   const isNew = !creation;
   const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -9210,6 +9664,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
   const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页时 App 先问一句(部分编辑页另有自己的)
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
   // v17.8: 编辑期间组件库变了(比如刚「↻ 同步回组件库」),表单里跟组件库走的部分也换成最新内容,
   // 不然打开同组件的另一部分看到的是旧的,原样保存会被当成「改过」而变成本产品专用
   useEffect(() => {
@@ -9347,6 +9802,9 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         onUpdateComponent={onUpdateComponent}
         linkState={layerLinkState(layer, components, matIds)}
         lang={lang}
+        setShopMaterials={setShopMaterials}
+        showToast={showToast}
+        confirmDialog={confirmDialog}
       />
     );
   }
@@ -9357,7 +9815,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建组合产品" : "编辑组合产品"}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -9687,7 +10145,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存" : "保存"}</Btn>
       </div>
 
@@ -9762,7 +10220,7 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 }
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
-function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats }) {
+function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats, setShopMaterials, showToast, confirmDialog }) {
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
@@ -9776,12 +10234,13 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
         const pp = getMaterialEffectivePrice(m);
         if (!isNaN(pp) && pp > 0) {
           const q = parseFloat(linked.qty) || 0;
-          return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
+          return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币,不标 CNY 会被当日元再乘一次汇率
         }
       }
     }
-    return { ...linked, _id: idx };
+    return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };   // C6:_originalPrice = 改价追踪 / ↺ 的原价(保存 / 同步回组件库时去掉)
   }));
+  const [saveToShop, setSaveToShop] = useState(true);   // C6:改了关联材料的价 → 保存时同时写本店原料(默认勾上)
   // 层从组件带来的是 stepsZh / stepsJa(addLayerFromComponent);以前这里只读老字段 steps,打开就是空的。
   // 和组件编辑页同一套:中日两栏,老数据只有 steps 时放进日文栏
   const initStepsZh = layer.stepsZh || [];
@@ -9794,33 +10253,16 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     }))
   );
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 取消」「取消」这一部分有改动先问
   // 保存层和同步回组件库共用。老字段 steps 要清掉,不然两栏都删空时 pickSteps 会回退到它
   const stepsOut = () => ({
-    stepsZh: steps.map(s => (s.textZh || "").trim()).filter(Boolean),
-    stepsJa: steps.map(s => (s.textJa || "").trim()).filter(Boolean),
+    ...stepsForSave(steps),   // C11:中日按行对齐存(中间空着的留 "")
     steps: undefined,
   });
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
-  // 双语自动补全数据源
-  const autoCompleteData = useMemo(() => {
-    const zhSet = new Set();
-    const jaSet = new Set();
-    const brandSet = new Set();
-    (cats || []).forEach(cat => {
-      if (cat.nameZh) zhSet.add(cat.nameZh);
-      if (cat.nameJa) jaSet.add(cat.nameJa);
-      (cat.brands || []).forEach(b => {
-        if (b.nameZh) brandSet.add(b.nameZh);
-        if (b.nameJa) brandSet.add(b.nameJa);
-      });
-    });
-    return { nameZh: Array.from(zhSet).sort(), nameJa: Array.from(jaSet).sort(), brand: Array.from(brandSet).sort() };
-  }, [cats]);
-
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
-  const updateIng = (id, field, val) => setIngs(prev => prev.map(i => i._id === id ? { ...i, [field]: val } : i));
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
   // 未关联材料对话框
@@ -9828,20 +10270,17 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
 
   // opts.synced:刚同步回组件库,这一部分直接算「跟组件库」(见 CreationEditForm.updateLayer)
   const doSave = (finalIngs, opts) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    const refreshedIngs = validIngs.map(i => {
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null };
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
+    // 改过价的关联行保留她填的价(C6);勾着「保存到本店原料」就同时写进去
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
+    }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     onSave({
       ...form,
-      ingredients: refreshedIngs.map(({ _id, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
     }, opts);
@@ -9857,7 +10296,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       onBack(); // 这一层不是从组件库来的，直接返回
       return;
     }
-    const validIngs = ings.filter(i => i.nameZh || i.nameJa);
+    const validIngs = ings.filter(ingHasName);
     const total = validIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     // 只带这一页能看到、能改的字段,App 那边按字段合并到原组件上。
     // 法文名 / 备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
@@ -9866,7 +10305,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       nameZh: form.nameZh, nameJa: form.nameJa,
       componentCategory: form.componentCategory,
       yield: form.yield, unit: form.unit,
-      ingredients: validIngs.map(({ _id, ...rest }) => rest),
+      ingredients: validIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
       updatedAt: new Date().toISOString(),
@@ -9897,7 +10336,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{W.editTitle}{form.nameZh || form.nameJa || "未命名"}</div>
-        <Btn onClick={onBack}>← 取消</Btn>
+        <Btn onClick={leave}>← 取消</Btn>
       </div>
 
       {layer.sourceComponentId && (
@@ -9923,152 +10362,14 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       </div>
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "原材料" : "原材料"}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {materials && materials.length > 0 && (
-              <Btn size="sm" onClick={() => setShowBulkMatch(true)} title={lang === "zh" ? "AI 批量关联百科" : "一括関連"}>
-                {lang === "zh" ? "🤖 批量关联" : "🤖 一括"}
-              </Btn>
-            )}
-            <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
-          </div>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-            <thead>
-              <tr style={{ background: "#F5F5F5" }}>
-                {["🔗","中文","日本語","用量","单位","品牌","单价","成本",""].map((h, i) => (
-                  <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ings.map(ing => {
-                const ist = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
-                const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
-                const linked = !!linkedCat;
-                const onNameChange = (field, val) => {
-                  const newIng = { ...ing, [field]: val };
-                  if (newIng.catId) {
-                    const currentCat = cats.find(c => c.id === newIng.catId);
-                    if (!currentCat || (
-                      (currentCat.nameZh || "").toLowerCase() !== val.toLowerCase() &&
-                      (currentCat.nameJa || "").toLowerCase() !== val.toLowerCase() &&
-                      (field === "nameZh" ? (currentCat.nameJa || "") : (currentCat.nameZh || "")).toLowerCase() !== (field === "nameZh" ? newIng.nameJa : newIng.nameZh || "").toLowerCase()
-                    )) {
-                      newIng.catId = null;
-                      newIng.brandIdx = null;
-                    }
-                  }
-                  const matched = findCatByName(val, cats);
-                  if (matched && !newIng.catId) {
-                    newIng.catId = matched.id;
-                    newIng.brandIdx = null;
-                    if (field === "nameZh" && !newIng.nameJa && matched.nameJa) newIng.nameJa = matched.nameJa;
-                    if (field === "nameJa" && !newIng.nameZh && matched.nameZh) newIng.nameZh = matched.nameZh;
-                    if (!newIng.unit && matched.unit) newIng.unit = matched.unit;
-                  }
-                  setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
-                };
-                const onBrandSelect = (idx) => {
-                  setIngs(prev => prev.map(i => {
-                    if (i._id !== ing._id) return i;
-                    if (idx === "" || idx === null) {
-                      return { ...i, brandIdx: null, brand: "" };
-                    }
-                    const bi = parseInt(idx);
-                    const brand = linkedCat && linkedCat.brands[bi];
-                    if (!brand) return i;
-                    const price = parseFloat(brand.price) || 0;
-                    const q = parseFloat(i.qty) || 0;
-                    return {
-                      ...i,
-                      brandIdx: bi,
-                      brand: getBrandName(brand, lang),
-                      unitPrice: brand.price || "",
-                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
-                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
-                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
-                      cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
-                    };
-                  }));
-                };
-                const { material: linkedMat } = resolveIngMaterial(ing, materials, brands);
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
-                  Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
-                  ? parseFloat(linkedBrand.price) : null;
-                return (
-                  <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5" }}>
-                    <td style={{ padding: "3px 4px" }}>
-                      <button
-                        onClick={() => setPickerTargetIngId(ing._id)}
-                        title={linkedMat
-                          ? (lang === "zh" ? `✓ 关联:${linkedMat.nameZh || linkedMat.nameJa}` : `✓ 連動中`)
-                          : (lang === "zh" ? "从材料百科选择" : "材料事典から選択")}
-                        style={{
-                          padding: "3px 6px", fontSize: 13, cursor: "pointer",
-                          background: linkedMat ? "#059669" : T.bgCard,
-                          color: linkedMat ? "#FFFFFF" : T.textSecondary,
-                          border: `0.5px solid ${linkedMat ? "#059669" : T.border}`,
-                          borderRadius: 4,
-                          width: 30, height: 26,
-                          display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        }}
-                      >🔗</button>
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input list="autoNameZh" placeholder="中文" value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC")}} title={linkedMat ? `✓ 百科:${linkedMat.nameZh || linkedMat.nameJa}` : (linked ? `✓ 已关联「${getCatName(linkedCat, lang)}」` : "")} /></td>
-                    <td style={{ padding: "3px 4px" }}><input list="autoNameJa" placeholder="日本語" value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC")}} /></td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{...ist, width: 52}} /></td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{...ist, width: 36}} /></td>
-                    <td style={{ padding: "3px 4px" }}>
-                      {linked ? (
-                        <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{...ist, width: 78, padding: "4px 3px"}} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
-                          <option value="">{lang === "zh" ? "—未定—" : "—未定—"}</option>
-                          {linkedCat.brands.map((b, bi) => <option key={bi} value={bi}>{getBrandName(b, lang)}</option>)}
-                        </select>
-                      ) : (
-                        <input list="autoBrand" placeholder="品牌" value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{...ist, width: 66}} />
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <input type="number" placeholder="单价" value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{...ist, width: 52}} />
-                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
-                      </div>
-                      {priceDrift !== null && (
-                        <button onClick={() => {
-                          setIngs(prev => prev.map(i => {
-                            if (i._id !== ing._id) return i;
-                            const q = parseFloat(i.qty) || 0;
-                            return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
-                          }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自动" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{...ist, width: 56, textAlign: "right"}} /></td>
-                    <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15 }}>×</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {/* 🧪 双语自动补全数据源 */}
-          <datalist id="autoNameZh">
-            {autoCompleteData.nameZh.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoNameJa">
-            {autoCompleteData.nameJa.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoBrand">
-            {autoCompleteData.brand.map(n => <option key={n} value={n} />)}
-          </datalist>
-        </div>
+        {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.layer */}
+        <IngredientTable variant="layer" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
         {/* 2026-09-29 体检第 2 批:以前叫「该层成本」,其实是组件整批的成本(还是存下来的成本快照),
             和产品编辑页按用量折算的「本层成本」差好几倍。改名 + 按实时价 + 另给一行按用量折算的这一部分成本 */}
         {(() => {
           const zh = lang !== "ja";
-          const liveIngs = ings.filter(i => i.nameZh || i.nameJa);
+          const liveIngs = ings.filter(ingHasName);
           const batchCost = getIngsLiveCost(liveIngs, materials, brands);
           const yNum = parseFloat(form.yield) || 0;
           const unitTxt = form.unit || "g";
@@ -10123,84 +10424,21 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
         ))}
       </div>
 
+      {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
+
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {layer.sourceComponentId && linkState !== "orphan" ? (
           <Btn variant="success" onClick={handleSyncBackToComponent}>↻ 同步回组件库</Btn>
         ) : <div />}
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
           <Btn variant="primary" onClick={handleSave}>{W.saveBtn}</Btn>
         </div>
       </div>
-      {/* 🔗 材料百科选择弹窗 */}
-      {pickerTargetIngId !== null && (
-        <MaterialPickerModal
-          materials={materials}
-          brands={brands}
-          currentMaterialId={(ings.find(i => i._id === pickerTargetIngId) || {}).materialId || null}
-          lang={lang}
-          onClose={() => setPickerTargetIngId(null)}
-          onSelect={(mat) => {
-            setIngs(prev => prev.map(i => {
-              if (i._id !== pickerTargetIngId) return i;
-              if (mat === null) return { ...i, materialId: null };
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setPickerTargetIngId(null);
-          }}
-        />
-      )}
-
-      {/* 🤖 批量智能关联弹窗 */}
-      {showBulkMatch && (
-        <BulkMatchModal
-          ings={ings}
-          materials={materials}
-          brands={brands}
-          lang={lang}
-          onClose={() => setShowBulkMatch(false)}
-          onApply={(selections) => {
-            setIngs(prev => prev.map(i => {
-              const matId = selections[i._id];
-              if (matId == null) return i;
-              const mat = materials.find(m => m.id === matId);
-              if (!mat) return i;
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setShowBulkMatch(false);
-          }}
-        />
-      )}
+      {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
+      <IngredientLinkModals variant="layer" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
@@ -11886,7 +12124,8 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
                   </div>
                   <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
                     {b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : ""}
-                    {m.pricePerG ? " · " + fmtUnitPrice(m.pricePerG, curOf(m)) : ""}
+                    {/* 2026-09-29 第 2 批 2b C12:显示选中后真正写进配料行的价(本店价优先、折人民币),以前显示百科旧字段 pricePerG,和写进去的对不上 */}
+                    {(() => { const pp = getMaterialEffectivePrice(m); return pp > 0 ? " · " + fmtUnitPrice(pp, "CNY") : ""; })()}
                     {m.rating ? ` · ${"★".repeat(m.rating)}` : ""}
                   </div>
                 </div>
@@ -11923,7 +12162,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
 }
 
 // ═══ 批量智能匹配弹窗:一键扫描配方 ingredient 匹配到百科 ═══
-function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
+function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose, where }) {
   // [B3 修复] 弹窗打开时锁 body 滚动,关闭时恢复 — 防手机滑动穿透
   useEffect(() => {
     const orig = document.body.style.overflow;
@@ -11970,7 +12209,8 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
             {lang === "zh" ? "✅ 所有材料都已关联百科" : "✅ 全材料が事典連動済"}
           </div>
           <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 16 }}>
-            {lang === "zh" ? "本配方没有需要批量匹配的材料。" : "一括マッチ対象なし。"}
+            {/* C12:按编辑页说(以前组件 / 部分编辑页也写「本配方」) */}
+            {lang === "zh" ? `${where || "本配方"}没有需要批量匹配的材料。` : `${where || "このレシピ"}には一括マッチ対象の材料がありません。`}
           </div>
           <Btn onClick={onClose}>{lang === "zh" ? "关闭" : "閉じる"}</Btn>
         </div>
@@ -12067,7 +12307,8 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
                             {b && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>
                               · {lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)}
                             </span>}
-                            {m.pricePerG && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· {fmtUnitPrice(m.pricePerG, curOf(m))}</span>}
+                            {/* C12:显示应用后真正写进配料行的价(本店价优先、折人民币,每 100g) */}
+                            {getMaterialEffectivePrice(m) > 0 && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· {fmtUnitPrice(getMaterialEffectivePrice(m), "CNY")}</span>}
                           </span>
                         </label>
                       );
@@ -13517,7 +13758,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 // ═══════════════════════════════════════════════════════════════
 
 // ─── Edit Form ────────────────────────────────────────────────────
-function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast }) {
+function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast, confirmDialog }) {
   const isNew = !recipe;
   const [errorMsg, setErrorMsg] = useState("");
   const [nameZhMissing, setNameZhMissing] = useState(false);   // 2026-09-29 体检第 2 批:点保存时中文名空 → 名字框旁边标红
@@ -13544,28 +13785,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };
       })
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none", note: "", catId: null, brandIdx: null, _originalPrice: "" }]);
-  // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示
-  const [saveToShop, setSaveToShop] = useState(false);
-
-  // 🧪 原料自动补全数据源（双语）
-  const autoCompleteData = useMemo(() => {
-    const zhSet = new Set();
-    const jaSet = new Set();
-    const brandSet = new Set();
-    (cats || []).forEach(cat => {
-      if (cat.nameZh) zhSet.add(cat.nameZh);
-      if (cat.nameJa) jaSet.add(cat.nameJa);
-      (cat.brands || []).forEach(b => {
-        if (b.nameZh) brandSet.add(b.nameZh);
-        if (b.nameJa) brandSet.add(b.nameJa);
-      });
-    });
-    return {
-      nameZh: Array.from(zhSet).sort(),
-      nameJa: Array.from(jaSet).sort(),
-      brand: Array.from(brandSet).sort(),
-    };
-  }, [cats]);
+  // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示。C6:默认勾上(改了关联材料的价,多半就是本店进价)
+  const [saveToShop, setSaveToShop] = useState(true);
 
   // 兼容老数据：老 recipes 可能只有单一 steps 字段
   const initStepsZh = recipe?.stepsZh || [];
@@ -13581,6 +13802,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const qty = parseFloat(form.yield) || 0;
@@ -13589,76 +13811,24 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const margin = price > 0 ? ((price - unitCost) / price) * 100 : 0;
   const mc = margin >= 50 ? "green" : margin >= 30 ? "amber" : "red";
 
-  const updateIng = (id, field, val) => setIngs(prev => prev.map(i => {
-    if (i._id !== id) return i;
-    const next = { ...i, [field]: val };
-    // v11: 改 unitPrice 时判 dirty
-    if (field === "unitPrice") {
-      const origP = parseFloat(i._originalPrice);
-      const newP = parseFloat(val);
-      const origNormalized = isNaN(origP) ? "" : String(origP);
-      const newNormalized = isNaN(newP) ? "" : String(newP);
-      next._priceModified = origNormalized !== newNormalized && newNormalized !== "";
-    }
-    return next;
-  }));
-  // v11: 单行撤销改价,恢复到 _originalPrice
-  const revertPrice = (id) => setIngs(prev => prev.map(i => {
-    if (i._id !== id) return i;
-    const q = parseFloat(i.qty) || 0;
-    const op = parseFloat(i._originalPrice) || 0;
-    return { ...i, unitPrice: i._originalPrice || "", cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost, _priceModified: false };
-  }));
+  // 改单价追踪(_priceModified)和 ↺ 撤销改价在共用配料表 IngredientTable 里;提示条是 PriceChangeBanner,写本店原料是 saveIngPricesToShop
 
   // 未关联材料对话框
   const [unlinkedDialog, setUnlinkedDialog] = useState(null);
 
   const doSave = (finalIngs) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
-    // 🔗 用材料百科最新价刷新有 materialId 的 ing
-    // v11: _priceModified 的 ing 跳过 refresh,保留用户改的 unitPrice
-    const refreshedIngs = validIngs.map(i => {
-      if (i._priceModified) return i; // 用户手改过,不覆盖
-      if (!i.materialId) return i;
-      const m = materials.find(x => x.id === i.materialId);
-      if (!m) return { ...i, materialId: null }; // 材料已被删除,清除关联
-      const pp = getMaterialEffectivePrice(m);
-      if (isNaN(pp) || pp <= 0) return i;
-      const q = parseFloat(i.qty) || 0;
-      return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };  // v17: 同上,pp 是人民币
-    });
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
+    // 🔗 用材料百科最新价刷新有 materialId 的 ing;改过价的(_priceModified)保留她填的价
+    const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
-    if (saveToShop && typeof setShopMaterials === "function") {
-      const toUpsert = refreshedIngs.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0);
-      if (toUpsert.length > 0) {
-        setShopMaterials(prev => {
-          const next = [...prev];
-          toUpsert.forEach(ing => {
-            const idx = next.findIndex(sm => sm.materialId === ing.materialId);
-            if (idx >= 0) {
-              next[idx] = { ...next[idx], pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: new Date().toISOString() };   // v17: 币种跟手写价走;修改时间给合并导入用
-            } else {
-              next.push({
-                id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
-                materialId: ing.materialId,
-                pricePerG: String(parseFloat(ing.unitPrice)),
-                currency: curOf(ing),   // v17
-                updatedAt: new Date().toISOString(),
-              });
-            }
-          });
-          return next;
-        });
-        if (typeof showToast === "function") {
-          showToast(lang === "zh" ? `✓ ${toUpsert.length} 项已保存到本店原料` : `✓ ${toUpsert.length} 件を仕入れ原料に保存`);
-        }
-      }
+    if (saveToShop) {
+      const n = saveIngPricesToShop(refreshedIngs, setShopMaterials);
+      if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
     const uc = q > 0 ? total / q : 0, mg = p > 0 ? ((p - uc) / p) * 100 : 0;
-    const stepsZh = steps.map(s => (s.textZh || "").trim()).filter(Boolean);
-    const stepsJa = steps.map(s => (s.textJa || "").trim()).filter(Boolean);
+    const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     // 清理临时字段 _priceModified / _originalPrice
     const cleanIngs = refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest);
     onSave({
@@ -13722,7 +13892,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新建配方" : "レシピ新規") : (lang === "zh" ? "编辑配方" : "レシピ編集")}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -13769,179 +13939,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       </>)}
 
       {card(<>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? "原材料" : "原材料"}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {materials && materials.length > 0 && (
-              <Btn size="sm" onClick={() => setShowBulkMatch(true)} title={lang === "zh" ? "AI 扫描所有未关联材料并推荐匹配" : "AI で未関連材料を一括マッチ"}>
-                {lang === "zh" ? "🤖 批量关联百科" : "🤖 一括関連"}
-              </Btn>
-            )}
-            <Btn size="sm" onClick={() => { setIngs(prev => [...prev, { _id: nextIngId.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }]); }}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
-          </div>
-        </div>
-
-        {/* Group legend */}
-        <div style={{ fontSize: 12, color: "#666666", marginBottom: 10 }}>
-          <span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-            {Object.entries(GROUPS).filter(([k]) => k !== "none").map(([k, g]) => (
-              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block" }} />
-                {g.zh}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-            <thead>
-              <tr style={{ background: "#F5F5F5" }}>
-                {["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","備考",""].map((h, i) => (
-                  <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ings.map((ing) => {
-                const g = GROUPS[ing.group || "none"];
-                const iStyle = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
-                const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
-                const linked = !!linkedCat;
-                const onNameChange = (field, val) => {
-                  const newIng = { ...ing, [field]: val };
-                  if (newIng.catId) {
-                    const currentCat = cats.find(c => c.id === newIng.catId);
-                    if (!currentCat || (
-                      (currentCat.nameZh || "").toLowerCase() !== val.toLowerCase() &&
-                      (currentCat.nameJa || "").toLowerCase() !== val.toLowerCase() &&
-                      (field === "nameZh" ? (currentCat.nameJa || "") : (currentCat.nameZh || "")).toLowerCase() !== (field === "nameZh" ? newIng.nameJa : newIng.nameZh || "").toLowerCase()
-                    )) {
-                      newIng.catId = null;
-                      newIng.brandIdx = null;
-                    }
-                  }
-                  const matched = findCatByName(val, cats);
-                  if (matched && !newIng.catId) {
-                    newIng.catId = matched.id;
-                    newIng.brandIdx = null;
-                    if (field === "nameZh" && !newIng.nameJa && matched.nameJa) newIng.nameJa = matched.nameJa;
-                    if (field === "nameJa" && !newIng.nameZh && matched.nameZh) newIng.nameZh = matched.nameZh;
-                    if (!newIng.unit && matched.unit) newIng.unit = matched.unit;
-                  }
-                  setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
-                };
-                const onBrandSelect = (idx) => {
-                  setIngs(prev => prev.map(i => {
-                    if (i._id !== ing._id) return i;
-                    if (idx === "" || idx === null) {
-                      return { ...i, brandIdx: null, brand: "" };
-                    }
-                    const bi = parseInt(idx);
-                    const brand = linkedCat && linkedCat.brands[bi];
-                    if (!brand) return i;
-                    const price = parseFloat(brand.price) || 0;
-                    const q = parseFloat(i.qty) || 0;
-                    return {
-                      ...i,
-                      brandIdx: bi,
-                      brand: getBrandName(brand, lang),
-                      unitPrice: brand.price || "",
-                      // 旧价格表 cats 全是东京时期的日元每克价:这一行改标日元(新行缺省是人民币,不标会把日元数当人民币,成本大约 20 倍)
-                      // 「↺ 撤销改价」记的原价 _originalPrice 也跟着换成日元口径,不然撤销会把人民币原价当日元恢复(审查发现)
-                      ...(price > 0 ? { currency: "JPY", ...(i._originalPrice !== undefined && i._originalPrice !== "" && curOf(i) !== "JPY" ? { _originalPrice: convCur(i._originalPrice, curOf(i), "JPY") } : {}) } : {}),
-                      cost: q > 0 && price > 0 ? (q * price).toFixed(1) : i.cost,
-                    };
-                  }));
-                };
-                const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
-                const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
-                  Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
-                  ? parseFloat(linkedBrand.price) : null;
-                return (
-                  <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
-                    <td style={{ padding: "3px 4px" }}>
-                      <button
-                        onClick={() => setPickerTargetIngId(ing._id)}
-                        title={linkedMat
-                          ? (lang === "zh" ? `✓ 关联:${linkedMat.nameZh || linkedMat.nameJa}\n点击修改或解除关联` : `✓ 連動中`)
-                          : (lang === "zh" ? "从材料百科选择(自动填名/价/品牌)" : "材料事典から選択")}
-                        style={{
-                          padding: "3px 6px", fontSize: 13, cursor: "pointer",
-                          background: linkedMat ? "#059669" : T.bgCard,
-                          color: linkedMat ? "#FFFFFF" : T.textSecondary,
-                          border: `0.5px solid ${linkedMat ? "#059669" : T.border}`,
-                          borderRadius: 4,
-                          width: 30, height: 26,
-                          display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        }}
-                      >🔗</button>
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input list="autoNameZhR" placeholder="名（中）" value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{ ...iStyle, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? `✓ 百科关联:${linkedMat.nameZh || linkedMat.nameJa}` : (linked ? `✓ 已关联「${getCatName(linkedCat, lang)}」` : "")} /></td>
-                    <td style={{ padding: "3px 4px" }}><input list="autoNameJaR" placeholder="名（日）" value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...iStyle, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...iStyle, width: 70 }} /></td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{ ...iStyle, width: 52 }} /></td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...iStyle, width: 36 }} /></td>
-                    <td style={{ padding: "3px 4px" }}>
-                      {linkedMat ? (
-                        // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)
-                        <div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          🔗 {linkedMatBrand ? (lang === "zh" ? (linkedMatBrand.nameZh || linkedMatBrand.nameJa) : (linkedMatBrand.nameJa || linkedMatBrand.nameZh)) : (ing.brand || "—")}
-                        </div>
-                      ) : linked ? (
-                        <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{ ...iStyle, width: 78, padding: "4px 3px" }} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
-                          <option value="">{lang === "zh" ? "—未定—" : "—未定—"}</option>
-                          {linkedCat.brands.map((b, bi) => <option key={bi} value={bi}>{getBrandName(b, lang)}</option>)}
-                        </select>
-                      ) : (
-                        <input list="autoBrandR" placeholder="品牌" value={ing.brand||""} onChange={e=>updateIng(ing._id,"brand",e.target.value)} style={{ ...iStyle, width: 66 }} />
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px", position: "relative" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                        <input type="number" placeholder={curOf(ing) === "CNY" ? "¥/g" : "円/g"} value={ing.unitPrice||""} onChange={e=>{updateIng(ing._id,"unitPrice",e.target.value);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(e.target.value)).toFixed(1));}} style={{ ...iStyle, width: 52, borderColor: ing._priceModified ? "#F59E0B" : undefined, background: ing._priceModified ? "#FFFBEB" : undefined }} />
-                        {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
-                        {!ing.materialId && ingCurBtn(ing, patch => setIngs(prev => prev.map(i => i._id === ing._id ? { ...i, ...patch } : i)), lang)}
-                        {ing._priceModified && (
-                          <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
-                        )}
-                      </div>
-                      {priceDrift !== null && (
-                        <button onClick={() => {
-                          setIngs(prev => prev.map(i => {
-                            if (i._id !== ing._id) return i;
-                            const q = parseFloat(i.qty) || 0;
-                            return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
-                          }));
-                        }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={lang === "zh" ? "价格表已更新,点击同步" : "価格表の値に更新"}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
-                      )}
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" placeholder="自動" value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...iStyle, width: 56, textAlign: "right" }} /></td>
-                    <td style={{ padding: "3px 4px" }}>
-                      <select value={ing.group||"none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...iStyle, width: 70, padding: "4px 3px" }}>
-                        {Object.entries(GROUPS).map(([k,v])=><option key={k} value={k}>{lang === "zh" ? v.zh : v.ja}</option>)}
-                      </select>
-                    </td>
-                    <td style={{ padding: "3px 4px" }}><input placeholder="備考・用途メモ" value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...iStyle, width: 120, fontSize: 11 }} /></td>
-                    <td style={{ padding: "3px 4px" }}><button onClick={()=>setIngs(prev=>prev.filter(i=>i._id!==ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "2px 4px" }}>×</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-
-          {/* 🧪 自动补全数据源 */}
-          <datalist id="autoNameZhR">
-            {autoCompleteData.nameZh.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoNameJaR">
-            {autoCompleteData.nameJa.map(n => <option key={n} value={n} />)}
-          </datalist>
-          <datalist id="autoBrandR">
-            {autoCompleteData.brand.map(n => <option key={n} value={n} />)}
-          </datalist>
-        </div>
+        {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.recipe */}
+        <IngredientTable variant="recipe" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
 
         {/* Cost summary */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: "1rem" }}>
@@ -14016,36 +14016,12 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         </div>
       )}
 
-      {/* v11: 改价提示条 — 至少一行 ing 被改过单价才显示 */}
-      {(() => {
-        const modCount = ings.filter(i => i._priceModified).length;
-        const upsertable = ings.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0).length;
-        if (modCount === 0) return null;
-        return (
-          <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12 }}>
-            <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
-              🟡 {lang === "zh" ? `你修改了 ${modCount} 项原料单价。` : `${modCount} 項の単価を変更しました。`}
-            </div>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: upsertable > 0 ? "pointer" : "not-allowed", opacity: upsertable > 0 ? 1 : 0.5 }}>
-              <input type="checkbox" checked={saveToShop} onChange={e => setSaveToShop(e.target.checked)} disabled={upsertable === 0} style={{ marginTop: 2 }} />
-              <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
-                {lang === "zh"
-                  ? (upsertable > 0
-                      ? <>保存到本店原料（其中 <b>{upsertable}</b> 项可落盘，下次打开直接用此价；{modCount - upsertable > 0 ? `其余 ${modCount - upsertable} 项没关联材料百科只存到本配方` : ""}）</>
-                      : <>这些原料没关联材料百科，改价只存到本配方（要批量保存到本店原料需先用"🤖 批量关联"挂材料百科）</>)
-                  : (upsertable > 0
-                      ? <>仕入れ原料に保存（<b>{upsertable}</b> 件が永続化可能）</>
-                      : <>材料百科リンクなし、このレシピのみに保存</>)
-                }
-              </div>
-            </label>
-          </div>
-        );
-      })()}
+      {/* v11: 改价提示条 — 至少一行关联材料百科的 ing 被改过单价才显示(C6 起三页共用 PriceChangeBanner) */}
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存配方" : "レシピ保存"}</Btn>
       </div>
 
@@ -14061,78 +14037,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         />
       )}
 
-      {/* 🔗 材料百科选择弹窗 */}
-      {pickerTargetIngId !== null && (
-        <MaterialPickerModal
-          materials={materials}
-          brands={brands}
-          currentMaterialId={(ings.find(i => i._id === pickerTargetIngId) || {}).materialId || null}
-          lang={lang}
-          onClose={() => setPickerTargetIngId(null)}
-          onSelect={(mat) => {
-            setIngs(prev => prev.map(i => {
-              if (i._id !== pickerTargetIngId) return i;
-              if (mat === null) {
-                // 取消关联
-                return { ...i, materialId: null };
-              }
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setPickerTargetIngId(null);
-          }}
-        />
-      )}
-
-      {/* 🤖 批量智能关联弹窗 */}
-      {showBulkMatch && (
-        <BulkMatchModal
-          ings={ings}
-          materials={materials}
-          brands={brands}
-          lang={lang}
-          onClose={() => setShowBulkMatch(false)}
-          onApply={(selections) => {
-            setIngs(prev => prev.map(i => {
-              const matId = selections[i._id];
-              if (matId == null) return i;
-              const mat = materials.find(m => m.id === matId);
-              if (!mat) return i;
-              const b = brands.find(x => x.id === mat.brandId);
-              const pp = getMaterialEffectivePrice(mat);
-              const q = parseFloat(i.qty) || 0;
-              return {
-                ...i,
-                materialId: mat.id,
-                nameZh: i.nameZh || mat.nameZh || "",
-                nameJa: i.nameJa || mat.nameJa || "",
-                nameFr: i.nameFr || mat.nameFr || "",
-                brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-                unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-                // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
-                // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-                currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-                cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-              };
-            }));
-            setShowBulkMatch(false);
-          }}
-        />
-      )}
+      {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
+      <IngredientLinkModals variant="recipe" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
@@ -17650,7 +17557,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           // [B4 修复] 有 id 跳详情,无 id 回列表
           if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
           else { setTab("list"); }
-        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} />
+        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog} />
       )}
 
       {/* MATERIALS */}
@@ -17888,6 +17795,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           brands={brands}
           materials={materials}
           setMaterials={setMaterials}
+          setShopMaterials={setShopMaterials}
           lang={lang} setLang={setLang}
           viewId={compViewId} setViewId={setCompViewId}
           editTarget={compEditTarget} setEditTarget={setCompEditTarget}
@@ -17924,6 +17832,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onUpdateCats={setCats}
           brands={brands}
           materials={materials}
+          setShopMaterials={setShopMaterials}
           lang={lang} setLang={setLang}
           viewId={creationViewId} setViewId={setCreationViewId}
           editTarget={creationEditTarget} setEditTarget={setCreationEditTarget}
