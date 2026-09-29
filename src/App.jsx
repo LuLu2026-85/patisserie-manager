@@ -4403,8 +4403,17 @@ function computeDataHealth(data) {
 
 // 面板:数据 tab「🩺 数据体检」打开,盖满屏(zIndex 在 toast 下面,撤销提示看得见)
 // fix:App 给的一键改 { shopCurrency(item, cur), category(item, catId), clearFamily(item), layerFollow(item), clearCats(item) }
-function DataHealthPanel({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, lang, onClose, onJump, fix }) {
+function DataHealthPanel({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, lang, onClose, onJump, fix, topInset }) {
   const zh = lang !== "ja";
+  // topInset:App 顶上正显示「别的窗口改过 / 有新版本」提示条(z 比面板高,会盖住面板的标题和关闭键)。
+  // 面板从提示条下沿开始:提示条照样看得见、能点刷新,关闭键也露在外面(iPad 没有 Esc)
+  const bannerBottom = () => { if (!topInset) return 0; const b = document.querySelector("[data-app-banner]"); return b ? Math.max(0, Math.ceil(b.getBoundingClientRect().bottom)) : 0; };
+  const [topOff, setTopOff] = useState(bannerBottom);
+  useEffect(() => {
+    const m = () => setTopOff(bannerBottom());
+    m(); window.addEventListener("resize", m);
+    return () => window.removeEventListener("resize", m);
+  }, [topInset, lang]);
   const checks = useMemo(
     () => computeDataHealth({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings }),
     [recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings]);
@@ -4475,7 +4484,7 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   const info = checks.find(c => c.level === "info");
   return (
     <div className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
-      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
+      style={{ position: "fixed", top: topOff, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
       <div style={{ maxWidth: 920, margin: "0 auto", padding: "16px 16px 96px", boxSizing: "border-box" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: T.sp.l }}>
           <div style={{ minWidth: 0 }}>
@@ -17574,7 +17583,7 @@ function App() {
       <style>{GLOBAL_CSS}</style>
       {/* 2026-09-29:别的窗口改过数据 → 本窗口已停止保存,提示刷新(见 staleRef) */}
       {staleWindow && (
-        <div role="alert" style={{ position: "sticky", top: 0, zIndex: T.z.toast, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
+        <div role="alert" data-app-banner="" style={{ position: "sticky", top: 0, zIndex: T.z.toast, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
           <span style={{ flex: 1, minWidth: 220 }}>
             {lang === "zh"
               ? "这份数据在别的窗口或标签页里改过了。这个窗口已经停止保存,免得把那边的修改冲掉。请刷新载入最新数据(这个窗口里刚改、还没存的内容会丢)。"
@@ -17587,7 +17596,7 @@ function App() {
       )}
       {/* 2026-09-29 体检第 2 批:新版本下载好了 → 提示刷新(见 swUpdateReady)。中性色,不是出错 */}
       {swUpdateReady && !staleWindow && (
-        <div role="status" style={{ position: "sticky", top: 0, zIndex: T.z.toast - 1, background: T.sunken, color: T.ink, borderBottom: `1px solid ${T.line}`, padding: "8px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
+        <div role="status" data-app-banner="" style={{ position: "sticky", top: 0, zIndex: T.z.toast - 1, background: T.sunken, color: T.ink, borderBottom: `1px solid ${T.line}`, padding: "8px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
           <span style={{ flex: 1, minWidth: 220 }}>
             {lang === "zh"
               ? "新版本已经下载好了。点「刷新」换上新版(编辑页里没保存的内容请先保存)。"
@@ -17696,6 +17705,7 @@ function App() {
           onClose={() => setShowDataHealth(false)}
           onJump={jumpToItem}
           fix={dataHealthFix}
+          topInset={staleWindow ? "stale" : swUpdateReady ? "sw" : ""}
         />
       )}
 
