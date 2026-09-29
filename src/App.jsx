@@ -20725,8 +20725,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               const res = doSave();
               setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
             }} />
-            {/* 第 3 批 F4:员工模式入口(每台设备各自的开关) */}
-            <Btn size="sm" variant="ghost" onClick={askStaffEnter} title={lang === "zh" ? "给员工用:看不到钱、改不了配方" : "スタッフ用:価格非表示・編集不可"}>{staffTxt(lang).enterBtn}</Btn>
+            {/* 第 3 批 F4:员工模式入口(每台设备各自的开关)。审查 r1:手机宽度下这一组放不下(语言切换被挤出屏幕),顶栏只在 600px 以上显示,手机从「更多」抽屉进 */}
+            <span className="k-desktop-only"><Btn size="sm" variant="ghost" onClick={askStaffEnter} title={lang === "zh" ? "给员工用:看不到钱、改不了配方" : "スタッフ用:価格非表示・編集不可"}>{staffTxt(lang).enterBtn}</Btn></span>
             <LangToggle lang={lang} onChange={setLang} />
           </div>
         </div>
@@ -20793,6 +20793,17 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 <span style={{ color: T.muted }}>→</span>
               </button>
             ))}
+            {/* 审查 r1:手机上员工模式从这里进(顶栏那个按钮手机宽度下藏起来了) */}
+            <button data-drawer-staff="1" onClick={() => { setMoreOpen(false); askStaffEnter(); }}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+                minHeight: 56, padding: "0 16px", background: "transparent", cursor: "pointer",
+                border: "none", borderBottom: `1px solid ${T.lineFaint}`, borderLeft: "3px solid transparent",
+                color: T.body, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
+              }}>
+              <span>{staffTxt(lang).enterBtn}</span>
+              <span style={{ color: T.muted }}>→</span>
+            </button>
           </div>
         </div>
       )}
