@@ -4413,6 +4413,17 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   // 一开始只展开「会算错钱」的几类;其他点标题展开
   const [open, setOpen] = useState(() => { const o = {}; checks.forEach(c => { o[c.id] = c.level === "money" && c.items.length > 0; }); return o; });
   const [showAll, setShowAll] = useState({});
+  // 一键改过的行留在原位置,按钮换成「✓ 已改好」(面板开着就一直留着)。以前改好的行立刻消失、下面的行顶上来,
+  // 双击 / 连点的第二下落在下一行同一个按钮上,没看就改了(H1 把日元的本店原料标成人民币,成本差 20 倍)
+  const [done, setDone] = useState({});
+  const markDone = (c, it, idx, zhL, jaL) => setDone(d => ({ ...d, [it.key]: { check: c.id, it, idx, zh: zhL, ja: jaL } }));
+  const shownOf = (c) => {
+    const here = new Set(c.items.map(x => x.key));
+    const out = c.items.map(it => ({ it, done: null }));
+    Object.values(done).filter(d => d.check === c.id && !here.has(d.it.key)).sort((a, b) => a.idx - b.idx)
+      .forEach(d => out.splice(Math.min(d.idx, out.length), 0, { it: d.it, done: d }));   // 撤销后又列出来的,按普通行显示
+    return out;
+  };
   const LIMIT = 20;
   useEffect(() => {
     const orig = document.body.style.overflow;
@@ -4429,15 +4440,15 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   const selStyle = { padding: "4px 8px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, maxWidth: "100%" };
   const jumpBtn = (j, label) => j ? <Btn size="sm" onClick={() => onJump(j)}>{label || (zh ? "去改" : "直す")}</Btn> : null;
   const catLabel = (c) => `${c.icon} ${zh ? c.zh : c.ja}`;
-  const actions = (c, it) => {
+  const actions = (c, it, idx) => {
     switch (c.id) {
       case "H1": return <>
-        <Btn size="sm" variant={it.looksCny ? "primary" : "default"} onClick={() => fix.shopCurrency(it, "CNY")}>{zh ? "是人民币" : "人民元"}</Btn>
-        <Btn size="sm" onClick={() => fix.shopCurrency(it, "JPY")}>{zh ? "是日元" : "円"}</Btn>
+        <Btn size="sm" variant={it.looksCny ? "primary" : "default"} onClick={() => { fix.shopCurrency(it, "CNY"); markDone(c, it, idx, "✓ 已标成人民币", "✓ 人民元にしました"); }}>{zh ? "是人民币" : "人民元"}</Btn>
+        <Btn size="sm" onClick={() => { fix.shopCurrency(it, "JPY"); markDone(c, it, idx, "✓ 已标成日元", "✓ 円にしました"); }}>{zh ? "是日元" : "円"}</Btn>
         {jumpBtn(it.jump, zh ? "去看" : "見る")}
       </>;
       case "H2": return <>
-        <select value="__pick" onChange={(e) => { const v = e.target.value; if (v !== "__pick") fix.category(it, v); }} style={selStyle}
+        <select value="__pick" onChange={(e) => { const v = e.target.value; if (v === "__pick") return; fix.category(it, v); const mc = (it.entity === "brand" && !v) ? BRAND_CAT_ALL : getMaterialCat(v); markDone(c, it, idx, `✓ 分类改成 ${mc.icon} ${mc.zh}`, `✓ 分類を ${mc.icon} ${mc.ja} にしました`); }} style={selStyle}
           aria-label={zh ? "选分类" : "分類を選ぶ"}>
           <option value="__pick" disabled>{zh ? "选分类…" : "分類を選ぶ…"}</option>
           {it.entity === "brand" && <option value="">{catLabel(BRAND_CAT_ALL)}</option>}
@@ -4446,11 +4457,11 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
         {jumpBtn(it.jump)}
       </>;
       case "H3": return <>
-        <Btn size="sm" onClick={() => fix.clearFamily(it)}>{zh ? "改成不归属" : "未所属にする"}</Btn>
+        <Btn size="sm" onClick={() => { fix.clearFamily(it); markDone(c, it, idx, "✓ 已改成不归属", "✓ 未所属にしました"); }}>{zh ? "改成不归属" : "未所属にする"}</Btn>
         {jumpBtn(it.jump)}
       </>;
       case "H7": return <>
-        <Btn size="sm" onClick={() => fix.layerFollow(it)}>{zh ? "用组件库的" : "部品庫に合わせる"}</Btn>
+        <Btn size="sm" onClick={() => { fix.layerFollow(it); markDone(c, it, idx, "✓ 已改成跟组件库走", "✓ 部品庫と連動させました"); }}>{zh ? "用组件库的" : "部品庫に合わせる"}</Btn>
         {jumpBtn(it.jump)}
       </>;
       case "H10": return <>
@@ -4493,10 +4504,11 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
         {checks.filter(c => c.level !== "info").map(c => {
           const n = c.items.length;
           const isOpen = !!open[c.id];
-          const list = showAll[c.id] ? c.items : c.items.slice(0, LIMIT);
+          const shown = shownOf(c);
+          const list = showAll[c.id] ? shown : shown.slice(0, LIMIT);
           return (
             <section key={c.id} data-check={c.id} style={{ borderTop: `1px solid ${T.line}` }}>
-              <button type="button" className="k-ease" aria-expanded={isOpen} disabled={n === 0}
+              <button type="button" className="k-ease" aria-expanded={isOpen} disabled={shown.length === 0}
                 onClick={() => setOpen(o => ({ ...o, [c.id]: !o[c.id] }))}
                 style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "14px 0", background: "none", border: "none", textAlign: "left", cursor: n ? "pointer" : "default", fontFamily: T.fontSans, color: T.ink }}>
                 {levelTag(c.level)}
@@ -4505,11 +4517,11 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
                   {n ? (zh ? `${n} 条` : `${n} 件`) : (zh ? "✓ 没有" : "✓ なし")}{n ? (isOpen ? " ▴" : " ▾") : ""}
                 </span>
               </button>
-              {isOpen && n > 0 && (
+              {isOpen && shown.length > 0 && (
                 <div style={{ paddingBottom: T.sp.l }}>
                   <div style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, background: T.sunken, padding: "8px 12px", marginBottom: 4 }}>{zh ? c.whyZh : c.whyJa}</div>
-                  {list.map((it, i) => (
-                    <div key={it.key + "#" + i} data-item={it.key} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 0", borderTop: i ? `1px solid ${T.lineFaint}` : "none" }}>
+                  {list.map(({ it, done: dn }, i) => (
+                    <div key={it.key + "#" + i} data-item={it.key} data-done={dn ? "1" : undefined} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 0", borderTop: i ? `1px solid ${T.lineFaint}` : "none" }}>
                       <div style={{ flex: "1 1 240px", minWidth: 0 }}>
                         <div style={{ ...T.fs.small, color: T.ink, overflowWrap: "anywhere" }}>
                           {L(it, "label")}
@@ -4517,13 +4529,15 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
                         </div>
                         {L(it, "detail") && <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 2, overflowWrap: "anywhere" }}>{L(it, "detail")}</div>}
                       </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>{actions(c, it)}</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        {dn ? <span style={{ ...T.fs.caption, color: T.success, minHeight: 28, display: "inline-flex", alignItems: "center", fontFamily: T.fontSans }}>{zh ? dn.zh : dn.ja}</span> : actions(c, it, i)}
+                      </div>
                     </div>
                   ))}
-                  {n > LIMIT && (
+                  {shown.length > LIMIT && (
                     <button type="button" className="k-ease" onClick={() => setShowAll(s => ({ ...s, [c.id]: !s[c.id] }))}
                       style={{ ...T.fs.caption, color: T.info, background: "none", border: "none", cursor: "pointer", padding: "8px 0", fontFamily: T.fontSans }}>
-                      {showAll[c.id] ? (zh ? "收起,只看前 20 条" : "先頭 20 件だけ表示") : (zh ? `显示全部 ${n} 条` : `すべて表示(${n} 件)`)}
+                      {showAll[c.id] ? (zh ? "收起,只看前 20 条" : "先頭 20 件だけ表示") : (zh ? `显示全部 ${shown.length} 条` : `すべて表示(${shown.length} 件)`)}
                     </button>
                   )}
                 </div>
