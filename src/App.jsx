@@ -3377,20 +3377,23 @@ const _dirtyChecks = new Set();
 // 已经在 app 里问过「不保存,刷新」的,刷新时别再弹浏览器自己的离开提示(2026-09-29 体检第 2 批,审查发现问两遍)
 let _skipUnloadPrompt = false;
 const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) return true; } catch (e) { return true; } } return false; };
+// 审查第 3 轮:比较时把 "" / null / [] 当成「没有这个字段」—— 原来没有 casePack 的材料,敲个 2 又删掉会变成 casePack: "",
+// 以前算「改过」、离开时白问一句。顶层不动;数组里的空值两边都变 null,照样比得出增删
+const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || (Array.isArray(v) && v.length === 0))) ? undefined : v;
 function useDirtyGuard(getState) {
   const latest = useRef(getState);
   latest.current = getState;
   const initial = useRef(null);
   useEffect(() => {
-    const check = () => initial.current !== null && JSON.stringify(latest.current()) !== initial.current;
+    const check = () => initial.current !== null && JSON.stringify(latest.current(), _dirtyNorm) !== initial.current;
     _dirtyChecks.add(check);
     return () => { _dirtyChecks.delete(check); };
   }, []);
-  const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current()); } catch (e) { initial.current = ""; } } };
+  const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current(), _dirtyNorm); } catch (e) { initial.current = ""; } } };
   const bind = { onPointerDownCapture: arm, onKeyDownCapture: arm };
   // 2026-09-29 第 2 批 2b C15:bind.isDirty() = 只看这一页自己改过没有(编辑页里的「← 返回」「取消」用;
   // anyEditorDirty 会把外层的组合产品编辑页也算进去)。不可枚举,{...bind} 挂到 div 上时不会被带成 DOM 属性
-  Object.defineProperty(bind, "isDirty", { enumerable: false, value: () => { try { return initial.current !== null && JSON.stringify(latest.current()) !== initial.current; } catch (e) { return true; } } });
+  Object.defineProperty(bind, "isDirty", { enumerable: false, value: () => { try { return initial.current !== null && JSON.stringify(latest.current(), _dirtyNorm) !== initial.current; } catch (e) { return true; } } });
   return bind;
 }
 // 编辑页自己的「← 返回」「取消」:有没保存的改动先问一句,文字和 App 的 goTab 一样(2026-09-29 体检第 2 批 2b)。
