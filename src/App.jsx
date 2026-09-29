@@ -19840,7 +19840,8 @@ function App() {
           setProductionLog(Array.isArray(d.productionLog) ? d.productionLog : []);
           setSuppliers(Array.isArray(d.suppliers) ? d.suppliers : []);
           if (d.printSettings) setPrintSettings(d.printSettings);
-          if (d.appSettings) setAppSettings(prev => ({ ...prev, ...d.appSettings }));
+          // 审查 r3:今天的生产单(prodPlan)跟着生产记录一起换 —— 文件里没有就清掉,以前留着「✓ 已记入 30」,生产记录却被文件换掉了,单子上记不回去
+          setAppSettings(prev => { const n = { ...prev, ...(d.appSettings || {}) }; if (!(d.appSettings && d.appSettings.prodPlan)) delete n.prodPlan; return n; });
           if (d.customCompCats) setCustomCompCats(d.customCompCats);
           if (d.productFamilies) setProductFamilies(d.productFamilies);
           showToast(lang === "zh" ? "✓ 数据导入成功" : "✓ インポート完了", { ms: 5000 });
