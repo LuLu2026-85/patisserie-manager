@@ -5978,7 +5978,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
             {ings.map(ing => {
               const ist = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
               // 行首盆色竖条。认不出的分组值(导入的 bowl6 之类)按「未分组」显示,数据里的值不动(以前配方页遇到会白屏)
-              const g = GROUPS[ing.group || "none"] || GROUPS.none;
+              const grp = (typeof ing.group === "string" && Object.prototype.hasOwnProperty.call(GROUPS, ing.group)) ? ing.group : "none";   // 只认 GROUPS 自己的键(bowl6 / 空 / 其他 → none)
+              const g = GROUPS[grp];
               const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
               const linked = !!linkedCat;
               // 智能名字更新：输入后若匹配到价格表 cat,同步填充另一语言和 catId
@@ -6113,7 +6114,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
-                    <select value={GROUPS[ing.group] ? ing.group : "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
+                    <select value={grp} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
                       {Object.entries(GROUPS).map(([k, gv]) => <option key={k} value={k}>{lang === "zh" ? gv.zh : gv.ja}</option>)}
                     </select>
                   </td>
