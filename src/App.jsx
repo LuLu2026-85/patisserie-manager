@@ -16833,8 +16833,11 @@ const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
     const stock0 = Math.max(0, parseFloat(p.currentStock) || 0);
     const back = first ? _r3(saleStockBackOf(first) + _num0(first.wasteOut)) : 0;
     const avail = _r3(stock0 + back);
-    const stockOut = _r3(Math.min(soldFirst, avail));
-    const wasteOut = _r3(Math.min(wSum, avail - stockOut));
+    // 审查 r1:以前卖超 / 报损扣不到的件数当时没扣库存,重存时也不从后来生产的库存里扣(只扣这次多出来的)
+    const prevShortSold = first ? Math.max(0, _num0(first.soldQty) - saleStockBackOf(first)) : 0;
+    const prevShortWaste = first ? Math.max(0, wasteTotalOf(first) - _num0(first.wasteOut)) : 0;
+    const stockOut = _r3(Math.min(Math.max(0, soldFirst - prevShortSold), avail));
+    const wasteOut = _r3(Math.min(Math.max(0, wSum - prevShortWaste), avail - stockOut));
     const stock1 = _r3(avail - stockOut - wasteOut);
     const hadWaste = !!(first && (first.waste !== undefined || first.wasteOut !== undefined));
     const wasteFields = (wSum > 0 || hadWaste) ? { waste: wFirst, wasteOut } : {};
@@ -16850,7 +16853,7 @@ const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
     if (stock1 !== (parseFloat(p.currentStock) || 0)) prods[pi] = { ...p, currentStock: stock1 };
     const tot = dayTotalsOf(log, pid, date);
     changed.push({ productId: pid, before: first, after, stockBefore: stock0, stockAfter: stock1,
-      oversell: _r3(soldFirst - stockOut), wasteShort: _r3(wSum - wasteOut),
+      oversell: _r3(Math.max(0, soldFirst - prevShortSold - stockOut)), wasteShort: _r3(Math.max(0, wSum - prevShortWaste - wasteOut)),
       dupes: others.length, resultSold: tot.sold, resultWaste: tot.waste, target: { sold: tSold, waste: tWaste } });
     undo.push({ productId: pid, before: first, afterId: after.id, afterUpdatedAt: now, stockDelta: _r3(stock1 - stock0) });
   });
