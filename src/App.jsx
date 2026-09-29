@@ -17906,8 +17906,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 setFamilyEditTarget(null);
               }}
               onDelete={() => {
-                confirmDialog("删除这个家族吗？\n\n家族里的配方不会被删除，只会变成「未归属」状态。", () => {
+                confirmDialog("删除这个家族吗？\n\n家族里的配方和组合产品不会被删除，只会变成「未归属」状态。", () => {
                   setRecipes(prev => prev.map(r => r.familyId === familyEditTarget.id ? { ...r, familyId: "" } : r));
+                  setCreations(prev => prev.map(c => c.familyId === familyEditTarget.id ? { ...c, familyId: "" } : c));   // v17.8 组合产品也挂家族,以前删家族漏了它们
                   setProductFamilies(prev => prev.filter(x => x.id !== familyEditTarget.id));
                   showToast("家族已删除");
                   setFamilyEditTarget(null);
