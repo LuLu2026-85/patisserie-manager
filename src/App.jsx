@@ -3379,7 +3379,8 @@ let _skipUnloadPrompt = false;
 const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) return true; } catch (e) { return true; } } return false; };
 // 审查第 3 轮:比较时把 "" / null / [] 当成「没有这个字段」(第 5 轮加 false:没有 isCouverture 的材料勾上再取消会变成 false,以前白问一句)—— 原来没有 casePack 的材料,敲个 2 又删掉会变成 casePack: "",
 // 以前算「改过」、离开时白问一句。顶层不动;数组里的空值两边都变 null,照样比得出增删
-const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || v === false || (Array.isArray(v) && v.length === 0))) ? undefined : v;
+// 审查第 6 轮:数字一律按字符串比 —— 老数据的创立年份 / 库存 / 售价存的是数字 1919,输入框敲了又删掉写回的是 "1919",以前白问一句
+const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || v === false || (Array.isArray(v) && v.length === 0))) ? undefined : ((typeof v === "number" && isFinite(v)) ? String(v) : v);
 function useDirtyGuard(getState) {
   const latest = useRef(getState);
   latest.current = getState;
