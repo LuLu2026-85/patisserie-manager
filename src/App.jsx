@@ -1650,7 +1650,11 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
     (e.layers || []).forEach(l0 => {
       const l = l0 || {};
       const comp = l.sourceComponentId ? (ctx.components || []).find(x => x && x.id === l.sourceComponentId) : null;
-      visitIngs(l.ingredients, _partNameZh(l, comp));
+      const pn = _partNameZh(l, comp);
+      const before = lines;
+      visitIngs(l.ingredients, pn);
+      // 审查 r1:某个部分一行配料都没有(或全是空行)→ 这一部分没法确认,整个组合产品不能算「全部核对过」
+      if (lines === before) pushUnknown({ name: pn, reason: "noIngredients", partLevel: true });
     });
   } else if (kind === "product") {
     (e.items || []).forEach(it => {
@@ -1662,7 +1666,7 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
       sub.contains.forEach(c => { contains.add(c); (sub.sources[c] || []).forEach(n => addSrc(sources, c, n)); });
       sub.mayContain.forEach(c => { may.add(c); (sub.maySources[c] || []).forEach(n => addSrc(maySources, c, n)); });
       const tName = _entityNameZh(t);
-      sub.unknown.forEach(u => pushUnknown({ ...u, part: u.reason === "noIngredients" ? "" : [tName, u.part].filter(Boolean).join(" · "), name: u.reason === "noIngredients" ? tName : u.name }));
+      sub.unknown.forEach(u => { const whole = u.reason === "noIngredients" && !u.partLevel; pushUnknown({ ...u, part: whole ? "" : [tName, u.part].filter(Boolean).join(" · "), name: whole ? tName : u.name }); });
     });
   } else {
     visitIngs(e.ingredients, "");
