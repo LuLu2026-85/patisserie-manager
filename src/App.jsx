@@ -19703,6 +19703,8 @@ function App() {
     // 审查 r2:这一页有没保存的改动(编辑页 / 日结的格子)时先问,不直接切 —— 以前悄悄关掉,改的内容就没了。
     // 进员工模式那一边:问的对话框盖住老板界面,要么不保存进员工模式,要么输 PIN 退出员工模式留下来保存
     if (anyEditorDirty()) {
+      // 审查 r3:已经在问同一件事时不再重来 —— 以前切走再切回(focus)会关掉她从这个对话框点开的 PIN 框,打了一半的数字没了
+      if (staffPending === (on ? "enter" : "exit")) return;
       if (on) { setConfirmState(null); setStaffDialog(null); }
       setStaffPending(on ? "enter" : "exit");
       return;
