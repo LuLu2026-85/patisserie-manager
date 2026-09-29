@@ -2995,7 +2995,10 @@ function backupSummary(src) {
 function pickBackupsToDelete(metas, now) {
   const sorted = [...(metas || [])].sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""));   // 新 → 旧
   const keep = new Set();
-  sorted.filter(m => m.pinned).slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  // 恢复前的固定备份单独算名额(审查发现:连着恢复 10 次找版本,覆盖导入前那份唯一的原数据就被挤掉了)
+  const pins = sorted.filter(m => m.pinned);
+  pins.filter(m => m.reason !== "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  pins.filter(m => m.reason === "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
   const auto = sorted.filter(m => !m.pinned);
   auto.slice(0, BACKUP_RECENT).forEach(m => keep.add(m.id));
   // 最近 BACKUP_HOURS 小时每小时留一份(那一小时最早那份):卖货时每点一次 +/- 都存一份,
@@ -3051,10 +3054,12 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
         const now = Date.now();
         const finish = (list) => { pickBackupsToDelete(list, now).forEach(id => { metaStore.delete(id); payStore.delete(id); }); result = true; };
         const newest = metas.reduce((a, m) => (!a || (m.savedAt || "") > (a.savedAt || "")) ? m : a, null);
-        if (newest && hash && newest.hash === hash) {
-          // 和最近一份内容一样:不再多存一份;要固定就把那一份标成固定
-          if (pinned && !newest.pinned) {
-            const upd = { ...newest, pinned: true, reason: opts.reason || "" };
+        // 固定备份:库里任何一份内容一样就直接把那份标成固定(连着恢复几次找版本时,不再每次多存一份 1.8 MB 的重复)
+        const same = (pinned && hash) ? (metas.find(m => m.hash === hash) || null) : ((newest && hash && newest.hash === hash) ? newest : null);
+        if (same) {
+          // 和已有的一份内容一样:不再多存一份;要固定就把那一份标成固定
+          if (pinned && !same.pinned) {
+            const upd = { ...same, pinned: true, reason: opts.reason || "" };
             metaStore.put(upd);
             finish(metas.map(m => m.id === upd.id ? upd : m));
           } else result = true;
@@ -3332,6 +3337,8 @@ function mergeByNewer(existing, inc, lockedKeys = []) {
 // 基准快照在她第一次按键 / 点击时才拍(捕获阶段,改动还没发生)——编辑页刚打开时 effect 会自动调整表单
 // (比如组合产品把部分同步成组件库最新内容),在那之前拍会被误判成「改过」。改回原样也算没改。
 const _dirtyChecks = new Set();
+// 已经在 app 里问过「不保存,刷新」的,刷新时别再弹浏览器自己的离开提示(2026-09-29 体检第 2 批,审查发现问两遍)
+let _skipUnloadPrompt = false;
 const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) return true; } catch (e) { return true; } } return false; };
 function useDirtyGuard(getState) {
   const latest = useRef(getState);
@@ -3725,18 +3732,33 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
         // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
         const payload = await getBackupPayload(snap);
         if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
+        const doRestore = () => {
+          try {
+            _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
+            localStorage.setItem(STORAGE_KEY, payload);
+          } catch (e) {
+            _suspendSaves = false;
+            showToast((lang === "zh" ? "⚠️ 恢复失败:" : "⚠️ 復元失敗:") + (e && e.message ? e.message : String(e)));
+            return;
+          }
+          showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
+          setTimeout(() => location.reload(), 800);
+        };
+        let pinned = true;
         try {
           const current = localStorage.getItem(STORAGE_KEY);
-          if (current && current !== payload) await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
-          _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
-          localStorage.setItem(STORAGE_KEY, payload);
-        } catch (e) {
-          _suspendSaves = false;
-          showToast((lang === "zh" ? "⚠️ 恢复失败:" : "⚠️ 復元失敗:") + (e && e.message ? e.message : String(e)));
+          if (current && current !== payload) pinned = await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
+        } catch (e) { pinned = false; }
+        // 审查发现:以前固定备份没存上也照样覆盖,对话框却说「会先存一份」。和覆盖导入 / 清除全部一样,存不上先问
+        if (!pinned) {
+          confirmDialog(
+            lang === "zh" ? "恢复前的固定备份没存上(浏览器的数据库用不了)。仍然恢复吗?现在的数据会被覆盖,建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できません。それでも復元しますか?",
+            doRestore,
+            { title: lang === "zh" ? "备份没存上" : "バックアップ失敗", confirmText: lang === "zh" ? "仍然恢复" : "復元する" }
+          );
           return;
         }
-        showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
-        setTimeout(() => location.reload(), 800);
+        doRestore();
       }
     );
   };
@@ -5491,10 +5513,10 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
       nameZh: c.nameZh ? c.nameZh + tag(true) : c.nameZh,
       nameJa: c.nameJa ? c.nameJa + tag(false) : c.nameJa,
       yield: String(target),
-      // 用量和屏幕上一样保留一位小数;「适量」这种不是数字的原样
+      // 用量和屏幕上同一个读法 fmtQty(10 以下两位小数,盐 0.03 g 不再印成 0.0);去掉千位逗号免得下游 parseFloat 读成 1;「适量」这种不是数字的原样
       ingredients: (c.ingredients || []).map(ing => ({
         ...ing,
-        qty: isNum(ing.qty) ? (parseFloat(ing.qty) * scale).toFixed(1) : ing.qty,
+        qty: isNum(ing.qty) ? fmtQty(parseFloat(ing.qty) * scale).replace(/,/g, "") : ing.qty,
         cost: isNum(ing.cost) ? String(parseFloat(ing.cost) * scale) : ing.cost,
       })),
     };
@@ -5676,7 +5698,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
                         {sub && sub !== n && <div style={{ fontSize: 11, color: "#666666" }}>{sub}</div>}
                         {ing.nameFr && <div style={{ fontSize: 10, color: "#888888", fontStyle: "italic" }}>{ing.nameFr}</div>}
                       </div>
-                      <div style={{ textAlign: "right", fontWeight: 500, fontSize: 15, color: scale !== 1 ? "#6D28D9" : "#111111" }}>{scale === 1 ? ing.qty : scaledQty.toFixed(1)}</div>
+                      <div style={{ textAlign: "right", fontWeight: 500, fontSize: 15, color: scale !== 1 ? "#6D28D9" : "#111111" }}>{scale === 1 ? ing.qty : (isFinite(parseFloat(ing.qty)) ? fmtQty(scaledQty) : ing.qty)}</div>
                       <div style={{ fontSize: 13, color: "#666666", paddingLeft: 4 }}>{ing.unit}</div>
                       <div style={{ textAlign: "right", fontSize: 12, color: "#666666" }}>{fmtCost(scaledCost)}</div>
                     </div>
@@ -6726,6 +6748,8 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
   });
   const [newTag, setNewTag] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  // 2026-09-29 体检第 2 批(审查发现):切页时 goTab 会关掉家族编辑层,没接离开保护的话改了一半直接丢
+  const dirtyBind = useDirtyGuard(() => ({ form, newTag }));
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
@@ -6746,7 +6770,7 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
   const selectedColor = FAMILY_COLORS[form.colorIdx || 0];
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建产品家族" : "编辑家族"}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -7509,6 +7533,7 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   // 2026-09-29 体检第 2 批:过敏原和总耗时以前从不打印
   const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} / ${ja}` : zh;
   const timeText = printTimeText(item.time, lang === "ja" ? "ja" : "zh");
+  const scaleText = printScaleText(item, lang);   // 缩放后打印:展示版也标出「做多少(原多少 ×倍)」(审查发现只有这一版没标)
 
   return (
     <div style={{ position: "relative", zIndex: 1, fontFamily: 'Georgia, "Hiragino Mincho ProN", "游明朝", "PingFang SC", serif', color: "#2D1B0E" }}>
@@ -7524,6 +7549,7 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
       <div style={{ textAlign: "center", marginBottom: "10mm" }}>
         <div style={{ fontFamily: "Georgia, serif", fontSize: "30pt", fontWeight: 400, marginBottom: "3mm", letterSpacing: "2pt", color: "#2D1B0E", lineHeight: 1.15 }}>{name}</div>
         {item.nameFr && <div style={{ fontFamily: "Georgia, serif", fontSize: "13pt", fontStyle: "italic", color: "#7A5F4A", letterSpacing: "1pt" }}>{item.nameFr}</div>}
+        {scaleText && <div style={{ fontSize: "10pt", color: "#7A5F4A", marginTop: "2mm" }}>{scaleText.main} {scaleText.sub}</div>}
         {/* 分隔线 */}
         <div style={{ margin: "6mm auto", width: "40mm", height: "0.5px", background: "#AC6B3A" }}></div>
         {/* 简介 */}
@@ -8619,7 +8645,8 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   return {
     unsure,
     text: showPct ? `${marginPercent.toFixed(1)}%` : "—",
-    color: !showPct ? T.textSecondary : unsure ? T.warning : marginPercent >= 65 ? T.success : marginPercent >= 50 ? T.warning : T.danger,
+    // 低于 50% 先标红:成本算不全时实际毛利只会更低,不能因为「不确定」降成黄色(审查发现)
+    color: !showPct ? T.textSecondary : marginPercent < 50 ? T.danger : unsure ? T.warning : marginPercent >= 65 ? T.success : T.warning,
     badge: unsure ? (incomplete ? (zh ? "算不全" : "未確定") : (zh ? "用量待确认" : "使用量要確認")) : "",
     note: unsure ? `⚠ ${zh ? "成本" : "原価"}${incomplete ? (zh ? "算不全" : "未確定") : (zh ? "可能不准" : "要確認")}：${reasons.join(zh ? "，" : "、")}${showPct && incomplete ? (zh ? "。实际毛利率会比这里低。" : "。実際の粗利率はこれより低くなります。") : ""}` : "",
   };
@@ -8658,7 +8685,9 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
       onUpdateCreation(c.id, cr => {
         const cur = cr.layers || [];
         let n = 0;
-        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); if (key && before[key] !== undefined) { n++; return before[key]; } return l; });
+        // 同一个组件用了两次、中间又删了一个时,「第几个」会错位到另一部分上:部分名和用量也得对得上才还原(审查发现)
+        const samePart = (l, b) => (l.customName || "") === (b.customName || "") && String(l.usedAmount || "") === String(b.usedAmount || "");
+        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); const b = key ? before[key] : undefined; if (b !== undefined && samePart(l, b)) { n++; return b; } return l; });
         restored = n;
         return { ...cr, layers: next };
       });
@@ -8865,9 +8894,11 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
               )}
             </div>
           </div>
-          {marginView.note ? (
+          {marginView.note && (
             <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
-          ) : priceNum > 0 && costPerPortion > 0 && (
+          )}
+          {/* 成本算不全但已经低于 50%:照样亮红线(实际只会更低) */}
+          {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < 50) && (
             <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
               {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）" : "🚨 毛利率过低（<50%）"}
             </div>
@@ -9471,9 +9502,10 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             )}
           </div>
         </div>
-        {marginView.note ? (
+        {marginView.note && (
           <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
-        ) : priceNum > 0 && costPerPortion > 0 && (
+        )}
+        {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < 50) && (
           <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
             📊 {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）建议调整" : "🚨 毛利率过低（<50%）需要涨价或降本"}
           </div>
@@ -15181,8 +15213,10 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
   // 现在分母 = min(30, 从这个商品最早一条记录到今天的天数),不足 30 天在「建议」旁标「按最近 X 天」
   const salesSpan = (productId) => {
     const since = plus(today, -30);
-    const list = (salesLog || []).filter(s => s.productId === productId && s.date >= since);
-    const earliest = list.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
+    const all = (salesLog || []).filter(s => s.productId === productId);
+    const list = all.filter(s => s.date >= since);
+    // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
+    const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
     const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
     return { list, span: Math.min(30, Math.max(1, span || 1)) };
   };
@@ -15671,7 +15705,8 @@ function App() {
   const goTab = (t) => {
     // 2026-09-29 体检第 2 批:家族详情 / 编辑是盖满屏的一层,以前点底栏切了页它还盖在上面,像导航失灵 —— 切页时一起关掉
     const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); };
-    if (t !== tab && anyEditorDirty()) {
+    // 家族编辑层开着时,点当前这个 tab 也会关掉它,所以也要问
+    if ((t !== tab || familyEditTarget !== null) && anyEditorDirty()) {
       confirmDialog(
         lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
         go,
@@ -15683,7 +15718,7 @@ function App() {
   };
   // 关网页 / 刷新时也提醒(浏览器自己的提示框;有的内嵌窗口不显示,不影响)
   useEffect(() => {
-    const onBeforeUnload = (e) => { if (anyEditorDirty()) { e.preventDefault(); e.returnValue = ""; } };
+    const onBeforeUnload = (e) => { if (_skipUnloadPrompt) return; if (anyEditorDirty()) { e.preventDefault(); e.returnValue = ""; } };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, []);
@@ -16850,7 +16885,7 @@ function App() {
           </span>
           <button type="button"
             onClick={() => {
-              const reload = () => window.location.reload();
+              const reload = () => { _skipUnloadPrompt = true; window.location.reload(); };
               if (anyEditorDirty()) {
                 confirmDialog(
                   lang === "zh" ? "编辑页里有还没保存的修改。现在刷新,刚才改的内容会丢。" : "保存していない変更があります。再読み込みすると失われます。",
