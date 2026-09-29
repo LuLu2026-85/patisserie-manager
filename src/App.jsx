@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { SEED_RECIPES, SEED_COMPONENTS, SEED_CREATIONS, SEED_KNOWLEDGE, SEED_FAMILIES } from "./seedData.js";
 
 const STORAGE_KEY = "patisserie_v4";
@@ -5907,7 +5907,8 @@ const ingPriceBasis = (unit) => {
 // 存的每单位价 → 输入框里显示的数。toPrecision(12) 去掉 0.1 × 100 = 10.000000000000002 这种浮点尾巴
 const ingPriceShown = (stored, per100) => {
   if (!stored) return "";
-  if (!per100) return String(stored);
+  // 按「本 / kg」填的行也去掉浮点尾巴(关联材料刷新来的每克价是 0.012899999999999998 这种)
+  if (!per100) { const m = parseFloat(stored); return isFinite(m) ? String(Number(m.toPrecision(12))) : String(stored); }
   const n = parseFloat(stored);
   return isFinite(n) ? String(Number((n * 100).toPrecision(12))) : "";
 };
@@ -7122,7 +7123,8 @@ function ImageUrlsEditor({ urls, onChange }) {
       </div>
 
       {/* 添加新图片（URL 粘贴）*/}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 6, alignItems: "center" }}>
+      {/* minmax(0, …):输入框自带最小宽度,手机上以前把整页撑出横向滚动 */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) auto", gap: 6, alignItems: "center" }}>
         <input
           value={newUrl}
           onChange={e => setNewUrl(e.target.value)}
@@ -13926,7 +13928,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   );
 
   const card = (children) => <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>{children}</div>;
-  const grid = (cols, children) => <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, marginBottom: 12 }}>{children}</div>;
+  // 子元素按位置给 key(以前直接塞数组,控制台一直报「列表缺 key」)
+  const grid = (cols, children) => <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, marginBottom: 12 }}>{children.map((c, i) => <Fragment key={i}>{c}</Fragment>)}</div>;
   const fld = (label, children) => <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{label}</label>{children}</div>;
 
   return (
