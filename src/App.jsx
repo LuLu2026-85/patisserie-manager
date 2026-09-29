@@ -6366,7 +6366,8 @@ const ingHasName = (i) => !!i && !!(String(i.nameZh == null ? "" : i.nameZh).tri
 // C6:改了价的关联行写进本店原料(三个编辑页保存时共用;写法同 v11 配方页:有就改价,没有就新建一条,带币种和修改时间)。
 // rows 是保存时刷新过的行;返回写了几条
 function saveIngPricesToShop(rows, setShopMaterials) {
-  const toUpsert = rows.filter(i => i._priceModified && i.materialId && parseFloat(i.unitPrice) > 0);
+  // 只存按克计量的行:本店原料 pricePerG 是每克价,「本 / 個 / kg」行填的是每单位价,存进去会把每克价放大几十上千倍(审查第 1 轮)
+  const toUpsert = rows.filter(i => i._priceModified && i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0);
   if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return 0;
   setShopMaterials(prev => {
     const next = [...prev];
@@ -6406,8 +6407,10 @@ function refreshIngForSave(i, materials) {
 function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
   const mod = ings.filter(i => i._priceModified);
   if (mod.length === 0) return null;
-  const ok = mod.filter(i => i.materialId && parseFloat(i.unitPrice) > 0).length;
+  const ok = mod.filter(i => i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0).length;   // 和 saveIngPricesToShop 同一条件
+  const nonGram = mod.some(i => i.materialId && !isGramUnit(i.unit));
   const zh = lang === "zh";
+  const nonGramText = zh ? "按「本 / 個」这类单位计量的行不会存到本店原料(本店原料按克计价)" : "本・個などの単位の行は仕入れ原料に保存されません(仕入れ原料はグラム単価)";
   return (
     <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12, marginBottom: 8 }}>
       <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
@@ -6417,10 +6420,13 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
         <input type="checkbox" checked={saveToShop} onChange={e => setSaveToShop(e.target.checked)} disabled={ok === 0} style={{ marginTop: 2 }} />
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
           {zh
-            ? (ok > 0 ? <>同时保存到本店原料（<b>{ok}</b> 项。存了以后，所有用到这个材料的配方 / 组件都按这个价算成本）</> : <>单价要大于 0 才能保存到本店原料</>)
-            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / コンポーネントの原価がこの単価になります）</> : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>)}
+            ? (ok > 0 ? <>同时保存到本店原料（<b>{ok}</b> 项。存了以后，所有用到这个材料的配方 / 组件都按这个价算成本）</> : (nonGram ? nonGramText : <>单价要大于 0 才能保存到本店原料</>))
+            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / コンポーネントの原価がこの単価になります）</> : (nonGram ? nonGramText : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>))}
         </div>
       </label>
+      {ok > 0 && nonGram && (
+        <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>{nonGramText}</div>
+      )}
       {!(saveToShop && ok > 0) && (
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
           {zh ? "不存的话，这几行保存后还是按材料百科的价算。" : "保存しない場合、これらの行は保存後も材料事典の単価で計算されます。"}
