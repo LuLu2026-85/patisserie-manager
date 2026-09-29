@@ -5837,6 +5837,10 @@ const ingPriceStored = (text, per100) => {
   const n = parseFloat(text);
   return isFinite(n) ? String(Number((n / 100).toPrecision(12))) : "";
 };
+// C14:数字框防误滚。聚焦的 number 输入框被滚轮扫过会一格一格改数(单价 0.03 滚一下变 1.03),
+// 滚轮一来就让它失焦,数不动、页面照常滚
+const blurOnWheel = (e) => { e.currentTarget.blur(); };
+
 // 单价输入框。draft = 她正在敲的原文:「1.」「0.50」这种换算一次就会变样(敲「1.」被吃成「1」),
 // 所以只要存下去的值还是这份原文算出来的那个,就照原文显示;失焦、或者值被别处改了(↺ / 选材料 / 切币种 / 改单位)就按存的值重算
 function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
@@ -5848,6 +5852,7 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
     <input type="number" placeholder={placeholder} value={shown}
       onChange={e => { const text = e.target.value; const stored = ingPriceStored(text, per100); setDraft({ text, stored, per100 }); onChangeStored(stored); }}
       onBlur={() => setDraft(null)}
+      onWheel={blurOnWheel}
       style={style} />
   );
 }
@@ -6045,7 +6050,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   </td>
                   <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={tx.nameJa} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} style={{ ...ist, width: 52 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
@@ -6088,7 +6093,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={tx.drift}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                     )}
                   </td>
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
                     <select value={GROUPS[ing.group] ? ing.group : "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
