@@ -415,7 +415,7 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
    `mergeWithDefaults(items, seeds, dismissed, kind)` 跳过它们;撤销删除 / 合并导入加回来会自动从名单去掉。**是按「缺了」推断的** ——
    覆盖导入一份没有预置条目的文件、清除全部之后,刷新也不会补回来。新增预置条目照旧给稳定 id。
 3. **有新版本提示**:页面载入时已经有旧版离线缓存在管,之后收到 `controllerchange` 才算更新(第一次安装不提示),顶上出一条中性色「刷新」;
-   编辑页有没存的改动时先 confirmDialog。页面看得见时每 60 分钟 `registration.update()` 一次。测法:`npm run preview` 装好一版 →
+   编辑页有没存的改动时先 confirmDialog。页面看得见时每 30 分钟 `registration.update()` 一次,切回标签页 / 从后台切回 app(`visibilitychange` / `focus`)也问,两次至少隔 1 分钟(09-29 她推完一直开着页面没看到新版)。测法:`npm run preview` 装好一版 →
    往 `public/` 临时放一个 svg 再 build → 页面里 `reg.update()` → 出提示 → 点刷新;**测完删掉那个 svg 再 build**。
 4. **删除的统一做法**(材料 / 本店原料 / 组件 / 组合产品):有人在用 → confirmDialog 把引用方列进 `refs`(配方 / 组件 / 组合产品 / 商品 /
    本店原料);没人用 → 直接删 + 撤销 toast,撤销放回原位置。组件页和组合产品页因此多收 `products`,本店原料页多收 `recipes / components / creations`。

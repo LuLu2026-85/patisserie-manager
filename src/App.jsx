@@ -15759,7 +15759,8 @@ function App() {
   // 2026-09-29 体检第 2 批(新功能):App 更新以后,以前要关掉重开才换上新版,她不知道自己用的是旧版。
   // 离线缓存(src/sw.js)下载好新版会 skipWaiting + clients.claim,页面收到 controllerchange ——
   // 只有「之前已经有旧版在管这一页」时才算更新(第一次安装也会触发,那次不提示),顶上出一条「刷新」提示。
-  // 页面开着时每 60 分钟问一次有没有新版(只在页面看得见时问)。不支持离线缓存的浏览器什么都不做。
+  // 页面开着时每 30 分钟问一次有没有新版,切回这个标签页 / 从后台切回 app 时也问(只在页面看得见时问,两次至少隔 1 分钟)。
+  // 不支持离线缓存的浏览器什么都不做。
   const [swUpdateReady, setSwUpdateReady] = useState(false);
   useEffect(() => {
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
@@ -15767,11 +15768,20 @@ function App() {
     let hadController = !!sw.controller;
     const onChange = () => { if (hadController) setSwUpdateReady(true); hadController = true; };
     sw.addEventListener("controllerchange", onChange);
-    const timer = setInterval(() => {
+    // 问一次有没有新版(只是重新取一下 sw.js,很小);两次之间至少隔 1 分钟,免得来回切页一直发请求
+    let lastCheck = 0;
+    const check = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (Date.now() - lastCheck < 60 * 1000) return;
+      lastCheck = Date.now();
       try { sw.getRegistration().then(r => { if (r) r.update().catch(() => {}); }).catch(() => {}); } catch (e) {}
-    }, 60 * 60 * 1000);
-    return () => { sw.removeEventListener("controllerchange", onChange); clearInterval(timer); };
+    };
+    const timer = setInterval(check, 30 * 60 * 1000);
+    // 09-29 她推完一直开着页面没看到新版:切回这个标签页 / iPad 从后台切回 app 时也问一次
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => { sw.removeEventListener("controllerchange", onChange); clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", onVisible); };
   }, []);
   const doSave = () => staleRef.current
     ? { ok: false, error: "stale" }
