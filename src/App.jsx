@@ -1433,7 +1433,8 @@ const _stepsKeyTail = (x) => {
 };
 const _ingContentKey = (ing, matIds) => {
   const mid = (ing.materialId && (!matIds || matIds.has(ing.materialId))) ? String(ing.materialId) : "";
-  const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand)];
+  // 备注 / 法文名也算内容(2b C1 / C2 起组件和部分编辑页都能改,不比的话组件里改的到不了部分、部分里改的会被下次同步悄悄盖掉;审查第 1 轮)
+  const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand), _normTxt(ing.note), _normTxt(ing.nameFr)];
   if (!mid) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
   return k;
 };
