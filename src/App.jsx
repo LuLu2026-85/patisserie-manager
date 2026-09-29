@@ -6146,7 +6146,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
   // 审查第 4 轮:改成离开单位框时拿「点进去之前的单位」比 —— 以前每敲一个键就判断,g 改 ml 敲到「m」、拼音输入「毫升」敲到「h」
   // 都会把同口径的手改价悄悄丢掉。点保存 / 别的按钮时单位框先失焦,所以真换了口径照样先丢价再保存
   const unitAtFocus = useRef({});
-  const commitUnit = (id) => {
+  // 审查第 6 轮:切去别的窗口(微信看报价)整个窗口失焦也会触发 blur,这时她还在这一格里 —— 不判断、留着点进去之前的单位,
+  // 回来时浏览器把焦点还给这一格,onFocus 看到 unitResume 就不覆盖起点
+  const unitResume = useRef(null);
+  const commitUnit = (id, e) => {
+    if (e && typeof document !== "undefined" && document.activeElement === e.target && typeof document.hasFocus === "function" && !document.hasFocus()) { unitResume.current = id; return; }
+    if (unitResume.current === id) unitResume.current = null;
     const from = unitAtFocus.current[id];
     delete unitAtFocus.current[id];
     if (from === undefined) return;
@@ -6281,7 +6286,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={()=>commitUnit(ing._id)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
                       // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
