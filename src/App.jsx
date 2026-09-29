@@ -17594,13 +17594,14 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const stale = rawPlan && typeof rawPlan === "object" && rawPlan.date && rawPlan.date !== today && Array.isArray(rawPlan.lines) && rawPlan.lines.length > 0 && plan.lines.length === 0;
   const addLines = (adds) => {
     const r = mergeProdLines(plan.lines, adds);
-    updatePlan(lines => mergeProdLines(lines, adds).lines);
+    if (updatePlan(lines => mergeProdLines(lines, adds).lines) === false) return;   // 审查 r2:页面停在昨天 → App 刷新到今天并提示,这次不算
     if (showToast) showToast(X.added(r.added, r.existed));
   };
   const setLine = (uid, patch) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, ...patch } : l));
   const remove = (uid) => {
     const idx = plan.lines.findIndex(l => l.uid === uid);
-    if (idx < 0 || today !== localDateStr()) return;   // 审查 r1:过了半夜的旧页面不删(撤销会把昨天那一行塞进今天的单子)
+    if (idx < 0) return;
+    if (today !== localDateStr()) { updatePlan(lines => lines); return; }   // 审查 r1:过了半夜的旧页面不删(撤销会把昨天那一行塞进今天的单子);r2:交给 App 刷新到今天并提示
     const gone = plan.lines[idx];
     const s = sheet[idx];
     updatePlan(lines => lines.filter(l => l.uid !== uid));
@@ -17612,7 +17613,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const clearAll = () => {
     const before = plan.lines;
     if (!before.length) return;
-    updatePlan(() => []);
+    if (updatePlan(() => []) === false) return;
     if (showToast) showToast(X.cleared(before.length), { undo: () => updatePlan(lines => lines.length ? [...before.filter(b => !lines.some(l => l.uid === b.uid)), ...lines] : before) });
   };
   const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty)));
@@ -17767,6 +17768,13 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
   const toRow = (r) => ({ productId: r.p.id, sold: r.val.sold, waste: Object.fromEntries(WASTE_REASONS.map(x => [x.id, r.val[x.id]])) });
   const pendingRows = rows.filter(r => r.dirty).map(toRow);
   const badRows = rows.filter(r => r.bad.length);
+  // 审查 r2:过了半夜 today 变了(App 会刷新):还停在旧的「今天」、也没有没保存的格子,就跟着换到新的今天(员工只能选今天和昨天,以前选不到今天)
+  const prevTodayRef = useRef(today);
+  useEffect(() => {
+    const old = prevTodayRef.current;
+    prevTodayRef.current = today;
+    if (old !== today && date === old && !pendingRows.length && !badRows.length) { setDate(today); setDraft({}); }
+  }, [today]);
   // 离开保护比较的是「和存着的不一样的格子」+ 填错的格子(敲了又改回原数不算改过)
   const bind = useDirtyGuard(() => [pendingRows, badRows.map(r => [r.p.id, r.bad])]);
   // 保存前的预览:库存前后、卖超、报损扣不到、同一天的别的记录(和保存走同一个纯函数)
@@ -18800,6 +18808,17 @@ function App() {
   const [staffMode, setStaffMode] = useState(readStaffMode);
   const [staffDialog, setStaffDialog] = useState(null);     // null | "setup" | "enter" | "exit"
   const [kitchenTarget, setKitchenTarget] = useState(null); // 老板界面:{ kind, id, qty }
+  // 审查 r2:页面上的「今天」(生产单 / 日结 / 厨房视图用)。以前每次渲染现算,店里 iPad 过了半夜一直开着、没有别的状态变化时
+  // App 不重新渲染,生产单和日结一直停在昨天。切回页面 / 窗口拿到焦点 / 每分钟对一次日期,变了才更新
+  const [today, setToday] = useState(() => localDateStr());
+  useEffect(() => {
+    const check = () => { const d = localDateStr(); setToday(p => (p === d ? p : d)); };
+    const onVis = () => { if (document.visibilityState !== "hidden") check(); };
+    const timer = setInterval(check, 60 * 1000);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", check);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", check); };
+  }, []);
   // 🚚 供货商 + 采购清单（v13）
   const [suppliers, setSuppliers] = useState(stored?.suppliers || []);
   const [supplierViewId, setSupplierViewId] = useState(null);
@@ -19515,6 +19534,16 @@ function App() {
     if (lines === cur.lines || (!lines.length && !cur.lines.length)) return prev;
     return { ...prev, prodPlan: { date: today, lines, updatedAt: new Date().toISOString() } };
   });
+  // 审查 r2:生产单页面上的操作走这里。页面还停在昨天(日期没刷新)时:刷新到今天、说一声,这次点击不算(以前什么都不发生,也不说为什么)。
+  // 返回 false = 没做
+  const staleSheetDay = () => {
+    const d = localDateStr();
+    if (d === today) return false;
+    setToday(d);
+    showToast(lang === "zh" ? "页面日期已过,已刷新到今天。请看一眼今天的单子再点" : "日付が変わったので今日の表示に更新しました。確認してからもう一度押してください");
+    return true;
+  };
+  const updateSheetPlan = (fn) => { if (staleSheetDay()) return false; updateProdPlan(fn); return true; };
   // 商品页「今日要做」红框 →「生成今日生产单」:低库存的带着建议数加进今天的单子(已经在单子上的不动),跳到今日 tab
   const openProdSheetWith = (adds) => {
     const r = mergeProdLines(prodPlanForToday(appSettings.prodPlan, localDateStr()).lines, adds);
@@ -19524,6 +19553,7 @@ function App() {
   };
   // 「记入生产」:和商品页「记录生产」同一个写法(makeLogQty),库存照加。只记这一行还没记过的那部分(logged),给撤销
   const logProdFromSheet = (uid) => {
+    if (staleSheetDay()) return;
     const today = localDateStr();
     const line = prodPlanForToday(appSettings.prodPlan, today).lines.find(l => l.uid === uid);
     if (!line || line.kind !== "product") return;
@@ -20709,7 +20739,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         return (
           <div data-owner-kitchen="1" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: T.paper, zIndex: T.z.drawer, overflow: "auto", paddingTop: 16, paddingBottom: 96 }}>
             <div className="rc-container">
-              <KitchenView key={`${kitchenTarget.kind}:${kitchenTarget.id}`} kind={kitchenTarget.kind} target={target} initialQty={kitchenTarget.qty} lang={lang} today={localDateStr()}
+              <KitchenView key={`${kitchenTarget.kind}:${kitchenTarget.id}`} kind={kitchenTarget.kind} target={target} initialQty={kitchenTarget.qty} lang={lang} today={today}
                 ctx={{ products, recipes, creations, components, materials, brands, productFamilies, lang }}
                 onBack={() => setKitchenTarget(null)} backLabel={kitchenTxt(lang).close} showToast={showToast} />
             </div>
@@ -21326,7 +21356,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       {tab === "today" && (
         <TodayView
           lang={lang}
-          today={localDateStr()}
+          today={today}
           products={products}
           recipes={recipes}
           creations={creations}
@@ -21339,7 +21369,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           confirmDialog={confirmDialog}
           onDailyClose={saveDailyClose}
           rawPlan={appSettings.prodPlan}
-          updatePlan={updateProdPlan}
+          updatePlan={updateSheetPlan}
           onLogProduction={logProdFromSheet}
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           showToast={showToast}
@@ -21739,10 +21769,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
       {/* 第 3 批 F4:员工外壳(不在 App 里提前 return —— hook 顺序、自动保存、跟组件库同步的 effect 照常跑) */}
       {staffMode && (
-        <StaffShell lang={lang} setLang={setLang} today={localDateStr()}
+        <StaffShell lang={lang} setLang={setLang} today={today}
           products={products} recipes={recipes} creations={creations} components={components} materials={materials} brands={brands} productFamilies={productFamilies}
           salesLog={salesLog} productionLog={productionLog}
-          rawPlan={appSettings.prodPlan} updatePlan={updateProdPlan} onLogProduction={logProdFromSheet}
+          rawPlan={appSettings.prodPlan} updatePlan={updateSheetPlan} onLogProduction={logProdFromSheet}
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit}
           saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
