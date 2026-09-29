@@ -15936,6 +15936,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                       {p.sellPrice > 0 && " · " + fmtSellPrice(p.sellPrice, p)}
                       {/* 第 3 批 F2:单件成本 / 毛利率;算不全标「成本不全·利润率虚高」(同配方一览) */}
                       {uc && uc.cost > 0 && <span data-listcost="1">{" · "}{lang === "zh" ? "成本 " : "原価 "}{fmtCost(uc.cost)}</span>}
+                      {uc && (uc.wholeCreation || []).length > 0 && <span data-listwhole="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? `按整个(${fmtQty(uc.wholeCreation[0].portions)} 份)算` : `1 台(${fmtQty(uc.wholeCreation[0].portions)} カット)で計算`}</span>}
                       {mg !== null && <span data-listmargin="1" style={{ color: marginColor(mg) }}>{" · "}{lang === "zh" ? "毛利 " : "粗利 "}{mg.toFixed(1)}%</span>}
                       {uc && uc.incomplete && mg !== null && <span data-listincomplete="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は過大"}</span>}
                     </div>
@@ -16887,7 +16888,7 @@ const productUnitCost = (p, ctx) => {
   const { recipes = [], creations = [], components = [], materials = [], brands = [] } = ctx || {};
   const items = (p && p.items) || [];
   let cost = 0;
-  const missing = [], noYield = [];
+  const missing = [], noYield = [], wholeCreation = [];
   items.forEach(it => {
     if (!it) return;
     const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
@@ -16898,6 +16899,8 @@ const productUnitCost = (p, ctx) => {
     if (type === "creation") {
       const b = creationBatch(target, q, components, materials, brands);
       cost += b.cost;
+      // 审查 r1:个数按「整个」算(和采购页 / 生产单一样);配方一览和组合产品详情按一份(÷ 每个分几份)显示,商品页把这点说清楚
+      if (parseFloat(target.portions) > 1) wholeCreation.push({ target, portions: parseFloat(target.portions), qty: q });
       if (b.incomplete) missing.push({ reason: "creation", type, target,
         noUsed: b.parts.filter(x => x.noUsed).length,
         noPrice: new Set(b.parts.flatMap(x => x.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size });
@@ -16909,7 +16912,7 @@ const productUnitCost = (p, ctx) => {
     if (noPrice) missing.push({ reason: "noPrice", type, target, noPrice });
     if (!(y > 0)) noYield.push(target);
   });
-  return { cost, incomplete: missing.length > 0, missing, noYield, noItems: items.length === 0 };
+  return { cost, incomplete: missing.length > 0, missing, noYield, wholeCreation, noItems: items.length === 0 };
 };
 // 毛利率(售价先折人民币):成本 0 或没售价 → null(页面显示「—」)
 const productMarginOf = (p, cost) => {
@@ -16920,7 +16923,7 @@ const productMarginOf = (p, cost) => {
 const marginColor = (mg) => mg === null || mg === undefined ? T.textSecondary : mg >= 50 ? T.success : mg >= 30 ? T.warning : T.danger;
 // 商品详情:成本算不全 / 没填产出量时说清是哪几项
 function ProductCostNote({ uc, lang }) {
-  if (!uc || uc.noItems || (!uc.incomplete && !uc.noYield.length)) return null;
+  if (!uc || uc.noItems || (!uc.incomplete && !uc.noYield.length && !(uc.wholeCreation || []).length)) return null;
   const zh = lang !== "ja";
   const nm = (o) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
   const kindName = { recipe: zh ? "配方" : "レシピ", creation: zh ? "组合产品" : "組立製品", component: zh ? "组件" : "パーツ" };
@@ -16931,6 +16934,9 @@ function ProductCostNote({ uc, lang }) {
     <div data-costnote="1" style={{ fontSize: 12, color: T.warning, marginTop: 10, lineHeight: 1.6 }}>
       {uc.incomplete && <div>⚠ {zh ? "成本不全·利润率虚高:" : "原価不完全・利益率は過大:"}{reasons.join(zh ? ";" : "、")}</div>}
       {uc.noYield.length > 0 && <div>⚠ {uc.noYield.map(o => `「${nm(o)}」`).join("")}{zh ? "没填产出量,按一批 = 1 个算,成本可能偏高" : "出来数が未入力(1 バッチ = 1 個で計算、原価は過大の可能性)"}</div>}
+      {(uc.wholeCreation || []).map((w, i) => <div key={"wc" + i} data-costwhole="1">⚠ {zh
+        ? `「${nm(w.target)}」按整个(${fmtQty(w.portions)} 份)算成本;按块卖请把个数填成 ${+(1 / w.portions).toPrecision(3)}(= 1/${fmtQty(w.portions)}),或另建一个按整个卖的商品`
+        : `「${nm(w.target)}」は 1 台(${fmtQty(w.portions)} カット)で原価計算。カット売りなら個数を ${+(1 / w.portions).toPrecision(3)}(= 1/${fmtQty(w.portions)})に`}</div>)}
     </div>
   );
 }
