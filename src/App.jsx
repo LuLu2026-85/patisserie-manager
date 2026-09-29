@@ -17169,6 +17169,12 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   });
   const out = { grams, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })) };
   if (prodMode) {
+    // 审查 r3:没关联百科的行并进同名(同单位)且只有一个的关联行 —— 以前「粉糖 1,978 g」「粉糖 1,800 g」分两行、按量排开,员工拿了一行就以为够了
+    const vals = [...weigh.values()];
+    vals.filter(w => !w.materialId).forEach(w => {
+      const hit = vals.filter(x => x.materialId && x.unit === w.unit && _prodNameKey(x.name) === _prodNameKey(w.name));
+      if (hit.length === 1) { hit[0].qty += w.qty; w.srcs.forEach(s => hit[0].srcs.add(s)); weigh.delete(w.key); }
+    });
     const all = [...weigh.values()].map(w => ({ ...w, srcs: [...w.srcs] })).sort((a, b) => b.qty - a.qty);
     out.weigh = all.filter(w => w.gram);
     out.nonGram = all.filter(w => !w.gram);
