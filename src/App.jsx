@@ -6453,7 +6453,8 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
   const ok = mod.filter(i => i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0).length;   // 和 saveIngPricesToShop 同一条件
   const nonGram = mod.some(i => i.materialId && !isGramUnit(i.unit));
   const zh = lang === "zh";
-  const nonGramText = zh ? "按「本 / 個」这类单位计量的行不会存到本店原料(本店原料按克计价)" : "本・個などの単位の行は仕入れ原料に保存されません(仕入れ原料はグラム単価)";
+  // 09-29 浏览器实测补:这种行改的价不光存不进本店原料,材料百科有价时成本也不按它算(getIngUnitPrice 关联行取材料的价),以前只说了前半句
+  const nonGramText = zh ? "按「本 / 個」这类单位计量的行,改的单价不会存到本店原料;材料百科有价时,成本也还是按材料的每克价算(单位对不上,见单位格的黄框)。要按每本 / 每个算,点行首 🔗「取消关联」,再填每本的价。" : "本・個などの単位の行は、変更した単価が仕入れ原料に保存されません。材料事典に価格がある場合、原価も材料のグラム単価で計算されます。1本・1個あたりで計算するには、行頭の 🔗 で連動を解除してから単価を入力してください。";
   return (
     <div style={{ background: "#FFFBEB", border: "0.5px solid #F59E0B", borderRadius: 8, padding: "12px 14px", marginTop: 12, marginBottom: 8 }}>
       <div style={{ fontSize: 13, color: "#92400E", marginBottom: 6 }}>
@@ -6470,7 +6471,8 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
       {ok > 0 && nonGram && (
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>{nonGramText}</div>
       )}
-      {!(saveToShop && ok > 0) && (
+      {/* 只在「能存、但她取消了勾」时说;本来就存不了(本 / 個 行、单价 0)时上面已经说了原因 */}
+      {ok > 0 && !saveToShop && (
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
           {zh ? "不存的话，这几行保存后还是按材料百科的价算。" : "保存しない場合、これらの行は保存後も材料事典の単価で計算されます。"}
         </div>
