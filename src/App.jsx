@@ -18322,7 +18322,7 @@ function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel }
   }
   return (
     <div data-staffdialog={mode} onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel && onCancel(); }}
-      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.modal, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.confirm, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div role="dialog" aria-modal="true" style={box}>{body}</div>
     </div>
   );
@@ -20562,8 +20562,8 @@ function App() {
       )}
       {/* 审查 r2:别的窗口进 / 退员工模式、这一页有没保存的改动。进:取消 = 输 PIN 退出员工模式(没设 PIN 直接退),PIN 框取消会回到这里 */}
       {/* 审查 r3:问的时候老板界面整个盖住(不透明,在 PIN 框和这个对话框下面、其余老板浮层上面)—— 以前只有 32% 的半透明遮罩,
-          iPad 已经交给员工时,后面日结的营收 / 毛利、编辑页的单价都看得见还能滚。编辑页留在下面没卸载,「留下来保存」时打的字还在 */}
-      {staffPending === "enter" && <div data-staff-cover="1" aria-hidden="true" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: T.paper, zIndex: T.z.modal - 1 }} />}
+          iPad 已经交给员工时,后面日结的营收 / 毛利、编辑页的单价都看得见还能滚。审查 r4:放在 T.z.confirm - 1,编辑页里开着的选材料 / 选组件 / 批量关联弹窗(1000 到 1500)也盖住;PIN 框因此升到 T.z.confirm。编辑页留在下面没卸载,「留下来保存」时打的字还在 */}
+      {staffPending === "enter" && <div data-staff-cover="1" aria-hidden="true" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: T.paper, zIndex: T.z.confirm - 1 }} />}
       {staffPending && !staffDialog && (
         <ConfirmDialog
           title={lang === "zh" ? "还没保存" : "未保存"}
