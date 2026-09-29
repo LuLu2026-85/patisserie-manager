@@ -5888,6 +5888,17 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
     }
     return next;
   }));
+  // 改用量 / 单价时顺手重算这一行的成本:另一个数 > 0 才算(没单价时手填的成本不动,老规矩)。
+  // C8:读不出数字(清空了)时成本写 "",以前会写成字符串 "NaN"。按这一刻的行算(以前拿渲染时的旧值)
+  const updateQtyOrPrice = (id, field, val) => {
+    updateIng(id, field, val);
+    setIngs(prev => prev.map(i => {
+      if (i._id !== id) return i;
+      const q = parseFloat(i.qty), p = parseFloat(i.unitPrice);
+      if (field === "qty" ? !(p > 0) : !(q > 0)) return i;
+      return { ...i, cost: (isFinite(q) && isFinite(p)) ? (q * p).toFixed(1) : "" };
+    }));
+  };
   // v11: 单行撤销改价,恢复到 _originalPrice。关联的材料有价时原价是按人民币刷出来的,币种也放回 CNY
   const revertPrice = (id) => setIngs(prev => prev.map(i => {
     if (i._id !== id) return i;
@@ -6027,7 +6038,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   </td>
                   <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={tx.nameJa} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{ ...ist, width: 52 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...ist, width: 36 }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
@@ -6049,7 +6060,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                       {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
                       <IngPriceInput ing={ing} placeholder={`${curOf(ing) === "CNY" ? "¥" : "円"}/${basis.label}`}
-                        onChangeStored={p=>{updateIng(ing._id,"unitPrice",p);const q=parseFloat(ing.qty)||0;if(q>0)updateIng(ing._id,"cost",(q*parseFloat(p)).toFixed(1));}}
+                        onChangeStored={p=>updateQtyOrPrice(ing._id,"unitPrice",p)}
                         // 改过价:黄框黄底。两个键一直都在(没改过时写回和 ist 一样的值):键时有时无,React 会先清掉 borderColor,把 border 简写里的颜色也清掉
                         style={{ ...ist, width: 52, borderColor: ing._priceModified ? "#F59E0B" : "#CCCCCC", background: ing._priceModified ? "#FFFBEB" : "#FFFFFF" }} />
                       {/* v17: 手写价的币种。关联了百科就跟百科走,这里只管手写的那些 */}
