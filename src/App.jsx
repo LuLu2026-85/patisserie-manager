@@ -4346,7 +4346,7 @@ function computeDataHealth(data) {
       items });
   }
 
-  // ── H13 规格读不出的材料(data-13)──
+  // ── H13 规格读不出 / 读得不确定的材料(data-13)──
   {
     const bad = [], multi = [];
     materials.forEach((m, i) => {
@@ -4365,7 +4365,7 @@ function computeDataHealth(data) {
       if (m0 && !m0[2]) multi.push({ ...base, key: `H13:${m.id != null ? m.id : "#" + i}`, multi: true, detailZh: `规格「${ps}」有好几段,第一段没写单位,借后面的单位按 ${fmtQty(g)} g 算`, detailJa: `規格「${ps}」は複数あり、最初の値に単位がないため ${fmtQty(g)} g で計算` });
     });
     checks.push({ id: "H13", audit: "data-13", level: "tidy",
-      titleZh: "规格读不出克数的材料", titleJa: "規格から g が読めない材料",
+      titleZh: "规格读不出或读得不确定的材料", titleJa: "規格から g が読めない・曖昧な材料",
       whyZh: "规格(比如「1kg」「500g」)是用来从袋价 / 箱价算每克价的。读不出克数的,填袋价时算不出单价,只能直接填单价;几个规格写在一起、第一段没写单位的(1/10/25kg),App 借后面的单位按第一段算(1 kg),也列出来看一眼对不对。「3 個」「10 本入」这种按个数的规格不算问题,不列。",
       whyJa: "規格は袋・ケース価格から g 単価を出すのに使います。g が読めないものは袋価格から単価を計算できません。複数規格(1/10/25kg)は最初の値で計算します。個数の規格は対象外です。",
       items: [...bad, ...multi] });
