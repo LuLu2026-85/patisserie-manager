@@ -3797,6 +3797,20 @@ input, textarea, select, button { font-family: inherit; }
 
 /* ── 中日切换后同一标题可能长 3 倍：一律允许换行，绝不固定宽度或 nowrap ── */
 .k-fluid { min-width: 0; overflow-wrap: anywhere; }
+
+/* ── 第 3 批 F4:员工模式外壳(自己的导航,所有宽度都显示;不借 .k-bottomnav,它在 iPad 宽度是藏着的)── */
+.k-staffbar { border-bottom: 1px solid ${T.ink}; background: ${T.paper}; margin-bottom: 24px; }
+.k-staffnav { display: flex; gap: 0; }
+.k-staffnav > button:focus-visible { outline: 2px solid ${T.info}; outline-offset: -2px; }
+.k-staffmain { padding-bottom: 72px; }
+.k-kitchen-row { transition: background .12s cubic-bezier(.2,0,.2,1); -webkit-tap-highlight-color: transparent; }
+.k-kitchen-row:focus-visible { outline: 2px solid ${T.info}; outline-offset: -2px; }
+.k-kitchen-row:active { background: ${T.line} !important; }
+@media (max-width: 599px) {
+  .k-staffnav > button { font-size: 15px !important; }
+  .k-kitchen-name { font-size: 19px !important; }
+  .k-kitchen-qty { font-size: 24px !important; }
+}
 `;
 
 // 按钮四型三态。hover / focus-visible / disabled 由全局 <style> 里的 .k-btn 规则接管
@@ -5381,7 +5395,7 @@ function StickySaveBar({ onSave, label = "保存" }) {
 }
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
-function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel }) {
+function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel, onKitchen }) {
   const name = pickLang(r, "name", lang);
   const nameOther = rawLang(r, "name", lang);
 
@@ -5474,6 +5488,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               </Btn>
             );
           })()}
+          {/* 第 3 批 F4:厨房视图(大字、打勾、常亮;不显示钱)。缩放过就带着缩放后的个数 */}
+          {onKitchen && <Btn size="sm" onClick={() => onKitchen(scale !== 1 ? target : undefined)}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
           {onPrint && <Btn size="sm" onClick={handlePrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
           <Btn size="sm" variant="primary" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn size="sm" variant="ghost" onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
@@ -8550,7 +8566,7 @@ function PrintModal({ onClose, onConfirm, itemType }) {
 }
 
 // ─── 打印预览视图 ─────────────
-function PrintView({ item, itemType, template, lang, sections, printSettings, onClose, onUpdateSettings }) {
+function PrintView({ item, itemType, template, lang, sections, printSettings, onClose, onUpdateSettings, canEditSettings = true }) {
   const [showLogoUpload, setShowLogoUpload] = useState(false);
   const [logoUrlInput, setLogoUrlInput] = useState(printSettings.logoUrl || "");
   const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "kororā");
@@ -8652,7 +8668,7 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           {lang === "zh" ? "🖨 打印预览" : "🖨 印刷プレビュー"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{lang === "zh" ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>
+          {canEditSettings && <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{lang === "zh" ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>}
           <Btn size="sm" variant="primary" onClick={doPrint}>{lang === "zh" ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
           <Btn size="sm" onClick={onClose} style={{ background: T.paper }}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -9881,7 +9897,7 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 
 // ─── 组合产品 View ───────────────────────────────────────────────
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
-  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel }) {
+  onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel, onOpenKitchen }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
   const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
@@ -9974,6 +9990,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           showToast={showToast}
           onPrint={onPrintCreation}
           onPrintLabel={onPrintLabel}
+          onKitchen={onOpenKitchen ? () => onOpenKitchen("creation", cr.id) : undefined}
         />
       );
     }
@@ -10403,7 +10420,7 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   };
 };
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge, onPrintLabel }) {
+function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge, onPrintLabel, onKitchen }) {
   const [expandedLayer, setExpandedLayer] = useState(null);
   const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
   const name = pickLang(c, "name", lang);
@@ -10489,7 +10506,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
           {lang === "zh" ? "组合产品详情" : "組立製品詳細"}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {onKitchen && <Btn size="sm" onClick={() => onKitchen()}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{backLabel || (lang === "zh" ? "← 返回" : "← 戻る")}</Btn>
         </div>
@@ -17166,6 +17184,7 @@ const PROD_TXT = {
     addRestock: (n) => `＋ ${n}(补库存)`, addAvg: (n) => `＋ ${n}(按日均)`, addOne: "＋ 加入", onSheet: "已在单子上",
     noProducts: "还没有商品(去「商品」页新建)", onSaleTitle: "在售中的配方 / 组合产品", noOnSale: "还没有标「在售中」的(在配方一览里点行首的圆点)",
     sources: "来源", unitPiece: "件",
+    kitchen: "👩‍🍳 厨房视图", staffEmptyTitle: "今天的生产单还是空的", staffEmptyHint: "生产单由店长排;排好以后这里就会出现。",
   },
   ja: {
     title: "製造リスト", kinds: { product: "商品", recipe: "レシピ", creation: "組立", component: "パーツ" },
@@ -17189,6 +17208,7 @@ const PROD_TXT = {
     addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
     noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組立製品", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
     sources: "使用先", unitPiece: "個",
+    kitchen: "👩‍🍳 キッチン表示", staffEmptyTitle: "本日の製造リストは空です", staffEmptyHint: "製造リストは店長が作成します。作成されるとここに表示されます。",
   },
 };
 const prodTxt = (lang) => PROD_TXT[lang === "ja" ? "ja" : "zh"];
@@ -17231,11 +17251,13 @@ function ProdMeta({ b, lang }) {
 }
 
 // 一个要做的东西的块:配方 / 组件 = 缩好的配料;组合产品 = 每部分要多少 + 缩好的配料,备货的只写从库存取
-function ProdBlock({ b, lang, showHead }) {
+function ProdBlock({ b, lang, showHead, onKitchen }) {
   const X = prodTxt(lang);
   const zh = lang !== "ja";
   if (b.missing) return <div style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>⚠ {X.missing}</div>;
   const name = prodName(b.target, lang);
+  // 员工模式(F4):每一块给一个「厨房视图」按钮,带着这一块要做的数量
+  const kitchenBtn = onKitchen && b.target ? <div style={{ marginTop: 6 }}><Btn size="sm" onClick={() => onKitchen(b.type, b.target.id, b.need)}>{X.kitchen}</Btn></div> : null;
   if (b.type === "creation") {
     const W = creationWords(creationStructureOf(b.target), lang);
     const batch = b.batch;
@@ -17243,6 +17265,7 @@ function ProdBlock({ b, lang, showHead }) {
       <div style={{ marginTop: 10 }}>
         {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds.creation} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)} {W.unit}</span></div>}
         <ProdMeta b={b} lang={lang} />
+        {kitchenBtn}
         {batch.parts.map(p => {
           const l = p.layer;
           const title = l.customName || prodName(l, lang) || `#${p.idx + 1}`;
@@ -17273,13 +17296,14 @@ function ProdBlock({ b, lang, showHead }) {
       {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)}{u ? " " + u : ""}</span></div>}
       <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), u ? " " + u : "")}</div>
       <ProdMeta b={b} lang={lang} />
+      {kitchenBtn}
       <ProdIngList rows={b.rows} bad={b.bad} lang={lang} />
     </div>
   );
 }
 
 // 生产单的一行
-function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, onDone, onLog }) {
+function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, onDone, onLog, readOnly = false, onKitchen }) {
   const X = prodTxt(lang);
   const l = s.line;
   const isProduct = l.kind === "product";
@@ -17302,6 +17326,12 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
             {s.leadTimeDays > 0 && <span style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, padding: "0 6px", borderRadius: T.radius }}>{X.lead(fmtQty(s.leadTimeDays))}</span>}
           </div>
         </div>
+        {readOnly ? (
+          <div data-prodqty-ro="1" style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontSize: 24, fontFamily: T.fontSerif, fontWeight: 500, color: T.ink, ...T.num }}>{fmtQty(s.qty) || "0"}</span>
+            <span style={{ ...T.fs.caption, color: T.subtle }}>{unit}</span>
+          </div>
+        ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button type="button" onClick={() => onStep(-1)} style={sq} aria-label="-1">−</button>
           <input type="text" inputMode="decimal" value={l.qty} onChange={e => onQty(e.target.value)}
@@ -17310,6 +17340,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           <span style={{ ...T.fs.caption, color: T.subtle, minWidth: 16 }}>{unit}</span>
           <button type="button" onClick={onRemove} title="✕" style={{ ...sq, border: "none", background: "transparent", color: T.subtle }}>✕</button>
         </div>
+        )}
       </div>
       {isProduct && s.obj && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
@@ -17329,7 +17360,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
             style={{ background: "none", border: "none", padding: "4px 0", cursor: "pointer", ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
             {open ? "▼ " + X.collapse : "▶ " + X.expand}
           </button>
-          {open && s.blocks.map((b, i) => <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} />)}
+          {open && s.blocks.map((b, i) => <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} />)}
         </div>
       )}
     </div>
@@ -17451,7 +17482,8 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
 
 // 生产单页面。plan 的读写都在 App(updatePlan),这里只拿今天的那份来显示
 function ProductionSheetView({ products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [], salesLog = [],
-  rawPlan, today, updatePlan, onLogProduction, onPrint, lang, showToast }) {
+  rawPlan, today, updatePlan, onLogProduction, onPrint, lang, showToast, staff = false, onOpenKitchen }) {
+  // staff = 员工模式(F4):只看、打勾、记入生产、打印;不能加 / 删 / 清空 / 改数量,也不给「照那天的再来一份」
   const X = prodTxt(lang);
   const plan = prodPlanForToday(rawPlan, today);
   const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
@@ -17498,6 +17530,11 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
 
   return (
     <div data-prodsheet="1">
+      {staff ? (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, justifyContent: "flex-end" }}>
+          <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint({ date: today, sheet, totals, lang })}>{X.print}</Btn>
+        </div>
+      ) : (
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         <Btn size="sm" onClick={() => setAdding(adding === "products" ? null : "products")}>{X.addProducts}</Btn>
         <Btn size="sm" onClick={() => setAdding("pick")}>{X.addPick}</Btn>
@@ -17506,15 +17543,16 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
         <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint({ date: today, sheet, totals, lang })}>{X.print}</Btn>
         <Btn size="sm" variant="ghost" disabled={!plan.lines.length} onClick={clearAll}>{X.clearAll}</Btn>
       </div>
+      )}
       {adding === "products" && <ProdAddProducts products={products} salesLog={salesLog} lines={plan.lines} today={today} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
       {adding === "onsale" && <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
-      {stale && (
+      {stale && !staff && (
         <div style={{ ...T.fs.caption, color: T.body, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span>{X.stale(rawPlan.date)}</span>
           <Btn size="sm" variant="ghost" onClick={copyStale}>{X.copyStale(rawPlan.date)}</Btn>
         </div>
       )}
-      {plan.lines.length === 0 ? (
+      {plan.lines.length === 0 ? (staff ? <EmptyState variant="first" title={X.staffEmptyTitle} hint={X.staffEmptyHint} lang={lang} /> :
         <EmptyState variant="first" title={X.emptyTitle} hint={X.emptyHint} lang={lang}
           actions={[{ label: X.addProducts, onClick: () => setAdding("products") }, { label: X.addPick, onClick: () => setAdding("pick") }]} />
       ) : (
@@ -17526,7 +17564,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
               onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d) })}
               onRemove={() => remove(s.line.uid)}
               onDone={() => setLine(s.line.uid, { done: !s.line.done })}
-              onLog={() => onLogProduction && onLogProduction(s.line.uid)} />
+              onLog={() => onLogProduction && onLogProduction(s.line.uid)}
+              readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined} />
           ))}
           <ProdTotals totals={totals} lang={lang} />
         </>
@@ -17922,6 +17961,651 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
   );
 }
 
+// ─── 第 3 批 F4:员工 / 厨房模式 ─────────────────────────────────────────────
+// 员工模式开没开是「每台设备各自的」:存 localStorage korora_staff_mode_v1(不放主存档 —— 覆盖导入会把别的设备的开关带过来)。
+// PIN 存 appSettings.staffPin(4 位数字,放进已有对象,旧版打开也会保留)。退出:输 PIN,或者 app 的进入密码(RURU_V1_PWD,PIN 忘了用);没设 PIN 直接退出。
+// ⚠️ 员工模式不是真正的安全措施:清掉网站数据就能出来(同时所有数据也没了)。它只是让员工看不到钱、改不了配方。
+// 员工外壳 StaffShell 三页:生产单(看 / 打勾 / 记入生产 / 打印)、厨房视图、日结(今天和昨天,不显示钱)。
+// 员工看到的页面**单独写或只用不露钱的小零件**:现有的配方 / 组件 / 组合产品详情页都有成本、售价、编辑入口。
+const STAFF_MODE_KEY = "korora_staff_mode_v1";
+const readStaffMode = () => { try { return localStorage.getItem(STAFF_MODE_KEY) === "1"; } catch (e) { return false; } };
+const writeStaffMode = (on) => { try { if (on) localStorage.setItem(STAFF_MODE_KEY, "1"); else localStorage.removeItem(STAFF_MODE_KEY); } catch (e) {} };
+const _pinNorm = (v) => String(v === undefined || v === null ? "" : v).normalize("NFKC").trim();
+const isValidStaffPin = (v) => /^\d{4}$/.test(_pinNorm(v));
+// 退出员工模式能不能放行:没设(或不是 4 位数字的)PIN → 放行;PIN 对 → 放行;app 进入密码对 → 放行
+const staffExitOk = (input, pin) => {
+  if (!isValidStaffPin(pin)) return true;
+  const v = _pinNorm(input);
+  return v === _pinNorm(pin) || String(input === undefined || input === null ? "" : input) === RURU_V1_PWD;
+};
+
+const STAFF_TXT = {
+  zh: {
+    enterBtn: "员工模式", badge: "员工模式", exitBtn: "退出员工模式",
+    pages: { sheet: "生产单", kitchen: "厨房视图", close: "日结" },
+    entered: "已进入员工模式", exited: "已退出员工模式",
+    setupTitle: "设一个员工模式 PIN", setupKicker: "员工模式",
+    setupHint: "4 位数字。退出员工模式时要输;忘了可以用 app 的进入密码退出。",
+    pin1: "PIN(4 位数字)", pin2: "再输一次", badPin: "要 4 位数字", mismatch: "两次输的不一样",
+    setupOk: "设好并进入", skipPin: "不设 PIN,直接进入", cancel: "取消", changePin: "换一个 PIN",
+    enterTitle: "进入员工模式", enterOk: "进入",
+    enterHint: "员工模式下看不到价格、成本和利润,不能改配方、不能删东西。只有「生产单 / 厨房视图 / 日结(今天和昨天)」三页。退出要输 PIN。\n\n开关只记在这台设备上,别的设备不受影响。",
+    noPinNote: "还没设 PIN:谁都能直接退出。",
+    exitTitle: "退出员工模式", exitHint: "输 4 位 PIN", wrongPin: "PIN 不对,再试一次",
+    forgot: "忘了 PIN?用 app 进入密码", pwd: "app 进入密码", pwdOk: "退出", wrongPwd: "密码不对", backToPin: "← 用 PIN",
+    del: "删一位",
+  },
+  ja: {
+    enterBtn: "スタッフモード", badge: "スタッフモード", exitBtn: "スタッフモード終了",
+    pages: { sheet: "製造リスト", kitchen: "キッチン", close: "日次締め" },
+    entered: "スタッフモードに切り替えました", exited: "スタッフモードを終了しました",
+    setupTitle: "スタッフモードの PIN を設定", setupKicker: "スタッフモード",
+    setupHint: "4 桁の数字。終了するときに入力します。忘れたときはアプリのパスワードでも終了できます。",
+    pin1: "PIN(4 桁)", pin2: "もう一度", badPin: "4 桁の数字にしてください", mismatch: "2 回の入力が一致しません",
+    setupOk: "設定して開始", skipPin: "PIN なしで開始", cancel: "キャンセル", changePin: "PIN を変更",
+    enterTitle: "スタッフモード", enterOk: "開始",
+    enterHint: "スタッフモードでは価格・原価・利益が見えず、レシピの編集や削除もできません。「製造リスト / キッチン / 日次締め(今日と昨日)」の 3 ページだけです。終了には PIN が必要です。\n\nこの端末だけの設定です。",
+    noPinNote: "PIN 未設定:だれでも終了できます。",
+    exitTitle: "スタッフモード終了", exitHint: "4 桁の PIN を入力", wrongPin: "PIN が違います",
+    forgot: "PIN を忘れた?アプリのパスワードで", pwd: "アプリのパスワード", pwdOk: "終了", wrongPwd: "パスワードが違います", backToPin: "← PIN で",
+    del: "1 文字消す",
+  },
+};
+const staffTxt = (lang) => STAFF_TXT[lang === "ja" ? "ja" : "zh"];
+
+// 进入 / 设 PIN / 退出 三种对话框。mode: "setup" | "enter" | "exit"
+// onEnter(pin | null | undefined):pin = 新设的 PIN;null = 不设 PIN;undefined = 沿用已有的
+function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel }) {
+  const X = staffTxt(lang);
+  const [mode, setMode] = useState(mode0);
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [err, setErr] = useState("");
+  const [typed, setTyped] = useState("");          // 退出:键盘输入的 PIN
+  const [usePwd, setUsePwd] = useState(false);     // 退出:改用 app 进入密码
+  const [pwd, setPwd] = useState("");
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onCancel && onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  const box = { background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 400, width: "100%", boxShadow: T.sh.overlay, padding: "22px 22px 18px", maxHeight: "92vh", overflowY: "auto" };
+  const inputStyle = { width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 22, letterSpacing: "0.4em", textAlign: "center", border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num };
+  const digits = (v) => _pinNorm(v).replace(/\D/g, "").slice(0, 4);
+  const submitSetup = () => {
+    if (!isValidStaffPin(p1)) { setErr(X.badPin); return; }
+    if (_pinNorm(p1) !== _pinNorm(p2)) { setErr(X.mismatch); return; }
+    onEnter(_pinNorm(p1));
+  };
+  const pressKey = (k) => {
+    setErr("");
+    const next = k === "del" ? typed.slice(0, -1) : (typed + k).slice(0, 4);
+    setTyped(next);
+    if (next.length === 4) {
+      if (onExit(next)) return;
+      setErr(X.wrongPin); setTyped("");
+    }
+  };
+  const submitPwd = () => { if (onExit(pwd)) return; setErr(X.wrongPwd); setPwd(""); };
+  let body;
+  if (mode === "setup") {
+    body = (
+      <>
+        <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{X.setupKicker}</div>
+        <div style={{ ...T.fs.titleS, marginTop: T.sp.m, color: T.ink }}>{X.setupTitle}</div>
+        <div style={{ ...T.fs.small, color: T.body, marginTop: 8, lineHeight: 1.65 }}>{X.setupHint}</div>
+        <label style={{ display: "block", marginTop: 14 }}>
+          <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 4 }}>{X.pin1}</div>
+          <input type="password" inputMode="numeric" autoComplete="off" maxLength={4} data-staffpin="1" value={p1} onChange={e => { setP1(digits(e.target.value)); setErr(""); }} style={inputStyle} autoFocus />
+        </label>
+        <label style={{ display: "block", marginTop: 10 }}>
+          <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 4 }}>{X.pin2}</div>
+          <input type="password" inputMode="numeric" autoComplete="off" maxLength={4} data-staffpin="2" value={p2} onChange={e => { setP2(digits(e.target.value)); setErr(""); }} style={inputStyle} />
+        </label>
+        {err && <div data-staffpinerr="1" style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 18 }}>
+          <Btn variant="ghost" onClick={onCancel}>{X.cancel}</Btn>
+          {!hasPin && <Btn onClick={() => onEnter(null)}>{X.skipPin}</Btn>}
+          <Btn variant="primary" onClick={submitSetup}>{X.setupOk}</Btn>
+        </div>
+      </>
+    );
+  } else if (mode === "enter") {
+    body = (
+      <>
+        <div style={{ ...T.fs.titleS, color: T.ink }}>{X.enterTitle}</div>
+        <div style={{ ...T.fs.small, color: T.body, marginTop: 10, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{X.enterHint}</div>
+        {!hasPin && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 8 }}>{X.noPinNote}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 18 }}>
+          <Btn variant="ghost" onClick={onCancel}>{X.cancel}</Btn>
+          <Btn onClick={() => { setMode("setup"); setErr(""); }}>{X.changePin}</Btn>
+          <Btn variant="primary" onClick={() => onEnter(undefined)}>{X.enterOk}</Btn>
+        </div>
+      </>
+    );
+  } else {
+    const key = (k, label) => (
+      <button key={k} type="button" data-pinkey={k} onClick={() => pressKey(k)} aria-label={k === "del" ? X.del : k}
+        style={{ minHeight: 60, fontSize: k === "del" ? 18 : 24, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: "pointer", fontFamily: T.fontSerif, ...T.num }}>
+        {label}
+      </button>
+    );
+    body = (
+      <>
+        <div style={{ ...T.fs.titleS, color: T.ink }}>{X.exitTitle}</div>
+        {!usePwd ? (
+          <>
+            <div style={{ ...T.fs.small, color: T.body, marginTop: 8 }}>{X.exitHint}</div>
+            <div data-pindots="1" style={{ display: "flex", justifyContent: "center", gap: 14, margin: "16px 0 12px" }}>
+              {[0, 1, 2, 3].map(i => <span key={i} style={{ width: 14, height: 14, borderRadius: "50%", border: `1.5px solid ${T.ink}`, background: i < typed.length ? T.ink : "transparent" }} />)}
+            </div>
+            {err && <div data-staffpinerr="1" style={{ ...T.fs.caption, color: T.danger, textAlign: "center", marginBottom: 8 }}>{err}</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map(k => key(k, k))}
+              <span />
+              {key("0", "0")}
+              {key("del", "⌫")}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+              <Btn variant="ghost" onClick={() => { setUsePwd(true); setErr(""); setTyped(""); }}>{X.forgot}</Btn>
+              <Btn onClick={onCancel}>{X.cancel}</Btn>
+            </div>
+          </>
+        ) : (
+          <>
+            <label style={{ display: "block", marginTop: 12 }}>
+              <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 4 }}>{X.pwd}</div>
+              <input type="password" autoComplete="off" data-staffpwd="1" value={pwd} onChange={e => { setPwd(e.target.value); setErr(""); }}
+                onKeyDown={e => { if (e.key === "Enter") submitPwd(); }}
+                style={{ ...inputStyle, fontSize: 16, letterSpacing: 0, textAlign: "left", fontFamily: T.fontSans }} autoFocus />
+            </label>
+            {err && <div data-staffpinerr="1" style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>{err}</div>}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+              <Btn variant="ghost" onClick={() => { setUsePwd(false); setErr(""); setPwd(""); }}>{X.backToPin}</Btn>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={onCancel}>{X.cancel}</Btn>
+                <Btn variant="primary" onClick={submitPwd}>{X.pwdOk}</Btn>
+              </div>
+            </div>
+          </>
+        )}
+      </>
+    );
+  }
+  return (
+    <div data-staffdialog={mode} onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel && onCancel(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.modal, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div role="dialog" aria-modal="true" style={box}>{body}</div>
+    </div>
+  );
+}
+
+// 屏幕常亮:navigator.wakeLock.request("screen");切回来(visibilitychange → visible)时重新申请(页面藏起来时浏览器会自动放掉);卸载时释放。
+// 返回 "idle" | "on" | "released" | "unsupported" | "failed"。不支持 / 失败时页面提示去 iPad 设置里关自动锁定。
+// 注意:iPad「添加到主屏幕」打开的 Web App 在 iOS 18.4 之前可能申请成功却不生效,要实机看。
+function useWakeLock(active) {
+  const [status, setStatus] = useState("idle");
+  useEffect(() => {
+    if (!active) { setStatus("idle"); return undefined; }
+    const nav = typeof navigator !== "undefined" ? navigator : null;
+    const wl = nav && nav.wakeLock;
+    if (!wl || typeof wl.request !== "function") { setStatus("unsupported"); return undefined; }
+    let sentinel = null, cancelled = false, pending = false;
+    const visible = () => typeof document === "undefined" || !document.visibilityState || document.visibilityState === "visible";
+    const request = () => {
+      if (cancelled || sentinel || pending || !visible()) return;
+      pending = true;
+      let p;
+      try { p = wl.request("screen"); } catch (e) { pending = false; setStatus("failed"); return; }
+      Promise.resolve(p).then((s) => {
+        pending = false;
+        if (cancelled) { try { if (s && s.release) s.release(); } catch (e) {} return; }
+        sentinel = s || null;
+        setStatus("on");
+        if (s && typeof s.addEventListener === "function") {
+          s.addEventListener("release", () => { if (sentinel === s) { sentinel = null; if (!cancelled) setStatus("released"); } });
+        }
+      }, () => { pending = false; if (!cancelled) setStatus("failed"); });
+    };
+    const onVis = () => { if (visible()) request(); };
+    request();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      if (sentinel) { try { sentinel.release(); } catch (e) {} sentinel = null; }
+    };
+  }, [active]);
+  return status;
+}
+
+// 厨房视图:大字、点一行打勾(sessionStorage,key 带日期和条目 id,关掉浏览器就清空)、「做几个」大加减、点步骤标「正在做」、过敏原、屏幕常亮。
+// 不显示任何钱:配料备注里带价格的那段去掉(prodNote),配方 / 组件的整体备注不显示(里面有试作成本之类)。
+const KITCHEN_TXT = {
+  zh: {
+    kinds: { recipe: "配方", creation: "组合产品", component: "组件" },
+    make: "做", stepBatch: "一批", reset: "清除勾选", resetDone: (n) => `清除了 ${n} 个勾`,
+    back: "← 返回列表", close: "✕ 关闭厨房视图",
+    ings: "配料", steps: "做法", assembly: "组装", current: "▶ 正在做", next: "下一步 →", doneAll: "✓ 做法走完了",
+    tapHint: "点一行 = 称好了 / 放好了,打勾;点一步 = 标出正在做的这一步。勾选只记在这台设备的这个页面里,关掉浏览器就清空。",
+    fromStock: "从库存取", noSteps: "没写做法", noIngs: "没有配料", qtyHint: "填要做的数量(大于 0)",
+    partNeed: "需要", batchOf: (k, y, u) => `约 ${k} 批(一批 ${y}${u})`, stockBadge: "备货",
+    noUsed: "这一部分没填用量,下面是组件的整批配方,没按个数算", ambiguous: (n, u) => `用量只认开头的数字,按 ${n} ${u} 一批算`,
+    whole: (f) => `整批 × ${f}`, badQty: "用量读不出数字,按原文",
+    wakeOn: "☀ 屏幕常亮中", wakeNo: "这台设备没法让屏幕一直亮着。请在 iPad 设置 → 显示与亮度 → 自动锁定 改成永不(用完记得改回来)。",
+    allergen: "过敏原(客人问的时候看这里)", contains: "含有", may: "可能含有", none: "无(原料全部核对过)",
+    unknown: (n) => `还有 ${n} 项原料没确认过敏原 —— 不能跟客人说「不含」,请问店长`, noneKnown: "已确认的原料里没有",
+    search: "搜索配方 / 组合产品 / 组件", secToday: "今天生产单上的", secOnSale: "在售中", secComp: "组件",
+    noOnSale: "还没有标「在售中」的配方 / 组合产品", noComp: "还没有组件", noMatch: "没有找到", searchChip: (q) => `搜索:${q}`,
+    missing: "这一样已经删掉了", inUse: "在用",
+  },
+  ja: {
+    kinds: { recipe: "レシピ", creation: "組立製品", component: "パーツ" },
+    make: "仕込み", stepBatch: "1 バッチ", reset: "チェックをクリア", resetDone: (n) => `${n} 件のチェックをクリア`,
+    back: "← 一覧へ", close: "✕ キッチン表示を閉じる",
+    ings: "材料", steps: "作り方", assembly: "組み立て", current: "▶ 作業中", next: "次へ →", doneAll: "✓ 全工程終了",
+    tapHint: "行をタップ = 計量済みにチェック。工程をタップ = 作業中の工程を表示。チェックはこの端末のこのページだけに残り、ブラウザを閉じると消えます。",
+    fromStock: "ストックから", noSteps: "作り方なし", noIngs: "材料なし", qtyHint: "数量を入力(0 より大きい数)",
+    partNeed: "必要量", batchOf: (k, y, u) => `約 ${k} バッチ(1 バッチ ${y}${u})`, stockBadge: "作り置き",
+    noUsed: "使用量未入力のため全量レシピ(個数で計算していません)", ambiguous: (n, u) => `先頭の数字 ${n} ${u} で計算`,
+    whole: (f) => `全量 × ${f}`, badQty: "分量が数字でない(原文どおり)",
+    wakeOn: "☀ 画面点灯中", wakeNo: "この端末では画面を点けたままにできません。iPad の設定 → 画面表示と明るさ → 自動ロック を「なし」にしてください(終わったら戻す)。",
+    allergen: "アレルゲン(お客様に聞かれたら)", contains: "含む", may: "コンタミ", none: "なし(全材料確認済み)",
+    unknown: (n) => `未確認の材料が ${n} 件 ——「含まない」とは言えません。店長に確認してください`, noneKnown: "確認済みの材料にはなし",
+    search: "レシピ / 組立製品 / パーツを検索", secToday: "本日の製造リスト", secOnSale: "販売中", secComp: "パーツ",
+    noOnSale: "販売中のレシピ / 組立製品はありません", noComp: "パーツがありません", noMatch: "見つかりません", searchChip: (q) => `検索:${q}`,
+    missing: "削除済みです", inUse: "使用中",
+  },
+};
+const kitchenTxt = (lang) => KITCHEN_TXT[lang === "ja" ? "ja" : "zh"];
+const KITCHEN_KINDS = ["recipe", "creation", "component"];
+const kitchenStateKey = (date, kind, id) => `korora_kitchen_v1:${date}:${kind}:${id}`;
+const readKitchenState = (key) => {
+  try {
+    const raw = sessionStorage.getItem(key);
+    const o = raw ? JSON.parse(raw) : null;
+    return { ings: (o && o.ings && typeof o.ings === "object" && !Array.isArray(o.ings)) ? o.ings : {}, step: (o && typeof o.step === "string") ? o.step : null };
+  } catch (e) { return { ings: {}, step: null }; }
+};
+const writeKitchenState = (key, st) => { try { sessionStorage.setItem(key, JSON.stringify(st)); } catch (e) {} };
+const _kitchenQtyStr = (v) => { const n = parseFloat(v); return isFinite(n) ? String(Math.round(n * 1000) / 1000) : ""; };
+
+// 一行配料:点一下打勾(整行是按钮)
+function KitchenIngRow({ k, name, sub, note, qty, unit, warn, checked, onToggle, bar }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={!!checked} data-kitchen-ing={k} onClick={onToggle} className="k-kitchen-row"
+      style={{ display: "grid", gridTemplateColumns: "34px minmax(0, 1fr) auto", gap: 12, alignItems: "center", width: "100%", textAlign: "left", cursor: "pointer",
+        padding: "12px 10px 12px 8px", border: "none", borderBottom: `1px solid ${T.lineFaint}`, borderLeft: `4px solid ${bar || "transparent"}`,
+        background: checked ? T.sunken : "transparent", color: T.ink, fontFamily: T.fontSans, opacity: checked ? 0.55 : 1 }}>
+      <span aria-hidden="true" style={{ width: 28, height: 28, border: `1.5px solid ${checked ? T.success : T.ink}`, borderRadius: T.radius, background: checked ? T.success : T.paper, color: T.paper,
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1 }}>{checked ? "✓" : ""}</span>
+      <span style={{ minWidth: 0 }}>
+        <span className="k-kitchen-name" style={{ display: "block", fontSize: 22, lineHeight: 1.3, fontWeight: 500, textDecoration: checked ? "line-through" : "none", overflowWrap: "anywhere" }}>{name}</span>
+        {sub && <span style={{ display: "block", fontSize: 14, color: T.subtle, marginTop: 2, overflowWrap: "anywhere" }}>{sub}</span>}
+        {note && <span style={{ display: "block", fontSize: 14, color: T.body, marginTop: 2, overflowWrap: "anywhere" }}>{note}</span>}
+      </span>
+      <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+        <span className="k-kitchen-qty" style={{ fontSize: 28, fontWeight: 500, fontFamily: T.fontSerif, color: warn ? T.warning : T.ink, ...T.num }}>{qty}</span>
+        {unit && <span style={{ fontSize: 16, color: T.body, marginLeft: 4 }}>{unit}</span>}
+      </span>
+    </button>
+  );
+}
+
+// 配料行(已缩好)→ 按盆分组的大字行。keyPrefix 区分组合产品的各部分
+function KitchenIngList({ rows, lang, keyPrefix, checked, onToggle }) {
+  const X = kitchenTxt(lang);
+  if (!rows || rows.length === 0) return <div style={{ fontSize: 15, color: T.subtle, padding: "8px 0" }}>{X.noIngs}</div>;
+  const grouped = {};
+  GROUP_ORDER.forEach(g => { grouped[g] = []; });
+  rows.forEach((r, i) => { grouped[GROUPS[r.ing.group] ? r.ing.group : "none"].push({ r, i }); });
+  return (
+    <div>
+      {GROUP_ORDER.map(gk => {
+        const arr = grouped[gk];
+        if (!arr.length) return null;
+        const g = GROUPS[gk];
+        return (
+          <div key={gk} style={{ marginTop: 6 }}>
+            {gk !== "none" && (
+              <div style={{ padding: "8px 0 4px" }}>
+                <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: T.radiusPill, border: `1px solid ${g.labelBorder}`, color: g.labelColor, fontWeight: 500, fontSize: 14 }}>{lang === "zh" ? g.zh : g.ja}</span>
+              </div>
+            )}
+            {arr.map(({ r, i }) => {
+              const k = `${keyPrefix}${i}`;
+              const n = pickLang(r.ing, "name", lang);
+              const other = rawLang(r.ing, "name", lang);
+              const raw = _normTxt(r.ing.qty);
+              const ok = r.qty !== null && r.qty > 0;
+              return (
+                <KitchenIngRow key={k} k={k} name={n || other} sub={other && other !== n ? other : ""} note={prodNote(r.ing.note)}
+                  qty={ok ? fmtQty(r.qty) : (raw ? `${raw} ⚠` : "— ⚠")} unit={ok ? (r.ing.unit || "g") : ""} warn={!ok}
+                  checked={!!checked[k]} onToggle={() => onToggle(k)} bar={gk !== "none" ? g.border : ""} />
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 做法:点一步 = 正在做这一步(再点「下一步」往下走)
+function KitchenSteps({ steps, lang, keyPrefix, current, onPick }) {
+  const X = kitchenTxt(lang);
+  if (!steps || steps.length === 0) return <div style={{ fontSize: 15, color: T.subtle, padding: "8px 0" }}>{X.noSteps}</div>;
+  return (
+    <ol style={{ margin: 0, padding: 0, listStyle: "none" }}>
+      {steps.map((s, i) => {
+        const k = `${keyPrefix}${i}`;
+        const on = current === k;
+        return (
+          <li key={k} style={{ borderBottom: `1px solid ${T.lineFaint}` }}>
+            <button type="button" data-kitchen-step={k} aria-current={on ? "step" : undefined} onClick={() => onPick(k)} className="k-kitchen-row"
+              style={{ display: "grid", gridTemplateColumns: "36px minmax(0, 1fr)", gap: 10, width: "100%", textAlign: "left", cursor: "pointer", border: "none",
+                borderLeft: `4px solid ${on ? T.ink : "transparent"}`, background: on ? T.sunken : "transparent", padding: "12px 10px 12px 8px", color: T.ink, fontFamily: T.fontSans }}>
+              <span style={{ fontFamily: T.fontSerif, fontSize: on ? 20 : 16, color: on ? T.ink : T.subtle, ...T.num }}>{String(i + 1).padStart(2, "0")}</span>
+              <span style={{ minWidth: 0 }}>
+                {on && <span style={{ display: "block", fontSize: 13, color: T.ink, fontWeight: 500, marginBottom: 2 }}>{X.current}</span>}
+                <span style={{ display: "block", fontSize: on ? 21 : 17, lineHeight: 1.6, fontWeight: on ? 500 : 400, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{s}</span>
+              </span>
+            </button>
+            {on && (
+              <div style={{ padding: "0 10px 12px 52px" }}>
+                <Btn size="lg" variant="primary" onClick={() => onPick(i + 1 < steps.length ? `${keyPrefix}${i + 1}` : `${keyPrefix}done`)}>{i + 1 < steps.length ? X.next : X.doneAll}</Btn>
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// 过敏原(员工要能回答客人):含有 / 可能含有 / 还有几项没确认。没确认完绝不说「无」
+function KitchenAllergens({ kind, entity, lang, ctx }) {
+  const X = kitchenTxt(lang);
+  const { materials, brands, components, recipes, creations } = ctx;
+  const summary = useMemo(() => allergenSummaryOf(kind, entity, { materials, brands, components, recipes, creations }), [kind, entity, materials, brands, components, recipes, creations]);
+  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const chip = (code, warn) => (
+    <span key={code} style={{ display: "inline-block", padding: "4px 12px", margin: "0 8px 6px 0", fontSize: 17, fontWeight: 500, borderRadius: T.radius,
+      border: `1.5px solid ${warn ? T.warning : T.ink}`, color: warn ? T.warning : T.ink }}>{allergenShort(code, lang)}</span>
+  );
+  return (
+    <div data-kitchen-allergens="1" style={{ border: `1px solid ${T.ink}`, padding: "14px 16px", marginTop: 20 }}>
+      <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 10 }}>{X.allergen}</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, color: T.subtle, minWidth: 64 }}>{X.contains}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {summary.contains.length > 0 ? summary.contains.map(c => chip(c, false))
+            : <span style={{ fontSize: 17, color: summary.complete ? T.ink : T.warning }}>{summary.complete ? X.none : X.noneKnown}</span>}
+        </div>
+      </div>
+      {summary.mayContain.length > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginTop: 4 }}>
+          <span style={{ fontSize: 14, color: T.subtle, minWidth: 64 }}>{X.may}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>{summary.mayContain.map(c => chip(c, true))}</div>
+        </div>
+      )}
+      {!summary.complete && <div data-kitchen-allergen-unknown="1" style={{ fontSize: 15, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>⚠ {X.unknown(unknownN)}</div>}
+    </div>
+  );
+}
+
+// 一样东西的厨房视图。kind: recipe | creation | component;target = 那个对象;initialQty = 从生产单 / 详情页带过来的数量(可空)
+function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backLabel, showToast }) {
+  const X = kitchenTxt(lang);
+  const zh = lang !== "ja";
+  const wake = useWakeLock(!!target);
+  const def = target ? defaultProdQty(kind, target) : 1;
+  const [nText, setNText] = useState(() => _kitchenQtyStr(parseFloat(initialQty) > 0 ? initialQty : def));
+  const key = kitchenStateKey(today, kind, target ? target.id : "");
+  const [st, setSt] = useState(() => readKitchenState(key));
+  const need = parseFloat(_pinNorm(nText));
+  const valid = need > 0 && isFinite(need);
+  const block = target && valid ? prodBlockOf(kind, target, need, ctx) : null;
+  const yieldNum = target ? (parseFloat(target.yield) || 0) : 0;
+  const stepSize = kind === "component" && yieldNum > 0 ? yieldNum : 1;
+  const unit = !target ? "" : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit : (_normTxt(target.unit) || (kind === "component" ? "g" : ""));
+  const update = (fn) => { const next = fn(st); writeKitchenState(key, next); setSt(next); };
+  const toggleIng = (k) => update(s => ({ ...s, ings: s.ings[k] ? Object.fromEntries(Object.entries(s.ings).filter(([x]) => x !== k)) : { ...s.ings, [k]: true } }));
+  const pickStep = (k) => update(s => ({ ...s, step: k }));
+  const nChecked = Object.keys(st.ings).length;
+  const reset = () => {
+    const before = st;
+    update(() => ({ ings: {}, step: null }));
+    if (showToast && (nChecked > 0 || before.step)) showToast(X.resetDone(nChecked), { undo: () => { writeKitchenState(key, before); setSt(before); } });
+  };
+  const bump = (d) => {
+    const cur = valid ? need : 0;
+    const next = cur + d * stepSize;
+    if (next > 0) setNText(_kitchenQtyStr(next));
+  };
+  if (!target) {
+    return (
+      <div data-kitchen="missing">
+        <Btn size="lg" onClick={onBack}>{backLabel || X.back}</Btn>
+        <div style={{ fontSize: 18, color: T.danger, marginTop: 20 }}>⚠ {X.missing}</div>
+      </div>
+    );
+  }
+  const name = prodName(target, lang);
+  const other = rawLang(target, "name", lang);
+  const big = { width: 64, height: 64, fontSize: 32, lineHeight: 1, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 };
+  const secTitle = { fontSize: 20, fontFamily: T.fontSerif, fontWeight: 500, marginTop: 24, paddingBottom: 6, borderBottom: `1px solid ${T.ink}` };
+  const metaItems = block ? [["mold", zh ? "模具" : "型"], ["temp", zh ? "炉温" : "温度"], ["time", zh ? "时间" : "時間"]]
+    .filter(([k]) => block[k] && block[k].v).map(([k, label]) => ({ label, v: block[k].v, fam: block[k].fam })) : [];
+  if (block && block.size) metaItems.push({ label: zh ? "尺寸" : "サイズ", v: block.size, fam: false });
+  return (
+    <div data-kitchen={`${kind}:${target.id}`}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <Btn size="lg" onClick={onBack}>{backLabel || X.back}</Btn>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {wake === "on" && <span data-wake="on" style={{ fontSize: 13, color: T.success }}>{X.wakeOn}</span>}
+          <Btn size="lg" variant="ghost" onClick={reset}>{X.reset}{nChecked > 0 ? ` (${nChecked})` : ""}</Btn>
+        </div>
+      </div>
+      {(wake === "unsupported" || wake === "failed") && (
+        <div data-wake="fallback" style={{ border: `1px solid ${T.warning}`, color: T.body, padding: "10px 12px", marginTop: 12, fontSize: 15, lineHeight: 1.6 }}>⚠ {X.wakeNo}</div>
+      )}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 13, color: T.subtle, letterSpacing: "0.12em" }}>{X.kinds[kind]}</div>
+        <div style={{ fontSize: 30, lineHeight: 1.25, fontWeight: 500, marginTop: 4, overflowWrap: "anywhere" }}>{name}</div>
+        {other && other !== name && <div style={{ fontSize: 16, color: T.subtle, marginTop: 2, overflowWrap: "anywhere" }}>{other}</div>}
+      </div>
+      {/* 做几个 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 16, padding: "12px 0", borderTop: `1px solid ${T.ink}`, borderBottom: `1px solid ${T.lineFaint}` }}>
+        <span style={{ fontSize: 18 }}>{X.make}</span>
+        <button type="button" data-kitchen-qty="-" onClick={() => bump(-1)} style={big} aria-label="-">−</button>
+        <input type="text" inputMode="decimal" data-kitchen-qty="input" value={nText} onChange={e => setNText(e.target.value)}
+          style={{ width: 110, height: 64, boxSizing: "border-box", textAlign: "center", fontSize: 30, border: `1px solid ${valid ? T.ink : T.danger}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
+        <button type="button" data-kitchen-qty="+" onClick={() => bump(1)} style={big} aria-label="+">+</button>
+        <span style={{ fontSize: 18 }}>{unit}</span>
+        {stepSize !== 1 && <span style={{ fontSize: 13, color: T.subtle }}>± {X.stepBatch}({fmtQty(stepSize)} {unit})</span>}
+      </div>
+      {!valid && <div style={{ fontSize: 15, color: T.danger, marginTop: 8 }}>{X.qtyHint}</div>}
+      {block && kind !== "creation" && <div style={{ fontSize: 15, color: T.body, marginTop: 8, ...T.num }}>{X.batchOf(fmtQty(block.scale), fmtQty(Math.max(1, block.yieldNum || 1)), block.unit ? " " + block.unit : "")}</div>}
+      {metaItems.length > 0 && (
+        <div style={{ display: "flex", gap: "6px 18px", flexWrap: "wrap", fontSize: 17, marginTop: 8 }}>
+          {metaItems.map((it, i) => <span key={i}><span style={{ color: T.subtle }}>{it.label}</span> {it.v}{it.fam && <span style={{ color: T.subtle, fontSize: 13 }}>({zh ? "家族通用" : "ファミリー共通"})</span>}</span>)}
+        </div>
+      )}
+      <div style={{ fontSize: 13, color: T.subtle, marginTop: 10, lineHeight: 1.6 }}>{X.tapHint}</div>
+
+      {block && kind !== "creation" && (
+        <>
+          <div style={secTitle}>{X.ings}</div>
+          <KitchenIngList rows={block.rows} lang={lang} keyPrefix="r:" checked={st.ings} onToggle={toggleIng} />
+          <div style={secTitle}>{X.steps}</div>
+          <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />
+        </>
+      )}
+      {block && kind === "creation" && (
+        <>
+          {block.batch.parts.map(p => {
+            const l = p.layer;
+            const title = l.customName || prodName(l, lang) || `#${p.idx + 1}`;
+            const u = l.unit || "g";
+            const pk = `p${p.idx}:`;
+            return (
+              <div key={p.idx} data-kitchen-part={p.idx}>
+                <div style={{ ...secTitle, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{String(p.idx + 1).padStart(2, "0")} {title}{p.stock && <span style={{ fontSize: 13, color: T.warning, marginLeft: 8, fontFamily: T.fontSans }}>{X.stockBadge}</span>}</span>
+                  <span style={{ fontSize: 18, ...T.num }}>{p.needed !== null ? `${X.partNeed} ${fmtQty(p.needed)} ${u}` : (p.yieldNum > 0 ? "" : X.whole(fmtQty(block.batch.factor)))}</span>
+                </div>
+                {p.noUsed && <div style={{ fontSize: 15, color: T.danger, marginTop: 6 }}>⚠ {X.noUsed}</div>}
+                {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: 15, color: T.warning, marginTop: 6 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
+                {p.stock ? (
+                  <KitchenIngRow k={`${pk}stock`} name={X.fromStock} sub={title} note="" qty={p.needed !== null ? fmtQty(p.needed) : "—"} unit={p.needed !== null ? u : ""} warn={p.needed === null}
+                    checked={!!st.ings[`${pk}stock`]} onToggle={() => toggleIng(`${pk}stock`)} bar="" />
+                ) : (
+                  <>
+                    <KitchenIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings} lang={lang} keyPrefix={pk} checked={st.ings} onToggle={toggleIng} />
+                    {pickSteps(l, lang).length > 0 && (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ fontSize: 15, color: T.subtle, marginBottom: 2 }}>{X.steps}</div>
+                        <KitchenSteps steps={pickSteps(l, lang)} lang={lang} keyPrefix={`${pk}s`} current={st.step} onPick={pickStep} />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+          <div style={secTitle}>{X.assembly}</div>
+          <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="a:" current={st.step} onPick={pickStep} />
+        </>
+      )}
+      <KitchenAllergens kind={kind} entity={target} lang={lang} ctx={ctx} />
+    </div>
+  );
+}
+
+// 员工的厨房视图列表:今天生产单上的 / 在售中的配方和组合产品 / 组件(在用的排前),可搜索
+function KitchenListView({ lang, recipes = [], creations = [], components = [], sheet = [], onOpen }) {
+  const X = kitchenTxt(lang);
+  const [q, setQ] = useState("");
+  const nq = String(q).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+  const hit = (o) => !nq || [o.nameZh, o.nameJa, o.nameFr].some(n => String(n || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "").includes(nq));
+  const seen = new Set();
+  const todayItems = [];
+  (sheet || []).forEach(s => (s.blocks || []).forEach(b => {
+    if (!b || b.missing || !b.target || !KITCHEN_KINDS.includes(b.type)) return;
+    const k = b.type + "\u0000" + String(b.target.id);
+    if (seen.has(k)) return;
+    seen.add(k);
+    todayItems.push({ kind: b.type, obj: b.target, qty: b.need });
+  }));
+  const onSale = [
+    ...(recipes || []).filter(r => r && r.onSale).map(r => ({ kind: "recipe", obj: r })),
+    ...(creations || []).filter(c => c && c.onSale).map(c => ({ kind: "creation", obj: c })),
+  ];
+  const comps = (components || []).filter(Boolean).map((c, i) => ({ kind: "component", obj: c, i })).sort((a, b) => (b.obj.inUse ? 1 : 0) - (a.obj.inUse ? 1 : 0) || a.i - b.i);
+  const secs = [
+    ["today", X.secToday, todayItems.filter(x => hit(x.obj)), ""],
+    ["onsale", X.secOnSale, onSale.filter(x => hit(x.obj)), X.noOnSale],
+    ["comp", X.secComp, comps.filter(x => hit(x.obj)), X.noComp],
+  ];
+  const total = secs.reduce((a, s) => a + s[2].length, 0);
+  const row = (it) => {
+    const n = prodName(it.obj, lang);
+    const other = rawLang(it.obj, "name", lang);
+    const u = it.kind === "creation" ? creationWords(creationStructureOf(it.obj), lang).unit : (_normTxt(it.obj.unit) || (it.kind === "component" ? "g" : ""));
+    return (
+      <button key={it.kind + ":" + it.obj.id} type="button" data-kitchen-open={`${it.kind}:${it.obj.id}`} onClick={() => onOpen(it.kind, it.obj.id, it.qty)} className="k-kitchen-row"
+        style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center", width: "100%", minHeight: 56, textAlign: "left", cursor: "pointer",
+          padding: "10px 4px", border: "none", borderBottom: `1px solid ${T.lineFaint}`, background: "transparent", color: T.ink, fontFamily: T.fontSans }}>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ fontSize: 12, color: T.subtle, marginRight: 8 }}>{X.kinds[it.kind]}{it.kind === "component" && it.obj.inUse ? ` · ${X.inUse}` : ""}</span>
+          <span style={{ fontSize: 19, fontWeight: 500, overflowWrap: "anywhere" }}>{n || other}</span>
+          {other && other !== n && <span style={{ display: "block", fontSize: 13, color: T.subtle, overflowWrap: "anywhere" }}>{other}</span>}
+        </span>
+        <span style={{ fontSize: 17, color: T.body, whiteSpace: "nowrap", ...T.num }}>{it.qty > 0 ? `× ${fmtQty(it.qty)}${u ? " " + u : ""} ` : ""}→</span>
+      </button>
+    );
+  };
+  return (
+    <div data-kitchen-list="1">
+      <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={X.search} className="k-input" data-kitchen-search="1"
+        style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans }} />
+      {nq && total === 0 ? (
+        <EmptyState variant="filter" title={X.noMatch} chips={[{ label: X.searchChip(q.trim()), onRemove: () => setQ("") }]} onClearAll={() => setQ("")} lang={lang} />
+      ) : secs.map(([id, title, items, empty]) => {
+        if (id === "today" && !todayItems.length) return null;
+        if (nq && !items.length) return null;
+        return (
+          <div key={id} data-kitchen-sec={id} style={{ marginTop: 22 }}>
+            <div style={{ fontSize: 15, fontWeight: 500, paddingBottom: 6, borderBottom: `1px solid ${T.ink}` }}>{title}{items.length ? ` ${items.length}` : ""}</div>
+            {items.length ? items.map(row) : <div style={{ fontSize: 14, color: T.subtle, padding: "10px 0" }}>{empty}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 员工外壳:自己的顶栏 + 三个 tab(所有宽度都显示,不借手机底栏 —— .k-bottomnav 在 iPad 宽度是藏着的)
+const STAFF_PAGES = ["sheet", "kitchen", "close"];
+function StaffShell({ lang, setLang, today, products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [],
+  salesLog = [], productionLog = [], rawPlan, updatePlan, onLogProduction, onPrint, onDailyClose, confirmDialog, showToast, onExit, saveSlot = null }) {
+  const X = staffTxt(lang);
+  const [page, setPage] = useState("sheet");
+  const [kitchenItem, setKitchenItem] = useState(null);   // { kind, id, qty }
+  const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
+  const go = (id) => {
+    if (id === page && !(id === "kitchen" && kitchenItem)) return;
+    // 日结有没保存的格子时先问(子页一换,日结页就卸载了)
+    confirmLeaveEditor(confirmDialog, lang, () => { setPage(id); setKitchenItem(null); });
+  };
+  const openKitchen = (kind, id, qty) => { setKitchenItem({ kind, id, qty }); setPage("kitchen"); if (typeof window !== "undefined" && window.scrollTo) { try { window.scrollTo(0, 0); } catch (e) {} } };
+  const kitchenTarget = kitchenItem ? _prodFind(kitchenItem.kind === "creation" ? creations : kitchenItem.kind === "component" ? components : recipes, kitchenItem.id) : null;
+  const plan = prodPlanForToday(rawPlan, today);
+  const sheet = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  return (
+    <div data-staffshell="1">
+      <div className="k-staffbar">
+        <div className="rc-container" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", paddingTop: 16, paddingBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <Wordmark size={17} sub={false} />
+            <span className="k-staffbadge" style={{ fontSize: 12, padding: "3px 10px", border: `1px solid ${T.ink}`, background: T.ink, color: T.paper, whiteSpace: "nowrap" }}>{X.badge}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {saveSlot}
+            <LangToggle lang={lang} onChange={setLang} />
+            <Btn size="sm" onClick={onExit}>{X.exitBtn}</Btn>
+          </div>
+        </div>
+        <div className="rc-container k-staffnav" role="tablist">
+          {STAFF_PAGES.map(id => (
+            <button key={id} type="button" role="tab" aria-selected={page === id} data-staffpage={id} onClick={() => go(id)} className="k-tab"
+              style={{ flex: "1 1 0", minHeight: 50, padding: "0 6px", background: "transparent", border: "none", cursor: "pointer", fontFamily: T.fontSans, fontSize: 16,
+                borderBottom: page === id ? `3px solid ${T.ink}` : "3px solid transparent", color: page === id ? T.ink : T.subtle, fontWeight: page === id ? 500 : 400, marginBottom: -1 }}>
+              {X.pages[id]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="rc-container k-staffmain">
+        {page === "sheet" && (
+          <ProductionSheetView staff lang={lang} today={today} products={products} recipes={recipes} creations={creations} components={components}
+            materials={materials} brands={brands} productFamilies={productFamilies} salesLog={salesLog}
+            rawPlan={rawPlan} updatePlan={updatePlan} onLogProduction={onLogProduction} onPrint={onPrint} showToast={showToast} onOpenKitchen={openKitchen} />
+        )}
+        {page === "kitchen" && (kitchenItem
+          ? <KitchenView key={`${kitchenItem.kind}:${kitchenItem.id}`} kind={kitchenItem.kind} target={kitchenTarget} initialQty={kitchenItem.qty} lang={lang} today={today}
+              ctx={ctx} onBack={() => setKitchenItem(null)} showToast={showToast} />
+          : <KitchenListView lang={lang} recipes={recipes} creations={creations} components={components} sheet={sheet} onOpen={openKitchen} />)}
+        {page === "close" && (
+          <DailyCloseView lang={lang} today={today} minDate={plusDaysStr(today, -1)} showMoney={false} products={products} salesLog={salesLog} productionLog={productionLog}
+            recipes={recipes} creations={creations} components={components} materials={materials} brands={brands} onSave={onDailyClose} confirmDialog={confirmDialog} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── 🔒 v1 内部テスト密码门 (LuLu 改这一行换密码) ─────────────────────
 const RURU_V1_PWD = "ruru2026";
 const RURU_V1_PWD_KEY = "ruru_v1_test_pwd_ok";
@@ -18003,6 +18687,10 @@ function App() {
   const [productionLog, setProductionLog] = useState(stored?.productionLog || []);
   const [productViewId, setProductViewId] = useState(null);
   const [productEditTarget, setProductEditTarget] = useState(null); // null=新建, obj=编辑
+  // 第 3 批 F4:员工模式(每台设备各自的开关,存 localStorage korora_staff_mode_v1)、进入 / 退出对话框、老板界面的厨房视图
+  const [staffMode, setStaffMode] = useState(readStaffMode);
+  const [staffDialog, setStaffDialog] = useState(null);     // null | "setup" | "enter" | "exit"
+  const [kitchenTarget, setKitchenTarget] = useState(null); // 老板界面:{ kind, id, qty }
   // 🚚 供货商 + 采购清单（v13）
   const [suppliers, setSuppliers] = useState(stored?.suppliers || []);
   const [supplierViewId, setSupplierViewId] = useState(null);
@@ -18767,6 +19455,49 @@ function App() {
     } });
     return r;
   };
+
+  // ─── 第 3 批 F4:员工模式 ───
+  // 进入:编辑页有没保存的改动先问(文案同 goTab)→ 第一次让她设 PIN,之后确认一下就进。进入时关掉所有编辑页和浮层(员工外壳里没有它们的入口)
+  const LEAVE_MSG = () => [
+    lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+    { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" },
+  ];
+  const askStaffEnter = () => {
+    const open = () => setStaffDialog(isValidStaffPin(appSettings.staffPin) ? "enter" : "setup");
+    if (anyEditorDirty()) { const [m, o] = LEAVE_MSG(); confirmDialog(m, open, o); return; }
+    open();
+  };
+  const doStaffEnter = (pin) => {
+    // pin:新设的 4 位 PIN;null = 不设;undefined = 沿用已有的
+    if (pin !== undefined) setAppSettings(prev => {
+      if (pin === null) { if (prev.staffPin === undefined) return prev; const { staffPin, ...rest } = prev; return rest; }
+      return { ...prev, staffPin: pin };
+    });
+    setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); setPrintTarget(null); setKitchenTarget(null);
+    setShowBulkLinkWizard(false); setShowBackupDialog(false); setShowQualityScan(false); setShowOrderieFetcher(false); setShowDataHealth(false);
+    if (tab === "edit") setTab("list");
+    setEditTarget(null); setCompEditTarget(null); setCreationEditTarget(null); setKnowledgeEditTarget(null);
+    setProductEditTarget(null); setSupplierEditTarget(null); setBrandEditTarget(null); setMaterialEditTarget(null);
+    writeStaffMode(true);
+    setStaffMode(true);
+    setStaffDialog(null);
+    showToast(staffTxt(lang).entered);
+  };
+  const doStaffExit = () => {
+    writeStaffMode(false);
+    setStaffMode(false);
+    setStaffDialog(null);
+    setPrintTarget(null);
+    showToast(staffTxt(lang).exited);
+  };
+  // 退出:日结有没保存的格子先问;没设 PIN 直接退出,否则弹数字键盘(PIN 或 app 进入密码)
+  const askStaffExit = () => {
+    const go = () => { if (isValidStaffPin(appSettings.staffPin)) setStaffDialog("exit"); else doStaffExit(); };
+    if (anyEditorDirty()) { const [m, o] = LEAVE_MSG(); confirmDialog(m, go, o); return; }
+    go();
+  };
+  const tryStaffExit = (input) => { if (!staffExitOk(input, appSettings.staffPin)) return false; doStaffExit(); return true; };
+  const openKitchenView = (kind, id, qty) => setKitchenTarget({ kind, id, qty });
 
   // 10 个 tab 的配置（数据化：桌面顶栏 / 手机底栏 / 「更多」抽屉复用同一份）
   // mZh / mJa 是手机底栏用的短标签（底栏只有 5 格，塞不下「材料百科」四个字）
@@ -19551,8 +20282,15 @@ function App() {
             printSettings={printSettings}
             onClose={() => setPrintTarget(null)}
             onUpdateSettings={(newSettings) => setPrintSettings(prev => ({ ...prev, ...newSettings }))}
+            canEditSettings={!staffMode}
           />
         </div>
+      )}
+
+      {/* 第 3 批 F4:员工模式 进入 / 设 PIN / 退出 */}
+      {staffDialog && (
+        <StaffPinDialog key={staffDialog} mode={staffDialog} lang={lang} hasPin={isValidStaffPin(appSettings.staffPin)}
+          onEnter={doStaffEnter} onExit={tryStaffExit} onCancel={() => setStaffDialog(null)} />
       )}
 
       {/* 自定义确认对话框 */}
@@ -19781,7 +20519,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
       {/* 🏷 家族编辑表单（全屏覆盖） */}
       {/* 2026-09-29 体检第 2 批:手机上底栏(约 68px)压在这一层下沿,「保存家族」被挡住 —— 底部留出 96px */}
-      {familyEditTarget && (
+      {!staffMode && familyEditTarget && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#FFFFFF", zIndex: 500, overflow: "auto", padding: "1rem", paddingBottom: 96 }}>
           <div style={{ maxWidth: 900, margin: "0 auto" }}>
             <FamilyEditForm
@@ -19810,7 +20548,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       )}
 
       {/* 🏷 家族详情（全屏覆盖） */}
-      {familyViewId && (() => {
+      {!staffMode && familyViewId && (() => {
         const fm = productFamilies.find(f => f.id === familyViewId);
         if (!fm) { setFamilyViewId(null); return null; }
         return (
@@ -19831,7 +20569,23 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         );
       })()}
 
+      {/* 第 3 批 F4:老板界面的厨房视图(配方 / 组合产品详情页的「厨房视图」按钮),满屏一层 */}
+      {!staffMode && kitchenTarget && (() => {
+        const list = kitchenTarget.kind === "creation" ? creations : kitchenTarget.kind === "component" ? components : recipes;
+        const target = list.find(x => x && String(x.id) === String(kitchenTarget.id)) || null;
+        return (
+          <div data-owner-kitchen="1" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: T.paper, zIndex: T.z.drawer, overflow: "auto", paddingTop: 16, paddingBottom: 96 }}>
+            <div className="rc-container">
+              <KitchenView key={`${kitchenTarget.kind}:${kitchenTarget.id}`} kind={kitchenTarget.kind} target={target} initialQty={kitchenTarget.qty} lang={lang} today={localDateStr()}
+                ctx={{ products, recipes, creations, components, materials, brands, productFamilies, lang }}
+                onBack={() => setKitchenTarget(null)} backLabel={kitchenTxt(lang).close} showToast={showToast} />
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ═══ 顶部导航：字标 + 语言切换 / 下划线式 tab ═══ */}
+      {!staffMode && (
       <div style={{ borderBottom: `1px solid ${T.ink}`, marginBottom: T.sp.block }}>
         <div className="rc-container" style={{ paddingTop: T.sp.xl, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: T.sp.l }}>
           <Wordmark size={22} />
@@ -19841,6 +20595,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               const res = doSave();
               setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
             }} />
+            {/* 第 3 批 F4:员工模式入口(每台设备各自的开关) */}
+            <Btn size="sm" variant="ghost" onClick={askStaffEnter} title={lang === "zh" ? "给员工用:看不到钱、改不了配方" : "スタッフ用:価格非表示・編集不可"}>{staffTxt(lang).enterBtn}</Btn>
             <LangToggle lang={lang} onChange={setLang} />
           </div>
         </div>
@@ -19848,8 +20604,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {NAV.map(n => navBtn(n.id, lang === "zh" ? n.zh : n.ja, n.badge ? n.badge() : 0))}
         </div>
       </div>
+      )}
 
       {/* ═══ 手机端底部导航：5 个高频 tab 固定在拇指区，其余 5 个收进「更多」全屏抽屉 ═══ */}
+      {!staffMode && (
       <div className="k-bottomnav" style={{
         position: "fixed", bottom: 0, left: 0, right: 0, zIndex: T.z.bar,
         background: T.paper, borderTop: `1px solid ${T.ink}`,
@@ -19882,9 +20640,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {lang === "zh" ? "更多" : "その他"}
         </button>
       </div>
+      )}
 
       {/* 「更多」全屏抽屉 */}
-      {moreOpen && (
+      {!staffMode && moreOpen && (
         <div className="k-drawer" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: `1px solid ${T.ink}` }}>
             <Wordmark size={15} sub={false} />
@@ -19908,6 +20667,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         </div>
       )}
 
+      {!staffMode && (
       <div className="rc-container k-main" style={{ paddingBottom: T.sp.gap }}>
 
       {/* LIST */}
@@ -20267,7 +21027,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} />
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)} />
         </div>
       )}
 
@@ -20607,6 +21367,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
           onOpenFromList={() => setCreationReturnTo(null)}
           onPrintLabel={openLabelPrint}
+          onOpenKitchen={openKitchenView}
         />
       )}
 
@@ -20830,6 +21591,21 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         </div>
       )}
       </div>
+      )}
+
+      {/* 第 3 批 F4:员工外壳(不在 App 里提前 return —— hook 顺序、自动保存、跟组件库同步的 effect 照常跑) */}
+      {staffMode && (
+        <StaffShell lang={lang} setLang={setLang} today={localDateStr()}
+          products={products} recipes={recipes} creations={creations} components={components} materials={materials} brands={brands} productFamilies={productFamilies}
+          salesLog={salesLog} productionLog={productionLog}
+          rawPlan={appSettings.prodPlan} updatePlan={updateProdPlan} onLogProduction={logProdFromSheet}
+          onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
+          onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit}
+          saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
+            const res = doSave();
+            setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
+          }} />} />
+      )}
     </div>
   );
 }
