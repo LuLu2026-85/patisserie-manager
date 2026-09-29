@@ -3785,6 +3785,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     import: lang === "zh" ? "覆盖导入之前" : "上書きインポート前",
     clear: lang === "zh" ? "清除全部之前" : "全削除前",
     restore: lang === "zh" ? "恢复备份之前" : "復元前",
+    "clear-cats": lang === "zh" ? "清掉旧价格表之前" : "旧価格表の削除前",   // 数据体检 H14(2026-09-29 第 2 批 2c)
   }[r] || "");
 
   const handleRestore = (snap) => {
@@ -16666,6 +16667,119 @@ function App() {
   // 合并 / 覆盖导入的结果,留在数据页上(提示条 5 秒就没了)
   const [importReport, setImportReport] = useState(null);
 
+  // ═══ 🩺 数据体检(2026-09-29 体检第 2 批 2c)═══ 数据 tab 打开面板;检查在 computeDataHealth,跳转和一键改在这里
+  const [showDataHealth, setShowDataHealth] = useState(false);
+  // 跳到对应的编辑页 / 详情页:先关面板,同一次操作里先设对象再切 tab(切 tab 的 effect 只清「不在那个 tab」的编辑对象,
+  // 和「内容质量扫描」跳材料是同一个做法)。从数据 tab 出发,没有编辑页开着,不用走 goTab 的未保存提醒
+  const jumpToItem = ({ kind, id } = {}) => {
+    const byId = (arr) => (arr || []).find(x => x && x.id === id);
+    const target = kind === "recipe" ? byId(recipes) : kind === "component" ? byId(components) : kind === "creation" ? byId(creations)
+      : (kind === "material" || kind === "materialView") ? byId(materials) : kind === "brand" ? byId(brands) : kind === "knowledge" ? byId(knowledge) : null;
+    if (!target) { showToast(lang === "zh" ? "找不到这一条了,可能已经删掉" : "見つかりません(削除済みかもしれません)"); return; }
+    setShowDataHealth(false);
+    if (kind === "recipe") { setEditTarget(target); setTab("edit"); }
+    else if (kind === "component") { setCompEditTarget(target); setTab("components"); }
+    else if (kind === "creation") { setCreationEditTarget(target); setTab("creations"); }
+    else if (kind === "material") { setBrandEditTarget(null); setMaterialEditTarget(target); setTab("materialsPedia"); }
+    else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
+    else if (kind === "brand") { setMaterialEditTarget(null); setBrandEditTarget(target); setTab("materialsPedia"); }
+    else if (kind === "knowledge") { setKnowledgeEditTarget(target); setTab("knowledge"); }
+  };
+  // 一键改:先改 + 撤销(2a §09)。按对象身份换:改的是面板上看到的那一个对象;撤销时换回原对象,
+  // 这几秒里被别处又改过(身份变了)就不还原,提示一句。本店原料 / 材料 / 厂家写 updatedAt(合并导入按它取新的一边)
+  const dhStale = () => showToast(lang === "zh" ? "这一条刚被改过,请再看一眼" : "直前に変更されています。もう一度確認してください");
+  const dhNoUndo = () => showToast(lang === "zh" ? "这一条之后又改过,没有撤销" : "その後変更されたため、元に戻しませんでした");
+  const dhReplaceOne = (list, setList, orig, patch, msg) => {
+    if (!orig || !list.includes(orig)) { dhStale(); return; }
+    const fixed = { ...orig, ...patch };
+    setList(prev => { const i = prev.indexOf(orig); if (i < 0) return prev; const next = prev.slice(); next[i] = fixed; return next; });
+    showToast(msg, { undo: () => {
+      let back = false;
+      setList(prev => { const i = prev.indexOf(fixed); if (i < 0) return prev; back = true; const next = prev.slice(); next[i] = orig; return next; });
+      setTimeout(() => { if (!back) dhNoUndo(); }, 0);   // 更新函数在 React 渲染时才跑,等它跑完再看
+    } });
+  };
+  // 组合产品里的一个部分:和详情页 layerKeyAt 同一个认法(组件 id + 同一组件的第几个),撤销时还要部分名和用量对得上
+  const dhLayerKey = (arr, i) => {
+    const sid = arr[i] && arr[i].sourceComponentId;
+    if (!sid) return null;
+    let k = 0;
+    for (let j = 0; j < i; j++) if (arr[j] && arr[j].sourceComponentId === sid) k++;
+    return `${sid}#${k}`;
+  };
+  const dataHealthFix = {
+    // H1:本店原料是哪种钱。数不变,只写币种
+    shopCurrency: (item, cur) => {
+      const zh = lang === "zh";
+      const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
+      dhReplaceOne(shopMaterials, setShopMaterials, item.obj, { currency: cur === "CNY" ? "CNY" : "JPY", updatedAt: new Date().toISOString() },
+        zh ? `「${nm}」标成${cur === "CNY" ? "人民币" : "日元"}(数没变)` : `「${nm}」を${cur === "CNY" ? "人民元" : "円"}にしました(数値はそのまま)`);
+    },
+    // H2:材料 / 厂家的分类。厂家可以选 ""(全品类)
+    category: (item, catId) => {
+      const zh = lang === "zh";
+      const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
+      const c = (item.entity === "brand" && !catId) ? BRAND_CAT_ALL : getMaterialCat(catId);
+      const msg = zh ? `「${nm}」分类改成「${c.zh}」` : `「${nm}」の分類を「${c.ja}」にしました`;
+      const patch = { categoryId: catId, updatedAt: new Date().toISOString() };
+      if (item.entity === "brand") dhReplaceOne(brands, setBrands, item.obj, patch, msg);
+      else dhReplaceOne(materials, setMaterials, item.obj, patch, msg);
+    },
+    // H3:家族已经不在了 → 不归属(和删家族时一样写 "")
+    clearFamily: (item) => {
+      const zh = lang === "zh";
+      const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
+      const patch = { familyId: "", updatedAt: new Date().toISOString() };
+      const msg = zh ? `「${nm}」改成不归属任何家族` : `「${nm}」を未所属にしました`;
+      if (item.entity === "creation") dhReplaceOne(creations, setCreations, item.obj, patch, msg);
+      else dhReplaceOne(recipes, setRecipes, item.obj, patch, msg);
+    },
+    // H7:空的部分改成跟组件库走(和组合产品详情页「用组件库的」同一个写法),内容由同步 effect 写进去
+    layerFollow: (item) => {
+      const zh = lang === "zh";
+      const cr0 = item.obj, l0 = item.layer;
+      const li = cr0 && Array.isArray(cr0.layers) ? cr0.layers.indexOf(l0) : -1;
+      if (!creations.includes(cr0) || li < 0) { dhStale(); return; }
+      const key = dhLayerKey(cr0.layers, li);
+      setCreations(prev => prev.map(c => (c && c.id === cr0.id && (c.layers || []).includes(l0))
+        ? { ...c, layers: c.layers.map(l => l === l0 ? { ...l0, follow: true, localVariant: false } : l) } : c));
+      const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
+      showToast(zh ? `「${nm}」改成跟组件库走,内容换成组件库现在的` : `「${nm}」を部品庫と連動させました`, { undo: () => {
+        let back = false;
+        setCreations(prev => prev.map(c => {
+          if (!c || c.id !== cr0.id) return c;
+          const cur = c.layers || [];
+          const hit = cur.findIndex((l, i) => l && dhLayerKey(cur, i) === key && (l.customName || "") === (l0.customName || "") && String(l.usedAmount || "") === String(l0.usedAmount || ""));
+          if (hit < 0) return c;
+          back = true;
+          const next = cur.slice(); next[hit] = l0;
+          return { ...c, layers: next };
+        }));
+        setTimeout(() => { if (!back) dhNoUndo(); }, 0);
+      } });
+    },
+    // H14:清掉旧价格表 cats。先存一份固定备份;存不上再问一次(同「清除全部」)
+    clearCats: async () => {
+      const zh = lang === "zh";
+      const orig = cats;
+      if (!orig || orig.length === 0) return;
+      const doClear = (pinned) => {
+        const emptied = [];
+        setCats(emptied);
+        showToast(zh ? `旧价格表 ${orig.length} 条已清掉${pinned ? "(清之前存了固定备份)" : ""}` : `旧価格表 ${orig.length} 件を削除しました`, { undo: () => {
+          let back = false;
+          setCats(prev => { if (prev !== emptied) return prev; back = true; return orig; });
+          setTimeout(() => { if (!back) dhNoUndo(); }, 0);
+        } });
+      };
+      if (await pinBackupNow("clear-cats")) doClear(true);
+      else confirmDialog(
+        zh ? "清之前的固定备份没存上(浏览器的数据库用不了)。仍然清掉旧价格表吗?清掉后 5 秒内还能撤销。" : "削除前の固定バックアップを保存できませんでした。それでも削除しますか?",
+        () => doClear(false),
+        { title: zh ? "备份没存上" : "バックアップ失敗", confirmText: zh ? "仍然清掉" : "削除する", refs: [zh ? `旧价格表:${orig.length} 条(已停用,成本不读它)` : `旧価格表:${orig.length} 件`] });
+    },
+  };
+
   const handleSaveRecipe = (r) => {
     setRecipes(prev => prev.find(x => x.id === r.id) ? prev.map(x => x.id === r.id ? r : x) : [...prev, r]);
     showToast("✓ 配方已保存");
@@ -17547,6 +17661,19 @@ function App() {
           lang={lang}
           showToast={showToast}
           confirmDialog={confirmDialog}
+        />
+      )}
+
+      {/* 🩺 数据体检面板(2026-09-29 第 2 批 2c) */}
+      {showDataHealth && (
+        <DataHealthPanel
+          recipes={recipes} components={components} creations={creations} knowledge={knowledge}
+          materials={materials} brands={brands} shopMaterials={shopMaterials} productFamilies={productFamilies}
+          cats={cats} printSettings={printSettings} appSettings={appSettings}
+          lang={lang}
+          onClose={() => setShowDataHealth(false)}
+          onJump={jumpToItem}
+          fix={dataHealthFix}
         />
       )}
 
@@ -18558,6 +18685,19 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.brand, letterSpacing: "-0.3px" }}>
               {lang === "zh" ? "数据管理" : "データ管理"}
             </div>
+          </div>
+
+          {/* 🩺 数据体检(2026-09-29 第 2 批 2c):放最上面 */}
+          <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+            <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>
+              🩺 {lang === "zh" ? "数据体检" : "データ診断"}
+            </div>
+            <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>
+              {lang === "zh"
+                ? "查一遍数据里会让钱数算错、显示不对、需要整理的地方(本店原料的币种、单位对不上的配料、组合产品读不出的用量、认不出的分类、疑似重复的材料……),每一条都能跳过去改,能安全改的给「一键改」,改完 5 秒内可以撤销。"
+                : "金額計算・表示・整理が必要なデータを一覧にします(通貨未確認の仕入れ原料、単位が合わない材料、読めない分量、不明な分類、重複材料など)。各項目から編集ページへ移動でき、安全なものはワンタップで直せます(5 秒以内なら元に戻せます)。"}
+            </p>
+            <Btn variant="primary" onClick={() => setShowDataHealth(true)}>{lang === "zh" ? "打开数据体检" : "データ診断を開く"}</Btn>
           </div>
 
           <FxSettingCard appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
