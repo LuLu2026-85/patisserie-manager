@@ -9592,7 +9592,9 @@ const labelDefaultsOf = (kind, e, ctx) => {
     const items = ((e && e.items) || []).filter(Boolean);
     if (items.length === 1) src = _findLinked(items[0].linkedType, items[0].linkedId, ctx) || src;
   }
-  return { shelfLife: _normTxt(src.shelfLife), storage: _normTxt(src.storage) };
+  // 审查 r1:配方的 storage 是「保存」那一行,写的是日文的保质期(「常温3日・冷凍1ヶ月」),不能原样填进标签的「贮存条件」。
+  // 两格都不从它预填,原文作为提示放在输入框下面,让她拆成保质期和贮存条件、用中文填
+  return { shelfLife: _normTxt(src.shelfLife), storage: "", storageHint: _normTxt(src.storage) };
 };
 function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], printSettings = {}, onClose, onConfirm, onUpdateSettings }) {
   const zh = lang !== "ja";
@@ -9649,6 +9651,11 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
           <div><label style={lab}>{zh ? "保质期" : "賞味期限"}</label><input value={shelf} onChange={e => setShelf(e.target.value)} placeholder={zh ? "例:常温 5 天" : "例:常温 5 日"} style={inp} /></div>
           <div><label style={lab}>{zh ? "贮存条件" : "保存方法"}</label><input value={storage} onChange={e => setStorage(e.target.value)} placeholder={zh ? "例:0 到 4℃冷藏保存" : "例:要冷蔵 0〜4℃"} style={inp} /></div>
         </div>
+        {defaults.storageHint && (
+          <div data-label-storage-hint="1" style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, margin: "-4px 0 10px" }}>
+            {zh ? `配方里写的保存:${defaults.storageHint}(请拆成保质期和贮存条件,用中文填)` : `レシピの保存:${defaults.storageHint}(賞味期限と保存方法に分けて中国語で入力)`}
+          </div>
+        )}
         <div style={{ fontSize: 12, fontWeight: 500, margin: "4px 0 6px" }}>{zh ? "经营者信息(存下来,下次自动带出)" : "事業者情報(保存されます)"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 10 }}>
           <div><label style={lab}>{zh ? "名称" : "名称"}</label><input value={shopName} onChange={e => setShopName(e.target.value)} placeholder={zh ? "填营业执照上的名称" : "営業許可証の名称"} style={inp} /></div>
