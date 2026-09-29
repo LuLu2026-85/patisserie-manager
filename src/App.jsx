@@ -10362,7 +10362,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     const validIngs = ings.filter(ingHasName);
     const total = validIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     // 只带这一页能看到、能改的字段,App 那边按字段合并到原组件上。
-    // 法文名 / 备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
+    // 组件自己的法文名 / 整体备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
+    // (配料行的备注 / 法文名在配料表里能改,随 ingredients 一起带)
     const updated = {
       id: layer.sourceComponentId,
       nameZh: form.nameZh, nameJa: form.nameJa,
@@ -17926,7 +17927,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             const matIds = new Set((materials || []).map(m => m && m.id));
             const followers = creations.filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === updated.id && layerLinkState(l, components, matIds) === "follow"));
             const refs = followers.map(cr => `${lang === "zh" ? "会跟着变" : "連動して変わる"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`);
-            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料和步骤；风味、模具、图片、备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
+            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
