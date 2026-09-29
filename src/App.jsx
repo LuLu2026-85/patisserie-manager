@@ -16158,7 +16158,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
         value={query}
         onChange={e => setQuery(e.target.value)}
         placeholder={lang === "zh" ? "🔍 搜索名称 / 分类" : "🔍 検索"}
-        style={{ width: "100%", padding: "9px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, marginBottom: 16, fontFamily: T.fontSans }}
+        style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, marginBottom: 16, fontFamily: T.fontSans }}
       />
       <Section title={lang === "zh" ? "配方" : "レシピ"} emoji="🧁" pool={recipePool} type="recipe" color="#a87b3e" originCount={recipes.length} />
       <Section title={lang === "zh" ? "组件" : "部品"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
