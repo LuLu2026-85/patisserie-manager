@@ -1812,6 +1812,8 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
 }
 // 标签和页面上的那行小字(打印时可关)。不写「已合规」「符合国标」这类字。
 const LABEL_DRAFT_NOTE = "标签草稿:店内现做现卖的产品国标不强制;自己装袋 / 礼盒算散装还是现制现售要问朝阳区市场监管。过敏原强制标示 2027-03-16 起。";
+// 审查 r2:日文界面上显示用的译文(详情页卡片、标签弹窗)。印在标签上的永远是中文那条
+const LABEL_DRAFT_NOTE_JA = "ラベル下書き:店内で製造・販売する商品は国家基準上の表示義務はありません。自店での袋詰め・ギフト箱が散装か現製現売かは朝陽区の市場監督管理局に要確認。アレルゲン表示の義務化は 2027-03-16 から。";
 // 标签弹窗存进 printSettings 的本店经营者信息(IP 分发包不带;合并导入只补本机空着的)
 const LABEL_SHOP_KEYS = ["labelShopName", "labelAddress", "labelPhone"];
 // END allergen helpers ───────────────────────────────────────────────────────
@@ -9590,7 +9592,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
             </div>
           )}
         </div>
-        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>{LABEL_DRAFT_NOTE}</div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>{zh ? LABEL_DRAFT_NOTE : LABEL_DRAFT_NOTE_JA}</div>
       </div>
     </div>
   );
@@ -9649,7 +9651,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
           <div style={{ fontSize: 16, fontWeight: 500 }}>🏷 {zh ? "打印标签(草稿)" : "ラベル印刷(下書き)"}</div>
           <button type="button" onClick={onClose} aria-label={zh ? "关闭" : "閉じる"} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
         </div>
-        <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, marginBottom: 12 }}>{LABEL_DRAFT_NOTE}</div>
+        <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, marginBottom: 12 }}>{zh ? LABEL_DRAFT_NOTE : LABEL_DRAFT_NOTE_JA}</div>
         {!summary.complete && (
           <div style={{ marginBottom: 12 }}>
             <InlineError title={zh ? `过敏原还有 ${unknownN} 项没确认` : `アレルゲン未確認 ${unknownN} 件`}
