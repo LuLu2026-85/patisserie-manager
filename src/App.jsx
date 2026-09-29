@@ -4636,7 +4636,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             </div>
             {_missingPriceCount > 0 && liveUnitCost > 0 && (
               <div style={{ ...T.fs.label, marginTop: 2, color: T.warning }}>
-                {lang === "zh" ? "成本不全·利润率偏高" : "原価不完全・利益率は高めに出ます"}
+                {lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は実際より高く出ます"}
               </div>
             )}
           </div>
@@ -4806,7 +4806,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted, ...T.num }}>
               {_priceNum > 0 && liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
               {_priceNum > 0 && liveUnitCost > 0 && _missingPriceCount > 0 && (
-                <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·偏高" : "原価不完全・高め"}</div>
+                <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は過大"}</div>
               )}
             </div>
             {/* 2026-09-29 体检第 2 批:单个成本以前只在电脑宽度显示、只到 0.1 元 —— 挪到总成本下面,所有屏幕都显示,走 fmtCost */}
@@ -8648,7 +8648,7 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
     // 低于 50% 先标红:成本算不全时实际毛利只会更低,不能因为「不确定」降成黄色(审查发现)
     color: !showPct ? T.textSecondary : marginPercent < 50 ? T.danger : unsure ? T.warning : marginPercent >= 65 ? T.success : T.warning,
     badge: unsure ? (incomplete ? (zh ? "算不全" : "未確定") : (zh ? "用量待确认" : "使用量要確認")) : "",
-    note: unsure ? `⚠ ${zh ? "成本" : "原価"}${incomplete ? (zh ? "算不全" : "未確定") : (zh ? "可能不准" : "要確認")}：${reasons.join(zh ? "，" : "、")}${showPct && incomplete ? (zh ? "。实际毛利率会比这里低。" : "。実際の粗利率はこれより低くなります。") : ""}` : "",
+    note: unsure ? `⚠ ${zh ? "成本" : "原価"}${incomplete ? (zh ? "算不全" : "未確定") : (zh ? "可能不准" : "要確認")}：${reasons.join(zh ? "，" : "、")}${showPct && incomplete ? (zh ? "。这里的毛利率虚高，实际比这里低。" : "。この粗利率は過大で、実際はもっと低くなります。") : ""}` : "",
   };
 };
 
@@ -17432,7 +17432,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 const priceN = toCNY(r.price, priceCurOf(r));   // v17: 折算后算利润率
                 const margin = priceN > 0 && unitCost > 0 ? ((priceN - unitCost) / priceN) * 100 : 0;
                 // 2026-09-29 体检第 2 批:有售价但成本算不出来(配料都没价 / 没填出品数)时,以前显示红色「0.0%」像是亏本 → 改显示灰色「缺成本」;
-                // 有几行没单价时成本偏低、利润率偏高,在下面标「N 项没价·偏高」(和详情页「成本算不全」同一口径)
+                // 有几行没单价时成本偏低、利润率虚高,在下面标「N 项没价·利润率虚高」(和详情页「成本算不全」同一口径;09-29 她选的叫法,原来「偏高」看不懂是什么偏高)
                 const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length : 0;
                 return (
                   <div
@@ -17491,8 +17491,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       {priceN > 0 && unitCost > 0 ? `${margin.toFixed(1)}%` : ""}
                       {priceN > 0 && !(unitCost > 0) && <span style={{ color: T.muted }}>{liveCost > 0 && !(yieldN > 0) ? (lang === "zh" ? "缺出品数" : "出来数なし") : (lang === "zh" ? "缺成本" : "原価なし")}</span>}
                       {noPriceN > 0 && (
-                        <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,利润率偏高" : "単価のない材料があり、利益率は高めに出ています"}>
-                          {lang === "zh" ? `${noPriceN} 项没价·偏高` : `単価なし ${noPriceN}・高め`}
+                        <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,显示的利润率比实际高" : "単価のない材料があり、利益率は実際より高く出ています"}>
+                          {/* 分两行:一行放不下时会把左边的名字挤成两行(手机宽度下可丽露实测) */}
+                          {lang === "zh" ? <>{noPriceN} 项没价<br />利润率虚高</> : <>単価なし {noPriceN}<br />利益率過大</>}
                         </div>
                       )}
                     </div>
