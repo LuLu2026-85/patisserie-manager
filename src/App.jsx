@@ -8600,6 +8600,9 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           /* 底色转白、描边转实黑 */
           .print-area * { background: transparent !important; box-shadow: none !important; }
           .print-area .p-hide-print { display: none !important; }
+          /* 标签页(第 3 批 F3):@page 已留 15mm 边,不再加内边距;两页之间屏幕上的间隔不带进打印 */
+          .print-area.k-label-area { padding: 0 !important; }
+          .print-area .k-label-page { margin-bottom: 0 !important; }
         }
         .print-area {
           background: white;
@@ -8705,11 +8708,13 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
       )}
 
       {/* 打印区域（实际打印内容） */}
-      <div className="print-area" style={{ padding: "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
-        {/* 水印 */}
-        <div className="watermark">{brandName}</div>
+      <div className={itemType === "label" ? "print-area k-label-area" : "print-area"} style={{ padding: itemType === "label" ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
+        {/* 水印(标签不印) */}
+        {itemType !== "label" && <div className="watermark">{brandName}</div>}
 
-        {itemType === "creation" ? (
+        {itemType === "label" ? (
+          <LabelTemplate data={item} printSettings={printSettings} />
+        ) : itemType === "creation" ? (
           <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
         ) : (
           <>
@@ -9537,6 +9542,146 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>{LABEL_DRAFT_NOTE}</div>
       </div>
+    </div>
+  );
+}
+
+// 标签打印前的设置弹窗(品名 / 净含量 / 保质期 / 贮存条件 / 经营者信息 / 张数 / 尺寸 / 草稿提示开关)
+const labelDefaultsOf = (kind, e, ctx) => {
+  let src = e || {};
+  if (kind === "product") {
+    const items = ((e && e.items) || []).filter(Boolean);
+    if (items.length === 1) src = _findLinked(items[0].linkedType, items[0].linkedId, ctx) || src;
+  }
+  return { shelfLife: _normTxt(src.shelfLife), storage: _normTxt(src.storage) };
+};
+function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], printSettings = {}, onClose, onConfirm, onUpdateSettings }) {
+  const zh = lang !== "ja";
+  const { summary, draft, defaults } = useMemo(() => {
+    const ctx = { materials, brands, components, recipes, creations };
+    return { summary: allergenSummaryOf(kind, entity, ctx), draft: draftIngredientList(kind, entity, ctx), defaults: labelDefaultsOf(kind, entity, ctx) };
+  }, [kind, entity, materials, brands, components, recipes, creations]);
+  const [name, setName] = useState(_entityNameZh(entity));
+  const [net, setNet] = useState("");
+  const [shelf, setShelf] = useState(defaults.shelfLife);
+  const [storage, setStorage] = useState(defaults.storage);
+  const [count, setCount] = useState("10");
+  const [size, setSize] = useState(() => draft.text.length > LABEL_FIT.small ? "large" : "small");   // 配料表长的默认大一号
+  const [showNote, setShowNote] = useState(true);
+  const [shopName, setShopName] = useState(printSettings.labelShopName || "");
+  const [address, setAddress] = useState(printSettings.labelAddress || "");
+  const [phone, setPhone] = useState(printSettings.labelPhone || "");
+  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const tooLong = draft.text.length > LABEL_FIT[size === "large" ? "large" : "small"];
+  const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
+  const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 4 };
+  const confirm = () => {
+    const shop = { labelShopName: shopName.trim(), labelAddress: address.trim(), labelPhone: phone.trim() };
+    if (onUpdateSettings && (shop.labelShopName !== (printSettings.labelShopName || "") || shop.labelAddress !== (printSettings.labelAddress || "") || shop.labelPhone !== (printSettings.labelPhone || ""))) onUpdateSettings(shop);
+    const n = Math.min(60, Math.max(1, parseInt(count, 10) || 1));
+    onConfirm({
+      name: name.trim(), ingredientsText: draft.text,
+      contains: summary.contains.map(c => allergenByCode(c).label), mayContain: summary.mayContain.map(c => allergenByCode(c).label),
+      unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
+      count: n, size: size === "large" ? "large" : "small", showNote,
+    });
+  };
+  return (
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: T.z.modal, padding: 16 }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.25rem 1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>🏷 {zh ? "打印标签(草稿)" : "ラベル印刷(下書き)"}</div>
+          <button type="button" onClick={onClose} aria-label={zh ? "关闭" : "閉じる"} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, marginBottom: 12 }}>{LABEL_DRAFT_NOTE}</div>
+        {!summary.complete && (
+          <div style={{ marginBottom: 12 }}>
+            <InlineError title={zh ? `过敏原还有 ${unknownN} 项没确认` : `アレルゲン未確認 ${unknownN} 件`}
+              detail={(zh ? "标签上会印「(还有 N 项原料没核对过敏原)」,不会写成没有。没确认的:" : "ラベルには未確認の件数を印刷します。未確認:") + summary.unknown.slice(0, 8).map(u => _allergenUnknownText(u, zh)).join("、") + (summary.unknown.length > 8 ? " …" : "")} />
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 10 }}>
+          <div><label style={lab}>{zh ? "品名" : "品名"}</label><input value={name} onChange={e => setName(e.target.value)} style={inp} /></div>
+          <div><label style={lab}>{zh ? "净含量(可空,空着印横线手写)" : "内容量(空欄可)"}</label><input value={net} onChange={e => setNet(e.target.value)} placeholder={zh ? "例:6 枚 / 120 g" : "例:6 枚"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "保质期" : "賞味期限"}</label><input value={shelf} onChange={e => setShelf(e.target.value)} placeholder={zh ? "例:常温 5 天" : "例:常温 5 日"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "贮存条件" : "保存方法"}</label><input value={storage} onChange={e => setStorage(e.target.value)} placeholder={zh ? "例:0 到 4℃冷藏保存" : "例:要冷蔵 0〜4℃"} style={inp} /></div>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 500, margin: "4px 0 6px" }}>{zh ? "经营者信息(存下来,下次自动带出)" : "事業者情報(保存されます)"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 10 }}>
+          <div><label style={lab}>{zh ? "名称" : "名称"}</label><input value={shopName} onChange={e => setShopName(e.target.value)} placeholder={zh ? "填营业执照上的名称" : "営業許可証の名称"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "地址" : "住所"}</label><input value={address} onChange={e => setAddress(e.target.value)} placeholder={zh ? "填营业执照上的地址" : "営業許可証の住所"} style={inp} /></div>
+          <div><label style={lab}>{zh ? "电话" : "電話"}</label><input value={phone} onChange={e => setPhone(e.target.value)} style={inp} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+          <div style={{ width: 100 }}><label style={lab}>{zh ? "张数" : "枚数"}</label><input type="number" min="1" max="60" inputMode="numeric" value={count} onChange={e => setCount(e.target.value)} style={inp} /></div>
+          <div>
+            <label style={lab}>{zh ? "尺寸" : "サイズ"}</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["small", zh ? "88×48 mm · 每页 10 张" : "88×48 mm・10 枚/頁"], ["large", zh ? "88×80 mm · 每页 6 张" : "88×80 mm・6 枚/頁"]].map(([v, t]) => (
+                <button key={v} type="button" onClick={() => setSize(v)} aria-pressed={size === v}
+                  style={{ padding: "7px 10px", fontSize: 12, border: `1.5px solid ${size === v ? "#111111" : "#E5E5E5"}`, background: size === v ? "#111111" : "#FFFFFF", color: size === v ? "#FFFFFF" : "#111111", borderRadius: 8, cursor: "pointer" }}>{t}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>
+          <input type="checkbox" checked={showNote} onChange={e => setShowNote(e.target.checked)} />
+          {zh ? "标签底部印「标签草稿」那行小字" : "ラベル下部に「下書き」の注記を印刷"}
+        </label>
+        <div style={{ background: T.bgMuted, padding: "8px 12px", fontSize: 12, lineHeight: 1.7, marginBottom: 10 }}>
+          <div><b>{zh ? "配料:" : "原材料:"}</b>{draft.text || "—"}</div>
+          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12 }}>{zh ? "打印时选「实际大小 / 100%」,别选「适合页面」。" : "印刷は「実際のサイズ(100%)」で。"}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <Btn onClick={onClose}>{zh ? "取消" : "キャンセル"}</Btn>
+          <Btn variant="primary" onClick={confirm}>{zh ? "🖨 打印预览" : "🖨 印刷プレビュー"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 一张标签大约放得下多少字的配料表(按 6.5pt、82 mm 宽一行约 34 字估的;印之前弹窗按它提醒、默认挑尺寸)。超出的部分会被裁掉,所以宁可估小
+const LABEL_FIT = { small: 60, large: 360 };
+// A4 标签页:88×48 mm 每页 2×5 张(或 88×80 mm 每页 2×3 张)。只印中文(强制标示事项用规范汉字)。不印水印、不印价格
+function LabelTemplate({ data, printSettings = {} }) {
+  const d = data || {};
+  const large = d.size === "large";
+  const perPage = large ? 6 : 10;
+  const h = large ? 80 : 48;
+  const n = Math.min(60, Math.max(1, parseInt(d.count, 10) || 1));
+  const pages = [];
+  for (let i = 0; i < n; i += perPage) pages.push(Array.from({ length: Math.min(perPage, n - i) }, (_, k) => i + k));
+  const blank = (w) => <span style={{ display: "inline-block", minWidth: w, borderBottom: "0.2mm solid #000" }}>{" "}</span>;
+  const row = { fontSize: "7pt", lineHeight: 1.3 };
+  const ingSize = (d.ingredientsText || "").length > (large ? 280 : 45) ? "6.5pt" : "7pt";
+  const shopName = _normTxt(printSettings.labelShopName), address = _normTxt(printSettings.labelAddress), phone = _normTxt(printSettings.labelPhone);
+  const contains = Array.isArray(d.contains) ? d.contains : [], may = Array.isArray(d.mayContain) ? d.mayContain : [];
+  const one = (key) => (
+    <div key={key} className="k-label" style={{ width: "88mm", height: h + "mm", boxSizing: "border-box", border: "0.25mm solid #000", padding: "1.8mm 2.6mm", overflow: "hidden", display: "flex", flexDirection: "column", gap: "0.4mm", breakInside: "avoid", pageBreakInside: "avoid", color: "#000" }}>
+      <div style={{ fontSize: "10pt", fontWeight: 700, lineHeight: 1.25 }}>{d.name || blank("40mm")}</div>
+      <div style={{ fontSize: ingSize, lineHeight: 1.3, flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}><b>配料:</b>{d.ingredientsText || blank("50mm")}</div>
+      {(contains.length > 0 || d.unknownCount > 0) && (
+        <div style={{ ...row, fontWeight: 700 }}>
+          致敏物质提示:{contains.length > 0 ? `含有${contains.join("、")}。` : ""}{d.unknownCount > 0 ? `(还有 ${d.unknownCount} 项原料没核对过敏原)` : ""}
+        </div>
+      )}
+      {may.length > 0 && <div style={row}>可能含有{may.join("、")}。</div>}
+      <div style={row}>净含量:{d.netContent || blank("16mm")}{"　"}生产日期:{blank("8mm")}年{blank("5mm")}月{blank("5mm")}日</div>
+      <div style={row}>保质期:{d.shelfLife || blank("16mm")}{"　"}贮存条件:{d.storage || blank("20mm")}</div>
+      <div style={row}>经营者:{shopName || blank("40mm")}</div>
+      <div style={row}>地址:{address || blank("36mm")}{"　"}电话:{phone || blank("18mm")}</div>
+      {d.showNote && <div style={{ fontSize: "6pt", lineHeight: 1.25 }}>{LABEL_DRAFT_NOTE}</div>}
+    </div>
+  );
+  return (
+    <div className="k-label-sheet">
+      {pages.map((pg, pi) => (
+        <div key={pi} className="k-label-page" style={{ display: "grid", gridTemplateColumns: "88mm 88mm", gridAutoRows: h + "mm", gap: "3mm 3mm", justifyContent: "center", breakAfter: pi < pages.length - 1 ? "page" : "auto", pageBreakAfter: pi < pages.length - 1 ? "always" : "auto", marginBottom: pi < pages.length - 1 ? "10mm" : 0 }}>
+          {pg.map(i => one(i))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -16754,6 +16899,8 @@ function App() {
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
+  // 第 3 批 F3:详情页过敏原卡片的「🏷 打印标签」→ 先弹 LabelPrintModal(填净含量 / 经营者信息等),确认后 data 换成算好的标签内容
+  const openLabelPrint = (kind, entity) => setPrintTarget({ type: "label", data: { kind, entity }, stage: "settings" });
   const [tab, setTab] = useState("list");
   const [lang, setLang] = useState("zh"); // v17 中文优先: 默认中文启动 (LuLu 主要国内中文录入)
   const [moreOpen, setMoreOpen] = useState(false); // 手机端「更多」抽屉
@@ -18129,7 +18276,19 @@ function App() {
       )}
 
       {/* 🖨 打印设置弹窗 */}
-      {printTarget && printTarget.stage === "settings" && (
+      {printTarget && printTarget.stage === "settings" && printTarget.type === "label" && (
+        <LabelPrintModal
+          kind={printTarget.data.kind}
+          entity={printTarget.data.entity}
+          lang={lang}
+          materials={materials} brands={brands} components={components} recipes={recipes} creations={creations}
+          printSettings={printSettings}
+          onClose={() => setPrintTarget(null)}
+          onUpdateSettings={(patch) => setPrintSettings(prev => ({ ...prev, ...patch }))}
+          onConfirm={(label) => setPrintTarget({ type: "label", data: label, stage: "preview", lang: "zh" })}
+        />
+      )}
+      {printTarget && printTarget.stage === "settings" && printTarget.type !== "label" && (
         <PrintModal
           itemType={printTarget.type}
           onClose={() => setPrintTarget(null)}
@@ -18148,7 +18307,7 @@ function App() {
             sections={printTarget.sections}
             printSettings={printSettings}
             onClose={() => setPrintTarget(null)}
-            onUpdateSettings={(newSettings) => setPrintSettings(newSettings)}
+            onUpdateSettings={(newSettings) => setPrintSettings(prev => ({ ...prev, ...newSettings }))}
           />
         </div>
       )}
@@ -18865,7 +19024,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} />
         </div>
       )}
 
@@ -19011,6 +19170,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setProductionLog={setProductionLog}
           materials={materials}
           brands={brands}
+          onPrintLabel={openLabelPrint}
         />
       )}
 
@@ -19178,6 +19338,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           returnToList={creationReturnTo === "list"}
           onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
           onOpenFromList={() => setCreationReturnTo(null)}
+          onPrintLabel={openLabelPrint}
         />
       )}
 
