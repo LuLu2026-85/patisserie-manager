@@ -4010,8 +4010,8 @@ const _dhName = (o, lang) => { if (!o) return ""; const zh = lang !== "ja"; retu
 const _dhTitle = (o, lang) => { if (!o) return ""; const zh = lang !== "ja"; return String((zh ? (o.titleZh || o.titleJa) : (o.titleJa || o.titleZh)) || "").trim(); };
 // 疑似重复材料的比较键:全角半角统一、去空格、不分大小写
 const _dhKey = (s) => String(s === undefined || s === null ? "" : s).normalize("NFKC").replace(/\s+/g, "").toLowerCase();
-// 日文:假名,或日文的中间点「・」(小麦・卵・乳 这种;中文输入法打出来的是「·」,不算)。长音「ー」不算
-const _dhKana = /[ぁ-ゖァ-・]/;
+// 日文:假名,或只有日文用的过敏原词「卵」(中文标签写「蛋」)。中点「・」不算日文(日文输入法打中文也会打出「小麦・鸡蛋・牛奶」),长音「ー」也不算
+const _dhKana = /[ぁ-ゖァ-ヺ]|卵/;
 // 按个数的规格(3 個 / 10 本入 / 1 袋 / 2 号缶 ……)读不出克数是正常的,不算问题
 const _dhCountPack = /[個个本枚缶罐袋粒片箱入支张張盒瓶根颗顆卷巻]|pcs?\b/i;
 // 每克价 → 每 100g 的数(两位小数,去尾零)
