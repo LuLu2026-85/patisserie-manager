@@ -9605,13 +9605,17 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
   const [shelf, setShelf] = useState(defaults.shelfLife);
   const [storage, setStorage] = useState(defaults.storage);
   const [count, setCount] = useState("10");
-  const [size, setSize] = useState(() => draft.text.length > LABEL_FIT.small ? "large" : "small");   // 配料表长的默认大一号
   const [showNote, setShowNote] = useState(true);
   const [shopName, setShopName] = useState(printSettings.labelShopName || "");
   const [address, setAddress] = useState(printSettings.labelAddress || "");
   const [phone, setPhone] = useState(printSettings.labelPhone || "");
   const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
-  const tooLong = draft.text.length > LABEL_FIT[size === "large" ? "large" : "small"];
+  // 审查 r1:放不放得下按整张标签估(labelIngFits),不只看配料表字数
+  const fitsOn = (sz) => labelIngFits({ name: name.trim(), ingredientsText: draft.text, contains: summary.contains.map(c => allergenByCode(c).label),
+    mayContain: summary.mayContain.map(c => allergenByCode(c).label), unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
+    showNote, size: sz }, { labelShopName: shopName, labelAddress: address, labelPhone: phone });
+  const [size, setSize] = useState(() => (draft.text.length > LABEL_FIT.small || !fitsOn("small")) ? "large" : "small");   // 放不下的默认大一号
+  const tooLong = draft.text.length > LABEL_FIT[size === "large" ? "large" : "small"] || !fitsOn(size);
   const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
   const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 4 };
   const confirm = () => {
@@ -9669,7 +9673,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
         </label>
         <div style={{ background: T.bgMuted, padding: "8px 12px", fontSize: 12, lineHeight: 1.7, marginBottom: 10 }}>
           <div><b>{zh ? "配料:" : "原材料:"}</b>{draft.text || "—"}</div>
-          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
+          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,加上过敏原、地址、草稿提示这几行,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12 }}>{zh ? "打印时选「实际大小 / 100%」,别选「适合页面」。" : "印刷は「実際のサイズ(100%)」で。"}</div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -9683,6 +9687,34 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
 
 // 一张标签大约放得下多少字的配料表(按 6.5pt、82 mm 宽一行约 34 字估的;印之前弹窗按它提醒、默认挑尺寸)。超出的部分会被裁掉,所以宁可估小
 const LABEL_FIT = { small: 60, large: 360 };
+// 审查 r1:只看配料表字数不够 —— 过敏原那行(没核对完会多一段「还有 N 项…」)、可能含有、长地址、草稿提示换了行,配料那一格就只剩一行。
+// 这里按 LabelTemplate 的尺寸把别的几行实际占几行算出来,再看配料表放不放得下(单位 = 一个汉字宽;数字 / 英文 / 空格按 0.55 个)。
+// 常数照 LabelTemplate:88 mm 宽、左右内边距 2.6 mm、上下 1.8 mm、边框 0.25 mm;品名 10pt×1.25、各行 7pt×1.3、配料 7 或 6.5pt×1.3、
+// 草稿提示 6pt×1.25,行间 0.4 mm。审查时在 Edge 里量过:这组常数下 55 字 / 40 字 + 5 类过敏原 + 未核对 + 可能含有 + 长地址 + 草稿提示 都被裁,少一行就放得下
+const _labelUnits = (s) => { let n = 0; for (const ch of String(s === undefined || s === null ? "" : s)) n += ch.charCodeAt(0) < 0x2E80 ? 0.55 : 1; return n; };
+const labelIngFits = (d, printSettings = {}) => {
+  const large = d && d.size === "large";
+  const PT = 0.3528, W = 88 - 2 * 2.6 - 0.5, H = (large ? 80 : 48) - 2 * 1.8 - 0.5, GAP = 0.4;
+  const perLine = (pt) => Math.floor(W / (pt * PT));
+  const nLines = (units, pt) => Math.max(1, Math.ceil(units / perLine(pt)));
+  const blank = (mm, pt) => mm / (pt * PT);
+  let used = 0, rows = 0;
+  // 带手写横线(inline-block + 下边框)的行,行框会比 1.3 倍行高多出约 1 px,按 0.3 mm 算
+  const add = (units, pt, lh, hasBlank) => { used += nLines(units, pt) * pt * lh * PT + (hasBlank ? 0.3 : 0); rows++; };
+  const contains = (d && d.contains) || [], may = (d && d.mayContain) || [];
+  const shop = _normTxt(printSettings.labelShopName), addr = _normTxt(printSettings.labelAddress), phone = _normTxt(printSettings.labelPhone);
+  add(d.name ? _labelUnits(d.name) : blank(40, 10), 10, 1.25, !d.name);
+  if (contains.length || d.unknownCount > 0) add(_labelUnits(`致敏物质提示:${contains.length ? `含有${contains.join("、")}。` : ""}${d.unknownCount > 0 ? `(还有 ${d.unknownCount} 项原料没核对过敏原)` : ""}`) * 1.05, 7, 1.3);   // 粗体略宽
+  if (may.length) add(_labelUnits(`可能含有${may.join("、")}。`), 7, 1.3);
+  add(_labelUnits(`净含量:${d.netContent || ""}　生产日期:年月日`) + (d.netContent ? 0 : blank(16, 7)) + blank(18, 7), 7, 1.3, true);
+  add(_labelUnits(`保质期:${d.shelfLife || ""}　贮存条件:${d.storage || ""}`) + (d.shelfLife ? 0 : blank(16, 7)) + (d.storage ? 0 : blank(20, 7)), 7, 1.3, !d.shelfLife || !d.storage);
+  add(_labelUnits(`经营者:${shop}`) + (shop ? 0 : blank(40, 7)), 7, 1.3, !shop);
+  add(_labelUnits(`地址:${addr}　电话:${phone}`) + (addr ? 0 : blank(36, 7)) + (phone ? 0 : blank(18, 7)), 7, 1.3, !addr || !phone);
+  if (d.showNote) add(_labelUnits(LABEL_DRAFT_NOTE), 6, 1.25);
+  const ingPt = String(d.ingredientsText || "").length > (large ? 280 : 45) ? 6.5 : 7;
+  const fitLines = Math.floor((H - used - GAP * rows) / (ingPt * 1.3 * PT) + 0.02);
+  return nLines(_labelUnits("配料:" + (d.ingredientsText || "")), ingPt) <= fitLines;
+};
 // A4 标签页:88×48 mm 每页 2×5 张(或 88×80 mm 每页 2×3 张)。只印中文(强制标示事项用规范汉字)。不印水印、不印价格
 function LabelTemplate({ data, printSettings = {} }) {
   const d = data || {};
@@ -9697,10 +9729,16 @@ function LabelTemplate({ data, printSettings = {} }) {
   const ingSize = (d.ingredientsText || "").length > (large ? 280 : 45) ? "6.5pt" : "7pt";
   const shopName = _normTxt(printSettings.labelShopName), address = _normTxt(printSettings.labelAddress), phone = _normTxt(printSettings.labelPhone);
   const contains = Array.isArray(d.contains) ? d.contains : [], may = Array.isArray(d.mayContain) ? d.mayContain : [];
+  // 审查 r1:印之前量第一张的配料那一格,真被裁了就在每张上印一行「没印全」(弹窗的估算万一估漏,也不会悄悄少印半截)
+  const ingRef = useRef(null);
+  const [clipped, setClipped] = useState(false);
+  const fitSig = JSON.stringify([d, shopName, address, phone]);
+  useEffect(() => { const el = ingRef.current; setClipped(!!(el && el.scrollHeight > el.clientHeight + 1)); }, [fitSig]);
   const one = (key) => (
     <div key={key} className="k-label" style={{ width: "88mm", height: h + "mm", boxSizing: "border-box", border: "0.25mm solid #000", padding: "1.8mm 2.6mm", overflow: "hidden", display: "flex", flexDirection: "column", gap: "0.4mm", breakInside: "avoid", pageBreakInside: "avoid", color: "#000" }}>
       <div style={{ fontSize: "10pt", fontWeight: 700, lineHeight: 1.25 }}>{d.name || blank("40mm")}</div>
-      <div style={{ fontSize: ingSize, lineHeight: 1.3, flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}><b>配料:</b>{d.ingredientsText || blank("50mm")}</div>
+      <div ref={key === 0 ? ingRef : undefined} style={{ fontSize: ingSize, lineHeight: 1.3, flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}><b>配料:</b>{d.ingredientsText || blank("50mm")}</div>
+      {clipped && <div data-label-clipped="1" style={{ ...row, fontWeight: 700 }}>⚠ 配料表没印全,请换大一号标签</div>}
       {(contains.length > 0 || d.unknownCount > 0) && (
         <div style={{ ...row, fontWeight: 700 }}>
           致敏物质提示:{contains.length > 0 ? `含有${contains.join("、")}。` : ""}{d.unknownCount > 0 ? `(还有 ${d.unknownCount} 项原料没核对过敏原)` : ""}
