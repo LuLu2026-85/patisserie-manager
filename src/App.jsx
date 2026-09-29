@@ -9477,6 +9477,8 @@ function MaterialAllergenSummary({ material: m, lang }) {
 }
 
 // 配方 / 组件 / 组合产品 / 商品详情页的汇总卡片。handwritten = 配方上手写的 allergens(只有配方有),并排显示、不一致标出来,不改它
+// 配料表草稿里「无法按重量排序」的一项:名字 + 数量(或为什么没数)。详情页卡片和标签弹窗共用
+const _nonGramText = (x, zh) => `${x.text}${isFinite(x.qty) ? ` ${fmtQty(x.qty)}${x.unit ? " " + x.unit : ""}` : (x.reason === "noUsed" ? (zh ? "(用量没填)" : "(使用量未入力)") : x.reason === "missingItem" ? (zh ? "(已删除)" : "(削除済み)") : "")}`;
 function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], handwritten, onPrintLabel, flat = false }) {
   const zh = lang !== "ja";
   const [showAllUnknown, setShowAllUnknown] = useState(false);
@@ -9572,7 +9574,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
               {draft.nonGram.length > 0 && (
                 <div style={{ color: T.warning }}>
                   {zh ? "无法按重量排序(排在最后,要人工放位置):" : "重量で並べられない(末尾に置いています):"}
-                  {draft.nonGram.map(x => `${x.text}${isFinite(x.qty) ? ` ${fmtQty(x.qty)}${x.unit ? " " + x.unit : ""}` : (x.reason === "noUsed" ? (zh ? "(用量没填)" : "(使用量未入力)") : x.reason === "missingItem" ? (zh ? "(已删除)" : "(削除済み)") : "")}`).join("、")}
+                  {draft.nonGram.map(x => _nonGramText(x, zh)).join("、")}
                 </div>
               )}
               <div style={{ color: T.textTertiary, marginTop: 4 }}>
@@ -9684,6 +9686,14 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
         </label>
         <div style={{ background: T.bgMuted, padding: "8px 12px", fontSize: 12, lineHeight: 1.7, marginBottom: 10 }}>
           <div><b>{zh ? "配料:" : "原材料:"}</b>{draft.text || "—"}</div>
+          {/* 审查 r2:以前只在详情页收起的「配料表草稿」里说,印标签的这里不提,整行按部分顺序印出去也看不出来(热带水果 5 个部分全没填用量) */}
+          {draft.nonGram.length > 0 && (
+            <div data-label-nongram="1" style={{ color: T.warning, marginTop: 4 }}>
+              {zh ? `⚠ 这 ${draft.nonGram.length} 项没法按重量排序,标签上放在最后(按配方里的顺序),不符合按重量从多到少排,要自己确认位置:`
+                : `⚠ 重量で並べられない ${draft.nonGram.length} 件は末尾に置いています(レシピ順)。位置を確認してください:`}
+              {draft.nonGram.map(x => _nonGramText(x, zh)).join(zh ? "、" : "・")}
+            </div>
+          )}
           {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,加上过敏原、地址、草稿提示这几行,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12 }}>{zh ? "打印时选「实际大小 / 100%」,别选「适合页面」。" : "印刷は「実際のサイズ(100%)」で。"}</div>
