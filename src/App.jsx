@@ -17115,6 +17115,13 @@ const defaultProdQty = (kind, obj) => {
   const n = parseFloat(obj && (kind === "creation" ? obj.serves : obj.yield));
   return n > 0 ? n : 1;
 };
+// 审查 r1:配方 / 组件没填产出量 → 数量是「几批」;单子上所有这种块的名字(总量那里提醒)
+const _prodNoYield = (kind, obj) => (kind === "recipe" || kind === "component") && !!obj && !(parseFloat(obj.yield) > 0);
+const prodNoYieldNames = (sheet, lang) => {
+  const out = [];
+  (sheet || []).forEach(s => (s.blocks || []).forEach(b => { if (b && b.noYield && b.target) { const n = prodName(b.target, lang); if (!out.includes(n)) out.push(n); } }));
+  return out;
+};
 const _prodFind = (list, id) => (list || []).find(x => x && String(x.id) === String(id));
 const _prodIngRows = (ings, scale) => (ings || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => {
   const q = parseFloat(i.qty);
@@ -17138,7 +17145,8 @@ const prodBlockOf = (type, target, need, ctx) => {
   const fam = type === "recipe" && target.familyId ? _prodFind(ctx.productFamilies, target.familyId) : null;
   const pickP = (own, famv) => _normTxt(own) ? { v: _normTxt(own), fam: false } : (fam && _normTxt(famv) ? { v: _normTxt(famv), fam: true } : { v: "", fam: false });
   return {
-    type, target, need, scale, yieldNum, unit: _normTxt(target.unit) || (type === "component" ? "g" : ""), rows, bad: _prodBadRows(rows),
+    // 审查 r1:noYield = 没填产出量,need 其实是「几批」(不是几个 / 几克),页面不再写「一批 1 個」
+    type, target, need, scale, yieldNum, noYield: !(yieldNum > 0), unit: _normTxt(target.unit) || (type === "component" ? "g" : ""), rows, bad: _prodBadRows(rows),
     mold: pickP(target.mold, fam && fam.commonMold),
     temp: type === "recipe" ? pickP(target.temp, fam && fam.commonTemp) : { v: "", fam: false },
     time: type === "recipe" ? pickP(target.baketime, fam && fam.commonTime) : { v: "", fam: false },
@@ -17182,6 +17190,8 @@ const PROD_TXT = {
     stale: (d) => `上次的单子是 ${d} 的,换了日期自动清空。`, copyStale: (d) => `↺ 照 ${d} 的单子再来一份`,
     missing: "这一样已经删掉了(商品 / 配方 / 组合产品找不到)", zero: "数量是 0,不做", noItems: "这个商品没挂配方 / 组合产品,只能记入生产",
     batchOf: (k, y, u) => `约 ${k} 批(一批 ${y}${u})`, per: (n, u) => `每件含 ${n}${u}`,
+    noYield: (k) => `⚠ 没填产出量,数量按批数算:整批配方 × ${k}(一批做多少不知道,去配方里填上产出量)`, batchUnit: "批",
+    noYieldTotals: (names) => `这些没填产出量,按整批数算进来了:${names}`,
     mold: "模具", temp: "炉温", time: "时间", fam: "家族通用", size: "尺寸",
     bad: "这几项用量读不出数字,按原文做:", badEmpty: "没填",
     partNeed: "需要", fromStock: "从库存取", noUsed: "这一部分没填用量,下面是组件的整批配方,没按个数算", ambiguous: (n, u) => `用量只认开头的数字,按 ${n} ${u} 一批算`,
@@ -17206,6 +17216,8 @@ const PROD_TXT = {
     stale: (d) => `前回のリストは ${d} のものです(日付が変わると空になります)。`, copyStale: (d) => `↺ ${d} と同じ内容で作る`,
     missing: "削除済み(見つかりません)", zero: "数量 0", noItems: "レシピ未関連の商品(製造記録のみ)",
     batchOf: (k, y, u) => `約 ${k} バッチ(1 バッチ ${y}${u})`, per: (n, u) => `1 個あたり ${n}${u}`,
+    noYield: (k) => `⚠ 出来数が未入力のため数量はバッチ数:全量 × ${k}(レシピに出来数を入力してください)`, batchUnit: "バッチ",
+    noYieldTotals: (names) => `出来数未入力(バッチ数で計算):${names}`,
     mold: "型", temp: "温度", time: "時間", fam: "ファミリー共通", size: "サイズ",
     bad: "分量が数字でない項目(原文どおり):", badEmpty: "未入力",
     partNeed: "必要量", fromStock: "ストックから", noUsed: "使用量未入力のため全量レシピ", ambiguous: (n, u) => `先頭の数字 ${n} ${u} で計算`,
@@ -17301,11 +17313,13 @@ function ProdBlock({ b, lang, showHead, onKitchen }) {
       </div>
     );
   }
-  const u = b.unit;
+  const u = b.noYield ? X.batchUnit : b.unit;
   return (
     <div style={{ marginTop: 10 }}>
       {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)}{u ? " " + u : ""}</span></div>}
-      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), u ? " " + u : "")}</div>
+      {b.noYield
+        ? <div data-prod-noyield="1" style={{ ...T.fs.caption, color: T.warning, marginTop: 2, ...T.num }}>{X.noYield(fmtQty(b.scale))}</div>
+        : <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), u ? " " + u : "")}</div>}
       <ProdMeta b={b} lang={lang} />
       {kitchenBtn}
       <ProdIngList rows={b.rows} bad={b.bad} lang={lang} />
@@ -17321,6 +17335,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   const name = s.obj ? prodName(s.obj, lang) : String(l.id);
   const unit = isProduct ? ((s.obj && s.obj.unit) || X.unitPiece)
     : l.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), lang).unit : "")
+    : _prodNoYield(l.kind, s.obj) ? X.batchUnit
     : ((s.obj && s.obj.unit) || (l.kind === "component" ? "g" : ""));
   const logged = parseFloat(l.logged) || 0;
   const pending = Math.round((s.qty - logged) * 1000) / 1000;
@@ -17379,7 +17394,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
 }
 
 // 今天总共要称多少
-function ProdTotals({ totals, lang }) {
+function ProdTotals({ totals, lang, noYieldNames = [] }) {
   const X = prodTxt(lang);
   const row = (w, i) => (
     <div key={w.key || i} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, padding: "7px 0", borderBottom: `1px solid ${T.lineFaint}`, alignItems: "baseline" }}>
@@ -17396,6 +17411,7 @@ function ProdTotals({ totals, lang }) {
     <div data-prodtotals="1" style={{ marginTop: 20 }}>
       <div style={{ ...T.fs.titleS, fontFamily: T.fontSerif }}>{X.totals}</div>
       <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{X.totalsHint}</div>
+      {noYieldNames.length > 0 && <div data-prod-noyield-totals="1" style={{ ...T.fs.caption, color: T.warning, marginTop: 6, overflowWrap: "anywhere" }}>⚠ {X.noYieldTotals(noYieldNames.map(n => `「${n}」`).join(""))}</div>}
       <div style={box}>{totals.weigh.length ? totals.weigh.map(row) : <div style={{ ...T.fs.caption, color: T.subtle }}>—</div>}</div>
       {totals.nonGram.length > 0 && (
         <div style={box}><div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.nonGram}</div>{totals.nonGram.map(row)}</div>
@@ -17477,7 +17493,7 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
       {items.map(({ kind, obj }) => {
         const already = on.has(kind + "\u0000" + String(obj.id));
         const q = defaultProdQty(kind, obj);
-        const u = kind === "creation" ? creationWords(creationStructureOf(obj), lang).unit : (obj.unit || "");
+        const u = kind === "creation" ? creationWords(creationStructureOf(obj), lang).unit : _prodNoYield(kind, obj) ? X.batchUnit : (obj.unit || "");
         return (
           <div key={kind + obj.id} data-addonsale={kind + ":" + obj.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}`, flexWrap: "wrap" }}>
             <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[kind]}</span>
@@ -17578,7 +17594,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
               onLog={() => onLogProduction && onLogProduction(s.line.uid)}
               readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined} />
           ))}
-          <ProdTotals totals={totals} lang={lang} />
+          <ProdTotals totals={totals} lang={lang} noYieldNames={prodNoYieldNames(sheet, lang)} />
         </>
       )}
     </div>
@@ -17886,15 +17902,16 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
     }
     return (
       <div key={key} style={{ marginTop: "6px" }}>
-        {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)}{b.unit ? " " + b.unit : ""}</div>}
-        <div style={{ fontSize: "10pt" }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), b.unit ? " " + b.unit : "")}{metaText(b) ? "   " + metaText(b) : ""}</div>
+        {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)}{b.noYield ? " " + X.batchUnit : b.unit ? " " + b.unit : ""}</div>}
+        <div style={{ fontSize: "10pt", fontWeight: b.noYield ? 700 : undefined }}>{b.noYield ? X.noYield(fmtQty(b.scale)) : X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), b.unit ? " " + b.unit : "")}{metaText(b) ? "   " + metaText(b) : ""}</div>
         {ingTable(b.rows)}
       </div>
     );
   };
   const lineName = (s) => s.obj ? prodName(s.obj, L) : String(s.line.id);
   const lineUnit = (s) => s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
-    : s.line.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), L).unit : "") : ((s.obj && s.obj.unit) || (s.line.kind === "component" ? "g" : ""));
+    : s.line.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), L).unit : "")
+    : _prodNoYield(s.line.kind, s.obj) ? X.batchUnit : ((s.obj && s.obj.unit) || (s.line.kind === "component" ? "g" : ""));
   const recCols = zh ? ["品名", "计划", "实做", "开始", "出炉", "核温", "签名"] : ["品名", "計画", "実績", "開始", "焼き上がり", "芯温", "サイン"];
   const totalRow = (w, i) => (
     <tr key={i}>
@@ -17936,6 +17953,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       ))}
 
       <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{X.totals}</div>
+      {prodNoYieldNames(sheet, L).length > 0 && <div className="p-row" style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.noYieldTotals(prodNoYieldNames(sheet, L).map(n => `「${n}」`).join(""))}</div>}
       <table><tbody>{totals.weigh.map(totalRow)}</tbody></table>
       {totals.nonGram.length > 0 && (<>
         <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.nonGram}</div>
@@ -18201,6 +18219,7 @@ const KITCHEN_TXT = {
     tapHint: "点一行 = 称好了 / 放好了,打勾;点一步 = 标出正在做的这一步。勾选只记在这台设备的这个页面里,关掉浏览器就清空。",
     fromStock: "从库存取", noSteps: "没写做法", noIngs: "没有配料", qtyHint: "填要做的数量(大于 0)",
     partNeed: "需要", batchOf: (k, y, u) => `约 ${k} 批(一批 ${y}${u})`, stockBadge: "备货",
+    noYield: (k) => `⚠ 这个配方没填产出量,数量按批数算:下面是整批配方 × ${k},按批数加减`, batchUnit: "批",
     noUsed: "这一部分没填用量,下面是组件的整批配方,没按个数算", ambiguous: (n, u) => `用量只认开头的数字,按 ${n} ${u} 一批算`,
     whole: (f) => `整批 × ${f}`, badQty: "用量读不出数字,按原文",
     wakeOn: "☀ 屏幕常亮中", wakeNo: "这台设备没法让屏幕一直亮着。请在 iPad 设置 → 显示与亮度 → 自动锁定 改成永不(用完记得改回来)。",
@@ -18218,6 +18237,7 @@ const KITCHEN_TXT = {
     tapHint: "行をタップ = 計量済みにチェック。工程をタップ = 作業中の工程を表示。チェックはこの端末のこのページだけに残り、ブラウザを閉じると消えます。",
     fromStock: "ストックから", noSteps: "作り方なし", noIngs: "材料なし", qtyHint: "数量を入力(0 より大きい数)",
     partNeed: "必要量", batchOf: (k, y, u) => `約 ${k} バッチ(1 バッチ ${y}${u})`, stockBadge: "作り置き",
+    noYield: (k) => `⚠ 出来数が未入力のため数量はバッチ数:全量 × ${k}(バッチ単位で増減)`, batchUnit: "バッチ",
     noUsed: "使用量未入力のため全量レシピ(個数で計算していません)", ambiguous: (n, u) => `先頭の数字 ${n} ${u} で計算`,
     whole: (f) => `全量 × ${f}`, badQty: "分量が数字でない(原文どおり)",
     wakeOn: "☀ 画面点灯中", wakeNo: "この端末では画面を点けたままにできません。iPad の設定 → 画面表示と明るさ → 自動ロック を「なし」にしてください(終わったら戻す)。",
@@ -18379,7 +18399,8 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const block = target && valid ? prodBlockOf(kind, target, need, ctx) : null;
   const yieldNum = target ? (parseFloat(target.yield) || 0) : 0;
   const stepSize = kind === "component" && yieldNum > 0 ? yieldNum : 1;
-  const unit = !target ? "" : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit : (_normTxt(target.unit) || (kind === "component" ? "g" : ""));
+  const unit = !target ? "" : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit
+    : _prodNoYield(kind, target) ? X.batchUnit : (_normTxt(target.unit) || (kind === "component" ? "g" : ""));
   const update = (fn) => { const next = fn(st); writeKitchenState(key, next); setSt(next); };
   const toggleIng = (k) => update(s => ({ ...s, ings: s.ings[k] ? Object.fromEntries(Object.entries(s.ings).filter(([x]) => x !== k)) : { ...s.ings, [k]: true } }));
   const pickStep = (k) => update(s => ({ ...s, step: k }));
@@ -18437,7 +18458,9 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
         {stepSize !== 1 && <span style={{ fontSize: 13, color: T.subtle }}>± {X.stepBatch}({fmtQty(stepSize)} {unit})</span>}
       </div>
       {!valid && <div style={{ fontSize: 15, color: T.danger, marginTop: 8 }}>{X.qtyHint}</div>}
-      {block && kind !== "creation" && <div style={{ fontSize: 15, color: T.body, marginTop: 8, ...T.num }}>{X.batchOf(fmtQty(block.scale), fmtQty(Math.max(1, block.yieldNum || 1)), block.unit ? " " + block.unit : "")}</div>}
+      {block && kind !== "creation" && (block.noYield
+        ? <div data-kitchen-noyield="1" style={{ fontSize: 15, color: T.warning, marginTop: 8, ...T.num }}>{X.noYield(fmtQty(block.scale))}</div>
+        : <div style={{ fontSize: 15, color: T.body, marginTop: 8, ...T.num }}>{X.batchOf(fmtQty(block.scale), fmtQty(Math.max(1, block.yieldNum || 1)), block.unit ? " " + block.unit : "")}</div>)}
       {metaItems.length > 0 && (
         <div style={{ display: "flex", gap: "6px 18px", flexWrap: "wrap", fontSize: 17, marginTop: 8 }}>
           {metaItems.map((it, i) => <span key={i}><span style={{ color: T.subtle }}>{it.label}</span> {it.v}{it.fam && <span style={{ color: T.subtle, fontSize: 13 }}>({zh ? "家族通用" : "ファミリー共通"})</span>}</span>)}
@@ -18523,7 +18546,8 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
   const row = (it) => {
     const n = prodName(it.obj, lang);
     const other = rawLang(it.obj, "name", lang);
-    const u = it.kind === "creation" ? creationWords(creationStructureOf(it.obj), lang).unit : (_normTxt(it.obj.unit) || (it.kind === "component" ? "g" : ""));
+    const u = it.kind === "creation" ? creationWords(creationStructureOf(it.obj), lang).unit
+      : _prodNoYield(it.kind, it.obj) ? X.batchUnit : (_normTxt(it.obj.unit) || (it.kind === "component" ? "g" : ""));
     return (
       <button key={it.kind + ":" + it.obj.id} type="button" data-kitchen-open={`${it.kind}:${it.obj.id}`} onClick={() => onOpen(it.kind, it.obj.id, it.qty)} className="k-kitchen-row"
         style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center", width: "100%", minHeight: 56, textAlign: "left", cursor: "pointer",
