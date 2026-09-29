@@ -1731,15 +1731,19 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   const addItem = (name, text, grams, compound, mkey, exp) => {
     const key = mkey || text;
     const prev = items.get(key);
-    if (prev) { prev.grams += grams; if (prev.name !== name) prev._multi = true; } else items.set(key, { name, text, grams, compound: !!compound, _exp: exp });
+    if (prev) { prev.grams += grams; if (prev.name !== name) prev._multi = true; } else items.set(key, { name, text, grams, compound: !!compound, _exp: exp, _n: key.startsWith("n:") });
   };
   const addNon = (name, text, qty, unit, reason, mkey, exp) => {
     const key = (mkey || text) + "\u0001" + (unit || "") + "\u0001" + reason;
     const prev = nonGram.get(key);
     const q = parseFloat(qty);
     if (prev) { if (isFinite(q) && isFinite(prev.qty)) prev.qty += q; else prev.qty = NaN; if (prev.name !== name) prev._multi = true; }
-    else nonGram.set(key, { name, text, qty: isFinite(q) ? q : NaN, unit: unit || "", reason, _exp: exp });
+    else nonGram.set(key, { name, text, qty: isFinite(q) ? q : NaN, unit: unit || "", reason, _exp: exp, _n: key.startsWith("n:") });
   };
+  // 审查 r2:没关联材料的行按「去掉末尾括号备注」的名字合并(「粉糖」+「粉糖（裹粉）」= 粉糖 2978 g;以前按全文字合并,同一样原料列两遍、
+  // 括号里的用途印成了名字、重量顺序也错)。只有一行时名字原样(手写的「巧克力(可可脂、糖)」不动),几行名字不一样才用去掉括号的名字;
+  // 只去括号,不去末尾的字母(「维生素 C」)
+  const stripNote = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || s;
   const e = entity || {};
   const visitIngs = (ings) => {
     (ings || []).forEach(ing => {
@@ -1750,7 +1754,7 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
       const exp = m ? _stripIngredientLead(m.labelIngredientsZh) : "";
       const text = exp ? `${name}(${exp})` : name;
       const g = ingGramsOf(ing);
-      const mkey = m ? "m:" + m.id : "";
+      const mkey = m ? "m:" + m.id : "n:" + stripNote(name);
       if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty", mkey, exp);
       else addItem(name, text, g, !!exp, mkey, exp);
     });
@@ -1789,8 +1793,8 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   const settle = (list, keyOf, merge) => {
     const out = new Map();
     list.forEach(x0 => {
-      const { _multi, _exp, ...x } = x0;
-      if (_multi) { x.name = baseName(x.name); x.text = _exp ? `${x.name}(${_exp})` : x.name; }
+      const { _multi, _exp, _n, ...x } = x0;
+      if (_multi) { x.name = _n ? stripNote(x.name) : baseName(x.name); x.text = _exp ? `${x.name}(${_exp})` : x.name; }
       const k = keyOf(x);
       const prev = out.get(k);
       if (prev) merge(prev, x); else out.set(k, x);
