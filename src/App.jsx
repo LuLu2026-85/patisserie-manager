@@ -17116,7 +17116,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   const ingName = (ing) => mLabel(ing) || ing.nameFr || "";
   // 生产模式的累加
   const weigh = new Map();
-  const fromStock = [];
+  const fromStock = new Map(); // 审查 r4:同一个备货组件(同单位)合成一行 —— 以前每个部分 / 每行生产单各一行,热带水果 3 层 × 2 行出 6 行一样的名字
   const addWeigh = (ing, qty, src) => {
     const unit = _prodUnitOf(ing.unit);
     const mat = ing.materialId ? (materials || []).find(m => m && m.id === ing.materialId) : null;
@@ -17152,7 +17152,16 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       const b = creationBatch(target, count, components, materials || [], brands || []);
       b.parts.forEach(p => {
         // 生产单:备货的部分不展开原料,只写「从库存取多少」
-        if (prodMode && p.stock) { fromStock.push({ src, name: p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`, unit: p.layer.unit || "g", qty: p.needed, noUsed: p.noUsed }); return; }
+        if (prodMode && p.stock) {
+          const nm = p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`, unit = p.layer.unit || "g";
+          const k = (p.layer.sourceComponentId || _prodNameKey(nm)) + "\u0000" + _prodUnitOf(unit);
+          if (!fromStock.has(k)) fromStock.set(k, { name: nm, unit, qty: 0, srcs: new Set(), noUsed: false });
+          const f = fromStock.get(k);
+          if (p.needed === null || f.qty === null) f.qty = null; else f.qty += p.needed;
+          if (p.noUsed) f.noUsed = true;
+          if (src) f.srcs.add(src);
+          return;
+        }
         if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
         p.ings.forEach(({ ing, qty }) => {
           if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
@@ -17203,7 +17212,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     const all = [...weigh.values()].map(w => ({ ...w, srcs: [...w.srcs] })).sort((a, b) => b.qty - a.qty);
     out.weigh = all.filter(w => w.gram);
     out.nonGram = all.filter(w => !w.gram);
-    out.fromStock = fromStock;
+    out.fromStock = [...fromStock.values()].map(f => ({ ...f, srcs: [...f.srcs] }));
   }
   return out;
 };
@@ -17554,7 +17563,7 @@ function ProdTotals({ totals, lang, noYieldNames = [] }) {
       {totals.fromStock.length > 0 && (
         <div style={box}>
           <div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.stockTitle}</div>
-          {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.name, srcs: [f.src], qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
+          {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
         </div>
       )}
       {totals.skipped.length > 0 && (
@@ -18111,7 +18120,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       </>)}
       {totals.fromStock.length > 0 && (<>
         <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.stockTitle}</div>
-        <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.name, srcs: [f.src], qty: f.qty, unit: f.unit }, i))}</tbody></table>
+        <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.name, srcs: f.srcs, qty: f.qty, unit: f.unit }, i))}</tbody></table>
       </>)}
       {totals.skipped.length > 0 && (
         <div style={{ marginTop: "10px", fontSize: "9.5pt" }}>
