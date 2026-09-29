@@ -12721,7 +12721,8 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
   const isNew = !brand;
   const [errorMsg, setErrorMsg] = useState("");
   const empty = { nameZh: "", nameJa: "", nameFr: "", categoryId: defaultCategory || "dairy_other", subcategoryId: "other", origin: "", foundedYear: "", storyZh: "", storyJa: "", imageUrls: [] };
-  const [form, setForm] = useState(brand ? { ...brand } : empty);
+  // 审查第 6 轮:老数据 350 家的创立年份存的是 0(输入框显示空、保存也写 ""),表单里先当 "",敲一位再删掉才不会白问「还没保存」
+  const [form, setForm] = useState(brand ? { ...brand, ...(brand.foundedYear === 0 ? { foundedYear: "" } : {}) } : empty);
   const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 返回时先问一句
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
