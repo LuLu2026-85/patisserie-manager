@@ -9630,12 +9630,14 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
   const [address, setAddress] = useState(printSettings.labelAddress || "");
   const [phone, setPhone] = useState(printSettings.labelPhone || "");
   const unknownN = summary.unknown.length;   // 审查 r2:按几种原料算(同一个部分用在 4 层也只算一种,每条后面的 ×N 写着用了几处);以前加 ×N,Framboisier 写「66 项」、展开却是 25 条
+  // 审查 r3:配料表能改 —— 草稿是拿组件 / 配方名和配料行名拼的,「开心果巴斯克面团 v1.0」这类版本号、用途备注、品牌名以前改不了,原样印到顾客标签上
+  const [ingText, setIngText] = useState(draft.text);
   // 审查 r1:放不放得下按整张标签估(labelIngFits),不只看配料表字数
-  const fitsOn = (sz) => labelIngFits({ name: name.trim(), ingredientsText: draft.text, contains: summary.contains.map(c => allergenByCode(c).label),
+  const fitsOn = (sz) => labelIngFits({ name: name.trim(), ingredientsText: ingText.trim(), contains: summary.contains.map(c => allergenByCode(c).label),
     mayContain: summary.mayContain.map(c => allergenByCode(c).label), unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
     showNote, size: sz }, { labelShopName: shopName, labelAddress: address, labelPhone: phone });
   const [size, setSize] = useState(() => (draft.text.length > LABEL_FIT.small || !fitsOn("small")) ? "large" : "small");   // 放不下的默认大一号
-  const tooLong = draft.text.length > LABEL_FIT[size === "large" ? "large" : "small"] || !fitsOn(size);
+  const tooLong = ingText.trim().length > LABEL_FIT[size === "large" ? "large" : "small"] || !fitsOn(size);
   const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
   const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 4 };
   const confirm = () => {
@@ -9643,7 +9645,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
     if (onUpdateSettings && (shop.labelShopName !== (printSettings.labelShopName || "") || shop.labelAddress !== (printSettings.labelAddress || "") || shop.labelPhone !== (printSettings.labelPhone || ""))) onUpdateSettings(shop);
     const n = Math.min(60, Math.max(1, parseInt(count, 10) || 1));
     onConfirm({
-      name: name.trim(), ingredientsText: draft.text,
+      name: name.trim(), ingredientsText: ingText.trim(),
       contains: summary.contains.map(c => allergenByCode(c).label), mayContain: summary.mayContain.map(c => allergenByCode(c).label),
       unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
       count: n, size: size === "large" ? "large" : "small", showNote,
@@ -9697,7 +9699,11 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
           {zh ? "标签底部印「标签草稿」那行小字" : "ラベル下部に「下書き」の注記を印刷"}
         </label>
         <div style={{ background: T.bgMuted, padding: "8px 12px", fontSize: 12, lineHeight: 1.7, marginBottom: 10 }}>
-          <div><b>{zh ? "配料:" : "原材料:"}</b>{draft.text || "—"}</div>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+            <b>{zh ? "配料(可以改,只改这次印的标签):" : "原材料(このラベルだけ修正可):"}</b>
+            {ingText !== draft.text && <button type="button" data-label-ing-reset="1" onClick={() => setIngText(draft.text)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: T.textTertiary, textDecoration: "underline", cursor: "pointer", fontFamily: T.fontSans }}>{zh ? "恢复草稿" : "下書きに戻す"}</button>}
+          </div>
+          <textarea data-label-ing="1" value={ingText} onChange={e => setIngText(e.target.value)} rows={3} placeholder="—" style={{ ...inp, fontSize: 12, lineHeight: 1.6, resize: "vertical" }} />
           {/* 审查 r2:以前只在详情页收起的「配料表草稿」里说,印标签的这里不提,整行按部分顺序印出去也看不出来(热带水果 5 个部分全没填用量) */}
           {draft.nonGram.length > 0 && (
             <div data-label-nongram="1" style={{ color: T.warning, marginTop: 4 }}>
@@ -9706,7 +9712,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
               {draft.nonGram.map(x => _nonGramText(x, zh)).join(zh ? "、" : "・")}
             </div>
           )}
-          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${draft.text.length} 个字,加上过敏原、地址、草稿提示这几行,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${draft.text.length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
+          {tooLong && <div style={{ color: T.warning, marginTop: 4 }}>{zh ? `配料表 ${ingText.trim().length} 个字,加上过敏原、地址、草稿提示这几行,这个尺寸的标签可能印不下(超出的部分会被裁掉)。换大一号,或在预览里看一眼。` : `原材料 ${ingText.trim().length} 文字、このサイズでは入りきらない可能性があります。`}</div>}
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 12 }}>{zh ? "打印时选「实际大小 / 100%」,别选「适合页面」。" : "印刷は「実際のサイズ(100%)」で。"}</div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
