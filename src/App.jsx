@@ -5801,12 +5801,15 @@ const ING_TABLE_TXT = {
 const ING_TABLE_VARIANTS = {
   recipe: {
     listIds: { zh: "autoNameZhR", ja: "autoNameJaR", brand: "autoBrandR" },
+    where: { zh: "本配方", ja: "このレシピ" },
   },
   component: {
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
+    where: { zh: "本组件", ja: "このコンポーネント" },
   },
   layer: {
     listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
+    where: { zh: "这一部分", ja: "このパーツ" },
   },
 };
 
@@ -6209,7 +6212,8 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
 
 // 配料表的两个弹窗。渲染在编辑页根元素里(useDirtyGuard 靠根元素的捕获阶段拍快照),位置和以前一样。
 // pickerTargetIngId:要选材料的那一行的 _id(可能是 0,所以判断用 !== null)
-function IngredientLinkModals({ ings, setIngs, materials, brands, lang, pickerTargetIngId, setPickerTargetIngId, showBulkMatch, setShowBulkMatch }) {
+function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang, pickerTargetIngId, setPickerTargetIngId, showBulkMatch, setShowBulkMatch }) {
+  const where = (ING_TABLE_VARIANTS[variant] || ING_TABLE_VARIANTS.recipe).where;
   return (
     <>
       {/* 🔗 材料百科选择弹窗 */}
@@ -6238,6 +6242,7 @@ function IngredientLinkModals({ ings, setIngs, materials, brands, lang, pickerTa
           materials={materials}
           brands={brands}
           lang={lang}
+          where={lang === "zh" ? where.zh : where.ja}
           onClose={() => setShowBulkMatch(false)}
           onApply={(selections) => {
             setIngs(prev => prev.map(i => {
@@ -6596,7 +6601,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       )}
 
       {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
-      <IngredientLinkModals ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+      <IngredientLinkModals variant="component" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
         pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
@@ -10233,7 +10238,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
         </div>
       </div>
       {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
-      <IngredientLinkModals ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+      <IngredientLinkModals variant="layer" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
         pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
@@ -11920,7 +11925,8 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
                   </div>
                   <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
                     {b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : ""}
-                    {m.pricePerG ? " · " + fmtUnitPrice(m.pricePerG, curOf(m)) : ""}
+                    {/* 2026-09-29 第 2 批 2b C12:显示选中后真正写进配料行的价(本店价优先、折人民币),以前显示百科旧字段 pricePerG,和写进去的对不上 */}
+                    {(() => { const pp = getMaterialEffectivePrice(m); return pp > 0 ? " · " + fmtUnitPrice(pp, "CNY") : ""; })()}
                     {m.rating ? ` · ${"★".repeat(m.rating)}` : ""}
                   </div>
                 </div>
@@ -11957,7 +11963,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
 }
 
 // ═══ 批量智能匹配弹窗:一键扫描配方 ingredient 匹配到百科 ═══
-function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
+function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose, where }) {
   // [B3 修复] 弹窗打开时锁 body 滚动,关闭时恢复 — 防手机滑动穿透
   useEffect(() => {
     const orig = document.body.style.overflow;
@@ -12004,7 +12010,8 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
             {lang === "zh" ? "✅ 所有材料都已关联百科" : "✅ 全材料が事典連動済"}
           </div>
           <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 16 }}>
-            {lang === "zh" ? "本配方没有需要批量匹配的材料。" : "一括マッチ対象なし。"}
+            {/* C12:按编辑页说(以前组件 / 部分编辑页也写「本配方」) */}
+            {lang === "zh" ? `${where || "本配方"}没有需要批量匹配的材料。` : `${where || "このレシピ"}には一括マッチ対象の材料がありません。`}
           </div>
           <Btn onClick={onClose}>{lang === "zh" ? "关闭" : "閉じる"}</Btn>
         </div>
@@ -12101,7 +12108,8 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose }) {
                             {b && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>
                               · {lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)}
                             </span>}
-                            {m.pricePerG && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· {fmtUnitPrice(m.pricePerG, curOf(m))}</span>}
+                            {/* C12:显示应用后真正写进配料行的价(本店价优先、折人民币,每 100g) */}
+                            {getMaterialEffectivePrice(m) > 0 && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 6 }}>· {fmtUnitPrice(getMaterialEffectivePrice(m), "CNY")}</span>}
                           </span>
                         </label>
                       );
@@ -13831,7 +13839,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       )}
 
       {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
-      <IngredientLinkModals ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
+      <IngredientLinkModals variant="recipe" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
         pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
