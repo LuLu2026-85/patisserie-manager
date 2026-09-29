@@ -3618,13 +3618,18 @@ function saveData(recipes, cats, components, creations, knowledge, brands, mater
 // 单价却换成文件里的日元数。只有一边写了 updatedAt 时,写了的那边算新的(录入包要更新已有材料,生成时写上当前时间)。
 // 两边都没写修改时间(老数据:本店原料 50 条一条都没有,材料 1838 条只有 73 条有)时沿用改之前的「文件为准」,
 // 只是价格那组字段整组取文件那一边 —— 不然两台电脑之间合并导入永远更新不了这些老条目(审查发现)。
-function mergeByNewer(existing, inc, lockedKeys = []) {
+// groups(审查 r3):几组字段各自整组取一边 —— 为准的一边有这组里任何一个字段就整组取它(缺的删掉),一个都没有才整组取另一边。
+// 过敏原三项(allergenCodes / mayContainCodes / allergenChecked)要这样:以前逐项补,新一边只勾了「乳」没勾核对,
+// 会从旧一边借来核对日期,变成「已核对 · 只含乳」,大豆就丢了
+function mergeByNewer(existing, inc, lockedKeys = [], groups = []) {
   const tLocal = Date.parse((existing && existing.updatedAt) || "") || 0;
   const tFile = Date.parse((inc && inc.updatedAt) || "") || 0;
   const fileWins = tFile > tLocal || (tFile === 0 && tLocal === 0);
   const next = fileWins ? { ...existing, ...inc } : { ...inc, ...existing };
   const src = fileWins ? inc : existing;
-  lockedKeys.forEach(k => { if (src && Object.prototype.hasOwnProperty.call(src, k)) next[k] = src[k]; else delete next[k]; });
+  const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+  lockedKeys.forEach(k => { if (has(src, k)) next[k] = src[k]; else delete next[k]; });
+  groups.forEach(g => { const from = g.some(k => has(src, k)) ? src : (fileWins ? existing : inc); g.forEach(k => { if (has(from, k)) next[k] = from[k]; else delete next[k]; }); });
   return next;
 }
 
@@ -20032,7 +20037,7 @@ function App() {
                   } else {
                     // 已存在:修改时间更晚的一边为准;单价 / 参考价 / 币种三样永远同一边(以前字段级合并,
                     // 旧文件没有 currency,本机的「人民币」标签留着、单价却换成文件里的日元数,成本错 20 到 50 倍)
-                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, ["pricePerG", "priceRange", "currency"]);
+                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
                   }
                 });
                 return result;
