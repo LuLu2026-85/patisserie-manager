@@ -5802,18 +5802,19 @@ const ING_TABLE_TXT = {
     unitMismatch: (u) => `この行は「${u}」単位ですが、連動した材料はグラム単価です。原価が正しく計算されません。グラムに直すか、連動を外して 1${u}あたりの単価を入力してください`,
   },
 };
-// 三页之间还剩的差异。datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id)
+// 三页之间还剩的差异。品牌 datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id);
+// 名字的 datalist(旧价格表)C9 去掉了,换成材料百科联想
 const ING_TABLE_VARIANTS = {
   recipe: {
-    listIds: { zh: "autoNameZhR", ja: "autoNameJaR", brand: "autoBrandR" },
+    listIds: { brand: "autoBrandR" },
     where: { zh: "本配方", ja: "このレシピ" },
   },
   component: {
-    listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
+    listIds: { brand: "autoBrand" },
     where: { zh: "本组件", ja: "このコンポーネント" },
   },
   layer: {
-    listIds: { zh: "autoNameZh", ja: "autoNameJa", brand: "autoBrand" },
+    listIds: { brand: "autoBrand" },
     where: { zh: "这一部分", ja: "このパーツ" },
   },
 };
@@ -5877,31 +5878,168 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
   );
 }
 
-// 配料表本体:「原材料」标题行(🤖 批量关联 / + 追加)+ 分组图例(配方)+ 表格 + 名字 / 品牌的 datalist。
+// ─── 配料名字联想(2026-09-29 第 2 批 2b C9)─────────────────────────────
+// 以前中文名 / 日文名输入框联想的是旧价格表 cats(已停用),打字打到和价格表同名还会悄悄绑上价格表。
+// 现在联想本店原料 + 材料百科:打字时出下拉,最多 8 条,本店原料排前(带「本店」标签和每 100g 价);
+// 点一条 = 和 🔗 选材料弹窗一模一样的写法(pickMaterialForRow → applyMaterialPick);不点就是普通手填,什么都不关联。
+// 只按中 / 日 / 法文名找(同选材料弹窗),NFKC + 不分大小写 + 不管空格
+const normIngSuggest = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+const _ingSuggestNames = new WeakMap();   // 材料对象 → 归一化后的名字(材料一改就是新对象,缓存自然作废)
+function suggestMaterialsForIng(text, materials, limit = 8) {
+  const k = normIngSuggest(text);
+  if (!k || !Array.isArray(materials)) return [];
+  const shopIds = new Set(_shopMaterials.map(s => s && s.materialId).filter(Boolean));
+  const hits = [];
+  for (const m of materials) {
+    if (!m || !m.id) continue;
+    let names = _ingSuggestNames.get(m);
+    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
+    // 0 = 名字完全一样,1 = 开头就是,2 = 名字里有
+    let rank = 3;
+    for (const n of names) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 3; if (r < rank) rank = r; }
+    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0 });
+  }
+  const nm = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
+  hits.sort((a, b) => (b.shop - a.shop) || (a.rank - b.rank)
+    || ((b.m.isBest ? 1 : 0) - (a.m.isBest ? 1 : 0)) || ((b.m.rating || 0) - (a.m.rating || 0))
+    || (nm(a.m).length - nm(b.m).length) || nm(a.m).localeCompare(nm(b.m)));
+  return hits.slice(0, limit).map(x => x.m);
+}
+
+// 中文名 / 日文名输入框 + 联想下拉(三个编辑页共用,IngredientTable 里用)。
+// 表格外层是 overflowX:auto,下拉用 position:fixed 按输入框的位置放,不会被裁掉;页面 / 表格滚动、改窗口大小时跟着挪,点别处收起。
+// 选项用 onMouseDown + preventDefault(输入框不失焦):用 onClick 的话输入框的 blur 先把面板关了,点不进来。
+// 键盘:↑↓ 挑、Enter 选挑着的那条(没挑过就只是收起,不会替她关联第一条)、Esc 收起;
+// 输入法组词时(isComposing / keyCode 229)一个键都不接 —— 那时的 Enter 是在选字;组词中也不出下拉,选完字再按整词找
+function IngNameInput({ value, placeholder, title, style, materials, brands, lang, onChangeText, onPickMaterial }) {
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(-1);
+  const [rect, setRect] = useState(null);
+  const [composing, setComposing] = useState(false);
+  const inputRef = useRef(null);
+  const boxRef = useRef(null);
+  const touchingBox = useRef(false);   // 手指正按在下拉里(见 onBlur)
+  const zh = lang === "zh";
+  const text = value == null ? "" : String(value);
+  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials) : [], [open, composing, text, materials]);
+  const place = () => {
+    const el = inputRef.current;
+    if (!el || !el.getBoundingClientRect) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.top, bottom: r.bottom, left: r.left });
+  };
+  const openFor = (v) => { touchingBox.current = false; setHi(-1); if (String(v == null ? "" : v).trim()) { place(); setOpen(true); } else setOpen(false); };
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => {
+      const t = e.target;
+      if ((inputRef.current && inputRef.current.contains(t)) || (boxRef.current && boxRef.current.contains(t))) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", away);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+  const choose = (m) => { touchingBox.current = false; setOpen(false); setHi(-1); onPickMaterial(m); };
+  const shown = open && !composing && list.length > 0 && !!rect;
+  const onKeyDown = (e) => {
+    const ne = e.nativeEvent || {};
+    if (composing || ne.isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape") { if (open) { e.preventDefault(); e.stopPropagation(); setOpen(false); setHi(-1); } return; }
+    if (e.key === "ArrowDown") {
+      if (!open) { if (text.trim()) { e.preventDefault(); openFor(text); } return; }
+      if (list.length) { e.preventDefault(); setHi(h => Math.min(h + 1, list.length - 1)); }
+      return;
+    }
+    if (e.key === "ArrowUp") { if (shown) { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); } return; }
+    if (e.key === "Enter" && open) {
+      e.preventDefault();
+      if (hi >= 0 && hi < list.length) choose(list[hi]); else { setOpen(false); setHi(-1); }
+    }
+  };
+  let box = null;
+  if (shown) {
+    const vw = (typeof window !== "undefined" && window.innerWidth) || 1024;
+    const vh = (typeof window !== "undefined" && window.innerHeight) || 768;
+    const w = Math.max(160, Math.min(320, vw - 16));
+    const left = Math.max(8, Math.min(rect.left, vw - w - 8));
+    const below = vh - rect.bottom - 8, above = rect.top - 8;
+    const up = below < 180 && above > below;   // 输入框靠近屏幕底下(手机键盘弹起来时常见)就往上开
+    const pos = up ? { bottom: vh - rect.top + 2, maxHeight: Math.max(120, Math.min(380, above)) } : { top: rect.bottom + 2, maxHeight: Math.max(120, Math.min(380, below)) };
+    box = (
+      // 容器也 preventDefault:点到下拉的滚动条 / 底下那行提示时输入框不失焦(失焦会把下拉收掉)
+      <div ref={boxRef} role="listbox" onMouseDown={(e) => e.preventDefault()}
+        onTouchStart={() => { touchingBox.current = true; }}
+        onTouchEnd={() => { setTimeout(() => { touchingBox.current = false; }, 500); }}
+        onTouchCancel={() => { touchingBox.current = false; }}
+        style={{ position: "fixed", left, width: w, ...pos, overflowY: "auto", zIndex: T.z.popover, background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, boxShadow: T.sh.popover, textAlign: "left" }}>
+        {list.map((m, i) => {
+          const b = (brands || []).find(x => x && x.id === m.brandId);
+          const bName = b ? (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : "";
+          const pp = getMaterialEffectivePrice(m);
+          const price = pp > 0 ? fmtUnitPrice(pp, "CNY") : "";
+          const sub = [bName, price].filter(Boolean).join(" · ");
+          return (
+            <div key={m.id} role="option" aria-selected={i === hi}
+              onMouseDown={(e) => { e.preventDefault(); choose(m); }}
+              onMouseEnter={() => setHi(i)}
+              style={{ padding: "6px 10px", cursor: "pointer", background: i === hi ? T.bgMuted : "transparent", borderBottom: `0.5px solid ${T.borderSoft}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textPrimary }}>
+                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(zh ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) || m.nameFr || m.id}</span>
+                {isShopMaterialId(m.id) && <span title={zh ? "本店原料已有" : "仕入れ済み"} style={{ flex: "0 0 auto", fontSize: 9, letterSpacing: "0.1em", padding: "1px 5px", border: `1px solid ${T.success}`, color: T.success, whiteSpace: "nowrap" }}>{zh ? "本店" : "仕入"}</span>}
+              </div>
+              {sub && <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub}</div>}
+            </div>
+          );
+        })}
+        <div style={{ padding: "5px 10px", fontSize: 10, color: T.textTertiary, lineHeight: 1.5 }}>
+          {zh ? "点一条 = 关联材料百科(价格、品牌跟着填);不点就是手填" : "選ぶと材料事典に連動(単価・ブランドを自動入力)。選ばなければ手入力のまま"}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <input ref={inputRef} placeholder={placeholder} value={text} title={title} autoComplete="off"
+        onChange={e => {
+          const v = e.target.value;
+          onChangeText(v);
+          const ne = e.nativeEvent || {};
+          if (!composing && !ne.isComposing) openFor(v);
+        }}
+        onCompositionStart={() => { setComposing(true); }}
+        onCompositionEnd={e => { setComposing(false); openFor(e.target.value); }}
+        onKeyDown={onKeyDown}
+        onBlur={() => { if (touchingBox.current) return; setOpen(false); setHi(-1); }}
+        style={style} />
+      {box}
+    </>
+  );
+}
+
+// 配料表本体:「原材料」标题行(🤖 批量关联 / + 追加)+ 分组图例 + 表格(名字格带材料百科联想 IngNameInput)+ 品牌的 datalist。
 // 表格下面的成本汇总三页各不一样,留在编辑页里。
 // nextIdRef = 编辑页的 useRef(ings.length),新行 _id 从它取(_id 可能是 0,判断一律 !== null)。
 function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, brands, lang, onPickMaterial, onOpenBulk }) {
   const v = ING_TABLE_VARIANTS[variant];
   const tx = ING_TABLE_TXT[lang === "zh" ? "zh" : "ja"];
 
-  // 🧪 原料自动补全数据源：从价格表 cats 取双语名称和品牌
-  const autoCompleteData = useMemo(() => {
-    const zhSet = new Set();
-    const jaSet = new Set();
+  // 品牌格(没关联百科、也没关联旧价格表的行)的自动补全:旧价格表 cats 里的品牌名。
+  // 名字的补全 C9 换成了材料百科联想(IngNameInput),不再从 cats 取
+  const brandSuggestions = useMemo(() => {
     const brandSet = new Set();
     (cats || []).forEach(cat => {
-      if (cat.nameZh) zhSet.add(cat.nameZh);
-      if (cat.nameJa) jaSet.add(cat.nameJa);
       (cat.brands || []).forEach(b => {
         if (b.nameZh) brandSet.add(b.nameZh);
         if (b.nameJa) brandSet.add(b.nameJa);
       });
     });
-    return {
-      nameZh: Array.from(zhSet).sort(),
-      nameJa: Array.from(jaSet).sort(),
-      brand: Array.from(brandSet).sort(),
-    };
+    return Array.from(brandSet).sort();
   }, [cats]);
 
   const updateIng = (id, field, val) => setIngs(prev => prev.map(i => {
@@ -5985,7 +6123,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               const g = GROUPS[grp];
               const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
               const linked = !!linkedCat;
-              // 智能名字更新：输入后若匹配到价格表 cat,同步填充另一语言和 catId
+              // 改名字:已绑旧价格表的行,名字对不上了就解绑(catId / brandIdx 清掉)。
+              // C9 起打字不再自动绑价格表(以前打到和价格表同名会悄悄绑上、补另一种语言的名字);打开时的 autoLinkIng 照旧
               const onNameChange = (field, val) => {
                 const newIng = { ...ing, [field]: val };
                 // 清空品牌绑定(因为名字可能变了)
@@ -6002,18 +6141,10 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     newIng.brandIdx = null;
                   }
                 }
-                // 尝试匹配新 cat
-                const matched = findCatByName(val, cats);
-                if (matched && !newIng.catId) {
-                  newIng.catId = matched.id;
-                  newIng.brandIdx = null;
-                  // 同步填充另一语言名称(仅当为空时)
-                  if (field === "nameZh" && !newIng.nameJa && matched.nameJa) newIng.nameJa = matched.nameJa;
-                  if (field === "nameJa" && !newIng.nameZh && matched.nameZh) newIng.nameZh = matched.nameZh;
-                  if (!newIng.unit && matched.unit) newIng.unit = matched.unit;
-                }
                 setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
               };
+              // C9:在名字联想里点了一条材料 = 和 🔗 选材料弹窗选中同一个写法
+              const onSuggestPick = (mat) => pickMaterialForRow(setIngs, ing._id, mat, brands, lang);
               // 品牌选择
               const onBrandSelect = (idx) => {
                 setIngs(prev => prev.map(i => {
@@ -6067,9 +6198,9 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     >🔗</button>
                   </td>
                   <td style={{ padding: "3px 4px" }}>
-                    <input list={v.listIds.zh} placeholder={tx.nameZh} value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
+                    <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
                   </td>
-                  <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={tx.nameJa} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
+                  <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
@@ -6130,15 +6261,9 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
           </tbody>
         </table>
 
-        {/* 🧪 自动补全数据源 */}
-        <datalist id={v.listIds.zh}>
-          {autoCompleteData.nameZh.map(n => <option key={n} value={n} />)}
-        </datalist>
-        <datalist id={v.listIds.ja}>
-          {autoCompleteData.nameJa.map(n => <option key={n} value={n} />)}
-        </datalist>
+        {/* 品牌格的自动补全(旧价格表的品牌名) */}
         <datalist id={v.listIds.brand}>
-          {autoCompleteData.brand.map(n => <option key={n} value={n} />)}
+          {brandSuggestions.map(n => <option key={n} value={n} />)}
         </datalist>
       </div>
     </>
@@ -6168,6 +6293,14 @@ function linkMaterialToIng(i, mat, brands, lang) {
     _originalPrice: (ok ? String(pp) : i.unitPrice) || "",
   };
 }
+
+// 🔗 选材料弹窗的 onSelect 和名字联想下拉(C9)共用的写法:mat = null 是取消关联(改价标记跟着作废),否则 linkMaterialToIng
+function applyMaterialPick(i, mat, brands, lang) {
+  if (mat === null) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
+  return linkMaterialToIng(i, mat, brands, lang);
+}
+const pickMaterialForRow = (setIngs, rowId, mat, brands, lang) =>
+  setIngs(prev => prev.map(i => i._id !== rowId ? i : applyMaterialPick(i, mat, brands, lang)));
 
 // 保存时哪些配料行留下:中文名或日文名去掉空格后不为空(2026-09-29 第 2 批 2b C13,三页统一)。
 // 以前按「有没有值」,只有空格的行也会存下来,但跟组件库比较(_ingContentKey)和整体配方 / 采购(creationBatch)又把它当空行,两边对不上
@@ -6255,11 +6388,7 @@ function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang,
           lang={lang}
           onClose={() => setPickerTargetIngId(null)}
           onSelect={(mat) => {
-            setIngs(prev => prev.map(i => {
-              if (i._id !== pickerTargetIngId) return i;
-              if (mat === null) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }   // 取消关联(改价标记跟着作废)
-              return linkMaterialToIng(i, mat, brands, lang);
-            }));
+            pickMaterialForRow(setIngs, pickerTargetIngId, mat, brands, lang);   // 选中 / 取消关联;名字联想(C9)点一条也走这个
             setPickerTargetIngId(null);
           }}
         />
