@@ -16721,7 +16721,9 @@ function App() {
       const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
       const c = (item.entity === "brand" && !catId) ? BRAND_CAT_ALL : getMaterialCat(catId);
       const msg = zh ? `「${nm}」分类改成「${c.zh}」` : `「${nm}」の分類を「${c.ja}」にしました`;
-      const patch = { categoryId: catId, updatedAt: new Date().toISOString() };
+      // 小分类跟着换(同厂家管理页 changeCat / 编辑页):旧的小分类在新大类里有就留着,没有就「其他」;厂家选全品类 → ""
+      const oldSub = item.obj && item.obj.subcategoryId;
+      const patch = { categoryId: catId, subcategoryId: catId ? ((MATERIAL_SUBCATEGORIES[catId] || []).some(s => s.id === oldSub) ? oldSub : "other") : "", updatedAt: new Date().toISOString() };
       if (item.entity === "brand") dhReplaceOne(brands, setBrands, item.obj, patch, msg);
       else dhReplaceOne(materials, setMaterials, item.obj, patch, msg);
     },
