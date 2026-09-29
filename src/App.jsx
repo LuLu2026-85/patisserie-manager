@@ -19580,16 +19580,39 @@ function App() {
       if (pin === null) { if (prev.staffPin === undefined) return prev; const { staffPin, ...rest } = prev; return rest; }
       return { ...prev, staffPin: pin };
     });
-    setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); setPrintTarget(null); setKitchenTarget(null);
-    setShowBulkLinkWizard(false); setShowBackupDialog(false); setShowQualityScan(false); setShowOrderieFetcher(false); setShowDataHealth(false);
-    if (tab === "edit") setTab("list");
-    setEditTarget(null); setCompEditTarget(null); setCreationEditTarget(null); setKnowledgeEditTarget(null);
-    setProductEditTarget(null); setSupplierEditTarget(null); setBrandEditTarget(null); setMaterialEditTarget(null);
+    closeAllForStaff();
     writeStaffMode(true);
     setStaffMode(true);
     setStaffDialog(null);
     showToast(staffTxt(lang).entered);
   };
+  // 进入员工模式时关掉所有编辑页和浮层(员工外壳里没有它们的入口)。本窗口进入、别的窗口进入都走这里
+  const closeAllForStaff = () => {
+    setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); setPrintTarget(null); setKitchenTarget(null);
+    setShowBulkLinkWizard(false); setShowBackupDialog(false); setShowQualityScan(false); setShowOrderieFetcher(false); setShowDataHealth(false);
+    if (tab === "edit") setTab("list");
+    setEditTarget(null); setCompEditTarget(null); setCreationEditTarget(null); setKnowledgeEditTarget(null);
+    setProductEditTarget(null); setSupplierEditTarget(null); setBrandEditTarget(null); setMaterialEditTarget(null);
+  };
+  // 审查 r1:员工模式的开关只存在这台设备的 localStorage。同一台设备上别的标签页 / 已安装的 app 窗口进入或退出时,这一页跟着切
+  // (以前只在打开时读一次:店里 iPad 一个标签页进了员工模式,另一个标签页还是老板界面,价格、编辑、删除都在)。
+  // storage 事件只在别的窗口写入时触发;切回这一页(focus)时再对一次,兜住漏掉的事件
+  const staffSyncRef = useRef(null);
+  staffSyncRef.current = () => {
+    const on = readStaffMode();
+    if (on === staffMode) return;
+    if (on) closeAllForStaff();
+    else setPrintTarget(null);
+    setStaffDialog(null);
+    setStaffMode(on);
+  };
+  useEffect(() => {
+    const onStorage = (e) => { if ((e.key === STAFF_MODE_KEY || e.key === null) && staffSyncRef.current) staffSyncRef.current(); };
+    const onFocus = () => { if (staffSyncRef.current) staffSyncRef.current(); };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => { window.removeEventListener("storage", onStorage); window.removeEventListener("focus", onFocus); };
+  }, []);
   const doStaffExit = () => {
     writeStaffMode(false);
     setStaffMode(false);
