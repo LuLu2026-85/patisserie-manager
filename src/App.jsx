@@ -9496,7 +9496,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
   }, [kind, entity, materials, brands, components, recipes, creations]);
   const hw = _normTxt(Array.isArray(handwritten) ? handwritten.join("、") : handwritten);
   const mm = hw ? allergenTextMismatch(summary, hw) : null;
-  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const unknownN = summary.unknown.length;   // 审查 r2:按几种原料算(同一个部分用在 4 层也只算一种,每条后面的 ×N 写着用了几处);以前加 ×N,Framboisier 写「66 项」、展开却是 25 条
   const sep = zh ? "、" : "・";
   const chip = (code, tone) => {
     const src = (tone === "warn" ? summary.maySources : summary.sources)[code] || [];
@@ -9624,7 +9624,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
   const [shopName, setShopName] = useState(printSettings.labelShopName || "");
   const [address, setAddress] = useState(printSettings.labelAddress || "");
   const [phone, setPhone] = useState(printSettings.labelPhone || "");
-  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const unknownN = summary.unknown.length;   // 审查 r2:按几种原料算(同一个部分用在 4 层也只算一种,每条后面的 ×N 写着用了几处);以前加 ×N,Framboisier 写「66 项」、展开却是 25 条
   // 审查 r1:放不放得下按整张标签估(labelIngFits),不只看配料表字数
   const fitsOn = (sz) => labelIngFits({ name: name.trim(), ingredientsText: draft.text, contains: summary.contains.map(c => allergenByCode(c).label),
     mayContain: summary.mayContain.map(c => allergenByCode(c).label), unknownCount: unknownN, netContent: net.trim(), shelfLife: shelf.trim(), storage: storage.trim(),
@@ -18465,7 +18465,7 @@ function KitchenAllergens({ kind, entity, lang, ctx }) {
   const X = kitchenTxt(lang);
   const { materials, brands, components, recipes, creations } = ctx;
   const summary = useMemo(() => allergenSummaryOf(kind, entity, { materials, brands, components, recipes, creations }), [kind, entity, materials, brands, components, recipes, creations]);
-  const unknownN = summary.unknown.reduce((s, u) => s + (u.count || 1), 0);
+  const unknownN = summary.unknown.length;   // 审查 r2:按几种原料算(同一个部分用在 4 层也只算一种,每条后面的 ×N 写着用了几处);以前加 ×N,Framboisier 写「66 项」、展开却是 25 条
   const chip = (code, warn) => (
     <span key={code} style={{ display: "inline-block", padding: "4px 12px", margin: "0 8px 6px 0", fontSize: 17, fontWeight: 500, borderRadius: T.radius,
       border: `1.5px solid ${warn ? T.warning : T.ink}`, color: warn ? T.warning : T.ink }}>{allergenShort(code, lang)}</span>
