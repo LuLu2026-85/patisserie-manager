@@ -5936,7 +5936,7 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
 // ─── 配料名字联想(2026-09-29 第 2 批 2b C9)─────────────────────────────
 // 以前中文名 / 日文名输入框联想的是旧价格表 cats(已停用),打字打到和价格表同名还会悄悄绑上价格表。
 // 现在联想本店原料 + 材料百科:打字时出下拉,最多 8 条,本店原料排前(带「本店」标签和每 100g 价);
-// 点一条 = 和 🔗 选材料弹窗一模一样的写法(pickMaterialForRow → applyMaterialPick);不点就是普通手填,什么都不关联。
+// 点一条 = 和 🔗 选材料弹窗一模一样的写法(applyMaterialPick),只多一步:正在打字的那个名字框换成材料的名字(没有就保留她打的);不点就是普通手填,什么都不关联。
 // 只按中 / 日 / 法文名找(同选材料弹窗),NFKC + 不分大小写 + 不管空格
 const normIngSuggest = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 const _ingSuggestNames = new WeakMap();   // 材料对象 → 归一化后的名字(材料一改就是新对象,缓存自然作废)
@@ -6198,8 +6198,10 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                 }
                 setIngs(prev => prev.map(i => i._id === ing._id ? newIng : i));
               };
-              // C9:在名字联想里点了一条材料 = 和 🔗 选材料弹窗选中同一个写法
-              const onSuggestPick = (mat) => pickMaterialForRow(setIngs, ing._id, mat, brands, lang);
+              // C9:在名字联想里点了一条材料 = 和 🔗 选材料弹窗选中同一个写法;
+              // 只多一步:正在打字的那个名字框换成材料的名字(打「黄」选了「四叶 无盐黄油」,名字不能只剩一个「黄」)。材料没有这种语言的名字就保留她打的
+              const onSuggestPick = (field) => (mat) => setIngs(prev => prev.map(i => i._id !== ing._id ? i
+                : applyMaterialPick({ ...i, [field]: (mat && mat[field]) || i[field] }, mat, brands, lang)));
               // 品牌选择
               const onBrandSelect = (idx) => {
                 setIngs(prev => prev.map(i => {
@@ -6253,9 +6255,9 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     >🔗</button>
                   </td>
                   <td style={{ padding: "3px 4px" }}>
-                    <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
+                    <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameZh")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
                   </td>
-                  <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
+                  <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
@@ -15635,6 +15637,12 @@ function App() {
   useEffect(() => {
     if (tab !== "components") setCompEditTarget(null);
     if (tab !== "creations") setCreationEditTarget(null);
+    // 2026-09-29 第 2 批 2b(施工时发现):商品 / 供货商 / 材料百科的编辑页同样会留着。商品最危险 ——
+    // 编辑页开着切去卖货,库存变了,回来一保存,表单里切走前的旧库存数把新的盖掉。
+    // (数据页「内容体检」跳材料 / 厂家编辑是同一次操作里先设编辑对象再切到 materialsPedia,切过去以后 tab 已经是它,不会被清)
+    if (tab !== "products") setProductEditTarget(null);
+    if (tab !== "suppliers") setSupplierEditTarget(null);
+    if (tab !== "materialsPedia") { setBrandEditTarget(null); setMaterialEditTarget(null); }
   }, [tab]);
   // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
   const goTab = (t) => {
