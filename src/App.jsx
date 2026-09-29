@@ -15031,7 +15031,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 //        currentStock, threshold, leadTimeDays, sellPrice, note }
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components 参数,商品可关联组件
-function ProductsView({ products, setProducts, recipes, creations, components = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet }) {
+function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet }) {
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
   // v12: 销售/生产按天 upsert,同日累加(2026-09-29 第 3 批:原样搬到模块顶层 makeLogQty,今日生产单「记入生产」用同一个)
@@ -15045,7 +15045,8 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
     const log = (list || []).find(x => x.id === logId);
     if (!log) return;
     const qtyField = kind === "sale" ? "soldQty" : "batchQty";
-    const q = kind === "sale" ? saleStockBack(log) : (parseFloat(log[qtyField]) || 0);
+    // 第 3 批 F2:日结的报损也扣了库存(wasteOut),删整条记录时一起加回
+    const q = kind === "sale" ? saleStockBack(log) + (parseFloat(log.wasteOut) || 0) : (parseFloat(log[qtyField]) || 0);
     setter(prev => prev.filter(x => x.id !== logId));
     // 反向调整: 销售记录删 → 库存加回; 生产记录删 → 库存扣回
     setProducts(prev => prev.map(p => {
@@ -15056,6 +15057,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
   };
   const mLabel = (obj) => obj ? (lang === "zh" ? (obj.nameZh || obj.nameJa) : (obj.nameJa || obj.nameZh)) : "";
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
+  const costCtx = { recipes, creations, components, materials, brands };
 
   // ─── 编辑表单 ───
   if (editTarget !== null) {
@@ -15095,6 +15097,9 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
     const p = products.find(x => x.id === viewId);
     if (!p) { setTimeout(() => setViewId(null), 0); return null; }   // 兜底:找不到这条(删了 / 导入替换了)就回列表
     const sales = salesLog.filter(s => s.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    // 第 3 批 F2:单件成本和毛利率(口径同采购页,见 productUnitCost)
+    const uc = productUnitCost(p, costCtx);
+    const mg = productMarginOf(p, uc.cost);
     const prods = productionLog.filter(l => l.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return (
       <div>
@@ -15127,7 +15132,20 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                 <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.success, marginTop: 2 }}>{fmtSellPrice(p.sellPrice, p)}</div>
               </div>
             )}
+            {(p.items || []).length > 0 && (
+              <div data-unitcost="1" style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
+                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "单件成本" : "1 個原価"}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.textPrimary, marginTop: 2, ...T.num }}>{uc.cost > 0 ? fmtCost(uc.cost) : "—"}</div>
+              </div>
+            )}
+            {(p.items || []).length > 0 && (p.sellPrice || 0) > 0 && (
+              <div data-margin="1" style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
+                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "毛利率" : "粗利率"}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: marginColor(mg), marginTop: 2, ...T.num }}>{mg !== null ? `${mg.toFixed(1)}%` : "—"}</div>
+              </div>
+            )}
           </div>
+          <ProductCostNote uc={uc} lang={lang} />
           {/* [B5 修复] 备注双语,旧 note 兜底 */}
           {(() => {
             const noteText = pickLang(p, "notes", lang) || p.note;
@@ -15168,15 +15186,21 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
               ? (lang === "zh" ? `⚠️ ${d === today ? "今日" : d} 销售 +${qty},但库存只有 ${out},库存记为 0(多卖的 ${qty - out} 件没扣库存)` : `⚠️ ${d} 販売 ${qty} 件、在庫は ${out} 件のみ → 在庫 0`)
               : (lang === "zh" ? `✓ ${d === today ? "今日" : d} 销售 +${qty}(库存 -${qty})` : `✓ ${d} 販売 ${qty} 件`)); }} lang={lang} />
             <div style={{ marginTop: 12, fontSize: 11, color: T.textTertiary, marginBottom: 6 }}>{lang === "zh" ? "最近 10 条" : "過去 10 件"}</div>
-            {sales.length === 0 ? <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic" }}>—</div> : sales.slice(0, 10).map(s => (
+            {/* 第 3 批 F2:日结写的报损一起显示(只有报损、没卖出的那天只显示报损) */}
+            {sales.length === 0 ? <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic" }}>—</div> : sales.slice(0, 10).map(s => {
+              const w = wasteTotalOf(s), sq = parseFloat(s.soldQty) || 0, back = _r3(saleStockBack(s) + (parseFloat(s.wasteOut) || 0));
+              const wTip = WASTE_REASONS.filter(r => wasteOf(s)[r.id] > 0).map(r => `${lang === "zh" ? r.zh : r.ja} ${wasteOf(s)[r.id]}`).join(" · ");
+              return (
               <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0", borderBottom: `0.5px dashed ${T.borderSoft}` }}>
                 <span>{s.date}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: T.danger }}>−{s.soldQty || 0}</span>
-                  <button onClick={() => confirmDialog(lang === "zh" ? `删除 ${s.date} 销售 ${s.soldQty} 件? 库存会加回 ${saleStockBack(s)}` : `${s.date} の販売 ${s.soldQty} 件を削除?`, () => deleteLog("sale", s.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  {(sq > 0 || !(w > 0)) && <span style={{ color: T.danger }}>−{s.soldQty || 0}</span>}
+                  {w > 0 && <span title={wTip} style={{ color: T.warning }}>{lang === "zh" ? `报损 ${w}` : `ロス ${w}`}</span>}
+                  <button onClick={() => confirmDialog(lang === "zh" ? `删除 ${s.date} 销售 ${s.soldQty || 0} 件${w > 0 ? `、报损 ${w} 件` : ""}? 库存会加回 ${back}` : `${s.date} の販売 ${s.soldQty || 0} 件${w > 0 ? `・ロス ${w} 件` : ""}を削除?`, () => deleteLog("sale", s.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           {/* v12: 生产录入(加库存) */}
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem" }}>
@@ -15253,6 +15277,8 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
               const th = p.threshold || 0;
               const low = th > 0 && stock <= th;
               const adjust = (delta) => setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) + delta) } : x));
+              const uc = (p.items || []).length > 0 ? productUnitCost(p, costCtx) : null;
+              const mg = uc ? productMarginOf(p, uc.cost) : null;
               return (
                 <div key={p.id} onClick={() => setViewId(p.id)} style={{ background: T.bgCard, border: `0.5px solid ${low ? T.danger : T.border}`, borderLeft: `3px solid ${low ? T.danger : T.accent}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -15260,6 +15286,10 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                     <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>
                       {(p.items || []).length > 0 ? `${p.items.length} ${lang === "zh" ? "项组成" : "項目"}` : (lang === "zh" ? "未关联配方" : "未関連")}
                       {p.sellPrice > 0 && " · " + fmtSellPrice(p.sellPrice, p)}
+                      {/* 第 3 批 F2:单件成本 / 毛利率;算不全标「成本不全·利润率虚高」(同配方一览) */}
+                      {uc && uc.cost > 0 && <span data-listcost="1">{" · "}{lang === "zh" ? "成本 " : "原価 "}{fmtCost(uc.cost)}</span>}
+                      {mg !== null && <span data-listmargin="1" style={{ color: marginColor(mg) }}>{" · "}{lang === "zh" ? "毛利 " : "粗利 "}{mg.toFixed(1)}%</span>}
+                      {uc && uc.incomplete && mg !== null && <span data-listincomplete="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は過大"}</span>}
                     </div>
                   </div>
                   {/* v12: 快捷 -1 / +1 按钮 */}
@@ -16039,7 +16069,8 @@ const salesSpanOf = (salesLog, productId, today) => {
   const all = (salesLog || []).filter(s => s.productId === productId);
   const list = all.filter(s => s.date >= since);
   // 从这个商品「有史以来第一条」销售记录算起(审查发现:只看 30 天内最早那条,偶尔卖一次的老商品会被当成新品,建议量翻好几倍)
-  const earliest = all.reduce((m, s) => (s.date && s.date < m ? s.date : m), today);
+  // 第 3 批 F2:只算真卖出过的(soldQty > 0)—— 日结会给只有报损的日子写一条卖出 0 的记录,不能当成开始卖的第一天
+  const earliest = all.reduce((m, s) => (s.date && s.date < m && (parseFloat(s.soldQty) || 0) > 0 ? s.date : m), today);
   const span = Math.round((new Date(today) - new Date(earliest)) / 86400000) + 1;
   return { list, span: Math.min(30, Math.max(1, span || 1)) };
 };
@@ -16086,6 +16117,195 @@ const makeLogQty = ({ products, today, setSalesLog, setProductionLog, setProduct
     return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
   }));
   return out;
+};
+
+// ─── 第 3 批 F2:日结(2026-09-29)─────────────────────────────────────────
+// 「今日」tab 的「日结」:每个商品填当天卖出和报损的**总数**(不是再加多少),一次保存。
+// 报损写进当天那条销售记录(同一商品同一天一条,原有字段不变):
+//   waste: { burnt, expired, tasting, staff }  件数;wasteOut 报损实际扣掉的库存件数;closedAt 这条什么时候日结过
+// 不单独建报损记录:旧版 logQty 用 find(productId && date) 找当天那条,先找到报损那条就会把销量加到它上面。
+// 旧版 app 对这个结构:追加销量是 { ...x } 展开写法,报损字段保留;旧版删整条记录只加回 stockOut,wasteOut 那部分不加回(库存偏少,不会凭空多)。
+const WASTE_REASONS = [
+  { id: "burnt", zh: "烤坏", ja: "焼き損じ" },
+  { id: "expired", zh: "过期", ja: "期限切れ" },
+  { id: "tasting", zh: "试吃", ja: "試食" },
+  { id: "staff", zh: "员工餐", ja: "まかない" },
+];
+const _r3 = (n) => Math.round(n * 1000) / 1000;
+const _num0 = (v) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : 0; };
+// 删一条销售记录 / 日结重算时库存加回多少:卖出实际扣的(老记录没有 stockOut = 按卖出数)+ 报损实际扣的
+const saleStockBackOf = (s) => s && s.stockOut != null ? (parseFloat(s.stockOut) || 0) : (parseFloat(s && s.soldQty) || 0);
+const wasteOf = (s) => { const w = (s && s.waste && typeof s.waste === "object") ? s.waste : {}; const o = {}; WASTE_REASONS.forEach(r => { o[r.id] = _num0(w[r.id]); }); return o; };
+const wasteTotalOf = (s) => { const w = wasteOf(s); return _r3(WASTE_REASONS.reduce((a, r) => a + w[r.id], 0)); };
+// 某商品某天的合计。两台设备合并导入后同一天可能有好几条,显示和比较一律按总和
+const dayTotalsOf = (salesLog, productId, date) => {
+  const recs = (salesLog || []).filter(s => s && s.productId === productId && s.date === date);
+  const waste = {};
+  WASTE_REASONS.forEach(r => { waste[r.id] = _r3(recs.reduce((a, s) => a + wasteOf(s)[r.id], 0)); });
+  return {
+    recs, sold: _r3(recs.reduce((a, s) => a + _num0(s.soldQty), 0)), waste,
+    closedAt: recs.reduce((m, s) => (s.closedAt && s.closedAt > m ? s.closedAt : m), ""),
+  };
+};
+// 一次写完一整天的日结。**不能循环调 logQty**:它按渲染时的 products 快照算扣几件,一次改好几个商品会互相踩。
+// rows = [{ productId, sold, waste: { burnt, expired, tasting, staff } }],填的是当天的总数。对每个商品:
+//   1. 当天所有记录,第一条是 first(和 logQty 找的是同一条),其余是 others
+//   2. 目标值扣掉 others:soldFirst = max(0, sold − Σothers.soldQty),报损按原因同样处理
+//   3. first 原来扣的库存先还回去:avail = 库存 + first 的 stockOut(老记录按 soldQty)+ first.wasteOut
+//   4. 重新扣:先卖出 stockOut = min(soldFirst, avail),再报损 wasteOut = min(Σ报损, avail − stockOut),库存 = 剩下的
+//   5. 写 updatedAt / closedAt;没有记录就新建(id 前缀 sale_,和 logQty 一样)
+//   6. 合计和现在一样的商品不动(再存一次不会把以前卖超时没扣的件数从后来的库存里扣掉)
+// 返回 { products, salesLog, changed, undo }(不改传入的数组);changed 每项给页面预览:库存前后、卖超 / 报损扣不到的件数、同一天的别的记录
+const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
+  const log = [...(salesLog || [])];
+  const prods = [...(products || [])];
+  const changed = [], undo = [];
+  const now = nowIso || new Date().toISOString();
+  let seq = 0;
+  (rows || []).forEach(row => {
+    if (!row) return;
+    const pid = row.productId;
+    const pi = prods.findIndex(p => p && p.id === pid);
+    if (pi < 0) return;
+    const recs = log.filter(s => s && s.productId === pid && s.date === date);
+    const first = recs[0] || null;
+    const others = recs.slice(1);
+    const tSold = _r3(_num0(row.sold));
+    const tWaste = {};
+    WASTE_REASONS.forEach(r => { tWaste[r.id] = _r3(_num0(row.waste && row.waste[r.id])); });
+    const cur = dayTotalsOf(recs, pid, date);
+    if (cur.sold === tSold && WASTE_REASONS.every(r => cur.waste[r.id] === tWaste[r.id])) return;
+    const oSold = _r3(others.reduce((a, s) => a + _num0(s.soldQty), 0));
+    const soldFirst = _r3(Math.max(0, tSold - oSold));
+    const wFirst = {};
+    WASTE_REASONS.forEach(r => { wFirst[r.id] = _r3(Math.max(0, tWaste[r.id] - others.reduce((a, s) => a + wasteOf(s)[r.id], 0))); });
+    const wSum = _r3(WASTE_REASONS.reduce((a, r) => a + wFirst[r.id], 0));
+    if (!first && soldFirst === 0 && wSum === 0) return;
+    const p = prods[pi];
+    const stock0 = Math.max(0, parseFloat(p.currentStock) || 0);
+    const back = first ? _r3(saleStockBackOf(first) + _num0(first.wasteOut)) : 0;
+    const avail = _r3(stock0 + back);
+    const stockOut = _r3(Math.min(soldFirst, avail));
+    const wasteOut = _r3(Math.min(wSum, avail - stockOut));
+    const stock1 = _r3(avail - stockOut - wasteOut);
+    const hadWaste = !!(first && (first.waste !== undefined || first.wasteOut !== undefined));
+    const wasteFields = (wSum > 0 || hadWaste) ? { waste: wFirst, wasteOut } : {};
+    let after;
+    if (first) {
+      after = { ...first, soldQty: soldFirst, stockOut, ...wasteFields, closedAt: now, updatedAt: now };
+      log[log.indexOf(first)] = after;
+    } else {
+      after = { id: "sale_" + (Date.parse(now) || Date.now()) + (seq++) + Math.random().toString(36).slice(2, 6), productId: pid, date,
+        soldQty: soldFirst, stockOut, ...wasteFields, createdAt: now, updatedAt: now, closedAt: now };
+      log.push(after);
+    }
+    if (stock1 !== (parseFloat(p.currentStock) || 0)) prods[pi] = { ...p, currentStock: stock1 };
+    const tot = dayTotalsOf(log, pid, date);
+    changed.push({ productId: pid, before: first, after, stockBefore: stock0, stockAfter: stock1,
+      oversell: _r3(soldFirst - stockOut), wasteShort: _r3(wSum - wasteOut),
+      dupes: others.length, resultSold: tot.sold, resultWaste: tot.waste, target: { sold: tSold, waste: tWaste } });
+    undo.push({ productId: pid, before: first, afterId: after.id, afterUpdatedAt: now, stockDelta: _r3(stock1 - stock0) });
+  });
+  return { products: prods, salesLog: log, changed, undo };
+};
+// 撤销日结:按商品把记录换回保存前那条(新建的删掉),库存按这次的增减反过来。
+// 保存之后这条记录又被改过(商品页又记了卖出 / 删掉了)的商品不动,放进 skipped —— 硬撤会把后来那次的库存算错
+const undoDailyClose = (products, salesLog, undo) => {
+  const log = [...(salesLog || [])];
+  const skipped = [];
+  const done = new Map();
+  (undo || []).forEach(u => {
+    const i = log.findIndex(s => s && s.id === u.afterId);
+    if (i < 0 || log[i].updatedAt !== u.afterUpdatedAt) { skipped.push(u.productId); return; }
+    if (u.before) log[i] = u.before; else log.splice(i, 1);
+    done.set(u.productId, u.stockDelta);
+  });
+  const prods = (products || []).map(p => {
+    if (!p || !done.has(p.id) || !done.get(p.id)) return p;
+    return { ...p, currentStock: _r3(Math.max(0, (parseFloat(p.currentStock) || 0) - done.get(p.id))) };
+  });
+  return { products: prods, salesLog: log, skipped };
+};
+
+// 商品的单件成本(人民币):口径和采购页一样 —— 组成项 × 个数,配方 / 组件按「个数 ÷ max(1, 产出量)」,组合产品走 creationBatch。
+// 配方 / 组件 = getIngsLiveCost(配料) × 个数 ÷ max(1, 产出量)(产出量 ≥ 1 时 = 配方一览的单个成本 × 个数);
+// 组合产品 = creationBatch(组合产品, 个数).cost。
+// 算不全(incomplete):配方有原料没价(getIngPriceSource === "none",和配方一览「N 项没价」同一个判定)、组合产品 batch.incomplete、挂的东西已删 ——
+// 这时成本偏低、毛利率虚高。noYield:配方 / 组件没填产出量,按一批 = 1 个算(和采购页一样),成本可能偏高
+const productUnitCost = (p, ctx) => {
+  const { recipes = [], creations = [], components = [], materials = [], brands = [] } = ctx || {};
+  const items = (p && p.items) || [];
+  let cost = 0;
+  const missing = [], noYield = [];
+  items.forEach(it => {
+    if (!it) return;
+    const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
+    const list = type === "creation" ? creations : type === "component" ? components : recipes;
+    const target = (list || []).find(x => x && x.id === it.linkedId);
+    const q = parseFloat(it.qty) || 1;
+    if (!target) { missing.push({ reason: "missing", type, id: it.linkedId }); return; }
+    if (type === "creation") {
+      const b = creationBatch(target, q, components, materials, brands);
+      cost += b.cost;
+      if (b.incomplete) missing.push({ reason: "creation", type, target,
+        noUsed: b.parts.filter(x => x.noUsed).length,
+        noPrice: new Set(b.parts.flatMap(x => x.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size });
+      return;
+    }
+    const y = parseFloat(target.yield) || 0;
+    cost += getIngsLiveCost(target.ingredients, materials, brands) * q / Math.max(1, y || 1);
+    const noPrice = (target.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length;
+    if (noPrice) missing.push({ reason: "noPrice", type, target, noPrice });
+    if (!(y > 0)) noYield.push(target);
+  });
+  return { cost, incomplete: missing.length > 0, missing, noYield, noItems: items.length === 0 };
+};
+// 毛利率(售价先折人民币):成本 0 或没售价 → null(页面显示「—」)
+const productMarginOf = (p, cost) => {
+  const price = toCNY(p && p.sellPrice, priceCurOf(p));
+  return price > 0 && cost > 0 ? ((price - cost) / price) * 100 : null;
+};
+// 颜色同配方一览:≥ 50% 绿、≥ 30% 黄、以下红;算不出灰
+const marginColor = (mg) => mg === null || mg === undefined ? T.textSecondary : mg >= 50 ? T.success : mg >= 30 ? T.warning : T.danger;
+// 商品详情:成本算不全 / 没填产出量时说清是哪几项
+function ProductCostNote({ uc, lang }) {
+  if (!uc || uc.noItems || (!uc.incomplete && !uc.noYield.length)) return null;
+  const zh = lang !== "ja";
+  const nm = (o) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
+  const kindName = { recipe: zh ? "配方" : "レシピ", creation: zh ? "组合产品" : "組立製品", component: zh ? "组件" : "パーツ" };
+  const reasons = uc.missing.map(m => m.reason === "missing" ? (zh ? `挂的${kindName[m.type]}已删除` : `関連の${kindName[m.type]}が削除済み`)
+    : m.reason === "noPrice" ? (zh ? `「${nm(m.target)}」${m.noPrice} 项原料没价` : `「${nm(m.target)}」単価なし ${m.noPrice}`)
+    : `「${nm(m.target)}」` + [m.noUsed ? (zh ? `${m.noUsed} 个部分没填用量` : `使用量未入力 ${m.noUsed}`) : "", m.noPrice ? (zh ? `${m.noPrice} 项原料没价` : `単価なし ${m.noPrice}`) : ""].filter(Boolean).join(zh ? "、" : "・"));
+  return (
+    <div data-costnote="1" style={{ fontSize: 12, color: T.warning, marginTop: 10, lineHeight: 1.6 }}>
+      {uc.incomplete && <div>⚠ {zh ? "成本不全·利润率虚高:" : "原価不完全・利益率は過大:"}{reasons.join(zh ? ";" : "、")}</div>}
+      {uc.noYield.length > 0 && <div>⚠ {uc.noYield.map(o => `「${nm(o)}」`).join("")}{zh ? "没填产出量,按一批 = 1 个算,成本可能偏高" : "出来数が未入力(1 バッチ = 1 個で計算、原価は過大の可能性)"}</div>}
+    </div>
+  );
+}
+// 日结底部的钱(只给老板视图):营收 = 售价(折人民币)× 卖出,原料成本 = 单件成本 × 卖出,报损金额按成本算
+// rows = [{ productId, sold, waste }](当天的总数)
+const dailyCloseMoney = (products, rows, ctx) => {
+  let revenue = 0, cost = 0, wasteCost = 0, approx = false;
+  const noPrice = [], incomplete = [], noCost = [];
+  (rows || []).forEach(r => {
+    const p = (products || []).find(x => x && x.id === r.productId);
+    if (!p) return;
+    const sold = _num0(r.sold);
+    const w = _r3(WASTE_REASONS.reduce((a, x) => a + _num0(r.waste && r.waste[x.id]), 0));
+    if (!(sold > 0) && !(w > 0)) return;
+    const uc = productUnitCost(p, ctx);
+    if (sold > 0) {
+      const price = toCNY(p.sellPrice, priceCurOf(p));
+      if (price > 0) { revenue += price * sold; if (priceCurOf(p) === "JPY") approx = true; } else noPrice.push(p);
+      cost += uc.cost * sold;
+    }
+    wasteCost += uc.cost * w;
+    if (uc.incomplete) incomplete.push(p);
+    if (!(uc.cost > 0)) noCost.push(p);
+  });
+  return { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost,
+    margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : null };
 };
 
 // 汇总原料(PurchaseView 原来的 compute 前半段)。
@@ -16687,15 +16907,214 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
 
 // 「今日」tab:生产单 | 日结。日结(F2)下一步做,先占位
 const TODAY_SUBS = [{ id: "sheet", zh: "生产单", ja: "製造リスト" }, { id: "close", zh: "日结", ja: "日次締め" }];
-function DailyClosePlaceholder({ lang }) {
-  return <EmptyState variant="first" lang={lang}
-    title={lang === "ja" ? "日次締めは準備中です" : "日结还在做"}
-    hint={lang === "ja" ? "次の版で、商品ごとに当日の販売数とロス(焼き損じ / 期限切れ / 試食 / まかない)を入力して一度に保存できるようになります。今は「商品」ページで記録してください。"
-      : "下一版在这里:每个商品一行,填当天卖出和报损(烤坏 / 过期 / 试吃 / 员工餐),一次保存。现在卖出还是在「商品」页记。"} />;
+// ─── 第 3 批 F2:日结(「今日」tab 的第二个子页)─────────────────────────────
+// 每个商品一行:当前库存 / 当天生产(productionLog)/ 卖出 / 报损 × 4。填的是当天的**总数**,保存一次写完(applyDailyClose),给撤销。
+// showMoney = 老板视图(底部营收 / 原料成本 / 毛利 / 报损金额);员工视图(F4)传 false,页面上不出现任何钱。
+// minDate:员工视图只能填今天和昨天。
+const DC_TXT = {
+  zh: {
+    date: "日期", closedAt: (t) => `已日结 · 最后保存 ${t}`, notClosed: "这一天还没日结",
+    hint: "每个商品填这一天的总数(不是再加多少),没有就留空。卖出先扣库存,报损在卖出之后扣。改以前的日子,库存按现在的库存加减。",
+    stock: "库存", prod: "当天生产", sold: "卖出", save: "保存日结", pending: (n) => `${n} 个商品有改动`, noChange: "没有改动",
+    noProducts: "还没有商品", noProductsHint: "先去「商品」页建商品(对外卖的单品 / 礼盒),这里才有东西可以日结。",
+    after: (a, b) => `保存后库存 ${a} → ${b}`,
+    oversell: (n) => `卖出比库存多 ${n} 件,库存记到 0(多卖的不扣库存)`,
+    wasteShort: (n) => `库存不够,报损有 ${n} 件扣不到库存`,
+    dupes: (n, sold) => `这一天还有 ${n} 条别的记录(两台设备合并来的),卖出合计最少是 ${sold}`,
+    saved: (d, n) => `✓ ${d} 日结已保存(${n} 个商品)`, undoSkipped: (n) => `${n} 个商品保存后又改过,没撤销`, undone: "日结已撤销",
+    badTitle: "有几格不是数字,没法保存", badDetail: (list) => `${list}。填 0 或正数,没有就留空。`,
+    discard: "换日期会丢掉还没保存的日结。", discardTitle: "还没保存", discardOk: "不保存,换日期", discardCancel: "留在这里",
+    money: "这一天的钱", moneyHint: "售价折人民币 × 卖出;原料成本 = 商品页的单件成本 × 卖出;报损按成本算。",
+    revenue: "营收", cost: "原料成本", profit: "毛利", waste: "报损(按成本)",
+    noPrice: (names) => `${names} 没定售价,营收没算进来`,
+    incomplete: (names) => `${names} 成本不全,原料成本偏低、毛利虚高`,
+    noCost: (names) => `${names} 算不出成本(没挂配方或配料没价),按 0 算`,
+    approx: "有日元售价,按汇率折成人民币(≈)",
+  },
+  ja: {
+    date: "日付", closedAt: (t) => `締め済み · 最終保存 ${t}`, notClosed: "この日はまだ締めていません",
+    hint: "商品ごとにその日の合計数を入力(追加分ではありません)。なければ空欄。販売を先に在庫から引き、ロスはその後に引きます。過去の日付は現在の在庫で加減します。",
+    stock: "在庫", prod: "当日製造", sold: "販売", save: "締めを保存", pending: (n) => `${n} 件の変更`, noChange: "変更なし",
+    noProducts: "商品が未登録です", noProductsHint: "「商品」ページで商品を作成すると、ここで日次締めができます。",
+    after: (a, b) => `保存後の在庫 ${a} → ${b}`,
+    oversell: (n) => `販売が在庫より ${n} 件多いため在庫 0(超過分は在庫から引かない)`,
+    wasteShort: (n) => `在庫不足でロス ${n} 件は在庫から引けません`,
+    dupes: (n, sold) => `同じ日の記録がほかに ${n} 件あります(販売合計は最低 ${sold})`,
+    saved: (d, n) => `✓ ${d} の締めを保存(${n} 件)`, undoSkipped: (n) => `${n} 件は保存後に変更されたため元に戻していません`, undone: "締めを元に戻しました",
+    badTitle: "数字でない欄があります", badDetail: (list) => `${list}。0 以上の数を入力、なければ空欄。`,
+    discard: "日付を変えると未保存の締めが失われます。", discardTitle: "未保存", discardOk: "保存せず変更", discardCancel: "戻る",
+    money: "この日の金額", moneyHint: "売価(人民元換算)× 販売;原価 = 商品ページの 1 個原価 × 販売;ロスは原価で計算。",
+    revenue: "売上", cost: "原材料費", profit: "粗利", waste: "ロス(原価)",
+    noPrice: (names) => `${names} は売価未設定(売上に含まれていません)`,
+    incomplete: (names) => `${names} は原価不完全(粗利は過大)`,
+    noCost: (names) => `${names} は原価を計算できません(0 で計算)`,
+    approx: "円の売価は為替で人民元に換算(≈)",
+  },
+};
+const dcTxt = (lang) => DC_TXT[lang === "ja" ? "ja" : "zh"];
+const DC_FIELDS = ["sold", ...WASTE_REASONS.map(r => r.id)];
+// 格子里的数:空 = 0;不是 0 以上的数 = NaN(页面标出来,不让存)
+const parseDcCell = (v) => {
+  const s = String(v === undefined || v === null ? "" : v).normalize("NFKC").trim();
+  if (s === "") return 0;
+  return /^\d+(\.\d+)?$|^\.\d+$/.test(s) ? parseFloat(s) : NaN;
+};
+const fmtDcMoney = (v) => {
+  const n = Math.round((parseFloat(v) || 0) * 100) / 100;
+  const a = Math.abs(n);
+  return (n < 0 ? "−" : "") + "¥" + (a >= 100 ? Math.round(a).toLocaleString("en-US") : String(a));
+};
+const fmtDcTime = (iso, date) => {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return localDateStr(d) === date ? hm : `${localDateStr(d)} ${hm}`;
+};
+
+function DailyCloseView({ products = [], salesLog = [], productionLog = [], recipes = [], creations = [], components = [], materials = [], brands = [],
+  lang, today, minDate = "", showMoney = true, onSave, confirmDialog }) {
+  const X = dcTxt(lang);
+  const zh = lang !== "ja";
+  const [date, setDate] = useState(today);
+  const [draft, setDraft] = useState({});   // productId → { sold?: "3", burnt?: "1", ... }(只放她敲过的格子,原样字符串)
+  const labels = { sold: X.sold, ...Object.fromEntries(WASTE_REASONS.map(r => [r.id, zh ? r.zh : r.ja])) };
+  // 每个商品:存着的合计、格子里现在的值、有没有改、有没有填错
+  const rows = (products || []).filter(p => p && p.id !== undefined).map(p => {
+    const t = dayTotalsOf(salesLog, p.id, date);
+    const stored = { sold: t.sold, ...t.waste };
+    const d = draft[p.id] || {};
+    const shown = {}, val = {};
+    const bad = [];
+    DC_FIELDS.forEach(f => {
+      shown[f] = d[f] !== undefined ? d[f] : (stored[f] > 0 ? String(stored[f]) : "");
+      val[f] = parseDcCell(shown[f]);
+      if (isNaN(val[f])) bad.push(f);
+    });
+    const dirty = !bad.length && DC_FIELDS.some(f => _r3(val[f]) !== stored[f]);
+    const prod = _r3((productionLog || []).filter(l => l && l.productId === p.id && l.date === date).reduce((a, l) => a + _num0(l.batchQty), 0));
+    return { p, t, stored, shown, val, bad, dirty, prod };
+  });
+  const toRow = (r) => ({ productId: r.p.id, sold: r.val.sold, waste: Object.fromEntries(WASTE_REASONS.map(x => [x.id, r.val[x.id]])) });
+  const pendingRows = rows.filter(r => r.dirty).map(toRow);
+  const badRows = rows.filter(r => r.bad.length);
+  // 离开保护比较的是「和存着的不一样的格子」+ 填错的格子(敲了又改回原数不算改过)
+  const bind = useDirtyGuard(() => [pendingRows, badRows.map(r => [r.p.id, r.bad])]);
+  // 保存前的预览:库存前后、卖超、报损扣不到、同一天的别的记录(和保存走同一个纯函数)
+  const preview = pendingRows.length ? applyDailyClose(products, salesLog, date, pendingRows, "1970-01-01T00:00:00.000Z") : null;
+  const pv = new Map(preview ? preview.changed.map(c => [c.productId, c]) : []);
+  const closedAt = rows.reduce((m, r) => (r.t.closedAt > m ? r.t.closedAt : m), "");
+  const money = showMoney ? dailyCloseMoney(products, rows.map(r => r.bad.length ? { productId: r.p.id, sold: r.stored.sold, waste: r.t.waste } : toRow(r)),
+    { recipes, creations, components, materials, brands }) : null;
+  const nm = (p) => pickLang(p, "name", lang) || p.nameFr || "";
+  const names = (list) => list.map(p => `「${nm(p)}」`).join("");
+
+  const setCell = (pid, f, v) => setDraft(d => ({ ...d, [pid]: { ...(d[pid] || {}), [f]: v } }));
+  const changeDate = (v0) => {
+    const v = v0 || today;
+    if (v > today || (minDate && v < minDate) || v === date) return;
+    if ((pendingRows.length || badRows.length) && confirmDialog) {
+      confirmDialog(X.discard, () => { setDraft({}); setDate(v); }, { title: X.discardTitle, confirmText: X.discardOk, cancelText: X.discardCancel });
+      return;
+    }
+    setDraft({}); setDate(v);
+  };
+  const save = () => {
+    if (!pendingRows.length || badRows.length || !onSave) return;
+    onSave(date, pendingRows);
+    setDraft({});
+  };
+  const cellStyle = (bad) => ({ width: "100%", height: 36, boxSizing: "border-box", textAlign: "center", fontSize: 16, padding: "0 4px",
+    border: `1px solid ${bad ? T.danger : T.border}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num });
+  const saveBtn = (k) => (
+    <Btn key={k} variant="primary" disabled={!pendingRows.length || badRows.length > 0} onClick={save}>{X.save}</Btn>
+  );
+
+  return (
+    <div data-dailyclose="1" {...bind}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, ...T.fs.small }}>
+          <span style={{ color: T.subtle }}>{X.date}</span>
+          <input type="date" value={date} max={today} min={minDate || undefined} onChange={e => changeDate(e.target.value)}
+            style={{ padding: "6px 8px", ...T.fs.small, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans, minWidth: 140 }} />
+        </label>
+        <span data-closedat="1" style={{ ...T.fs.caption, color: closedAt ? T.success : T.subtle }}>{closedAt ? X.closedAt(fmtDcTime(closedAt, date)) : X.notClosed}</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ ...T.fs.caption, color: T.subtle }}>{pendingRows.length ? X.pending(pendingRows.length) : X.noChange}</span>
+        {saveBtn("top")}
+      </div>
+      <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{X.hint}</div>
+      {badRows.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <InlineError title={X.badTitle} detail={X.badDetail(badRows.map(r => `「${nm(r.p)}」${r.bad.map(f => labels[f]).join(zh ? "、" : "・")}`).join(zh ? ";" : "、"))} />
+        </div>
+      )}
+      {rows.length === 0 ? <EmptyState variant="first" title={X.noProducts} hint={X.noProductsHint} lang={lang} /> : (
+        <div style={{ borderTop: `1px solid ${T.ink}` }}>
+          {rows.map(r => {
+            const c = pv.get(r.p.id);
+            return (
+              <div key={r.p.id} data-dcrow={r.p.id} style={{ padding: "12px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 170px", minWidth: 0 }}>
+                    <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink, overflowWrap: "anywhere" }}>{r.dirty ? "● " : ""}{nm(r.p)}</div>
+                    <div style={{ ...T.fs.label, color: T.subtle, letterSpacing: 0, ...T.num }}>
+                      {X.stock} {fmtQty(r.p.currentStock || 0) || "0"} · {X.prod} {fmtQty(r.prod) || "0"}
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${DC_FIELDS.length}, 56px)`, gap: 6 }}>
+                    {DC_FIELDS.map(f => (
+                      <label key={f} style={{ display: "block", minWidth: 0 }}>
+                        <div style={{ ...T.fs.label, letterSpacing: 0, color: f === "sold" ? T.ink : T.subtle, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden" }}>{labels[f]}</div>
+                        <input type="text" inputMode="decimal" data-dcfield={f} value={r.shown[f]} placeholder="0" aria-label={`${nm(r.p)} ${labels[f]}`}
+                          onChange={e => setCell(r.p.id, f, e.target.value)}
+                          style={cellStyle(r.bad.includes(f))} />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {c && (
+                  <div data-dcpreview="1" style={{ ...T.fs.caption, marginTop: 6, ...T.num }}>
+                    <span style={{ color: T.body }}>{X.after(fmtQty(c.stockBefore) || "0", fmtQty(c.stockAfter) || "0")}</span>
+                    {c.oversell > 0 && <div style={{ color: T.warning }}>⚠ {X.oversell(fmtQty(c.oversell))}</div>}
+                    {c.wasteShort > 0 && <div style={{ color: T.warning }}>⚠ {X.wasteShort(fmtQty(c.wasteShort))}</div>}
+                    {c.dupes > 0 && c.resultSold !== c.target.sold && <div style={{ color: T.warning }}>⚠ {X.dupes(c.dupes, fmtQty(c.resultSold))}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {rows.length > 0 && <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>{saveBtn("bottom")}</div>}
+      {money && rows.length > 0 && (
+        <div data-dcmoney="1" style={{ border: `1px solid ${T.border}`, background: T.bgCard, padding: "12px 14px", marginTop: 16 }}>
+          <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.money}</div>
+          <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{X.moneyHint}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 10 }}>
+            {[["revenue", X.revenue, (money.approx ? "≈" : "") + fmtDcMoney(money.revenue), T.ink],
+              ["cost", X.cost, fmtDcMoney(money.cost), T.ink],
+              ["profit", X.profit, (money.approx ? "≈" : "") + fmtDcMoney(money.profit) + (money.margin !== null ? ` · ${money.margin.toFixed(1)}%` : ""), money.profit < 0 ? T.danger : T.success],
+              ["waste", X.waste, fmtDcMoney(money.wasteCost), money.wasteCost > 0 ? T.warning : T.ink]].map(([k, label, v, color]) => (
+              <div key={k} data-dcmoneycell={k} style={{ background: T.bgMuted, padding: "10px 12px" }}>
+                <div style={{ ...T.fs.label, color: T.subtle }}>{label}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 20, fontWeight: 500, color, marginTop: 2, ...T.num }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {money.incomplete.length > 0 && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 8 }}>⚠ {X.incomplete(names(money.incomplete))}</div>}
+          {money.noCost.length > 0 && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.noCost(names(money.noCost))}</div>}
+          {money.noPrice.length > 0 && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.noPrice(names(money.noPrice))}</div>}
+          {money.approx && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 4 }}>{X.approx}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 function TodayView(props) {
-  const { lang, today } = props;
+  const { lang, today, confirmDialog } = props;
   const [sub, setSub] = useState("sheet");
+  // 日结有没保存的格子时,切回生产单先问一句(子页一换,日结页就卸载了)
+  const goSub = (id) => { if (id === sub) return; confirmLeaveEditor(confirmDialog, lang, () => setSub(id)); };
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingBottom: T.sp.l, borderBottom: `1px solid ${T.ink}`, flexWrap: "wrap", gap: T.sp.m, marginBottom: T.sp.l }}>
@@ -16705,7 +17124,7 @@ function TodayView(props) {
         </div>
         <div role="tablist" style={{ display: "flex", border: `1px solid ${T.ink}` }}>
           {TODAY_SUBS.map((t, i) => (
-            <button key={t.id} type="button" role="tab" aria-selected={sub === t.id} onClick={() => setSub(t.id)}
+            <button key={t.id} type="button" role="tab" aria-selected={sub === t.id} onClick={() => goSub(t.id)}
               style={{ padding: "8px 18px", minHeight: 40, border: "none", borderLeft: i ? `1px solid ${T.ink}` : "none", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.small,
                 background: sub === t.id ? T.ink : T.paper, color: sub === t.id ? T.paper : T.ink }}>
               {lang === "ja" ? t.ja : t.zh}
@@ -16713,7 +17132,7 @@ function TodayView(props) {
           ))}
         </div>
       </div>
-      {sub === "sheet" ? <ProductionSheetView {...props} /> : <DailyClosePlaceholder lang={lang} />}
+      {sub === "sheet" ? <ProductionSheetView {...props} /> : <DailyCloseView {...props} onSave={props.onDailyClose} />}
     </div>
   );
 }
@@ -17696,6 +18115,25 @@ function App() {
       setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - add) } : x));
       updateProdPlan(lines => lines.map(l => l.uid === uid ? { ...l, logged: Math.max(0, Math.round(((parseFloat(l.logged) || 0) - add) * 1000) / 1000) } : l));
     } });
+  };
+
+  // ─── 第 3 批 F2:日结 ───
+  // 一次写完(applyDailyClose 纯函数,一次 setState),撤销 toast。撤销时拿最新的数据算(dataRef;toast 5 秒内可能又记了卖出)
+  const saveDailyClose = (date, rows) => {
+    const now = new Date().toISOString();
+    const r = applyDailyClose(products, salesLog, date, rows, now);
+    if (!r.changed.length) return r;
+    setSalesLog(r.salesLog);
+    setProducts(r.products);
+    const X = dcTxt(lang);
+    showToast(X.saved(date, r.changed.length), { undo: () => {
+      const cur = dataRef.current || { products, salesLog };
+      const u = undoDailyClose(cur.products, cur.salesLog, r.undo);
+      setSalesLog(u.salesLog);
+      setProducts(u.products);
+      showToast(u.skipped.length ? X.undoSkipped(u.skipped.length) : X.undone);
+    } });
+    return r;
   };
 
   // 10 个 tab 的配置（数据化：桌面顶栏 / 手机底栏 / 「更多」抽屉复用同一份）
@@ -19318,6 +19756,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           recipes={recipes}
           creations={creations}
           components={components}
+          materials={materials}
+          brands={brands}
           lang={lang}
           showToast={showToast}
           confirmDialog={confirmDialog}
@@ -19346,6 +19786,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           brands={brands}
           productFamilies={productFamilies}
           salesLog={salesLog}
+          productionLog={productionLog}
+          confirmDialog={confirmDialog}
+          onDailyClose={saveDailyClose}
           rawPlan={appSettings.prodPlan}
           updatePlan={updateProdPlan}
           onLogProduction={logProdFromSheet}
