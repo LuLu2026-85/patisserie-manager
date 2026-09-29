@@ -5931,11 +5931,11 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
   const cur = ing.unitPrice === undefined || ing.unitPrice === null ? "" : ing.unitPrice;
   const live = draft && draft.stored === cur && draft.per100 === per100;
   const shown = live ? draft.text : ingPriceShown(cur, per100);
-  // 审查第 6 轮:base = 开始敲之前存的原值。敲回一开始显示的那个数就原样还回去 —— 存的 0.12727999999999998 显示成 12.728,
+  // 审查第 6 轮:base = 开始敲之前存的原值。敲回一开始显示的那个数就原样还回去(清空照旧存 "",老数据存数字 0 的不还成 0)—— 存的 0.12727999999999998 显示成 12.728,
   // 敲 1 再删掉以前会存成 0.12728,离开时白问「还没保存」
   return (
     <input type="number" placeholder={placeholder} value={shown}
-      onChange={e => { const text = e.target.value; const base = live ? draft.base : cur; const stored = text === ingPriceShown(base, per100) ? base : ingPriceStored(text, per100); setDraft({ text, stored, per100, base }); onChangeStored(stored); }}
+      onChange={e => { const text = e.target.value; const base = live ? draft.base : cur; const stored = (text !== "" && text === ingPriceShown(base, per100)) ? base : ingPriceStored(text, per100); setDraft({ text, stored, per100, base }); onChangeStored(stored); }}
       onBlur={() => setDraft(null)}
       onWheel={blurOnWheel}
       style={style} />
