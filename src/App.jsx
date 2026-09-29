@@ -3352,6 +3352,25 @@ function useDirtyGuard(getState) {
   const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current()); } catch (e) { initial.current = ""; } } };
   return { onPointerDownCapture: arm, onKeyDownCapture: arm };
 }
+// 编辑页自己的「← 返回」「取消」:有没保存的改动先问一句,文字和 App 的 goTab 一样(2026-09-29 体检第 2 批 2b)。
+// confirmDialog 是 App 里那个;没传进来就直接走(不拦)
+function confirmLeaveEditor(confirmDialog, lang, go) {
+  if (typeof confirmDialog === "function" && anyEditorDirty()) {
+    confirmDialog(
+      lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+      go,
+      { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
+    );
+    return;
+  }
+  go();
+}
+// 写在列表页里面、没有单独组件的编辑表单(本店原料)用它当根元素:编辑表单出现 = 挂载,关掉 = 卸载,
+// 快照跟着这一次编辑走(直接在列表页里调 useDirtyGuard,关掉编辑后快照还在,回到列表也会被当成「改过」)
+function DirtyGuardScope({ watch, children }) {
+  const bind = useDirtyGuard(() => watch);
+  return <div {...bind}>{children}</div>;
+}
 
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
 // 2026-09-29 体检第 2 批:以前删掉的预置条目刷新后又被补回来。dismissed = appSettings.dismissedSeedIds 的 Set,
@@ -10238,11 +10257,11 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             setEditTarget(null);
           });
         }}
-        onBack={() => {
+        onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
           // [B4 修复] 有 id 跳详情,无 id 回列表
           if (editTarget && editTarget.id) setViewId(editTarget.id);
           setEditTarget(null);
-        }}
+        })}
       />
     );
   }
@@ -10610,6 +10629,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
   const empty = { titleZh: "", titleJa: "", tags: [], relatedRecipes: [], contentZh: "", contentJa: "", imageUrls: [] };
   const [form, setForm] = useState(item ? { imageUrls: [], ...item, tags: item.tags || [], relatedRecipes: item.relatedRecipes || [] } : empty);
   const [relatedInput, setRelatedInput] = useState("");
+  const dirtyBind = useDirtyGuard(() => ({ form, relatedInput }));   // 没保存就切页 / 返回时先问一句(「关联配方」框里敲了还没点添加的也算)
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
@@ -10651,7 +10671,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
   };
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新增知识点" : "编辑知识点"}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -10914,7 +10934,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
         // v17.3: 不再连带删材料。名下有材料 → 先弹「挪到哪家」;没材料 → 直接删 + 给撤销
         requestDelete([brandEditTarget.id], () => { setBrandEditTarget(null); setBrandViewId(null); });
       }}
-      onBack={() => setBrandEditTarget(null)}
+      onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setBrandEditTarget(null))}
     />;
   }
 
@@ -10977,7 +10997,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
           }
         );
       }}
-      onBack={() => setMaterialEditTarget(null)}
+      onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setMaterialEditTarget(null))}
     />;
   }
 
@@ -12407,6 +12427,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
   const [errorMsg, setErrorMsg] = useState("");
   const empty = { nameZh: "", nameJa: "", nameFr: "", categoryId: defaultCategory || "dairy_other", subcategoryId: "other", origin: "", foundedYear: "", storyZh: "", storyJa: "", imageUrls: [] };
   const [form, setForm] = useState(brand ? { ...brand } : empty);
+  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 返回时先问一句
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
   const handleSave = () => {
@@ -12426,7 +12447,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新增厂家" : "编辑厂家"}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -13292,6 +13313,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
     imageUrls: []
   };
   const [form, setForm] = useState(material ? { ...material, parameters: material.parameters || {} } : empty);
+  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 返回时先问一句
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   // 当前大分类下已有材料的厂家 → 给 BrandPicker 排前并标「本类」(厂家的主分类只是提示,真正的归属看材料)
   const inCatBrandIds = useMemo(() => new Set(materials.filter(m => m.categoryId === form.categoryId && m.brandId).map(m => m.brandId)), [materials, form.categoryId]);
@@ -13353,7 +13375,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
   const customKeys = Object.keys(form.parameters).filter(k => !templateKeys.has(k));
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新增产品" : "编辑产品"}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -14246,11 +14268,13 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
     const brand = mat && brands.find(b => b.id === mat.brandId);
     const refPrice = (mat && mat.priceRange && mat.priceRange.mid) || (mat && mat.pricePerG);
     const inputStyle = { width: "100%", padding: "8px 10px", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary };
+    // 2026-09-29 体检第 2 批 2b:「← 返回」「取消」有没保存的改动先问一句(以前直接关,填好的价当场丢)
+    const leaveEditing = () => confirmLeaveEditor(confirmDialog, lang, () => setEditing(null));
 
     return (
-      <div>
+      <DirtyGuardScope key={editing.id} watch={editing}>
         <div style={{ marginBottom: 16 }}>
-          <Btn onClick={() => setEditing(null)}>← {lang === "zh" ? "返回" : "戻る"}</Btn>
+          <Btn onClick={leaveEditing}>← {lang === "zh" ? "返回" : "戻る"}</Btn>
         </div>
         <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 20, border: `0.5px solid ${T.border}` }}>
           <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4, fontFamily: T.fontSerif, color: T.textPrimary }}>
@@ -14315,12 +14339,12 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, gap: 8 }}>
             <div>{!editing._new && <Btn variant="danger" onClick={handleDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}</div>
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn onClick={() => setEditing(null)}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+              <Btn onClick={leaveEditing}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
               <Btn variant="success" onClick={handleSave}>{lang === "zh" ? "保存" : "保存"}</Btn>
             </div>
           </div>
         </div>
-      </div>
+      </DirtyGuardScope>
     );
   }
 
@@ -14519,11 +14543,11 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           setViewId(null);   // 编辑页是从详情进的,不清掉就会停在已删商品的详情(白屏)
         });
       }}
-      onBack={() => {
+      onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
         // [B4 修复] 有 id 跳详情,无 id 回列表
         if (editTarget && editTarget.id) setViewId(editTarget.id);
         setEditTarget(null);
-      }}
+      })}
     />;
   }
 
@@ -14822,6 +14846,9 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   }
   const [form, setForm] = useState(initial);
   const [picker, setPicker] = useState(null); // { forItemIdx? null=新增 }
+  // 没保存就切页 / 取消时先问一句。要写在下面「选组成项」那个提前 return 之前(hook 顺序不能变);
+  // 选组成项的页面是点本页「+ 加一项」进去的,那一下已经拍过快照,所以它的根元素不用再挂
+  const dirtyBind = useDirtyGuard(() => form);
   const [errorMsg, setErrorMsg] = useState("");
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
   const mLabel = (obj) => obj ? (lang === "zh" ? (obj.nameZh || obj.nameJa) : (obj.nameJa || obj.nameZh)) : "";
@@ -14863,7 +14890,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   }
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>{lang === "zh" ? (product ? "编辑商品" : "新建商品") : (product ? "商品編集" : "新規商品")}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -14993,11 +15020,11 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
           setViewId(null);   // 同商品:不清掉会停在已删供货商的详情(白屏)
         });
       }}
-      onBack={() => {
+      onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
         // [B4 修复] 有 id 跳详情,无 id 回列表
         if (editTarget && editTarget.id) setViewId(editTarget.id);
         setEditTarget(null);
-      }}
+      })}
     />;
   }
 
@@ -15105,6 +15132,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
 function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
   const empty = { name: "", deliveryDaysOfWeek: [], closureWindows: [], note: "" };
   const [form, setForm] = useState(supplier ? { ...empty, ...supplier } : empty);
+  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 取消时先问一句
   const [errorMsg, setErrorMsg] = useState("");
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
   const dayLabels = lang === "zh" ? DAY_LABELS_ZH : DAY_LABELS_JA;
@@ -15133,7 +15161,7 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
   };
 
   return (
-    <div>
+    <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>{lang === "zh" ? (supplier ? "编辑供货商" : "新建供货商") : (supplier ? "仕入先編集" : "新規仕入先")}</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -15724,6 +15752,9 @@ function App() {
   }, []);
   const [knowledgeViewId, setKnowledgeViewId] = useState(null);
   const [knowledgeEditTarget, setKnowledgeEditTarget] = useState(null);
+  // 2026-09-29 体检第 2 批 2b:离开知识库就关掉知识编辑页(照上面组件 / 组合产品)。以前切回来编辑页还开着、是旧内容;
+  // 从配方详情点「相关知识」跳过来,也被这个旧编辑页挡住看不到那条知识
+  useEffect(() => { if (tab !== "knowledge") setKnowledgeEditTarget(null); }, [tab]);
   // Toast 队列（2a §09）：左下角、最多堆 3 条、5 秒消失、hover 暂停计时、可带「撤销」
   const [toasts, setToasts] = useState([]); // [{ id, msg, undo?, ttl }]
   const toastSeq = useRef(0);
