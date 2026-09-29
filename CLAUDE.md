@@ -402,6 +402,43 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
    `npm run build && node .claude/scripts/sw/sw_install_probe.cjs`**(模拟全新安装 / 主程序下载失败 / 复用 / 激活删旧缓存)。
 8. 组件和组合产品部分的保存**不再弹「有 N 个材料未在价格表中」**(旧价格表 v11 已停用);矩阵空格新建组件按新建处理(`!component.id`)。
 
+## 2026-09-29 体检第 2 批 2a(中等 / 轻微 bug,改这些地方前先看)
+
+5 个区域并行修、合并后统一测。每处改动旁有「体检第 2 批」注释写着以前的问题。
+
+1. **自动备份换了库**:新库 `patisserie_backup_v2`,`meta`(时间 / 大小 / 条数摘要 / 是否固定)和 `payloads`(整份数据)分开存,
+   恢复列表只读 meta,点「恢复」才读整份。保留规则(`pickBackupsToDelete`):最近 15 份 + 最近 12 小时每小时一份 + 最近 14 天每天一份
+   (当天最早那份)+ 固定备份(覆盖导入 / 清除全部的最多 10 份,恢复前的另算 10 份,免得连着恢复几次把导入前那份挤掉);
+   内容和上一份一样不存,要固定的内容库里已有就把那份标成固定。**覆盖导入、清除全部、恢复备份之前一律先存固定备份**
+   (`pinBackupNow(reason)` / 恢复时 `addBackupSnapshot(..., { pinned: true, reason: "restore" })`),存不上会再问一次。旧库 `patisserie_backup` 只读,照样能列能恢复,超过 14 天的自动清。
+2. **删掉的预置条目不再复活**:App 里一个 effect 把「数据里找不到的预置 id」记进 `appSettings.dismissedSeedIds`,
+   `mergeWithDefaults(items, seeds, dismissed, kind)` 跳过它们;撤销删除 / 合并导入加回来会自动从名单去掉。**是按「缺了」推断的** ——
+   覆盖导入一份没有预置条目的文件、清除全部之后,刷新也不会补回来。新增预置条目照旧给稳定 id。
+3. **有新版本提示**:页面载入时已经有旧版离线缓存在管,之后收到 `controllerchange` 才算更新(第一次安装不提示),顶上出一条中性色「刷新」;
+   编辑页有没存的改动时先 confirmDialog。页面看得见时每 60 分钟 `registration.update()` 一次。测法:`npm run preview` 装好一版 →
+   往 `public/` 临时放一个 svg 再 build → 页面里 `reg.update()` → 出提示 → 点刷新;**测完删掉那个 svg 再 build**。
+4. **删除的统一做法**(材料 / 本店原料 / 组件 / 组合产品):有人在用 → confirmDialog 把引用方列进 `refs`(配方 / 组件 / 组合产品 / 商品 /
+   本店原料);没人用 → 直接删 + 撤销 toast,撤销放回原位置。组件页和组合产品页因此多收 `products`,本店原料页多收 `recipes / components / creations`。
+5. **用量读法只有一个出口 `parseUsedAmount(raw, unit)`**(在 creation-follow helpers 里):去掉开头的 约 / 約 / ~ / ～ 和千位逗号,认 kg。
+   `usedAmountAmbiguous` 先忽略括号里的字,开头数字之后还有数字、+ × * /、或者「每」都算读不准,页面(列表卡片 / 详情 / 整体配方 / 打印)提醒
+   「是这一批一共的量」。显示单位一律 `l.unit || "g"`(蒙布朗的「颗」)。
+6. **缺成本的利润率**:成本 0 显示「—」,有原料没价显示「成本不全·偏高」(配方一览 / 配方详情 / 组合产品卡片,组合产品走 `creationMarginView`),
+   **不再显示红色 0.0% 或绿色 100%**。
+7. **缩放后打印按倍数**:配方详情 / 组件详情缩放过,`onPrint(scaledCopy)` 传一份带 `_printScale` 的副本(只给打印,不写回数据);
+   App 那边只认带 `_printScale` 的对象,别把点击事件当副本。抬头印「做 100 個(原 25 個 ×4)」。
+8. **打印模板**:按盆 `GROUP_ORDER` 稳定排序(`printSortByBowl`);双语时每步下面印日文;印过敏原和制作时间(`printTimeText`);
+   「图片」「关联知识点」两个没用的勾选删了;`printSettings.brandSubtitle` 可以存空串(空 = 不印副标题)。
+9. **销售记录多了 `stockOut`**(实际扣掉的件数,卖超库存时小于 soldQty);删记录按它加回库存,老记录没这个字段按 soldQty。
+   以后任何重写 salesLog 的代码要把它带上。合并导入的 salesLog / productionLog 同 id 取 `updatedAt || createdAt` 更晚的。
+10. **材料「你的使用情况」**(`getUsageScenes`):配料名为空的跳过,只认「关联了这个材料,或配料名包含材料名」;跟组件库走的组合产品部分已在组件那行算过,不重复算。
+    认不出的材料分类一律 `getMaterialCat(id).id` 归「其他」(首页计数 / 分类页 / 选材料弹窗 / 本店原料选材料都是)。
+11. **「今天」一律 `localDateStr()`**,别再写 `toISOString().slice(0, 10)`(那是 UTC 日期,北京早上 8 点前会落到前一天)。
+12. 家族编辑页也接了 `useDirtyGuard`(`goTab` 切页会关掉家族编辑层,点当前这个 tab 也会关,所以家族编辑层开着时同 tab 也要问)。
+    更新提示点「不保存,刷新」时设 `_skipUnloadPrompt`,不再弹浏览器自己的离开提示。
+13. 编辑页提示统一「中文名必填,日文可以不填」(和保存校验一致);配方编辑页 `familyId` 指向已删家族时下拉多一项「⚠ 已丢失的家族」,保存不悄悄清掉。
+14. `creation_follow_probe.cjs` 抽代码时截到 `toCNY` 的结尾(中间插了 `localDateStr`,旧写法截到第一个 `};` 会漏掉 toCNY)。
+    **App.jsx 工作副本是 CRLF 换行**(git 存 LF、autocrlf 转换),脚本里拼字符串匹配要用 `\r\n` 或按 `/\r?\n/` 切行。
+
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
