@@ -17598,6 +17598,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     if (showToast) showToast(X.added(r.added, r.existed));
   };
   const setLine = (uid, patch) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, ...patch } : l));
+  // 审查 r2:撤销删除 / 清空时,同一样(种类 + id)已经重新加回单子的不再放回去(和 mergeProdLines 同一条规矩;以前会出现两行费南雪,配料算两遍、能记两次生产)
+  const onSheet = (lines, b) => lines.some(l => l.uid === b.uid || (l.kind === b.kind && String(l.id) === String(b.id)));
   const remove = (uid) => {
     const idx = plan.lines.findIndex(l => l.uid === uid);
     if (idx < 0) return;
@@ -17606,7 +17608,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     const s = sheet[idx];
     updatePlan(lines => lines.filter(l => l.uid !== uid));
     if (showToast) showToast(X.removed(s && s.obj ? prodName(s.obj, lang) : String(gone.id)), { undo: () => updatePlan(lines => {
-      if (lines.some(l => l.uid === uid)) return lines;
+      if (onSheet(lines, gone)) return lines;
       const next = [...lines]; next.splice(Math.min(idx, next.length), 0, gone); return next;
     }) });
   };
@@ -17614,7 +17616,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     const before = plan.lines;
     if (!before.length) return;
     if (updatePlan(() => []) === false) return;
-    if (showToast) showToast(X.cleared(before.length), { undo: () => updatePlan(lines => lines.length ? [...before.filter(b => !lines.some(l => l.uid === b.uid)), ...lines] : before) });
+    if (showToast) showToast(X.cleared(before.length), { undo: () => updatePlan(lines => lines.length ? [...before.filter(b => !onSheet(lines, b)), ...lines] : before) });
   };
   const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty)));
   const mLabel = (o) => prodName(o, lang);
