@@ -5775,7 +5775,7 @@ const ING_TABLE_VARIANTS = {
     newRowGroup: true,                 // 「+ 追加」的新行带 group: "none"
     legend: true,                      // 表格上方的分组图例
     minWidth: 700,
-    headers: ["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","備考",""],
+    headers: ["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","@note",""],
     thNowrap: true,
     groupBar: true, groupBarFallback: false,   // 行首盆色竖条;分组值认不出时没有兜底(现状)
     linkTitleSuffixZh: "\n点击修改或解除关联",
@@ -5792,7 +5792,6 @@ const ING_TABLE_VARIANTS = {
     driftTitleZh: "价格表已更新,点击同步",
     costPlaceholder: "自動",
     showGroup: true, groupWidth: 70,
-    showNote: true,
     delPad: true,
   },
   component: {
@@ -5801,7 +5800,7 @@ const ING_TABLE_VARIANTS = {
     newRowGroup: true,
     legend: false,
     minWidth: 760,
-    headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组",""],
+    headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组","@note",""],
     thNowrap: true,
     groupBar: true, groupBarFallback: true,
     linkTitleSuffixZh: "",
@@ -5818,7 +5817,6 @@ const ING_TABLE_VARIANTS = {
     driftTitleZh: "价格表已更新为此值,点击同步",
     costPlaceholder: "自动",
     showGroup: true, groupWidth: 80,
-    showNote: false,
     delPad: false,
   },
   layer: {
@@ -5827,7 +5825,7 @@ const ING_TABLE_VARIANTS = {
     newRowGroup: false,
     legend: false,
     minWidth: 640,
-    headers: ["🔗","中文","日本語","用量","单位","品牌","单价","成本",""],
+    headers: ["🔗","中文","日本語","用量","单位","品牌","单价","成本","@note",""],
     thNowrap: false,
     groupBar: false, groupBarFallback: false,
     linkTitleSuffixZh: "",
@@ -5844,7 +5842,6 @@ const ING_TABLE_VARIANTS = {
     driftTitleZh: "价格表已更新,点击同步",
     costPlaceholder: "自动",
     showGroup: false, groupWidth: 0,
-    showNote: false,
     delPad: false,
   },
 };
@@ -5930,7 +5927,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
           <thead>
             <tr style={{ background: "#F5F5F5" }}>
               {v.headers.map((h, i) => (
-                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", ...(v.thNowrap ? { whiteSpace: "nowrap" } : {}) }}>{h}</th>
+                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", ...(v.thNowrap ? { whiteSpace: "nowrap" } : {}) }}>{h === "@note" ? (lang === "zh" ? "备注" : "備考") : h}</th>
               ))}
             </tr>
           </thead>
@@ -6066,7 +6063,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       </select>
                     </td>
                   )}
-                  {v.showNote && <td style={{ padding: "3px 4px" }}><input placeholder="備考・用途メモ" value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>}
+                  {/* 备注:三页都有(2026-09-29 第 2 批 2b C1,以前组件 / 部分编辑页看不见,组件 106 行、部分 61 行备注改不了) */}
+                  <td style={{ padding: "3px 4px" }}><input placeholder={lang === "zh" ? "备注・用途" : "備考・用途メモ"} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
                   <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, ...(v.delPad ? { padding: "2px 4px" } : {}) }}>×</button></td>
                 </tr>
               );
