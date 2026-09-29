@@ -1726,16 +1726,19 @@ const _stripIngredientLead = (s) => _normTxt(s).replace(/^(?:配料表?|原料|�
 function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   const matById = _matMap(ctx);
   const items = new Map(), nonGram = new Map();
-  const addItem = (name, text, grams, compound) => {
-    const prev = items.get(text);
-    if (prev) prev.grams += grams; else items.set(text, { name, text, grams, compound: !!compound });
+  // 审查 r1:关联了同一个材料的几行(「发酵黄油」+「发酵黄油AOP」、「淡奶油 35%」+「淡奶油 35%(打发 7 分)」)按材料合成一项(mkey),
+  // 名字不一样时用第一行的名字去掉末尾括号备注 / 「 A」「 B」;没关联的照旧按文字合并。最后同文字的再合一次(关联和没关联的「黄油」)
+  const addItem = (name, text, grams, compound, mkey, exp) => {
+    const key = mkey || text;
+    const prev = items.get(key);
+    if (prev) { prev.grams += grams; if (prev.name !== name) prev._multi = true; } else items.set(key, { name, text, grams, compound: !!compound, _exp: exp });
   };
-  const addNon = (name, text, qty, unit, reason) => {
-    const key = text + "\u0001" + (unit || "") + "\u0001" + reason;
+  const addNon = (name, text, qty, unit, reason, mkey, exp) => {
+    const key = (mkey || text) + "\u0001" + (unit || "") + "\u0001" + reason;
     const prev = nonGram.get(key);
     const q = parseFloat(qty);
-    if (prev) { if (isFinite(q) && isFinite(prev.qty)) prev.qty += q; else prev.qty = NaN; }
-    else nonGram.set(key, { name, text, qty: isFinite(q) ? q : NaN, unit: unit || "", reason });
+    if (prev) { if (isFinite(q) && isFinite(prev.qty)) prev.qty += q; else prev.qty = NaN; if (prev.name !== name) prev._multi = true; }
+    else nonGram.set(key, { name, text, qty: isFinite(q) ? q : NaN, unit: unit || "", reason, _exp: exp });
   };
   const e = entity || {};
   const visitIngs = (ings) => {
@@ -1747,8 +1750,9 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
       const exp = m ? _stripIngredientLead(m.labelIngredientsZh) : "";
       const text = exp ? `${name}(${exp})` : name;
       const g = ingGramsOf(ing);
-      if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty");
-      else addItem(name, text, g, !!exp);
+      const mkey = m ? "m:" + m.id : "";
+      if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty", mkey, exp);
+      else addItem(name, text, g, !!exp, mkey, exp);
     });
   };
   if (kind === "creation") {
@@ -1781,8 +1785,21 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   } else {
     visitIngs(e.ingredients);
   }
-  const sorted = [...items.values()].map((x, i) => ({ x, i })).sort((a, b) => (b.x.grams - a.x.grams) || (a.i - b.i)).map(o => o.x);
-  const ng = [...nonGram.values()];
+  const baseName = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "").replace(/\s+[A-Za-zＡ-Ｚａ-ｚ]$/, "")) || s;
+  const settle = (list, keyOf, merge) => {
+    const out = new Map();
+    list.forEach(x0 => {
+      const { _multi, _exp, ...x } = x0;
+      if (_multi) { x.name = baseName(x.name); x.text = _exp ? `${x.name}(${_exp})` : x.name; }
+      const k = keyOf(x);
+      const prev = out.get(k);
+      if (prev) merge(prev, x); else out.set(k, x);
+    });
+    return [...out.values()];
+  };
+  const itemList = settle([...items.values()], x => x.text, (a, b) => { a.grams += b.grams; });
+  const sorted = itemList.map((x, i) => ({ x, i })).sort((a, b) => (b.x.grams - a.x.grams) || (a.i - b.i)).map(o => o.x);
+  const ng = settle([...nonGram.values()], x => x.text + "\u0001" + x.unit + "\u0001" + x.reason, (a, b) => { a.qty = isFinite(a.qty) && isFinite(b.qty) ? a.qty + b.qty : NaN; });
   const totalGrams = sorted.reduce((s, x) => s + x.grams, 0);
   return { items: sorted, nonGram: ng, text: [...sorted.map(x => x.text), ...ng.map(x => x.text)].join("、"), totalGrams };
 }
