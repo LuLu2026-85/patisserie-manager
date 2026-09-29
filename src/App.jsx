@@ -17414,8 +17414,9 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   return (
     <div data-prodline={l.uid} style={{ borderTop: `1px solid ${l.done ? T.success : T.border}`, borderRight: `1px solid ${l.done ? T.success : T.border}`, borderBottom: `1px solid ${l.done ? T.success : T.border}`, borderLeft: `3px solid ${l.done ? T.success : T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {/* 审查 r2:「✓ 做完」以前 28 px,比同一张卡上的 ± / ✕(36)还小;员工模式里它是主要操作,手湿 / 有面粉时点不准 → 员工 44(同 Btn lg)、老板 36 */}
         <button type="button" onClick={onDone} aria-pressed={!!l.done} title={X.done}
-          style={{ ...sq, width: 28, height: 28, fontSize: 15, color: l.done ? T.paper : T.body, background: l.done ? T.success : T.paper, border: `1px solid ${l.done ? T.success : T.border}` }}>{l.done ? "✓" : ""}</button>
+          style={{ ...sq, width: readOnly ? 44 : 36, height: readOnly ? 44 : 36, fontSize: readOnly ? 22 : 17, color: l.done ? T.paper : T.body, background: l.done ? T.success : T.paper, border: `1px solid ${l.done ? T.success : T.border}` }}>{l.done ? "✓" : ""}</button>
         <div style={{ flex: "1 1 160px", minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
             <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[l.kind]}</span>
