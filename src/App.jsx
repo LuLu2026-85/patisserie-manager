@@ -17527,7 +17527,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const setLine = (uid, patch) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, ...patch } : l));
   const remove = (uid) => {
     const idx = plan.lines.findIndex(l => l.uid === uid);
-    if (idx < 0) return;
+    if (idx < 0 || today !== localDateStr()) return;   // 审查 r1:过了半夜的旧页面不删(撤销会把昨天那一行塞进今天的单子)
     const gone = plan.lines[idx];
     const s = sheet[idx];
     updatePlan(lines => lines.filter(l => l.uid !== uid));
@@ -19437,7 +19437,8 @@ function App() {
     const today = localDateStr();
     const cur = prodPlanForToday(prev.prodPlan, today);
     const lines = fn(cur.lines);
-    if (lines === cur.lines) return prev;
+    // 审查 r1:空进空出 = 没改(过了半夜还开着昨天的页面,点 ✓ / ± / ✕ 会拿今天的空单子算,不能把昨天那份换成今天的空单子)
+    if (lines === cur.lines || (!lines.length && !cur.lines.length)) return prev;
     return { ...prev, prodPlan: { date: today, lines, updatedAt: new Date().toISOString() } };
   });
   // 商品页「今日要做」红框 →「生成今日生产单」:低库存的带着建议数加进今天的单子(已经在单子上的不动),跳到今日 tab
