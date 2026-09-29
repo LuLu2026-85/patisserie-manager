@@ -17831,8 +17831,10 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
   useEffect(() => {
     const old = prevTodayRef.current;
     prevTodayRef.current = today;
-    if (old !== today && date === old && !pendingRows.length && !badRows.length) { setDate(today); setDraft({}); }
+    if (old !== today && (date === old || (minDate && date < minDate)) && !pendingRows.length && !badRows.length) { setDate(today); setDraft({}); }
   }, [today]);
+  // 审查 r3:员工选了昨天、iPad 开着过了半夜,那一天变成了前天:不让存(以前 minDate 只拦换日期,保存不拦,能改掉前天的卖出 / 报损和现在的库存)
+  const outOfRange = !!((minDate && date < minDate) || date > today);
   // 离开保护比较的是「和存着的不一样的格子」+ 填错的格子(敲了又改回原数不算改过)
   const bind = useDirtyGuard(() => [pendingRows, badRows.map(r => [r.p.id, r.bad])]);
   // 保存前的预览:库存前后、卖超、报损扣不到、同一天的别的记录(和保存走同一个纯函数)
@@ -17855,14 +17857,14 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
     setDraft({}); setDate(v);
   };
   const save = () => {
-    if (!pendingRows.length || badRows.length || !onSave) return;
+    if (!pendingRows.length || badRows.length || !onSave || outOfRange) return;
     onSave(date, pendingRows);
     setDraft({});
   };
   const cellStyle = (bad) => ({ width: "100%", height: 36, boxSizing: "border-box", textAlign: "center", fontSize: 16, padding: "0 4px",
     border: `1px solid ${bad ? T.danger : T.border}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num });
   const saveBtn = (k) => (
-    <Btn key={k} variant="primary" disabled={!pendingRows.length || badRows.length > 0} onClick={save}>{X.save}</Btn>
+    <Btn key={k} variant="primary" disabled={!pendingRows.length || badRows.length > 0 || outOfRange} onClick={save}>{X.save}</Btn>
   );
 
   return (
@@ -17879,6 +17881,7 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
         {saveBtn("top")}
       </div>
       <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{X.hint}</div>
+      {outOfRange && <div data-dc-outofrange="1" style={{ ...T.fs.small, color: T.warning, marginBottom: 12 }}>{zh ? "这一天已经不能再改了,请换到今天或昨天。" : "この日はもう修正できません。今日か昨日に切り替えてください。"}</div>}
       {badRows.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <InlineError title={X.badTitle} detail={X.badDetail(badRows.map(r => `「${nm(r.p)}」${r.bad.map(f => labels[f]).join(zh ? "、" : "・")}`).join(zh ? ";" : "、"))} />
