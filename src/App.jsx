@@ -4120,19 +4120,23 @@ function computeDataHealth(data) {
   {
     const famIds = new Set(productFamilies.map(f => f.id));
     const items = [];
+    // 5 月 1 日重建数据时丢的三个家族(恢复方案等她批);只有挂着这三个的条目才提这件事
+    const lost0501 = new Set(["family_chocolate", "family_french_classic", "family_cheesecake"]);
     [["recipe", recipes], ["creation", creations]].forEach(([kind, list]) => list.forEach((r, i) => {
       if (!r.familyId || famIds.has(r.familyId)) return;
+      const is0501 = lost0501.has(r.familyId);
       items.push({
         key: `H3:${kind}:${r.id != null ? r.id : "#" + i}`, kind, entity: kind, id: r.id, obj: r,
         jump: { kind, id: r.id },
         labelZh: zhN(r) || noName.zh, labelJa: jaN(r) || noName.ja,
-        detailZh: `${TYPE[kind][0]} · 家族编号「${r.familyId}」已经不存在`, detailJa: `${TYPE[kind][1]} · ファミリー「${r.familyId}」は存在しません`,
+        detailZh: `${TYPE[kind][0]} · 家族编号「${r.familyId}」已经不存在${is0501 ? "(5 月 1 日重建数据时丢的,恢复方案等你批)" : ""}`,
+        detailJa: `${TYPE[kind][1]} · ファミリー「${r.familyId}」は存在しません${is0501 ? "(5/1 のデータ再構築で失われたもの。復元案を検討中)" : ""}`,
       });
     }));
     checks.push({ id: "H3", audit: "data-3", level: "display",
       titleZh: "挂着已经不存在的家族", titleJa: "存在しないファミリーを参照",
-      whyZh: "这些配方的「家族」指向的家族已经不在了(5 月 1 日那次重建数据时丢的),家族模式里它们算「未归属」。另有一份恢复这几个家族的方案等你批 —— 打算恢复的话先别点;不恢复就点「改成不归属」(5 秒内可以撤销)。",
-      whyJa: "参照先のファミリーが存在しません(5/1 のデータ再構築で失われたもの)。ファミリー表示では「未所属」になります。復元案を検討中なら押さずに、復元しないなら「未所属にする」を押してください。",
+      whyZh: "这些配方 / 组合产品指向的家族已经不在了(删掉了,或导入时没带过来),家族模式里它们算「未归属」。要找回这个家族就先别点;不要了就点「改成不归属」(5 秒内可以撤销)。",
+      whyJa: "これらのレシピ・組み合わせが参照するファミリーは存在しません(削除された、またはインポートに含まれていなかった)。ファミリー表示では「未所属」になります。ファミリーを戻すつもりなら押さずに、不要なら「未所属にする」を押してください(5 秒以内なら元に戻せます)。",
       items });
   }
 
