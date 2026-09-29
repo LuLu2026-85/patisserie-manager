@@ -16925,8 +16925,13 @@ const applyDailyClose = (products, salesLog, date, rows, nowIso) => {
     const prevShortSold = first ? Math.max(0, _num0(first.soldQty) - saleStockBackOf(first)) : 0;
     const prevShortWaste = first ? Math.max(0, wasteTotalOf(first) - _num0(first.wasteOut)) : 0;
     // 审查 r2:改小了先减没扣到的那部分(只留新总数还用得上的),别把没扣过的件数当成扣过的还回库存(卖超那天 12 改成 10,库存会凭空多 2)
-    const keepShort = Math.min(prevShortSold, Math.max(0, soldFirst - (first ? saleStockBackOf(first) : 0)));
-    const keepShortW = Math.min(prevShortWaste, Math.max(0, wSum - (first ? _num0(first.wasteOut) : 0)));
+    // 审查 r3:短缺按当天卖出 + 报损的合计留,不分两格 —— 以前分开留,卖出改小还回来的件数没拿去扣报损(库存 20 记 50 + 2 再改 5 + 2 得 15,应 13)
+    const demand = _r3(soldFirst + wSum);
+    const keep = _r3(Math.min(prevShortSold + prevShortWaste, Math.max(0, demand - back)));
+    // 留下的短缺先记回原来那一类(卖超的还算卖出没扣到),多的归另一类
+    let keepShort = Math.min(keep, prevShortSold, soldFirst), keepShortW = Math.min(keep - keepShort, prevShortWaste, wSum);
+    const keepLeft = _r3(keep - keepShort - keepShortW), keepAddS = Math.min(keepLeft, soldFirst - keepShort);
+    keepShort = _r3(keepShort + keepAddS); keepShortW = _r3(keepShortW + keepLeft - keepAddS);
     const stockOut = _r3(Math.min(Math.max(0, soldFirst - keepShort), avail));
     const wasteOut = _r3(Math.min(Math.max(0, wSum - keepShortW), avail - stockOut));
     const stock1 = _r3(avail - stockOut - wasteOut);
