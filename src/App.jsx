@@ -3350,8 +3350,24 @@ function useDirtyGuard(getState) {
     return () => { _dirtyChecks.delete(check); };
   }, []);
   const arm = () => { if (initial.current === null) { try { initial.current = JSON.stringify(latest.current()); } catch (e) { initial.current = ""; } } };
-  return { onPointerDownCapture: arm, onKeyDownCapture: arm };
+  const bind = { onPointerDownCapture: arm, onKeyDownCapture: arm };
+  // 2026-09-29 第 2 批 2b C15:bind.isDirty() = 只看这一页自己改过没有(编辑页里的「← 返回」「取消」用;
+  // anyEditorDirty 会把外层的组合产品编辑页也算进去)。不可枚举,{...bind} 挂到 div 上时不会被带成 DOM 属性
+  Object.defineProperty(bind, "isDirty", { enumerable: false, value: () => { try { return initial.current !== null && JSON.stringify(latest.current()) !== initial.current; } catch (e) { return true; } } });
+  return bind;
 }
+// C15:编辑页自己的「← 返回」「取消」—— 这一页有没保存的改动先问一句(文字同切页的 goTab);没传 confirmDialog 就直接走
+const confirmLeave = (isDirty, confirmDialog, lang, go) => {
+  if (typeof confirmDialog === "function" && typeof isDirty === "function" && isDirty()) {
+    confirmDialog(
+      lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
+      go,
+      { title: lang === "zh" ? "还没保存" : "未保存", confirmText: lang === "zh" ? "不保存,离开" : "保存せず移動", cancelText: lang === "zh" ? "留在这里" : "戻る" }
+    );
+    return;
+  }
+  go();
+};
 
 // 只在同 id 不存在时才加入，不会覆盖用户已经修改过的同 id 项目
 // 2026-09-29 体检第 2 批:以前删掉的预置条目刷新后又被补回来。dismissed = appSettings.dismissedSeedIds 的 Set,
@@ -4931,6 +4947,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         materials={materials}
         setShopMaterials={setShopMaterials}
         showToast={showToast}
+        confirmDialog={confirmDialog}
         onSave={(c) => {
           setComponents(prev => {
             const found = prev.find(x => x.id === c.id);
@@ -6271,7 +6288,7 @@ function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang,
 
 
 // ─── 组件编辑 Form ────────────────────────────────────────────────
-function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast }) {
+function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast, confirmDialog }) {
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 材料选择弹窗
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
@@ -6325,6 +6342,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
 
@@ -6391,7 +6409,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新增组件" : "コンポーネント追加") : (lang === "zh" ? "编辑组件" : "コンポーネント編集")}</div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -6593,7 +6611,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存组件" : "コンポーネント保存"}</Btn>
       </div>
 
@@ -9476,6 +9494,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
   const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页时 App 先问一句(部分编辑页另有自己的)
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
   // v17.8: 编辑期间组件库变了(比如刚「↻ 同步回组件库」),表单里跟组件库走的部分也换成最新内容,
   // 不然打开同组件的另一部分看到的是旧的,原样保存会被当成「改过」而变成本产品专用
   useEffect(() => {
@@ -9615,6 +9634,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         lang={lang}
         setShopMaterials={setShopMaterials}
         showToast={showToast}
+        confirmDialog={confirmDialog}
       />
     );
   }
@@ -9625,7 +9645,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新建组合产品" : "编辑组合产品"}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -9955,7 +9975,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存" : "保存"}</Btn>
       </div>
 
@@ -10030,7 +10050,7 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 }
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
-function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats, setShopMaterials, showToast }) {
+function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats, setShopMaterials, showToast, confirmDialog }) {
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
@@ -10063,6 +10083,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     }))
   );
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 取消」「取消」这一部分有改动先问
   // 保存层和同步回组件库共用。老字段 steps 要清掉,不然两栏都删空时 pickSteps 会回退到它
   const stepsOut = () => ({
     stepsZh: steps.map(s => (s.textZh || "").trim()).filter(Boolean),
@@ -10146,7 +10167,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div style={{ fontSize: 16, fontWeight: 500 }}>{W.editTitle}{form.nameZh || form.nameJa || "未命名"}</div>
-        <Btn onClick={onBack}>← 取消</Btn>
+        <Btn onClick={leave}>← 取消</Btn>
       </div>
 
       {layer.sourceComponentId && (
@@ -10242,7 +10263,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
           <Btn variant="success" onClick={handleSyncBackToComponent}>↻ 同步回组件库</Btn>
         ) : <div />}
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
           <Btn variant="primary" onClick={handleSave}>{W.saveBtn}</Btn>
         </div>
       </div>
@@ -13568,7 +13589,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 // ═══════════════════════════════════════════════════════════════
 
 // ─── Edit Form ────────────────────────────────────────────────────
-function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast }) {
+function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast, confirmDialog }) {
   const isNew = !recipe;
   const [errorMsg, setErrorMsg] = useState("");
   const [nameZhMissing, setNameZhMissing] = useState(false);   // 2026-09-29 体检第 2 批:点保存时中文名空 → 名字框旁边标红
@@ -13612,6 +13633,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
   const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
   const qty = parseFloat(form.yield) || 0;
@@ -13702,7 +13724,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新建配方" : "レシピ新規") : (lang === "zh" ? "编辑配方" : "レシピ編集")}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -13831,7 +13853,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
-        <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+        <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存配方" : "レシピ保存"}</Btn>
       </div>
 
@@ -17367,7 +17389,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           // [B4 修复] 有 id 跳详情,无 id 回列表
           if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
           else { setTab("list"); }
-        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} />
+        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog} />
       )}
 
       {/* MATERIALS */}
