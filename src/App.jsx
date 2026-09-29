@@ -3377,9 +3377,9 @@ const _dirtyChecks = new Set();
 // 已经在 app 里问过「不保存,刷新」的,刷新时别再弹浏览器自己的离开提示(2026-09-29 体检第 2 批,审查发现问两遍)
 let _skipUnloadPrompt = false;
 const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) return true; } catch (e) { return true; } } return false; };
-// 审查第 3 轮:比较时把 "" / null / [] 当成「没有这个字段」—— 原来没有 casePack 的材料,敲个 2 又删掉会变成 casePack: "",
+// 审查第 3 轮:比较时把 "" / null / [] 当成「没有这个字段」(第 5 轮加 false:没有 isCouverture 的材料勾上再取消会变成 false,以前白问一句)—— 原来没有 casePack 的材料,敲个 2 又删掉会变成 casePack: "",
 // 以前算「改过」、离开时白问一句。顶层不动;数组里的空值两边都变 null,照样比得出增删
-const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || (Array.isArray(v) && v.length === 0))) ? undefined : v;
+const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || v === false || (Array.isArray(v) && v.length === 0))) ? undefined : v;
 function useDirtyGuard(getState) {
   const latest = useRef(getState);
   latest.current = getState;
