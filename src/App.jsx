@@ -17151,12 +17151,12 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     if (planQty <= 0) return;
     if (line.kind !== "product") {
       const target = line.obj || findTarget(line.kind, line.id);
-      if (!target) { skip("missingDirect", String(line.id)); return; }
+      if (!target) { skip("missingDirect", prodLineGoneName(line, lang)); return; }
       addTarget(line.kind, target, planQty, mLabel(target) || target.nameFr || "");
       return;
     }
     const p = line.obj || (products || []).find(x => x.id === line.id);
-    if (!p) { skip("missingDirect", String(line.id)); return; }
+    if (!p) { skip("missingDirect", prodLineGoneName(line, lang)); return; }
     if ((p.items || []).length === 0) skip("noItems", mLabel(p));
     (p.items || []).forEach(it => {
       // [B6 修复] 支持 component(组件)
@@ -17196,7 +17196,11 @@ const prodPlanForToday = (raw, today) => {
   if (!raw || typeof raw !== "object" || raw.date !== today || !Array.isArray(raw.lines)) return { date: today, lines: [] };
   return { date: today, lines: raw.lines.filter(l => l && PROD_KINDS.includes(l.kind) && l.uid), updatedAt: raw.updatedAt };
 };
-const newProdLine = (kind, id, qty) => ({ uid: "pl_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), kind, id, qty: String(qty) });
+// 审查 r3:加进单子时记下中 / 日文名(nameZh / nameJa,可选),东西后来被删掉时卡片 / 打印 / 总量显示名字,不再显示内部 id(prod_… / 1007)
+const _prodLineNames = (x) => { const r = {}; if (x && x.nameZh) r.nameZh = x.nameZh; if (x && x.nameJa) r.nameJa = x.nameJa; return r; };
+const _prodLineSnap = (o) => o ? _prodLineNames({ nameZh: prodName(o, "zh"), nameJa: prodName(o, "ja") }) : {};
+const prodLineGoneName = (l, lang) => (lang === "ja" ? l.nameJa : l.nameZh) || l.nameZh || l.nameJa || String(l.id);
+const newProdLine = (kind, id, qty, names) => ({ uid: "pl_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), kind, id, qty: String(qty), ..._prodLineNames(names) });
 // 往单子上加:同一样(种类 + id)已经在单子上的不重复加,原来的数量不动
 const mergeProdLines = (lines, adds) => {
   const out = [...(lines || [])];
@@ -17204,7 +17208,7 @@ const mergeProdLines = (lines, adds) => {
   (adds || []).forEach(a => {
     if (!a || !PROD_KINDS.includes(a.kind)) return;
     if (out.some(l => l.kind === a.kind && String(l.id) === String(a.id))) { existed++; return; }
-    out.push(newProdLine(a.kind, a.id, a.qty));
+    out.push(newProdLine(a.kind, a.id, a.qty, a));
     added++;
   });
   return { lines: out, added, existed };
@@ -17277,7 +17281,7 @@ const buildProdSheet = (lines, ctx) => (lines || []).map(line => {
 });
 // 今天总共要称多少(computeMaterialNeeds 的生产模式)
 const prodSheetTotals = (sheet, ctx) => computeMaterialNeeds(
-  (sheet || []).map(s => ({ kind: s.line.kind, id: s.line.id, qty: s.qty, obj: s.obj })), ctx, { production: true });
+  (sheet || []).map(s => ({ kind: s.line.kind, id: s.line.id, qty: s.qty, obj: s.obj, ..._prodLineNames(s.line) })), ctx, { production: true });
 
 const PROD_TXT = {
   zh: {
@@ -17435,7 +17439,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   const X = prodTxt(lang);
   const l = s.line;
   const isProduct = l.kind === "product";
-  const name = s.obj ? prodName(s.obj, lang) : String(l.id);
+  const name = s.obj ? prodName(s.obj, lang) : prodLineGoneName(l, lang);
   const unit = isProduct ? ((s.obj && s.obj.unit) || X.unitPiece)
     : l.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), lang).unit : "")
     : _prodNoYield(l.kind, s.obj) ? X.batchUnit
@@ -17625,7 +17629,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const [adding, setAdding] = useState(null);      // null | "products" | "pick" | "onsale"
   const [closed, setClosed] = useState({});         // uid → true(收起了配料)
   const stale = rawPlan && typeof rawPlan === "object" && rawPlan.date && rawPlan.date !== today && Array.isArray(rawPlan.lines) && rawPlan.lines.length > 0 && plan.lines.length === 0;
-  const addLines = (adds) => {
+  const addLines = (adds0) => {
+    const adds = (adds0 || []).map(a => a ? { ...a, ..._prodLineSnap(_prodFind(a.kind === "product" ? products : a.kind === "creation" ? creations : a.kind === "component" ? components : recipes, a.id)) } : a);
     const r = mergeProdLines(plan.lines, adds);
     if (updatePlan(lines => mergeProdLines(lines, adds).lines) === false) return;   // 审查 r2:页面停在昨天 → App 刷新到今天并提示,这次不算
     if (showToast) showToast(X.added(r.added, r.existed));
@@ -17640,7 +17645,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     const gone = plan.lines[idx];
     const s = sheet[idx];
     updatePlan(lines => lines.filter(l => l.uid !== uid));
-    if (showToast) showToast(X.removed(s && s.obj ? prodName(s.obj, lang) : String(gone.id)), { undo: () => updatePlan(lines => {
+    if (showToast) showToast(X.removed(s && s.obj ? prodName(s.obj, lang) : prodLineGoneName(gone, lang)), { undo: () => updatePlan(lines => {
       if (onSheet(lines, gone)) return lines;
       const next = [...lines]; next.splice(Math.min(idx, next.length), 0, gone); return next;
     }) });
@@ -17651,7 +17656,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     if (updatePlan(() => []) === false) return;
     if (showToast) showToast(X.cleared(before.length), { undo: () => updatePlan(lines => lines.length ? [...before.filter(b => !onSheet(lines, b)), ...lines] : before) });
   };
-  const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty)));
+  const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty, l)));
   const mLabel = (o) => prodName(o, lang);
 
   if (adding === "pick") {
@@ -18025,7 +18030,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       </div>
     );
   };
-  const lineName = (s) => s.obj ? prodName(s.obj, L) : String(s.line.id);
+  const lineName = (s) => s.obj ? prodName(s.obj, L) : prodLineGoneName(s.line, L);
   const lineUnit = (s) => s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
     : s.line.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), L).unit : "")
     : _prodNoYield(s.line.kind, s.obj) ? X.batchUnit : ((s.obj && s.obj.unit) || (s.line.kind === "component" ? "g" : ""));
@@ -19584,7 +19589,8 @@ function App() {
   };
   const updateSheetPlan = (fn) => { if (staleSheetDay()) return false; updateProdPlan(fn); return true; };
   // 商品页「今日要做」红框 →「生成今日生产单」:低库存的带着建议数加进今天的单子(已经在单子上的不动),跳到今日 tab
-  const openProdSheetWith = (adds) => {
+  const openProdSheetWith = (adds0) => {
+    const adds = (adds0 || []).map(a => a ? { ...a, ..._prodLineSnap(_prodFind(products, a.id)) } : a);
     const r = mergeProdLines(prodPlanForToday(appSettings.prodPlan, localDateStr()).lines, adds);
     updateProdPlan(lines => mergeProdLines(lines, adds).lines);
     goTab("today");
