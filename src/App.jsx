@@ -6143,6 +6143,10 @@ function linkMaterialToIng(i, mat, brands, lang) {
   };
 }
 
+// 保存时哪些配料行留下:中文名或日文名去掉空格后不为空(2026-09-29 第 2 批 2b C13,三页统一)。
+// 以前按「有没有值」,只有空格的行也会存下来,但跟组件库比较(_ingContentKey)和整体配方 / 采购(creationBatch)又把它当空行,两边对不上
+const ingHasName = (i) => !!i && !!(String(i.nameZh == null ? "" : i.nameZh).trim() || String(i.nameJa == null ? "" : i.nameJa).trim());
+
 // C6:改了价的关联行写进本店原料(三个编辑页保存时共用;写法同 v11 配方页:有就改价,没有就新建一条,带币种和修改时间)。
 // rows 是保存时刷新过的行;返回写了几条
 function saveIngPricesToShop(rows, setShopMaterials) {
@@ -6323,7 +6327,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const [unlinkedDialog, setUnlinkedDialog] = useState(null); // null | { items: [...] }
 
   const doSave = (finalIngs) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
     // 🔗 自动用材料百科最新价刷新有 materialId 的 ing;改过价的保留她填的价(C6)
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
@@ -10071,7 +10075,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
 
   // opts.synced:刚同步回组件库,这一部分直接算「跟组件库」(见 CreationEditForm.updateLayer)
   const doSave = (finalIngs, opts) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
     // 改过价的关联行保留她填的价(C6);勾着「保存到本店原料」就同时写进去
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
@@ -10097,7 +10101,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       onBack(); // 这一层不是从组件库来的，直接返回
       return;
     }
-    const validIngs = ings.filter(i => i.nameZh || i.nameJa);
+    const validIngs = ings.filter(ingHasName);
     const total = validIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     // 只带这一页能看到、能改的字段,App 那边按字段合并到原组件上。
     // 法文名 / 备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
@@ -10170,7 +10174,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
             和产品编辑页按用量折算的「本层成本」差好几倍。改名 + 按实时价 + 另给一行按用量折算的这一部分成本 */}
         {(() => {
           const zh = lang !== "ja";
-          const liveIngs = ings.filter(i => i.nameZh || i.nameJa);
+          const liveIngs = ings.filter(ingHasName);
           const batchCost = getIngsLiveCost(liveIngs, materials, brands);
           const yNum = parseFloat(form.yield) || 0;
           const unitTxt = form.unit || "g";
@@ -13617,7 +13621,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const [unlinkedDialog, setUnlinkedDialog] = useState(null);
 
   const doSave = (finalIngs) => {
-    const validIngs = finalIngs.filter(i => i.nameZh || i.nameJa);
+    const validIngs = finalIngs.filter(ingHasName);   // C13:名字只有空格的行不存
     // 🔗 用材料百科最新价刷新有 materialId 的 ing;改过价的(_priceModified)保留她填的价
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
