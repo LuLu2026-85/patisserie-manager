@@ -5772,12 +5772,7 @@ const ING_TABLE_VARIANTS = {
   recipe: {
     bulkTitle: { zh: "AI 扫描所有未关联材料并推荐匹配", ja: "AI で未関連材料を一括マッチ" },
     bulkLabel: { zh: "🤖 批量关联百科", ja: "🤖 一括関連" },
-    newRowGroup: true,                 // 「+ 追加」的新行带 group: "none"
-    legend: true,                      // 表格上方的分组图例
-    minWidth: 700,
     headers: ["🔗","名（中文）","名（日本語）","名（FR）","用量","単位","品牌","単価","成本(¥)","分组","@note",""],
-    thNowrap: true,
-    groupBar: true, groupBarFallback: false,   // 行首盆色竖条;分组值认不出时没有兜底(现状)
     linkTitleSuffixZh: "\n点击修改或解除关联",
     pickTitleZh: "从材料百科选择(自动填名/价/品牌)",
     nameTdRelative: false,
@@ -5785,24 +5780,17 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "名（中）", ja: "名（日）" },
     nameWidth: 110,
     matTitlePrefix: "✓ 百科关联:",
-    showFr: true,
     lockBrandWhenLinked: true,         // 关联了百科 → 品牌只读
     trackPrice: true,                  // 改价追踪:_priceModified / 黄框 / ↺ 撤销
     pricePlaceholder: (ing) => curOf(ing) === "CNY" ? "¥/g" : "円/g",
     driftTitleZh: "价格表已更新,点击同步",
     costPlaceholder: "自動",
-    showGroup: true, groupWidth: 70,
     delPad: true,
   },
   component: {
     bulkTitle: { zh: "AI 扫描批量关联百科", ja: "一括関連" },
     bulkLabel: { zh: "🤖 批量关联", ja: "🤖 一括" },
-    newRowGroup: true,
-    legend: false,
-    minWidth: 760,
     headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组","@note",""],
-    thNowrap: true,
-    groupBar: true, groupBarFallback: true,
     linkTitleSuffixZh: "",
     pickTitleZh: "从材料百科选择",
     nameTdRelative: true,
@@ -5810,24 +5798,17 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "中文", ja: "日本語" },
     nameWidth: 100,
     matTitlePrefix: "✓ 百科:",
-    showFr: true,
     lockBrandWhenLinked: false,
     trackPrice: false,
     pricePlaceholder: () => "单价",
     driftTitleZh: "价格表已更新为此值,点击同步",
     costPlaceholder: "自动",
-    showGroup: true, groupWidth: 80,
     delPad: false,
   },
   layer: {
     bulkTitle: { zh: "AI 批量关联百科", ja: "一括関連" },
     bulkLabel: { zh: "🤖 批量关联", ja: "🤖 一括" },
-    newRowGroup: false,
-    legend: false,
-    minWidth: 640,
-    headers: ["🔗","中文","日本語","用量","单位","品牌","单价","成本","@note",""],
-    thNowrap: false,
-    groupBar: false, groupBarFallback: false,
+    headers: ["🔗","中文","日本語","FR","用量","单位","品牌","单价","成本","分组","@note",""],
     linkTitleSuffixZh: "",
     pickTitleZh: "从材料百科选择",
     nameTdRelative: false,
@@ -5835,13 +5816,11 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "中文", ja: "日本語" },
     nameWidth: 110,
     matTitlePrefix: "✓ 百科:",
-    showFr: false,
     lockBrandWhenLinked: false,
     trackPrice: false,
     pricePlaceholder: () => "单价",
     driftTitleZh: "价格表已更新,点击同步",
     costPlaceholder: "自动",
-    showGroup: false, groupWidth: 0,
     delPad: false,
   },
 };
@@ -5903,38 +5882,37 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               {lang === "zh" ? v.bulkLabel.zh : v.bulkLabel.ja}
             </Btn>
           )}
-          <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIdRef.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", ...(v.newRowGroup ? { group: "none" } : {}) }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
+          <Btn size="sm" onClick={() => setIngs(prev => [...prev, { _id: nextIdRef.current++, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none" }])}>{lang === "zh" ? "+ 追加" : "+ 追加"}</Btn>
         </div>
       </div>
 
-      {/* Group legend */}
-      {v.legend && (
-        <div style={{ fontSize: 12, color: "#666666", marginBottom: 10 }}>
-          <span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-            {Object.entries(GROUPS).filter(([k]) => k !== "none").map(([k, g]) => (
-              <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block" }} />
-                {g.zh}
-              </span>
-            ))}
-          </div>
+      {/* 分组图例(2026-09-29 第 2 批 2b C2:以前只有配方页有,组件 / 部分编辑页也有分组列了,三页都给) */}
+      <div style={{ fontSize: 12, color: "#666666", marginBottom: 10 }}>
+        <span>分组 = 可以一起称量放入</span><strong>同一个盆/锅</strong><span>的材料，同色条 = 同一容器</span>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {Object.entries(GROUPS).filter(([k]) => k !== "none").map(([k, g]) => (
+            <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: `1.5px solid ${g.labelBorder}`, color: g.labelColor }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: g.border, display: "inline-block" }} />
+              {g.zh}
+            </span>
+          ))}
         </div>
-      )}
+      </div>
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: v.minWidth }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
           <thead>
             <tr style={{ background: "#F5F5F5" }}>
               {v.headers.map((h, i) => (
-                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", ...(v.thNowrap ? { whiteSpace: "nowrap" } : {}) }}>{h === "@note" ? (lang === "zh" ? "备注" : "備考") : h}</th>
+                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }}>{h === "@note" ? (lang === "zh" ? "备注" : "備考") : h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {ings.map(ing => {
               const ist = { padding: "4px 6px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111111" };
-              const g = !v.groupBar ? null : v.groupBarFallback ? (GROUPS[ing.group || "none"] || GROUPS.none) : GROUPS[ing.group || "none"];
+              // 行首盆色竖条。认不出的分组值(导入的 bowl6 之类)按「未分组」显示,数据里的值不动(以前配方页遇到会白屏)
+              const g = GROUPS[ing.group || "none"] || GROUPS.none;
               const { cat: linkedCat, brand: linkedBrand } = resolveIngBinding(ing, cats);
               const linked = !!linkedCat;
               // 智能名字更新：输入后若匹配到价格表 cat,同步填充另一语言和 catId
@@ -5996,7 +5974,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                 Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
                 ? parseFloat(linkedBrand.price) : null;
               return (
-                <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", ...(v.groupBar ? { borderLeft: `4px solid ${g.border}` } : {}) }}>
+                <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
                   <td style={{ padding: "3px 4px" }}>
                     <button
                       onClick={() => onPickMaterial(ing._id)}
@@ -6018,7 +5996,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     <input list={v.listIds.zh} placeholder={v.namePlaceholder.zh} value={ing.nameZh||""} onChange={e=>onNameChange("nameZh", e.target.value)} style={{ ...ist, width: v.nameWidth, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? `${v.matTitlePrefix}${linkedMat.nameZh || linkedMat.nameJa}` : (linked ? `✓ 已关联「${getCatName(linkedCat, lang)}」` : "")} />
                   </td>
                   <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={v.namePlaceholder.ja} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: v.nameWidth, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
-                  {v.showFr && <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>}
+                  <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...ist, width: 36 }} /></td>
                   <td style={{ padding: "3px 4px" }}>
@@ -6056,13 +6034,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     )}
                   </td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder={v.costPlaceholder} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
-                  {v.showGroup && (
-                    <td style={{ padding: "3px 4px" }}>
-                      <select value={ing.group || "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: v.groupWidth, padding: "4px 3px" }}>
-                        {Object.entries(GROUPS).map(([k, gv]) => <option key={k} value={k}>{lang === "zh" ? gv.zh : gv.ja}</option>)}
-                      </select>
-                    </td>
-                  )}
+                  <td style={{ padding: "3px 4px" }}>
+                    {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
+                    <select value={GROUPS[ing.group] ? ing.group : "none"} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
+                      {Object.entries(GROUPS).map(([k, gv]) => <option key={k} value={k}>{lang === "zh" ? gv.zh : gv.ja}</option>)}
+                    </select>
+                  </td>
                   {/* 备注:三页都有(2026-09-29 第 2 批 2b C1,以前组件 / 部分编辑页看不见,组件 106 行、部分 61 行备注改不了) */}
                   <td style={{ padding: "3px 4px" }}><input placeholder={lang === "zh" ? "备注・用途" : "備考・用途メモ"} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
                   <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, ...(v.delPad ? { padding: "2px 4px" } : {}) }}>×</button></td>
