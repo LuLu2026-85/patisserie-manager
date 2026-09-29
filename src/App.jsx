@@ -4498,8 +4498,9 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
   return (
     <div ref={panelRef} className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
       style={{ position: "fixed", top: topOff, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
-      <div style={{ maxWidth: 920, margin: "0 auto", padding: "16px 16px 96px", boxSizing: "border-box" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: T.sp.l }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", padding: "8px 16px 96px", boxSizing: "border-box" }}>
+        {/* 标题行贴顶:列表展开到几百条时,iPad(没有 Esc)不用滚回最上面也点得到「✕ 关闭」 */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, position: "sticky", top: 0, zIndex: 1, background: T.paper, paddingTop: T.sp.s, paddingBottom: T.sp.l }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSans }}>{zh ? "数据管理" : "データ管理"}</div>
             <div style={{ ...T.fs.titleS, color: T.ink, fontFamily: T.fontSans, marginTop: 2 }}>🩺 {zh ? "数据体检" : "データ診断"}</div>
@@ -4574,6 +4575,7 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
             <div style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, flexBasis: "100%", overflowWrap: "anywhere" }}>{zh ? info.whyZh : info.whyJa}</div>
           </div>
         )}
+        {problems.length > 0 && <div style={{ display: "flex", justifyContent: "center", marginTop: T.sp.xxl }}><Btn onClick={onClose}>{zh ? "关闭" : "閉じる"}</Btn></div>}
       </div>
     </div>
   );
