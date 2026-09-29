@@ -1054,14 +1054,36 @@ const pickLang = (obj, base, lang) => {
   return primary || fallback || "";
 };
 
-// steps 数组: 当前语言为空数组 → 回退另一语言 → 都空返回 []。兼容老数据 obj.steps
-const pickSteps = (obj, lang) => {
+// 步骤按行对齐(2026-09-29 体检 #31 / 第 2 批 2b C11):stepsZh[i] 和 stepsJa[i] 是同一步的两种语言。
+// 存(stepsForSave):某一语言空着的行在那一语言里留 "",两种语言都空的行不存,每种语言末尾的 "" 去掉。
+// 读(stepRows / pickSteps):第 i 行当前语言空 → 用另一语言的第 i 行;两边都空的行跳过;序号按显示出来的顺序数。
+// 以前保存时两种语言各自把空行删掉,中间空一行,后面的步骤就整体错位一行(中文第 3 步对上日文第 4 步)。
+// 某语言是空数组 → 用老字段 steps(兼容老数据,和 _effSteps 同一个规则)
+const _stepStr = (s) => (s === undefined || s === null) ? "" : (typeof s === "string" ? s : String(s));
+const _stepArr = (obj, L) => (Array.isArray(obj["steps" + L]) && obj["steps" + L].length) ? obj["steps" + L] : (Array.isArray(obj.steps) ? obj.steps : []);
+// 返回 [{ zh, ja }],一行一步,已跳过两边都空的行;某一语言空着是 ""(不回退,双语并排用)
+const stepRows = (obj) => {
   if (!obj) return [];
-  const zh = (obj.stepsZh && obj.stepsZh.length) ? obj.stepsZh : (obj.steps || []);
-  const ja = (obj.stepsJa && obj.stepsJa.length) ? obj.stepsJa : (obj.steps || []);
-  const primary = lang === "zh" ? zh : ja;
-  const fallback = lang === "zh" ? ja : zh;
-  return (primary && primary.length) ? primary : ((fallback && fallback.length) ? fallback : []);
+  const zh = _stepArr(obj, "Zh"), ja = _stepArr(obj, "Ja");
+  const rows = [];
+  for (let i = 0, n = Math.max(zh.length, ja.length); i < n; i++) {
+    const z = _stepStr(zh[i]), j = _stepStr(ja[i]);
+    const zOk = z.trim() !== "", jOk = j.trim() !== "";
+    if (zOk || jOk) rows.push({ zh: zOk ? z : "", ja: jOk ? j : "" });
+  }
+  return rows;
+};
+// 显示用:一步一个字符串,当前语言这一行空着就用另一语言
+const pickSteps = (obj, lang) => stepRows(obj).map(r => lang === "zh" ? (r.zh || r.ja) : (r.ja || r.zh));
+// 编辑页保存:rows = 编辑页的步骤行 [{ textZh, textJa }](三个编辑页共用)
+const stepsForSave = (rows) => {
+  const zh = [], ja = [];
+  (Array.isArray(rows) ? rows : []).forEach(s => {
+    const z = _stepStr(s && s.textZh).trim(), j = _stepStr(s && s.textJa).trim();
+    if (z || j) { zh.push(z); ja.push(j); }
+  });
+  const trimEnd = (a) => { let n = a.length; while (n > 0 && !a[n - 1]) n--; return a.slice(0, n); };
+  return { stepsZh: trimEnd(zh), stepsJa: trimEnd(ja) };
 };
 
 // 取「另一语言」原始值、不回退 — 专供双语并排的副行(否则回退会显示成「中文·中文」)
@@ -1396,6 +1418,19 @@ const _effSteps = (x, L) => {
   const a = (x && Array.isArray(x["steps" + L]) && x["steps" + L].length) ? x["steps" + L] : ((x && Array.isArray(x.steps)) ? x.steps : []);
   return a;
 };
+// 步骤比较(C11):老写法是两种语言各自去掉空串后比。步骤按行对齐存以后,某一语言「中间」空一行,
+// 老写法就看不出这一行对着哪一步(中文 [a,"",c] 和 [a,c] 比成一样)—— 只在这种时候再补一项逐行对照。
+// 没有中间空行的数据(09-26 的全部数据都是)比较结果和以前一字不差,「打开部分编辑页不改就保存」不会变成本产品专用
+const _stepsKeyTail = (x) => {
+  const zh = _effSteps(x, "Zh").map(_normTxt), ja = _effSteps(x, "Ja").map(_normTxt);
+  const rows = [];
+  for (let i = 0, n = Math.max(zh.length, ja.length); i < n; i++) {
+    const z = zh[i] || "", j = ja[i] || "";
+    if (z || j) rows.push([z, j]);
+  }
+  const gap = (k) => { let blank = false; for (const r of rows) { if (!r[k]) blank = true; else if (blank) return true; } return false; };
+  return (gap(0) || gap(1)) ? [rows] : [];
+};
 const _ingContentKey = (ing, matIds) => {
   const mid = (ing.materialId && (!matIds || matIds.has(ing.materialId))) ? String(ing.materialId) : "";
   const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand)];
@@ -1408,6 +1443,7 @@ const layerContentKey = (x, matIds) => JSON.stringify(x ? [
   (Array.isArray(x.ingredients) ? x.ingredients : []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(i => _ingContentKey(i, matIds)),
   _effSteps(x, "Zh").map(_normTxt).filter(Boolean), _effSteps(x, "Ja").map(_normTxt).filter(Boolean),
   _normTxt(x.notesZh), _normTxt(x.notesJa),
+  ..._stepsKeyTail(x),
 ] : null);
 const sameLayerContent = (layer, comp, matIds) => !!(layer && comp) && layerContentKey(layer, matIds) === layerContentKey(comp, matIds);
 // 组件 → 部分的内容字段。加部分(addLayerFromComponent)和跟组件库同步共用这一个
@@ -6491,8 +6527,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`);
     }
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
-    const stepsZh = steps.map(s => s.textZh.trim()).filter(Boolean);
-    const stepsJa = steps.map(s => s.textJa.trim()).filter(Boolean);
+    const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     onSave({
       ...form,
       id: (component && component.id) ? component.id : "comp_" + Date.now(),
@@ -7822,9 +7857,9 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   const name = getName(item);
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
-  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文(日文回退成中文时是同一个数组,不重复印)
-  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
-  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
+  // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
+  // C11:按行对齐取这一行的日文;这一行中文空着(主行已经回退成日文)或日文空着就不重复印
+  const stepsSub = lang === "both" ? stepRows(item).map(r => r.ja) : null;
   const notesText = getText(item.notesZh, item.notesJa);
   const scaleText = printScaleText(item, lang);
   const ingsSorted = printSortByBowl(item.ingredients);
@@ -7943,8 +7978,8 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
   // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
-  const stepsJaSub = lang === "both" ? pickSteps(item, "ja") : null;
-  const stepsSub = stepsJaSub && stepsJaSub !== steps ? stepsJaSub : null;
+  // C11:按行对齐取这一行的日文;这一行中文空着(主行已经回退成日文)或日文空着就不重复印
+  const stepsSub = lang === "both" ? stepRows(item).map(r => r.ja) : null;
   const notesText = getText(item.notesZh, item.notesJa);
   // 2026-09-29 体检第 2 批:过敏原和总耗时以前从不打印
   const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} / ${ja}` : zh;
@@ -8042,9 +8077,9 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   };
 
   const name = getName(item);
-  // 空数组也要回退到老字段 steps(和 pickSteps 同一个规则)
-  const stepsZh = (item.stepsZh && item.stepsZh.length) ? item.stepsZh : (item.steps || []);
-  const stepsJa = (item.stepsJa && item.stepsJa.length) ? item.stepsJa : (item.steps || []);
+  // C11:步骤按行对齐(stepRows:空数组回退老字段 steps、两边都空的行跳过),双语并排时同一行的中日对在一起
+  const stepLines = stepRows(item);
+  const hasStepsZh = stepLines.some(r => r.zh), hasStepsJa = stepLines.some(r => r.ja);
   const notesText = getText(item.notesZh, item.notesJa);
   // 2026-09-29 体检第 2 批:以前选「仅日文」时信息行 / 表头 / 页脚还是写死的中文(表头中日混排)—— 标签跟着打印语言走
   const lb = (zh, ja) => lang === "ja" ? ja : zh;
@@ -8126,21 +8161,21 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
       )}
 
       {/* 制法 - 双语并列显示 */}
-      {sections.steps && (stepsZh.length > 0 || stepsJa.length > 0) && (
+      {sections.steps && stepLines.length > 0 && (
         <div style={{ marginBottom: "6mm" }}>
           <div style={{ fontSize: "12pt", fontWeight: 500, marginBottom: "3mm", paddingBottom: "1mm", borderBottom: "0.5px solid #666" }}>
             ─ {lang === "ja" ? "作り方" : lang === "zh" ? "制法" : "制法 / 作り方"} ─
           </div>
-          {lang === "both" && stepsZh.length > 0 && stepsJa.length > 0 ? (
+          {lang === "both" && hasStepsZh && hasStepsJa ? (
             <table style={{ fontSize: "9.5pt" }}>
               <thead>
                 <tr><th style={{ textAlign: "left", padding: "1mm", fontWeight: 400, fontSize: "8pt", color: "#666", width: "50%" }}>中文</th><th style={{ textAlign: "left", padding: "1mm", fontWeight: 400, fontSize: "8pt", color: "#666" }}>日本語</th></tr>
               </thead>
               <tbody>
-                {Array.from({ length: Math.max(stepsZh.length, stepsJa.length) }).map((_, i) => (
+                {stepLines.map((r, i) => (
                   <tr key={i} style={{ borderBottom: "0.25px solid #DDD" }}>
-                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{stepsZh[i] || ""}</td>
-                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{stepsJa[i] || ""}</td>
+                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{r.zh}</td>
+                    <td style={{ padding: "2mm 1mm", verticalAlign: "top", lineHeight: 1.6 }}><strong style={{ color: "#999" }}>{i + 1}. </strong>{r.ja}</td>
                   </tr>
                 ))}
               </tbody>
@@ -8189,10 +8224,11 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
   };
   const marks = { bowl1: "①", bowl2: "②", bowl3: "③", bowl4: "④", bowl5: "⑤" };
   const stepsBlock = (x) => {
-    const zhS = pickSteps(x, "zh"), jaS = pickSteps(x, "ja");
-    const main = L === "ja" ? jaS : zhS;
+    // C11:按行对齐。主行 = 当前语言,这一行空着用另一语言;双语时这一行中文有字才在下面印日文(中文空着时主行已经是日文,不重复印)
+    const rows = stepRows(x);
+    const main = rows.map(r => L === "ja" ? (r.ja || r.zh) : (r.zh || r.ja));
     if (!main.length) return null;
-    const sub = lang === "both" && jaS !== main ? jaS : null;   // 日文回退成中文时是同一个数组,不重复印
+    const sub = lang === "both" ? rows.map(r => r.zh ? r.ja : "") : null;
     return (
       <div className="p-steps" style={{ marginTop: "6px" }}>
         {main.map((s, i) => (
@@ -8534,6 +8570,7 @@ const LAYER_LINK_TAGS = {
 const LAYER_DIFF_FIELDS = [
   ["名字", "名前"], ["名字", "名前"], ["名字", "名前"], ["分类", "分類"], ["产出量", "出来高"], ["单位", "単位"],
   ["原料", "材料"], ["步骤", "工程"], ["步骤", "工程"], ["备注", "メモ"], ["备注", "メモ"],
+  ["步骤", "工程"],   // C11:步骤中间有空行时补的逐行对照(_stepsKeyTail),只差在对齐也要说「步骤」
 ];
 const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
   if (!l || !comp) return [];
@@ -10219,8 +10256,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 取消」「取消」这一部分有改动先问
   // 保存层和同步回组件库共用。老字段 steps 要清掉,不然两栏都删空时 pickSteps 会回退到它
   const stepsOut = () => ({
-    stepsZh: steps.map(s => (s.textZh || "").trim()).filter(Boolean),
-    stepsJa: steps.map(s => (s.textJa || "").trim()).filter(Boolean),
+    ...stepsForSave(steps),   // C11:中日按行对齐存(中间空着的留 "")
     steps: undefined,
   });
   const nextIngId = useRef(ings.length);
@@ -13792,8 +13828,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
     const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
     const uc = q > 0 ? total / q : 0, mg = p > 0 ? ((p - uc) / p) * 100 : 0;
-    const stepsZh = steps.map(s => (s.textZh || "").trim()).filter(Boolean);
-    const stepsJa = steps.map(s => (s.textJa || "").trim()).filter(Boolean);
+    const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     // 清理临时字段 _priceModified / _originalPrice
     const cleanIngs = refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest);
     onSave({
