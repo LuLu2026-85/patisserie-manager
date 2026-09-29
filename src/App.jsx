@@ -6114,12 +6114,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
       const changed = isFinite(n) && !(isFinite(o) && Math.abs(o - n) <= 1e-9 * Math.max(1, Math.abs(o)));
       if (linkedOk && changed) next._priceModified = true; else delete next._priceModified;
     }
-    // 审查第 3 轮:单位在「克 / 毫升」和「本 / 個」之间换了,手改的单价口径就不对了(按本填的 30 会变成每克 30、存进本店原料),
-    // 丢掉手改的价、回到材料百科的价,同 revertPrice
-    if (field === "unit" && i._priceModified && isGramUnit(i.unit) !== isGramUnit(val)) {
-      const q = parseFloat(i.qty) || 0, op = parseFloat(i._originalPrice) || 0, m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
-      next.unitPrice = i._originalPrice || ""; next.cost = q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost; delete next._priceModified; if (m && getMaterialEffectivePrice(m) > 0) next.currency = "CNY";
-    }
+    // 单位换了口径时丢掉手改的价:不在这里逐键判断(审查第 4 轮),见下面 commitUnit
     return next;
   }));
   // 改用量 / 单价时顺手重算这一行的成本:另一个数 > 0 才算(没单价时手填的成本不动,老规矩)。
@@ -6134,14 +6129,25 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
     }));
   };
   // v11: 单行撤销改价,恢复到 _originalPrice。关联的材料有价时原价是按人民币刷出来的,币种也放回 CNY
-  const revertPrice = (id) => setIngs(prev => prev.map(i => {
-    if (i._id !== id) return i;
+  const revertPrice = (id) => setIngs(prev => prev.map(i => i._id !== id ? i : revertRow(i)));
+  const revertRow = (i) => {
     const q = parseFloat(i.qty) || 0;
     const op = parseFloat(i._originalPrice) || 0;
     const m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
     const { _priceModified, ...rest } = i;
     return { ...rest, unitPrice: i._originalPrice || "", ...(m && getMaterialEffectivePrice(m) > 0 ? { currency: "CNY" } : {}), cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost };
-  }));
+  };
+  // 审查第 3 轮:单位在「克 / 毫升」和「本 / 個」之间换了,手改的单价口径就不对了(按本填的 30 会变成每克 30、存进本店原料),
+  // 丢掉手改的价、回到材料百科的价,同 revertPrice。
+  // 审查第 4 轮:改成离开单位框时拿「点进去之前的单位」比 —— 以前每敲一个键就判断,g 改 ml 敲到「m」、拼音输入「毫升」敲到「h」
+  // 都会把同口径的手改价悄悄丢掉。点保存 / 别的按钮时单位框先失焦,所以真换了口径照样先丢价再保存
+  const unitAtFocus = useRef({});
+  const commitUnit = (id) => {
+    const from = unitAtFocus.current[id];
+    delete unitAtFocus.current[id];
+    if (from === undefined) return;
+    setIngs(prev => prev.map(i => (i._id === id && i._priceModified && isGramUnit(from) !== isGramUnit(i.unit)) ? revertRow(i) : i));
+  };
 
   return (
     <>
@@ -6271,7 +6277,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={()=>commitUnit(ing._id)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
                       // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
