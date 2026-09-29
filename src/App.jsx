@@ -1605,6 +1605,9 @@ const _findLinked = (kind, id, ctx) => {
   const list = kind === "creation" ? ctx.creations : kind === "component" ? ctx.components : ctx.recipes;
   return (list || []).find(x => x && String(x.id) === String(id)) || null;
 };
+// 审查 r4:商品组成里挂的配方 / 组合产品 / 组件已删时显示的名字 —— 以前直接用 linkedId,标签配料框会预填「1007」
+const _goneLinkedName = (kind, ja) => ja ? (kind === "creation" ? "削除済みの組立製品" : kind === "component" ? "削除済みのコンポーネント" : "削除済みのレシピ")
+  : (kind === "creation" ? "已删除的组合产品" : kind === "component" ? "已删除的组件" : "已删除的配方");
 const _matMap = (ctx) => {
   if (!ctx._matById) ctx._matById = new Map((ctx.materials || []).filter(Boolean).map(m => [m.id, m]));
   return ctx._matById;
@@ -1665,7 +1668,7 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
     (e.items || []).forEach(it => {
       if (!it) return;
       const t = _depth < 4 ? _findLinked(it.linkedType, it.linkedId, ctx) : null;
-      if (!t) { lines++; pushUnknown({ name: String(it.linkedId === undefined ? "" : it.linkedId), reason: "missingItem" }); return; }
+      if (!t) { lines++; pushUnknown({ name: _goneLinkedName(it.linkedType), nameJa: _goneLinkedName(it.linkedType, true), reason: "missingItem" }); return; }
       const sub = allergenSummaryOf(it.linkedType === "creation" ? "creation" : it.linkedType === "component" ? "component" : "recipe", t, ctx, _depth + 1);
       lines += sub.lines;
       sub.contains.forEach(c => { contains.add(c); (sub.sources[c] || []).forEach(n => addSrc(sources, c, n)); (sub.sourcesJa[c] || []).forEach(n => addSrc(sourcesJa, c, n)); });
@@ -1784,7 +1787,7 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
     const kindOf = (it) => it.linkedType === "creation" ? "creation" : it.linkedType === "component" ? "component" : "recipe";
     if (valid.length === 1 && valid[0].t) return draftIngredientList(kindOf(valid[0].it), valid[0].t, ctx, _depth + 1);
     valid.forEach(({ it, t }) => {
-      if (!t) { addNon(String(it.linkedId === undefined ? "" : it.linkedId), String(it.linkedId === undefined ? "" : it.linkedId), NaN, "", "missingItem"); return; }
+      if (!t) { addNon(_goneLinkedName(it.linkedType), _goneLinkedName(it.linkedType), NaN, "", "missingItem"); return; }
       const k = kindOf(it);
       const name = _entityNameZh(t);
       const sub = draftIngredientList(k, t, ctx, _depth + 1);
@@ -1814,7 +1817,8 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   const sorted = itemList.map((x, i) => ({ x, i })).sort((a, b) => (b.x.grams - a.x.grams) || (a.i - b.i)).map(o => o.x);
   const ng = settle([...nonGram.values()], x => x.text + "\u0001" + x.unit + "\u0001" + x.reason, (a, b) => { a.qty = isFinite(a.qty) && isFinite(b.qty) ? a.qty + b.qty : NaN; });
   const totalGrams = sorted.reduce((s, x) => s + x.grams, 0);
-  return { items: sorted, nonGram: ng, text: [...sorted.map(x => x.text), ...ng.map(x => x.text)].join("、"), totalGrams };
+  // 审查 r4:已删的组成不进配料表文字(标签配料框用它预填),只留在 nonGram 里给提示
+  return { items: sorted, nonGram: ng, text: [...sorted.map(x => x.text), ...ng.filter(x => x.reason !== "missingItem").map(x => x.text)].join("、"), totalGrams };
 }
 // 标签和页面上的那行小字(打印时可关)。不写「已合规」「符合国标」这类字。
 const LABEL_DRAFT_NOTE = "标签草稿:店内现做现卖的产品国标不强制;自己装袋 / 礼盒算散装还是现制现售要问朝阳区市场监管。过敏原强制标示 2027-03-16 起。";
@@ -9497,7 +9501,7 @@ function MaterialAllergenSummary({ material: m, lang }) {
 
 // 配方 / 组件 / 组合产品 / 商品详情页的汇总卡片。handwritten = 配方上手写的 allergens(只有配方有),并排显示、不一致标出来,不改它
 // 配料表草稿里「无法按重量排序」的一项:名字 + 数量(或为什么没数)。详情页卡片和标签弹窗共用
-const _nonGramText = (x, zh) => `${x.text}${isFinite(x.qty) ? ` ${fmtQty(x.qty)}${x.unit ? " " + x.unit : ""}` : (x.reason === "noUsed" ? (zh ? "(用量没填)" : "(使用量未入力)") : x.reason === "missingItem" ? (zh ? "(已删除)" : "(削除済み)") : "")}`;
+const _nonGramText = (x, zh) => `${x.text}${isFinite(x.qty) ? ` ${fmtQty(x.qty)}${x.unit ? " " + x.unit : ""}` : (x.reason === "noUsed" ? (zh ? "(用量没填)" : "(使用量未入力)") : x.reason === "missingItem" ? (zh ? "(已删除,配料表里没写它)" : "(削除済み・原材料表示には入れていません)") : "")}`;
 function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], handwritten, onPrintLabel, flat = false }) {
   const zh = lang !== "ja";
   const [showAllUnknown, setShowAllUnknown] = useState(false);
