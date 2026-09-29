@@ -16712,9 +16712,10 @@ function App() {
     if (kind === "recipe") { setEditTarget(target); setTab("edit"); }
     else if (kind === "component") { setCompEditTarget(target); setTab("components"); }
     else if (kind === "creation") { setCreationEditTarget(target); setTab("creations"); }
-    else if (kind === "material") { setBrandEditTarget(null); setMaterialEditTarget(target); setTab("materialsPedia"); }
+    // 材料百科的查看状态(看过的材料 / 厂家详情、从配方点进来的返回键)在 App 里,切 tab 不清;跳进编辑页前清掉,保存 / 返回后才不冒出以前看过的另一条
+    else if (kind === "material") { setBrandEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setMaterialEditTarget(target); setTab("materialsPedia"); }
     else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
-    else if (kind === "brand") { setMaterialEditTarget(null); setBrandEditTarget(target); setTab("materialsPedia"); }
+    else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandEditTarget(target); setTab("materialsPedia"); }
     else if (kind === "knowledge") { setKnowledgeEditTarget(target); setTab("knowledge"); }
   };
   // 一键改:先改 + 撤销(2a §09)。按对象身份换:改的是面板上看到的那一个对象;撤销时换回原对象,
