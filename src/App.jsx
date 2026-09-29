@@ -9563,13 +9563,20 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
             <span style={rowLab}>{zh ? "手写" : "手入力"}</span>
             <div style={{ flex: 1 }}>
               <span>{hw}</span>
-              {mm && (mm.missing.length > 0 || mm.extra.length > 0) && (
+              {/* 审查 r3:「手写有、原料里没找到」只在原料全部核对完时才算不一致(报红);没核对完时只是还比不了,灰字说明 ——
+                  以前真数据 1838 条材料一条都没核对,10 个写了手写过敏原的配方详情页全是红色「不一致」 */}
+              {mm && (mm.missing.length > 0 || (summary.complete && mm.extra.length > 0)) && (
                 <div style={{ color: T.danger, fontSize: 12, marginTop: 2, lineHeight: 1.6 }}>
                   {zh ? "⚠ 和按原料算的不一致:" : "⚠ 材料からの計算と不一致:"}
                   {mm.missing.length > 0 && <span>{zh ? `原料里有、手写没写 ${mm.missing.map(c => allergenShort(c, lang)).join(sep)}` : `材料にあり・手入力になし ${mm.missing.map(c => allergenShort(c, lang)).join(sep)}`}</span>}
-                  {mm.missing.length > 0 && mm.extra.length > 0 && <span>{zh ? ";" : "。"}</span>}
-                  {mm.extra.length > 0 && <span>{zh ? `手写有、已核对的原料里没找到 ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}` : `手入力にあり・確認済み材料になし ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}`}{!summary.complete ? (zh ? "(可能在没确认的那几项里)" : "(未確認の材料かも)") : ""}</span>}
+                  {mm.missing.length > 0 && summary.complete && mm.extra.length > 0 && <span>{zh ? ";" : "。"}</span>}
+                  {summary.complete && mm.extra.length > 0 && <span>{zh ? `手写有、已核对的原料里没找到 ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}` : `手入力にあり・確認済み材料になし ${mm.extra.map(c => allergenShort(c, lang)).join(sep)}`}</span>}
                   <span style={{ color: T.textTertiary }}>{zh ? "。手写的不会被自动改。" : "。手入力は自動で書き換えません。"}</span>
+                </div>
+              )}
+              {mm && !summary.complete && mm.extra.length > 0 && (
+                <div data-allergen-hw-pending="1" style={{ color: T.textTertiary, fontSize: 12, marginTop: 2, lineHeight: 1.6 }}>
+                  {zh ? `手写有 ${mm.extra.map(c => allergenShort(c, lang)).join(sep)},原料还没核对完,核对完再比` : `手入力に ${mm.extra.map(c => allergenShort(c, lang)).join(sep)} あり。材料の確認が終わってから照合します`}
                 </div>
               )}
             </div>
