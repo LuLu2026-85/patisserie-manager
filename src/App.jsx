@@ -17225,7 +17225,9 @@ const prodName = (o, lang) => o ? (pickLang(o, "name", lang) || o.nameFr || "") 
 // 生产单(和以后的员工视图)不显示钱:配料备注里夹着的价格(09-26 数据:「全换黄油；¥1300/25kg(厨房老虎 2026-09)」)
 // 按「;」/ 换行分段,带钱的那段整段去掉,其余照印
 const PROD_MONEY_RE = /[¥￥円]|\d\s*元|价格|価格|成本|原価|毛利|利润|利益/;
-const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
+// 审查 r1:也按句号(。．)切 —— 录入包的备注常是一整段「……。价格是……。用不加糖的蛋黄时 = ……」,只按分号切会把做法连着价格一起删掉。
+// 不按逗号切(「5,816 円」的千位逗号、「……，北京待核」这种半句留着没意义)
+const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n。．]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
 const prodRowsNoMoney = (rows) => (rows || []).map(r => (r.ing && r.ing.note) ? { ...r, ing: { ...r.ing, note: prodNote(r.ing.note) } } : r);
 
 // 配料行 + 读不出的用量提示(不改 SheetIngRows,它是组合产品整体配方共用的)
