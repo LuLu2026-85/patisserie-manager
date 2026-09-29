@@ -1705,8 +1705,11 @@ function parseAllergenText(s) {
   const text = Array.isArray(s) ? s.join("、") : String(s === undefined || s === null ? "" : s);
   text.split(/[・、,，/／;；\s]+/).map(t => t.trim()).filter(Boolean).forEach(tok => {
     let hit = false;
+    // 审查 r2:「不含坚果」「乳不使用」「卵なし」写的是没有,不算含有(以前读成含有,和按原料算的对不上时报红)
+    if (/^不含|^不使用|不使用$|なし$/.test(tok)) { others.push(tok); return; }
     ALLERGEN_TEXT_PATTERNS.forEach(([code, re]) => {
       if (!re.test(tok)) return;
+      if (code === "nuts" && /ココナッツ|coconut/i.test(tok) && !re.test(tok.replace(/ココナッツ|coconut/gi, ""))) return;   // 审查 r2:椰子不是坚果(ココナッツ / coconut 里带着「ナッツ」「nut」)
       if (code === "milk" && /椰|ココナッツ|coconut/i.test(tok) && !/牛|乳/.test(tok)) return;   // 椰奶不是乳
       if (code === "nuts" && /花生|ピーナッツ|peanut/i.test(tok) && !/杏仁|アーモンド|榛|胡桃|核桃|ナッツ|坚果/.test(tok)) return;
       codes.add(code); hit = true;
