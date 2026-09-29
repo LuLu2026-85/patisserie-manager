@@ -5998,7 +5998,9 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               };
               const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
               const basis = ingPriceBasis(ing.unit);   // 单价按每 100g 还是每单位填
-              const curBtnShown = !ing.materialId;     // ¥ / 円 切换按钮只给手写价的行
+              // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
+              // 材料被删掉的行价格其实是手写价在算,以前没有按钮,币种改不了
+              const curBtnShown = !linkedMat;
               // 检查价格是否和价格表当前值不一致
               const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                 Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
