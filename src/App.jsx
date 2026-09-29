@@ -6110,6 +6110,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
       const changed = isFinite(n) && !(isFinite(o) && Math.abs(o - n) <= 1e-9 * Math.max(1, Math.abs(o)));
       if (linkedOk && changed) next._priceModified = true; else delete next._priceModified;
     }
+    // 审查第 3 轮:单位在「克 / 毫升」和「本 / 個」之间换了,手改的单价口径就不对了(按本填的 30 会变成每克 30、存进本店原料),
+    // 丢掉手改的价、回到材料百科的价,同 revertPrice
+    if (field === "unit" && i._priceModified && isGramUnit(i.unit) !== isGramUnit(val)) {
+      const q = parseFloat(i.qty) || 0, op = parseFloat(i._originalPrice) || 0, m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
+      next.unitPrice = i._originalPrice || ""; next.cost = q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost; delete next._priceModified; if (m && getMaterialEffectivePrice(m) > 0) next.currency = "CNY";
+    }
     return next;
   }));
   // 改用量 / 单价时顺手重算这一行的成本:另一个数 > 0 才算(没单价时手填的成本不动,老规矩)。
