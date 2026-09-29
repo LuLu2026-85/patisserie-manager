@@ -3990,6 +3990,558 @@ function ContentQualityScanDialog({ onClose, materials, brands, lang, onJumpMate
   );
 }
 
+// ═══ 🩺 数据体检(2026-09-29 体检第 2 批 2c,LuLu:「2 要做」)═══
+// 体检报告 synthesis.dataCleanup(data-1 到 data-16)里「数据本身」的问题,改成在 App 里自己查、自己改。
+// computeDataHealth 是纯函数:只读传进来的数据、不改任何对象(条目里 obj / layer 是原对象的引用,给一键改认身份用),
+// 返回 [{ id, audit, level, titleZh, titleJa, whyZh, whyJa, items: [{ key, kind, id, labelZh, labelJa, detailZh, detailJa, jump, ... }] }]。
+// 面板 DataHealthPanel 只管显示和按钮;真正改数据的一键改在 App 里(dataHealthFix),都是「先改 + 撤销」,
+// 撤销按对象身份还原(这几秒里被别处改过就不还原,提示一句)。
+// 不查:data-4(照片编号撞车,碰图片代码,她说不急)、data-8(没关联也没单价的配料)、data-11(商品没挂配方)—— 她没勾。
+// 用 node 对真数据跑:.claude/scripts/data_health/data_health_tests.cjs
+const DH_LEVELS = {
+  money:   { zh: "会算错钱",       ja: "金額がずれる",       color: T.danger },
+  display: { zh: "显示或查找不对", ja: "表示・検索がずれる", color: T.warning },
+  tidy:    { zh: "整理",           ja: "整理",               color: T.subtle },
+  info:    { zh: "说明",           ja: "お知らせ",           color: T.info },
+};
+const DH_LEVEL_ORDER = ["money", "display", "tidy", "info"];
+const _dhName = (o, lang) => { if (!o) return ""; const zh = lang !== "ja"; return String((zh ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) || o.nameFr || "").trim(); };
+const _dhTitle = (o, lang) => { if (!o) return ""; const zh = lang !== "ja"; return String((zh ? (o.titleZh || o.titleJa) : (o.titleJa || o.titleZh)) || "").trim(); };
+// 疑似重复材料的比较键:全角半角统一、去空格、不分大小写
+const _dhKey = (s) => String(s === undefined || s === null ? "" : s).normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+// 日文:假名,或日文的中间点「・」(小麦・卵・乳 这种;中文输入法打出来的是「·」,不算)。长音「ー」不算
+const _dhKana = /[ぁ-ゖァ-・]/;
+// 按个数的规格(3 個 / 10 本入 / 1 袋 / 2 号缶 ……)读不出克数是正常的,不算问题
+const _dhCountPack = /[個个本枚缶罐袋粒片箱入支张張盒瓶根颗顆卷巻]|pcs?\b/i;
+// 每克价 → 每 100g 的数(两位小数,去尾零)
+const _dh100 = (p) => { const n = parseFloat(p); return (isFinite(n) && n > 0) ? String(Math.round(n * 100 * 100) / 100) : ""; };
+
+function computeDataHealth(data) {
+  const d = data || {};
+  const A = (x) => Array.isArray(x) ? x.filter(v => v && typeof v === "object") : [];
+  const recipes = A(d.recipes), components = A(d.components), creations = A(d.creations), knowledge = A(d.knowledge);
+  const materials = A(d.materials), brands = A(d.brands), shopMaterials = A(d.shopMaterials);
+  const productFamilies = A(d.productFamilies), cats = A(d.cats);
+  const printSettings = (d.printSettings && typeof d.printSettings === "object") ? d.printSettings : {};
+  const appSettings = (d.appSettings && typeof d.appSettings === "object") ? d.appSettings : {};
+  const fx = parseFloat(appSettings.fxJpyToCny) > 0 ? parseFloat(appSettings.fxJpyToCny) : DEFAULT_FX_JPY_CNY;
+  const zhN = (o) => _dhName(o, "zh"), jaN = (o) => _dhName(o, "ja");
+  const noName = { zh: "（没有名字）", ja: "（名前なし）" };
+  const matById = new Map(), brandById = new Map(), compById = new Map();
+  materials.forEach(m => { if (m.id != null && !matById.has(m.id)) matById.set(m.id, m); });
+  brands.forEach(b => { if (b.id != null && !brandById.has(b.id)) brandById.set(b.id, b); });
+  components.forEach(c => { if (c.id != null && !compById.has(c.id)) compById.set(c.id, c); });
+  const matIds = new Set(materials.map(m => m.id));
+  // 和成本链 getMaterialEffectivePrice 同一个取价顺序:第一条本店原料的价 → 百科参考价 priceRange.mid → 老字段 pricePerG
+  const shopFirst = new Map();
+  shopMaterials.forEach(s => { if (s.materialId != null && !shopFirst.has(s.materialId)) shopFirst.set(s.materialId, s); });
+  const matOwnPrice = (m) => {
+    const mid = parseFloat(m && m.priceRange && m.priceRange.mid);
+    if (mid > 0) return mid;
+    const p = parseFloat(m && m.pricePerG);
+    return p > 0 ? p : 0;
+  };
+  const matHasPrice = (m) => { if (!m) return false; const s = shopFirst.get(m.id); return (s && parseFloat(s.pricePerG) > 0) || matOwnPrice(m) > 0; };
+  const toCny = (v, cur) => { const n = parseFloat(v); return (isFinite(n) && n > 0) ? (cur === "CNY" ? n : n * fx) : 0; };
+  const named = (ings) => (Array.isArray(ings) ? ings : []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa)));
+  const TYPE = { recipe: ["配方", "レシピ"], component: ["组件", "パーツ"], creation: ["组合产品", "組み合わせ"] };
+  const checks = [];
+
+  // ── H1 本店原料币种没确认(data-1)──
+  {
+    const items = [];
+    shopMaterials.forEach((s, i) => {
+      if (s.currency === "CNY" || s.currency === "JPY") return;   // 写了币种 = 她确认过(JPY 也算)
+      const m = s.materialId != null ? matById.get(s.materialId) : null;
+      const v = parseFloat(s.pricePerG);
+      const has = isFinite(v) && v > 0;
+      const p100 = has ? _dh100(v) : "";
+      const jpyCny100 = has ? _dh100(v * fx) : "";
+      const refP = m ? matOwnPrice(m) : 0;
+      const refCur = m ? curOf(m) : "JPY";
+      const refCny = refP > 0 ? toCny(refP, refCur) : 0;
+      // 按日元读比百科便宜 10 倍以上、按人民币读又在百科价 3 倍以内 → 数量级像人民币(只提示,不自动改)
+      const looksCny = has && refCny > 0 && refCny / (v * fx) >= 10 && v >= refCny / 3 && v <= refCny * 3;
+      const refZh = refP > 0 ? (refCur === "CNY" ? `¥${_dh100(refP)}/100g` : `${_dh100(refP)}円/100g ≈ ¥${_dh100(refCny)}/100g`) : "";
+      items.push({
+        key: `H1:${s.id != null ? s.id : "#" + i}`, kind: "shopMaterial", id: s.id, obj: s, looksCny, hasPrice: has,
+        jump: m ? { kind: "materialView", id: m.id } : null,
+        labelZh: m ? (zhN(m) || noName.zh) : "（材料百科里找不到这一条）", labelJa: m ? (jaN(m) || noName.ja) : "（材料事典に見つかりません）",
+        detailZh: has
+          ? `存的数:每克 ${v}。按日元读 = ${p100}円/100g(≈¥${jpyCny100}/100g);按人民币读 = ¥${p100}/100g${refZh ? `;材料百科价 ${refZh}` : ""}`
+          : "还没填价",
+        detailJa: has
+          ? `保存値:1g あたり ${v}。円なら ${p100}円/100g(≈¥${jpyCny100}/100g)、人民元なら ¥${p100}/100g${refZh ? `。材料事典の価格 ${refZh}` : ""}`
+          : "価格未入力",
+      });
+    });
+    items.sort((a, b) => (b.looksCny ? 1 : 0) - (a.looksCny ? 1 : 0));
+    checks.push({ id: "H1", audit: "data-1", level: "money",
+      titleZh: "本店原料没写是哪种钱", titleJa: "仕入れ原料の通貨が未確認",
+      whyZh: "本店原料没写币种时,App 一律当日元算(东京时期的老规矩)。如果其实是人民币价,成本只算出二十分之一左右。看一眼每条的数量级,点「是人民币」或「是日元」确认,点完就不再列出(数不变)。标了「看数量级像人民币」的是和材料百科价对过的,建议先看。",
+      whyJa: "通貨が書かれていない仕入れ原料は円として計算されます。実は人民元なら原価は約 1/20 になります。桁を見て「人民元」か「円」を押してください(数値は変わりません)。「人民元らしい」印は材料事典の価格と比べたものです。",
+      items });
+  }
+
+  // ── H2 材料 / 厂家分类认不出(data-2)──
+  {
+    const valid = new Set(MATERIAL_CATEGORIES.map(c => c.id));
+    const items = [];
+    materials.forEach((m, i) => {
+      if (valid.has(m.categoryId)) return;
+      const cur = (m.categoryId === undefined || m.categoryId === null) ? "" : String(m.categoryId);
+      const b = m.brandId != null ? brandById.get(m.brandId) : null;
+      items.push({
+        key: `H2:m:${m.id != null ? m.id : "#" + i}`, kind: "material", entity: "material", id: m.id, obj: m, current: cur,
+        jump: { kind: "material", id: m.id },
+        labelZh: zhN(m) || noName.zh, labelJa: jaN(m) || noName.ja,
+        detailZh: `材料${b ? ` · 厂家「${zhN(b)}」` : ""} · 现在写的是「${cur || "空"}」`,
+        detailJa: `材料${b ? ` · メーカー「${jaN(b)}」` : ""} · 現在の値「${cur || "空"}」`,
+      });
+    });
+    brands.forEach((b, i) => {
+      if (!b.categoryId || valid.has(b.categoryId)) return;   // 空 = 全品类,是正常值
+      items.push({
+        key: `H2:b:${b.id != null ? b.id : "#" + i}`, kind: "brand", entity: "brand", id: b.id, obj: b, current: String(b.categoryId),
+        jump: { kind: "brand", id: b.id },
+        labelZh: zhN(b) || noName.zh, labelJa: jaN(b) || noName.ja,
+        detailZh: `厂家 · 现在写的是「${b.categoryId}」`, detailJa: `メーカー · 現在の値「${b.categoryId}」`,
+      });
+    });
+    checks.push({ id: "H2", audit: "data-2", level: "display",
+      titleZh: "材料 / 厂家的分类认不出", titleJa: "材料・メーカーの分類が不明",
+      whyZh: "这些材料和厂家的分类是 App 认不出的旧写法(misc、dairy、c177… 这类),分类页里找不到它们,统一算进「其他」。在下拉里选对的分类,选了就改好,不再列出(5 秒内可以撤销)。厂家可以选「全品类」(淘宝、进口商这类什么都卖的)。",
+      whyJa: "旧形式の分類(misc・dairy・c177… など)で、分類ページに出ず「その他」扱いになっています。プルダウンで正しい分類を選ぶとすぐ直ります(5 秒以内なら元に戻せます)。メーカーは「全カテゴリ」も選べます。",
+      items });
+  }
+
+  // ── H3 配方挂着已经不存在的家族(data-3)──
+  {
+    const famIds = new Set(productFamilies.map(f => f.id));
+    const items = [];
+    [["recipe", recipes], ["creation", creations]].forEach(([kind, list]) => list.forEach((r, i) => {
+      if (!r.familyId || famIds.has(r.familyId)) return;
+      items.push({
+        key: `H3:${kind}:${r.id != null ? r.id : "#" + i}`, kind, entity: kind, id: r.id, obj: r,
+        jump: { kind, id: r.id },
+        labelZh: zhN(r) || noName.zh, labelJa: jaN(r) || noName.ja,
+        detailZh: `${TYPE[kind][0]} · 家族编号「${r.familyId}」已经不存在`, detailJa: `${TYPE[kind][1]} · ファミリー「${r.familyId}」は存在しません`,
+      });
+    }));
+    checks.push({ id: "H3", audit: "data-3", level: "display",
+      titleZh: "挂着已经不存在的家族", titleJa: "存在しないファミリーを参照",
+      whyZh: "这些配方的「家族」指向的家族已经不在了(5 月 1 日那次重建数据时丢的),家族模式里它们算「未归属」。另有一份恢复这几个家族的方案等你批 —— 打算恢复的话先别点;不恢复就点「改成不归属」(5 秒内可以撤销)。",
+      whyJa: "参照先のファミリーが存在しません(5/1 のデータ再構築で失われたもの)。ファミリー表示では「未所属」になります。復元案を検討中なら押さずに、復元しないなら「未所属にする」を押してください。",
+      items });
+  }
+
+  // ── H5 单位对不上的关联配料行(data-5)──
+  {
+    const items = [];
+    const scan = (ings, base) => (Array.isArray(ings) ? ings : []).forEach((ing, j) => {
+      if (!ing || !ing.materialId) return;
+      const m = matById.get(ing.materialId);
+      if (!m || !matHasPrice(m) || isGramUnit(ing.unit)) return;
+      const nmZh = _normTxt(ing.nameZh) || _normTxt(ing.nameJa) || zhN(m);
+      const nmJa = _normTxt(ing.nameJa) || _normTxt(ing.nameZh) || jaN(m);
+      const qty = _normTxt(ing.qty), unit = _normTxt(ing.unit);
+      items.push({
+        key: `${base.key}:${j}`, kind: base.kind, id: base.id, jump: base.jump,
+        labelZh: `${base.ownerZh} · ${nmZh}`, labelJa: `${base.ownerJa} · ${nmJa}`,
+        detailZh: `${TYPE[base.type][0]} · 用量 ${qty || "?"} ${unit} · 关联了「${zhN(m)}」(按克计价)→ 成本按 ${qty || "?"} 克算${base.noteZh ? " · " + base.noteZh : ""}`,
+        detailJa: `${TYPE[base.type][1]} · 分量 ${qty || "?"} ${unit} · 「${jaN(m)}」(g 単価)と連動 → 原価は ${qty || "?"} g で計算${base.noteJa ? " · " + base.noteJa : ""}`,
+      });
+    });
+    recipes.forEach((r, i) => scan(r.ingredients, { key: `H5:r:${r.id != null ? r.id : "#" + i}`, type: "recipe", kind: "recipe", id: r.id, jump: { kind: "recipe", id: r.id }, ownerZh: zhN(r) || noName.zh, ownerJa: jaN(r) || noName.ja }));
+    components.forEach((c, i) => scan(c.ingredients, { key: `H5:p:${c.id != null ? c.id : "#" + i}`, type: "component", kind: "component", id: c.id, jump: { kind: "component", id: c.id }, ownerZh: zhN(c) || noName.zh, ownerJa: jaN(c) || noName.ja }));
+    creations.forEach((cr, i) => (Array.isArray(cr.layers) ? cr.layers : []).forEach((l, li) => {
+      if (!l) return;
+      const comp = l.sourceComponentId ? compById.get(l.sourceComponentId) : null;
+      // 跟组件库走的部分:改组件就行(这里改会变成本产品专用),「去改」跳组件
+      const follows = !!comp && layerLinkState(l, components, matIds) === "follow";
+      scan(l.ingredients, {
+        key: `H5:c:${cr.id != null ? cr.id : "#" + i}:${li}`, type: "creation", kind: "creation", id: cr.id,
+        jump: follows ? { kind: "component", id: comp.id } : { kind: "creation", id: cr.id },
+        ownerZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || noName.zh}`, ownerJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || noName.ja}`,
+        noteZh: follows ? `这一部分跟组件库走,改组件「${zhN(comp)}」就行` : "",
+        noteJa: follows ? `部品庫と連動中:パーツ「${jaN(comp)}」を直せば反映されます` : "",
+      });
+    }));
+    checks.push({ id: "H5", audit: "data-5", level: "money",
+      titleZh: "单位对不上的关联配料", titleJa: "単位が合わない連動材料",
+      whyZh: "这些配料关联了材料百科(材料都按克计价),用量却写的是「個 / 本」这类。成本 = 材料每克价 × 用量,50 个干杏会按 50 克算,少算很多。改法:把用量改成克数;或者取消关联,直接填每个 / 每根的价。",
+      whyJa: "材料事典(g 単価)と連動しているのに、分量が「個・本」などになっています。原価 = g 単価 × 分量なので、干し杏 50 個が 50 g として計算されます。分量を g に直すか、連動を外して 1 個あたりの単価を入力してください。",
+      items });
+  }
+
+  // ── H6 组合产品用量读不出 / 读不准(data-6)──
+  {
+    const items = [];
+    creations.forEach((cr, i) => (Array.isArray(cr.layers) ? cr.layers : []).forEach((l, li) => {
+      if (!l || !(parseFloat(l.yield) > 0)) return;   // 没填产出量的部分成本按整批算,用量不参与计算
+      const raw = _normTxt(l.usedAmount);
+      const unit = _normTxt(l.unit) || "g";
+      let zhD, jaD;
+      if (!raw) { zhD = "没填用量 → 这一部分成本算成 0"; jaD = "分量未入力 → このパーツの原価は 0"; }
+      else {
+        const n = parseUsedAmount(l.usedAmount, l.unit);
+        if (!(n > 0)) { zhD = `「${raw}」读不出数字 → 成本算成 0`; jaD = `「${raw}」は数値として読めません → 原価 0`; }
+        else if (usedAmountAmbiguous(raw)) { zhD = `「${raw}」只认开头的数 → 按 ${fmtQty(n)} ${unit} 算`; jaD = `「${raw}」は先頭の数だけ読みます → ${fmtQty(n)} ${unit} で計算`; }
+        else return;
+      }
+      items.push({
+        key: `H6:${cr.id != null ? cr.id : "#" + i}:${li}`, kind: "creation", id: cr.id, jump: { kind: "creation", id: cr.id },
+        labelZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || noName.zh}`, labelJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || noName.ja}`,
+        detailZh: zhD, detailJa: jaD,
+      });
+    }));
+    checks.push({ id: "H6", audit: "data-6", level: "money",
+      titleZh: "组合产品的用量读不出 / 读不准", titleJa: "組み合わせの分量が読めない",
+      whyZh: "组合产品每一部分的用量是「做这一批一共用多少」,成本和整体配方按它算。没填、读不出数字的部分成本算成 0;「500g + 170g」「约 45g/个」这种只认开头的数。改成一个总克数就好,说明可以写在括号里(括号里的字不影响计算)。",
+      whyJa: "各パーツの分量は「このバッチ全体で使う量」で、原価と全体レシピはこれで計算します。未入力・読めないものは 0、「500g + 170g」「約45g/個」は先頭の数だけ読みます。合計の g を 1 つ書いてください(補足は括弧内に)。",
+      items });
+  }
+
+  // ── H7 组合产品里内容是空的部分(data-7)──
+  {
+    const items = [];
+    creations.forEach((cr, i) => (Array.isArray(cr.layers) ? cr.layers : []).forEach((l, li) => {
+      if (!l || !l.sourceComponentId || named(l.ingredients).length > 0) return;
+      const comp = compById.get(l.sourceComponentId);
+      if (!comp) return;
+      const n = named(comp.ingredients).length;
+      if (!n) return;
+      items.push({
+        key: `H7:${cr.id != null ? cr.id : "#" + i}:${li}`, kind: "creation", id: cr.id, obj: cr, layer: l, layerIndex: li,
+        jump: { kind: "creation", id: cr.id },
+        labelZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || zhN(comp) || noName.zh}`, labelJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || jaN(comp) || noName.ja}`,
+        detailZh: `这一部分 0 行原料;组件库「${zhN(comp)}」有 ${n} 行`, detailJa: `このパーツは材料 0 行。部品庫「${jaN(comp)}」は ${n} 行`,
+      });
+    }));
+    checks.push({ id: "H7", audit: "data-7", level: "money",
+      titleZh: "组合产品里内容是空的部分", titleJa: "中身が空のパーツ",
+      whyZh: "这些部分一行原料都没有,但组件库里的那个组件有 —— 成本和整体配方都缺了这一块。点「用组件库的」:这一部分改成跟组件库走,内容换成组件库现在的(和组合产品详情页的同名按钮一样,5 秒内可以撤销)。",
+      whyJa: "材料が 0 行のパーツですが、部品庫の元パーツには材料があります。「部品庫に合わせる」でこのパーツを部品庫と連動させ、中身を部品庫の最新に置き換えます(5 秒以内なら元に戻せます)。",
+      items });
+  }
+
+  // ── H9 知识按钮找不到 / 同名(data-9)──
+  {
+    const items = [];
+    const resolve = makeKnowledgeLinkResolver(recipes, components, creations);
+    const tName = (x, zh) => `${TYPE[x.type] ? TYPE[x.type][zh ? 0 : 1] : ""}「${zh ? zhN(x.item) : jaN(x.item)}」`;
+    knowledge.forEach((k, i) => {
+      const seen = new Set();
+      (Array.isArray(k.relatedRecipes) ? k.relatedRecipes : []).flatMap(splitLinkNames).forEach(n => {
+        if (seen.has(n)) return;
+        seen.add(n);
+        const m = resolve(n);
+        if (m && !m.ambiguous) return;
+        items.push({
+          key: `H9:${k.id != null ? k.id : "#" + i}:${n}`, kind: "knowledge", id: k.id, ambiguous: !!m,
+          jump: { kind: "knowledge", id: k.id },
+          labelZh: _dhTitle(k, "zh") || "（没有标题）", labelJa: _dhTitle(k, "ja") || "（タイトルなし）",
+          detailZh: m ? `按钮「${n}」有 ${m.ambiguous.length} 个同名:${m.ambiguous.map(x => tName(x, true)).join("、")}` : `按钮「${n}」找不到对应的配方 / 组件 / 组合产品`,
+          detailJa: m ? `ボタン「${n}」は同名が ${m.ambiguous.length} 件:${m.ambiguous.map(x => tName(x, false)).join("、")}` : `ボタン「${n}」に該当するレシピ・パーツ・組み合わせがありません`,
+        });
+      });
+    });
+    checks.push({ id: "H9", audit: "data-9", level: "display",
+      titleZh: "知识的关联按钮找不到 / 同名", titleJa: "ナレッジの関連ボタンが迷子",
+      whyZh: "知识页的「关联配方」按钮按名字找配方 / 组件 / 组合产品。下面这些名字一个都找不到(按钮点不动),或者找到好几个同名的(按钮不知道跳哪个)。去知识编辑页把名字改成和配方一样的写法(比如繁体「費」改简体「费」、加上版本号)。",
+      whyJa: "ナレッジの「関連レシピ」ボタンは名前で探します。以下は見つからない名前、または同名が複数ある名前です。ナレッジ編集でレシピと同じ書き方に直してください。",
+      items });
+  }
+
+  // ── H15 过敏原没填或只有日文(data-15)──
+  {
+    const items = [];
+    recipes.forEach((r, i) => {
+      const a = _normTxt(Array.isArray(r.allergens) ? r.allergens.join("、") : r.allergens);
+      if (a && !_dhKana.test(a)) return;
+      items.push({
+        key: `H15:${r.id != null ? r.id : "#" + i}`, kind: "recipe", id: r.id, jump: { kind: "recipe", id: r.id },
+        labelZh: zhN(r) || noName.zh, labelJa: jaN(r) || noName.ja,
+        detailZh: a ? `写的是日文:${a}` : "没填", detailJa: a ? `日本語表記:${a}` : "未入力",
+      });
+    });
+    checks.push({ id: "H15", audit: "data-15", level: "display",
+      titleZh: "过敏原没填或只有日文", titleJa: "アレルゲン未入力・日本語のみ",
+      whyZh: "北京的标签要中文;法定标注的用词也要你自己定,所以这里不自动翻译。去配方编辑页改。",
+      whyJa: "北京のラベルには中国語が必要です。法定表示の用語はご自身で決めてください(自動翻訳はしません)。",
+      items });
+  }
+
+  // ── H10 疑似重复材料(data-10)──
+  {
+    const items = [];
+    const idx = new Map(materials.map((m, i) => [m, i]));
+    const used = new Map();   // 材料 → 配料行关联了几行
+    const bump = (ings) => (Array.isArray(ings) ? ings : []).forEach(g => { if (g && g.materialId != null) used.set(g.materialId, (used.get(g.materialId) || 0) + 1); });
+    recipes.forEach(r => bump(r.ingredients));
+    components.forEach(c => bump(c.ingredients));
+    creations.forEach(cr => (Array.isArray(cr.layers) ? cr.layers : []).forEach(l => l && bump(l.ingredients)));
+    const groups = new Map();
+    materials.forEach(m => {
+      if (m.brandId === undefined || m.brandId === null || m.brandId === "") return;
+      [["nameZh", "zh"], ["nameJa", "ja"]].forEach(([f, t]) => {
+        const k = _dhKey(m[f]);
+        if (!k) return;
+        const g = `${String(m.brandId)}\u0000${t}\u0000${k}`;
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(m);
+      });
+    });
+    const seenPair = new Set();
+    const useZh = (m) => { const n = used.get(m.id) || 0; return `${n ? `配料关联 ${n} 行` : "没有配料关联"}${shopFirst.has(m.id) ? " · 本店原料有" : ""}`; };
+    const useJa = (m) => { const n = used.get(m.id) || 0; return `${n ? `連動 ${n} 行` : "連動なし"}${shopFirst.has(m.id) ? " · 仕入れ原料あり" : ""}`; };
+    groups.forEach(list => {
+      for (let x = 0; x < list.length; x++) for (let y = x + 1; y < list.length; y++) {
+        const a0 = list[x], b0 = list[y];
+        if (a0 === b0) continue;
+        const [a, b] = idx.get(a0) < idx.get(b0) ? [a0, b0] : [b0, a0];
+        const pk = `${idx.get(a)}|${idx.get(b)}`;
+        if (seenPair.has(pk)) continue;
+        seenPair.add(pk);
+        const br = brandById.get(a.brandId);
+        items.push({
+          key: `H10:${pk}`, kind: "materialPair", id: a.id, a, b,
+          jumpA: { kind: "materialView", id: a.id }, jumpB: { kind: "materialView", id: b.id },
+          labelZh: `${zhN(a) || noName.zh} ↔ ${zhN(b) || noName.zh}`, labelJa: `${jaN(a) || noName.ja} ↔ ${jaN(b) || noName.ja}`,
+          detailZh: `${br ? `厂家「${zhN(br)}」· ` : ""}A:${useZh(a)};B:${useZh(b)}`,
+          detailJa: `${br ? `メーカー「${jaN(br)}」· ` : ""}A:${useJa(a)} / B:${useJa(b)}`,
+        });
+      }
+    });
+    checks.push({ id: "H10", audit: "data-10", level: "tidy",
+      titleZh: "疑似重复的材料", titleJa: "重複しているかもしれない材料",
+      whyZh: "同一个厂家下有中文名或日文名一样的两条材料,多半是手录一条、后来又导入一条。配方可能一半关联这条、一半关联那条,改价只改到一边。点「去看」对比一下,留一条就行(删之前看看哪条有配料在用)。这里不自动合并。",
+      whyJa: "同じメーカーに同名の材料が 2 件あります(手入力とインポートの重複が多い)。「見る」で比べて 1 件に整理してください。自動では統合しません。",
+      items });
+  }
+
+  // ── H12 步骤没翻完(data-12)──
+  {
+    const items = [];
+    const scan = (o, i, kind) => {
+      const rows = stepRows(o);
+      if (!rows.length) return;
+      const zhC = rows.filter(r => r.zh).length, jaC = rows.filter(r => r.ja).length;
+      const missZh = rows.some(r => !r.zh);                       // 有步骤没有中文(中文界面显示的是日文)
+      const missJa = jaC > 0 && rows.some(r => !r.ja);            // 已经开始写日文、还有几步没翻;一步日文都没有的不算(中文优先)
+      if (!missZh && !missJa) return;
+      items.push({
+        key: `H12:${kind}:${o.id != null ? o.id : "#" + i}`, kind, id: o.id, jump: { kind, id: o.id },
+        labelZh: zhN(o) || noName.zh, labelJa: jaN(o) || noName.ja,
+        detailZh: `${TYPE[kind][0]} · 中文 ${zhC} 步 / 日文 ${jaC} 步`, detailJa: `${TYPE[kind][1]} · 中国語 ${zhC} / 日本語 ${jaC} 工程`,
+      });
+    };
+    recipes.forEach((r, i) => scan(r, i, "recipe"));
+    components.forEach((c, i) => scan(c, i, "component"));
+    checks.push({ id: "H12", audit: "data-12", level: "tidy",
+      titleZh: "步骤没翻完", titleJa: "工程の翻訳が途中",
+      whyZh: "步骤的中文和日文是一行对一行的。下面这些有几步只有一种语言:缺中文的那几步,中文界面显示的是日文;缺日文的那几步,切到日文界面显示中文。只写了中文、一步日文都没有的不算(中文优先)。",
+      whyJa: "工程は中国語と日本語が 1 行ずつ対応しています。以下は一部の工程が片方の言語しかありません。日本語が 1 行もないもの(中国語のみ)は対象外です。",
+      items });
+  }
+
+  // ── H13 规格读不出的材料(data-13)──
+  {
+    const bad = [], multi = [];
+    materials.forEach((m, i) => {
+      const ps = _normTxt(m.packSize);
+      if (!ps) return;
+      const g = parsePackSizeToGrams(ps);
+      const base = { kind: "material", id: m.id, jump: { kind: "material", id: m.id }, labelZh: zhN(m) || noName.zh, labelJa: jaN(m) || noName.ja };
+      if (!(g > 0)) {
+        if (_dhCountPack.test(ps)) return;
+        bad.push({ ...base, key: `H13:${m.id != null ? m.id : "#" + i}`, detailZh: `规格「${ps}」读不出克数`, detailJa: `規格「${ps}」から g が読めません` });
+        return;
+      }
+      // 几个规格写在一起、第一段自己没写单位的(1/10/25KG):单位是借后面的,读成 1 kg 值得看一眼。「200ml / 1000ml」每段都有单位,不列
+      const parts = ps.replace(/(\d),(\d{3})(?!\d)/g, "$1$2").split(/[\/、，,]/).map(s => s.trim()).filter(Boolean);
+      const m0 = parts.length > 1 ? parts[0].match(/^\s*(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|g|克|l|ℓ|升)?/i) : null;
+      if (m0 && !m0[2]) multi.push({ ...base, key: `H13:${m.id != null ? m.id : "#" + i}`, multi: true, detailZh: `规格「${ps}」有好几段,第一段没写单位,借后面的单位按 ${fmtQty(g)} g 算`, detailJa: `規格「${ps}」は複数あり、最初の値に単位がないため ${fmtQty(g)} g で計算` });
+    });
+    checks.push({ id: "H13", audit: "data-13", level: "tidy",
+      titleZh: "规格读不出克数的材料", titleJa: "規格から g が読めない材料",
+      whyZh: "规格(比如「1kg」「500g」)是用来从袋价 / 箱价算每克价的。读不出克数的,填袋价时算不出单价,只能直接填单价;几个规格写在一起、第一段没写单位的(1/10/25kg),App 借后面的单位按第一段算(1 kg),也列出来看一眼对不对。「3 個」「10 本入」这种按个数的规格不算问题,不列。",
+      whyJa: "規格は袋・ケース価格から g 単価を出すのに使います。g が読めないものは袋価格から単価を計算できません。複数規格(1/10/25kg)は最初の値で計算します。個数の規格は対象外です。",
+      items: [...bad, ...multi] });
+  }
+
+  // ── H14 旧价格表还在(data-14)──
+  {
+    const items = [];
+    if (cats.length > 0) {
+      const emptyN = cats.filter(c => !_normTxt(c.nameZh) && !_normTxt(c.nameJa)).length;
+      items.push({ key: "H14:cats", kind: "cats", id: null, count: cats.length,
+        labelZh: `旧价格表 ${cats.length} 条`, labelJa: `旧価格表 ${cats.length} 件`,
+        detailZh: emptyN ? `其中 ${emptyN} 条名字是空的` : "", detailJa: emptyN ? `うち ${emptyN} 件は名前が空` : "" });
+    }
+    checks.push({ id: "H14", audit: "data-14", level: "tidy",
+      titleZh: "旧价格表还在", titleJa: "旧価格表が残っています",
+      whyZh: "旧价格表(v11 以前的)已经停用,界面早就藏起来了,成本也不读它。清掉让数据干净一点;配料行上留着的旧价格表编号不影响成本。清之前会自动存一份固定备份,5 秒内也可以撤销。",
+      whyJa: "旧価格表(v11 以前)は使われておらず、原価計算にも使いません。削除前に固定バックアップを自動保存します(5 秒以内なら元に戻せます)。",
+      items });
+  }
+
+  // ── H16 打印设置(data-16,只是说明,不算问题)──
+  {
+    const logo = _normTxt(printSettings.logoUrl);
+    const sub = typeof printSettings.brandSubtitle === "string" ? printSettings.brandSubtitle.trim() : "";
+    checks.push({ id: "H16", audit: "data-16", level: "info", items: [],
+      titleZh: "打印抬头", titleJa: "印刷のヘッダー",
+      whyZh: `${logo ? "LOGO 用的是你设的图片网址。" : "LOGO 没设,打印用的是定稿字标 kororā ✓。"}副标题现在是「${sub || "(空,不印)"}」。要改:任意一页点打印 → 打印预览上方的「⚙ LOGO设置」。`,
+      whyJa: `${logo ? "ロゴは設定した画像 URL を使用。" : "ロゴ未設定のため、確定版ロゴ kororā で印刷されます ✓。"}サブタイトルは「${sub || "(空・印刷しない)"}」。変更は印刷プレビュー上部の「⚙ ロゴ設定」から。`,
+    });
+  }
+
+  return DH_LEVEL_ORDER.flatMap(lv => checks.filter(c => c.level === lv));
+}
+
+// 面板:数据 tab「🩺 数据体检」打开,盖满屏(zIndex 在 toast 下面,撤销提示看得见)
+// fix:App 给的一键改 { shopCurrency(item, cur), category(item, catId), clearFamily(item), layerFollow(item), clearCats(item) }
+function DataHealthPanel({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, lang, onClose, onJump, fix }) {
+  const zh = lang !== "ja";
+  const checks = useMemo(
+    () => computeDataHealth({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings }),
+    [recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings]);
+  const problems = checks.filter(c => c.level !== "info" && c.items.length > 0);
+  const moneyN = problems.filter(c => c.level === "money").length;
+  // 一开始只展开「会算错钱」的几类;其他点标题展开
+  const [open, setOpen] = useState(() => { const o = {}; checks.forEach(c => { o[c.id] = c.level === "money" && c.items.length > 0; }); return o; });
+  const [showAll, setShowAll] = useState({});
+  const LIMIT = 20;
+  useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = orig; window.removeEventListener("keydown", onKey); };
+  }, []);
+  const L = (o, base) => zh ? o[base + "Zh"] : (o[base + "Ja"] || o[base + "Zh"]);
+  const levelTag = (lv) => {
+    const x = DH_LEVELS[lv];
+    return <span style={{ ...T.fs.label, letterSpacing: 0, padding: "1px 6px", border: `1px solid ${x.color}`, color: x.color, background: T.surface, borderRadius: T.radius, whiteSpace: "nowrap", fontFamily: T.fontSans }}>{zh ? x.zh : x.ja}</span>;
+  };
+  const selStyle = { padding: "4px 8px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, maxWidth: "100%" };
+  const jumpBtn = (j, label) => j ? <Btn size="sm" onClick={() => onJump(j)}>{label || (zh ? "去改" : "直す")}</Btn> : null;
+  const catLabel = (c) => `${c.icon} ${zh ? c.zh : c.ja}`;
+  const actions = (c, it) => {
+    switch (c.id) {
+      case "H1": return <>
+        <Btn size="sm" variant={it.looksCny ? "primary" : "default"} onClick={() => fix.shopCurrency(it, "CNY")}>{zh ? "是人民币" : "人民元"}</Btn>
+        <Btn size="sm" onClick={() => fix.shopCurrency(it, "JPY")}>{zh ? "是日元" : "円"}</Btn>
+        {jumpBtn(it.jump, zh ? "去看" : "見る")}
+      </>;
+      case "H2": return <>
+        <select value="__pick" onChange={(e) => { const v = e.target.value; if (v !== "__pick") fix.category(it, v); }} style={selStyle}
+          aria-label={zh ? "选分类" : "分類を選ぶ"}>
+          <option value="__pick" disabled>{zh ? "选分类…" : "分類を選ぶ…"}</option>
+          {it.entity === "brand" && <option value="">{catLabel(BRAND_CAT_ALL)}</option>}
+          {MATERIAL_CATEGORIES.map(mc => <option key={mc.id} value={mc.id}>{catLabel(mc)}</option>)}
+        </select>
+        {jumpBtn(it.jump)}
+      </>;
+      case "H3": return <>
+        <Btn size="sm" onClick={() => fix.clearFamily(it)}>{zh ? "改成不归属" : "未所属にする"}</Btn>
+        {jumpBtn(it.jump)}
+      </>;
+      case "H7": return <>
+        <Btn size="sm" onClick={() => fix.layerFollow(it)}>{zh ? "用组件库的" : "部品庫に合わせる"}</Btn>
+        {jumpBtn(it.jump)}
+      </>;
+      case "H10": return <>
+        {jumpBtn(it.jumpA, zh ? "去看 A" : "A を見る")}
+        {jumpBtn(it.jumpB, zh ? "去看 B" : "B を見る")}
+      </>;
+      case "H14": return <Btn size="sm" variant="danger" onClick={() => fix.clearCats(it)}>{zh ? "清掉旧价格表" : "旧価格表を削除"}</Btn>;
+      default: return jumpBtn(it.jump);
+    }
+  };
+  const info = checks.find(c => c.level === "info");
+  return (
+    <div className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", padding: "16px 16px 96px", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: T.sp.l }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSans }}>{zh ? "数据管理" : "データ管理"}</div>
+            <div style={{ ...T.fs.titleS, color: T.ink, fontFamily: T.fontSans, marginTop: 2 }}>🩺 {zh ? "数据体检" : "データ診断"}</div>
+          </div>
+          <Btn variant="ghost" onClick={onClose}>{zh ? "✕ 关闭" : "✕ 閉じる"}</Btn>
+        </div>
+        {problems.length === 0 ? (
+          <div style={{ border: `1px solid ${T.line}`, background: T.surface, marginBottom: T.sp.l }}>
+            <EmptyState variant="first" lang={lang}
+              title={zh ? "✓ 数据都没问题" : "✓ データに問題はありません"}
+              hint={zh ? "下面各类都查过了,一条也没有。以后导入新数据、改了很多东西之后可以再来看一眼。" : "すべての項目を確認しました。大きな変更やインポートの後にまた見てください。"}
+              actions={[{ label: zh ? "关闭" : "閉じる", onClick: onClose }]} />
+          </div>
+        ) : (
+          <div style={{ ...T.fs.small, color: T.ink, lineHeight: 1.7, marginBottom: T.sp.l, fontFamily: T.fontSans }}>
+            {zh ? <>共 <b>{problems.length}</b> 类问题要看,其中 <b style={{ color: moneyN ? T.danger : T.ink }}>{moneyN}</b> 类会让钱数算错。</>
+                : <>確認が必要な項目 <b>{problems.length}</b> 種類、うち <b style={{ color: moneyN ? T.danger : T.ink }}>{moneyN}</b> 種類は金額に影響します。</>}
+            <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 4 }}>
+              {zh ? "「是人民币」「用组件库的」、选分类这类按钮点了马上改好,左下角 5 秒内可以撤销;「去改」「去看」会关掉这一页,打开对应的编辑页 / 详情页。"
+                  : "「人民元」「部品庫に合わせる」や分類の選択はすぐ反映され、左下から 5 秒以内に元に戻せます。「直す」「見る」はこの画面を閉じて編集・詳細ページを開きます。"}
+            </div>
+          </div>
+        )}
+        {checks.filter(c => c.level !== "info").map(c => {
+          const n = c.items.length;
+          const isOpen = !!open[c.id];
+          const list = showAll[c.id] ? c.items : c.items.slice(0, LIMIT);
+          return (
+            <section key={c.id} data-check={c.id} style={{ borderTop: `1px solid ${T.line}` }}>
+              <button type="button" className="k-ease" aria-expanded={isOpen} disabled={n === 0}
+                onClick={() => setOpen(o => ({ ...o, [c.id]: !o[c.id] }))}
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "14px 0", background: "none", border: "none", textAlign: "left", cursor: n ? "pointer" : "default", fontFamily: T.fontSans, color: T.ink }}>
+                {levelTag(c.level)}
+                <span style={{ ...T.fs.small, fontWeight: 500, flex: "1 1 160px", minWidth: 0, color: n ? T.ink : T.secondary }}>{zh ? c.titleZh : c.titleJa}</span>
+                <span style={{ ...T.fs.small, ...T.num, color: n ? T.ink : T.success, whiteSpace: "nowrap" }}>
+                  {n ? (zh ? `${n} 条` : `${n} 件`) : (zh ? "✓ 没有" : "✓ なし")}{n ? (isOpen ? " ▴" : " ▾") : ""}
+                </span>
+              </button>
+              {isOpen && n > 0 && (
+                <div style={{ paddingBottom: T.sp.l }}>
+                  <div style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, background: T.sunken, padding: "8px 12px", marginBottom: 4 }}>{zh ? c.whyZh : c.whyJa}</div>
+                  {list.map((it, i) => (
+                    <div key={it.key + "#" + i} data-item={it.key} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "10px 0", borderTop: i ? `1px solid ${T.lineFaint}` : "none" }}>
+                      <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+                        <div style={{ ...T.fs.small, color: T.ink, overflowWrap: "anywhere" }}>
+                          {L(it, "label")}
+                          {it.looksCny && <span style={{ ...T.fs.label, letterSpacing: 0, marginLeft: 6, padding: "0 5px", border: `1px solid ${T.danger}`, color: T.danger, borderRadius: T.radius, whiteSpace: "nowrap" }}>{zh ? "看数量级像人民币" : "人民元らしい"}</span>}
+                        </div>
+                        {L(it, "detail") && <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 2, overflowWrap: "anywhere" }}>{L(it, "detail")}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>{actions(c, it)}</div>
+                    </div>
+                  ))}
+                  {n > LIMIT && (
+                    <button type="button" className="k-ease" onClick={() => setShowAll(s => ({ ...s, [c.id]: !s[c.id] }))}
+                      style={{ ...T.fs.caption, color: T.info, background: "none", border: "none", cursor: "pointer", padding: "8px 0", fontFamily: T.fontSans }}>
+                      {showAll[c.id] ? (zh ? "收起,只看前 20 条" : "先頭 20 件だけ表示") : (zh ? `显示全部 ${n} 条` : `すべて表示(${n} 件)`)}
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
+          );
+        })}
+        {info && (
+          <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 14, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+            {levelTag("info")}
+            <span style={{ ...T.fs.small, fontWeight: 500, color: T.ink, fontFamily: T.fontSans }}>{zh ? info.titleZh : info.titleJa}</span>
+            <div style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, flexBasis: "100%", overflowWrap: "anywhere" }}>{zh ? info.whyZh : info.whyJa}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ═══ 批量关联材料百科向导 ═══
 function BulkMaterialLinkWizard({ recipes, components, creations, materials, brands, lang, onApply, onClose }) {
   // [B3 修复] 弹窗打开时锁 body 滚动,关闭时恢复 — 防手机滑动穿透
