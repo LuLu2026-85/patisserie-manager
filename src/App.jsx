@@ -5780,7 +5780,6 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "名（中）", ja: "名（日）" },
     nameWidth: 110,
     matTitlePrefix: "✓ 百科关联:",
-    lockBrandWhenLinked: true,         // 关联了百科 → 品牌只读
     trackPrice: true,                  // 改价追踪:_priceModified / 黄框 / ↺ 撤销
     pricePlaceholder: (ing) => curOf(ing) === "CNY" ? "¥/g" : "円/g",
     driftTitleZh: "价格表已更新,点击同步",
@@ -5798,7 +5797,6 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "中文", ja: "日本語" },
     nameWidth: 100,
     matTitlePrefix: "✓ 百科:",
-    lockBrandWhenLinked: false,
     trackPrice: false,
     pricePlaceholder: () => "单价",
     driftTitleZh: "价格表已更新为此值,点击同步",
@@ -5816,7 +5814,6 @@ const ING_TABLE_VARIANTS = {
     namePlaceholder: { zh: "中文", ja: "日本語" },
     nameWidth: 110,
     matTitlePrefix: "✓ 百科:",
-    lockBrandWhenLinked: false,
     trackPrice: false,
     pricePlaceholder: () => "单价",
     driftTitleZh: "价格表已更新,点击同步",
@@ -6000,8 +5997,9 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>{updateIng(ing._id,"qty",e.target.value);const up=parseFloat(ing.unitPrice)||0;if(up>0)updateIng(ing._id,"cost",(parseFloat(e.target.value)*up).toFixed(1));}} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...ist, width: 36 }} /></td>
                   <td style={{ padding: "3px 4px" }}>
-                    {v.lockBrandWhenLinked && linkedMat ? (
-                      // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)
+                    {linkedMat ? (
+                      // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
+                      // 2026-09-29 第 2 批 2b C3:以前只有配方页锁,组件 / 部分编辑页关联了百科还能手改品牌,改了也不起作用
                       <div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         🔗 {linkedMatBrand ? (lang === "zh" ? (linkedMatBrand.nameZh || linkedMatBrand.nameJa) : (linkedMatBrand.nameJa || linkedMatBrand.nameZh)) : (ing.brand || "—")}
                       </div>
