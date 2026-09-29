@@ -18627,14 +18627,17 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
   const [q, setQ] = useState("");
   const nq = String(q).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
   const hit = (o) => !nq || [o.nameZh, o.nameJa, o.nameFr].some(n => String(n || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "").includes(nq));
-  const seen = new Set();
+  // 审查 r2:同一样东西在单子上好几块(商品费南雪 ×30 + 配方费南雪 ×25、两个礼盒里都有)时数量加起来(以前只取第一块的 30,厨房视图按 30 打开,单子要 55)
+  const seen = new Map();
   const todayItems = [];
   (sheet || []).forEach(s => (s.blocks || []).forEach(b => {
     if (!b || b.missing || !b.target || !KITCHEN_KINDS.includes(b.type)) return;
     const k = b.type + "\u0000" + String(b.target.id);
-    if (seen.has(k)) return;
-    seen.add(k);
-    todayItems.push({ kind: b.type, obj: b.target, qty: b.need });
+    const ex = seen.get(k);
+    if (ex) { ex.qty = Math.round(((ex.qty || 0) + (b.need || 0)) * 1000) / 1000; return; }
+    const it = { kind: b.type, obj: b.target, qty: b.need };
+    seen.set(k, it);
+    todayItems.push(it);
   }));
   const onSale = [
     ...(recipes || []).filter(r => r && r.onSale).map(r => ({ kind: "recipe", obj: r })),
