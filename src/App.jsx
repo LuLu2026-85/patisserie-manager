@@ -18832,6 +18832,7 @@ function App() {
   // 第 3 批 F4:员工模式(每台设备各自的开关,存 localStorage korora_staff_mode_v1)、进入 / 退出对话框、老板界面的厨房视图
   const [staffMode, setStaffMode] = useState(readStaffMode);
   const [staffDialog, setStaffDialog] = useState(null);     // null | "setup" | "enter" | "exit"
+  const [staffPending, setStaffPending] = useState(null);   // 审查 r2:别的窗口切了员工模式、这一页有没保存的改动,先问:null | "enter" | "exit"
   const [kitchenTarget, setKitchenTarget] = useState(null); // 老板界面:{ kind, id, qty }
   // 审查 r2:页面上的「今天」(生产单 / 日结 / 厨房视图用)。以前每次渲染现算,店里 iPad 过了半夜一直开着、没有别的状态变化时
   // App 不重新渲染,生产单和日结一直停在昨天。切回页面 / 窗口拿到焦点 / 每分钟对一次日期,变了才更新
@@ -19661,7 +19662,18 @@ function App() {
   const staffSyncRef = useRef(null);
   staffSyncRef.current = () => {
     const on = readStaffMode();
-    if (on === staffMode) return;
+    if (on === staffMode) { if (staffPending) setStaffPending(null); return; }
+    // 审查 r2:这一页有没保存的改动(编辑页 / 日结的格子)时先问,不直接切 —— 以前悄悄关掉,改的内容就没了。
+    // 进员工模式那一边:问的对话框盖住老板界面,要么不保存进员工模式,要么输 PIN 退出员工模式留下来保存
+    if (anyEditorDirty()) {
+      if (on) { setConfirmState(null); setStaffDialog(null); }
+      setStaffPending(on ? "enter" : "exit");
+      return;
+    }
+    setStaffPending(null);
+    applyStaffSync(on);
+  };
+  const applyStaffSync = (on) => {
     if (on) closeAllForStaff();
     else setPrintTarget(null);
     setStaffDialog(null);
@@ -19676,6 +19688,7 @@ function App() {
   }, []);
   const doStaffExit = () => {
     writeStaffMode(false);
+    setStaffPending(null);
     setStaffMode(false);
     setStaffDialog(null);
     setPrintTarget(null);
@@ -20487,6 +20500,22 @@ function App() {
       {staffDialog && (
         <StaffPinDialog key={staffDialog} mode={staffDialog} lang={lang} hasPin={isValidStaffPin(appSettings.staffPin)}
           onEnter={doStaffEnter} onExit={tryStaffExit} onCancel={() => setStaffDialog(null)} />
+      )}
+      {/* 审查 r2:别的窗口进 / 退员工模式、这一页有没保存的改动。进:取消 = 输 PIN 退出员工模式(没设 PIN 直接退),PIN 框取消会回到这里 */}
+      {staffPending && !staffDialog && (
+        <ConfirmDialog
+          title={lang === "zh" ? "还没保存" : "未保存"}
+          message={staffPending === "enter"
+            ? (lang === "zh" ? "另一个窗口进入了员工模式。这一页有还没保存的修改,切到员工模式会丢。\n要留下来保存,得先退出员工模式。" : "別のウィンドウで従業員モードに入りました。このページには未保存の変更があり、切り替えると失われます。\n残って保存するには従業員モードを終了してください。")
+            : (lang === "zh" ? "另一个窗口退出了员工模式。这一页还有没保存的格子,现在退出会丢。" : "別のウィンドウで従業員モードを終了しました。このページには未保存の入力があり、終了すると失われます。")}
+          confirmText={staffPending === "enter" ? (lang === "zh" ? "不保存,进入员工模式" : "保存せず従業員モードへ") : (lang === "zh" ? "不保存,退出员工模式" : "保存せず終了")}
+          cancelText={staffPending === "enter" ? (lang === "zh" ? "退出员工模式,留下来保存" : "従業員モードを終了して保存") : (lang === "zh" ? "留在这里,先保存" : "ここで保存する")}
+          onConfirm={() => { const on = staffPending === "enter"; setStaffPending(null); applyStaffSync(on); }}
+          onCancel={() => {
+            if (staffPending !== "enter") { setStaffPending(null); return; }
+            if (isValidStaffPin(appSettings.staffPin)) setStaffDialog("exit"); else doStaffExit();
+          }}
+        />
       )}
 
       {/* 自定义确认对话框 */}
