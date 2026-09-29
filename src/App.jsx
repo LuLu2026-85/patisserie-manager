@@ -6253,9 +6253,10 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                 }));
               };
               const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
-              const basis = ingPriceBasis(ing.unit);   // 单价按每 100g 还是每单位填
               // C10:关联了材料(材料都按克计价)但单位不是 g / ml / 空 → 成本 = 用量 × 每克价,按「本」写的行只算出几分之一
               const unitMismatch = !!linkedMat && !isGramUnit(ing.unit);
+              // 单价按每 100g 还是每单位填。审查第 7 轮:按「本」的关联行,材料有价时框里是打开时刷新来的每克价,口径写「/g」(以前写「¥/本」,1.29 像一根香草荚的价);材料没价时算的是手填价,仍写「/本」
+              const basis = unitMismatch && getMaterialEffectivePrice(linkedMat) > 0 ? { per100: false, label: "g" } : ingPriceBasis(ing.unit);
               // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
               // 材料被删掉的行价格其实是手写价在算,以前没有按钮,币种改不了
               const curBtnShown = !linkedMat;
