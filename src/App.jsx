@@ -5782,6 +5782,7 @@ const ING_TABLE_TXT = {
     catTitle: (n) => `✓ 已关联「${n}」`,
     drift: "价格表已更新,点击同步",
     priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、個、kg …)按每个单位填",
+    unitMismatch: (u) => `这一行按「${u}」计量,但关联的材料按克计价,成本会算错。改成克,或者取消关联后直接填每${u}的价`,
   },
   ja: {
     headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
@@ -5793,6 +5794,7 @@ const ING_TABLE_TXT = {
     catTitle: (n) => `✓ 価格表「${n}」に連動`,
     drift: "価格表の値に更新",
     priceTh: "g / ml の行は 100g(100ml)あたりで入力。その他の単位(本・個・kg など)は 1 単位あたり",
+    unitMismatch: (u) => `この行は「${u}」単位ですが、連動した材料はグラム単価です。原価が正しく計算されません。グラムに直すか、連動を外して 1${u}あたりの単価を入力してください`,
   },
 };
 // 三页之间还剩的差异。datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id)
@@ -6009,6 +6011,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               };
               const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
               const basis = ingPriceBasis(ing.unit);   // 单价按每 100g 还是每单位填
+              // C10:关联了材料(材料都按克计价)但单位不是 g / ml / 空 → 成本 = 用量 × 每克价,按「本」写的行只算出几分之一
+              const unitMismatch = !!linkedMat && !isGramUnit(ing.unit);
               // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
               // 材料被删掉的行价格其实是手写价在算,以前没有按钮,币种改不了
               const curBtnShown = !linkedMat;
@@ -6039,7 +6043,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><input list={v.listIds.ja} placeholder={tx.nameJa} value={ing.nameJa||""} onChange={e=>onNameChange("nameJa", e.target.value)} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} style={{ ...ist, width: 52 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} style={{ ...ist, width: 36 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
                       // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
