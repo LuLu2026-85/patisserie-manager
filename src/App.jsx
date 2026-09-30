@@ -14478,8 +14478,8 @@ function DomesticNoteInput({ value, onCommit, lang, style }) {
       onChange={(e) => setDraft(e.target.value)}
       onFocus={() => setFocused(true)}
       onBlur={() => { setFocused(false); commit(); }}
-      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-      placeholder={lang === "zh" ? "备注:货源、托谁买、在比哪几款…" : "メモ:仕入先・候補など"}
+      onKeyDown={(e) => { if (e.key === "Enter" && !(e.nativeEvent && e.nativeEvent.isComposing) && e.keyCode !== 229) e.currentTarget.blur(); }}   // 审查 b4r1:输入法选字的回车不算(同 IngNameInput)
+      placeholder={lang === "zh" ? "备注:货源、托谁买、在比哪几款…": "メモ:仕入先・候補など"}
       style={style} />
   );
 }
