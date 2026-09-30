@@ -22618,7 +22618,8 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
   }, [lotSig]);
   const [adds, setAdds] = useState([]);
   const [err, setErr] = useState(null);
-  const bind = useDirtyGuard(() => ({ rows: rows.map(r => [r.value, r.wrong]), adds }));
+  // 审查 ps4:只比她填过的(没动过的行 = 还是现在剩的数 / 改单位模式的空格),上面跟着账本换的行、加减的行不算「改过」
+  const bind = useDirtyGuard(() => ({ rows: rows.filter(r => r.wrong || r.value !== (unitMode ? "" : String(r.left))).map(r => [r.lotId, r.value, r.wrong]), adds }));
   const sent = useRef(false);
   const newUnit = cfg ? cfg.unit : (item && item.unit) || "";
   // 审查 ps1:同账本 count 的规整(按个计四舍五入),预览、写进去的数和 toast 一致;漏记的一批按个计填 0.4 → 0,算没填
