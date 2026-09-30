@@ -4940,6 +4940,7 @@ const _dhPrepChecks = (d, A) => {
         const minDate = mv.reduce((a, m) => (dateRe.test(String(m.date || "")) && (!a || m.date < a) ? m.date : a), "");
         const since = String(it.since || "");
         if (!firstAt || !minDate || r.date < minDate) return;
+        if (dateRe.test(String(it.movesCutTo || "")) && r.date <= it.movesCutTo) return;   // 审查 ps3:那天的记录被 80 条上限剪掉过(可能切在一天中间),对不了
         if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
         if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 这天之后盘点过:账已经对成实物(商品页补录这种日子也不扣,审查 ps1)
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
@@ -19601,7 +19602,14 @@ const _prepTrimItem = (it, today) => {
   if (!_prepIsObj(it)) return it;
   const lots0 = Array.isArray(it.lots) ? it.lots : [], moves0 = Array.isArray(it.moves) ? it.moves : [];
   let moves = moves0.filter(m => !(_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && _daysBetween(m.date, today) > 60));
-  if (moves.length > 80) moves = moves.slice(moves.length - 80);
+  // 审查 ps3:按条数(80)剪掉的最晚那天记在 movesCutTo:那天和之前的记录可能不全(剪的是最早插进去的,可能切在一天中间,也可能剪掉一次盘点)。
+  // 数据体检 H22 不查这些日子、商品页补录这些日子不扣(同「开始记之前」)。只往后挪;按 60 天剪的不记(那些日子本来就不查不扣)
+  let cutTo = "";
+  if (moves.length > 80) {
+    moves.slice(0, moves.length - 80).forEach(m => { if (_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && m.date > cutTo) cutTo = m.date; });
+    moves = moves.slice(moves.length - 80);
+  }
+  const cutMore = !!cutTo && !(String(it.movesCutTo || "") >= cutTo);
   let lots = lots0.filter(l => !(_prepLotOk(l) && l.left === 0 && (
     (l.voided && !moves.some(m => _prepMoveTouches(m, l.id))) ||
     (_prepDateRe.test(String(l.usedUpAt || "")) && _daysBetween(l.usedUpAt, today) > 30))));
@@ -19612,7 +19620,7 @@ const _prepTrimItem = (it, today) => {
     lots = lots.filter((_, i) => !drop.has(i));
   }
   if (lots.length === lots0.length && moves.length === moves0.length && Array.isArray(it.lots) && Array.isArray(it.moves)) return it;
-  return { ...it, lots, moves };
+  return { ...it, lots, moves, ...(cutMore ? { movesCutTo: cutTo } : {}) };
 };
 const _prepFinish = (w, now, today) => { w.updatedAt = now; return _prepTrimItem(w, today); };
 const _prepNewItem = (cfg, now, today) => ({ kind: cfg.kind, id: cfg.id, nameZh: _normTxt(cfg.obj && cfg.obj.nameZh), nameJa: _normTxt(cfg.obj && cfg.obj.nameJa),
