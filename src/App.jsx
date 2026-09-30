@@ -3645,6 +3645,18 @@ function mergeByNewer(existing, inc, lockedKeys = [], groups = []) {
   groups.forEach(g => { const from = g.some(k => has(src, k)) ? src : (fileWins ? existing : inc); g.forEach(k => { if (has(from, k)) next[k] = from[k]; else delete next[k]; }); });
   return next;
 }
+// 第 4 批第 0 步(2026-09-30):合并导入里「已存在的材料」只有这一个合并出口(mergeImportData 的材料分支调它)。
+// 现在就是原来那一行 mergeByNewer,行为零变化。以后往里加步骤的顺序固定:mergeByNewer → pickGroupByStamp(待换国产标记)
+// → mergePriceHistory(价格历史,要看合并后的现价,所以放最后;前两步都不改价格)。nowIso 留给后两步用
+function mergeMaterialEntry(loc, inc, nowIso) {
+  // 单价 / 参考价 / 币种三样永远同一边;过敏原三项整组取一边(见 mergeByNewer)
+  return mergeByNewer(loc, inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
+}
+// 第 4 批第 0 步:IP 分发包里每条材料要剥掉的本店私有字段只在这里写(exportPublicIP 调它)。
+// 现在原样返回;以后价格历史 priceHistory、待换国产标记 domestic* 在这里剥(aliases 保留)
+function stripPrivateMaterialFields(m) {
+  return m;
+}
 
 // ─── 编辑页「有没有没保存的改动」(2026-09-29 体检修)────────────────────────
 // 以前编辑页没保存就点顶部导航 / 手机底栏,内容当场丢,没有任何提醒。
@@ -19818,7 +19830,8 @@ function App() {
     const payload = {
       recipes, components, creations, knowledge,
       brands,
-      materials: stripCrawlImages(materials),  // v15: 剥离 source='crawl' 来源（版权外溢防护）
+      // v15: 剥离 source='crawl' 来源（版权外溢防护）;第 4 批:每条材料的本店私有字段在 stripPrivateMaterialFields 里剥
+      materials: (ms => Array.isArray(ms) ? ms.map(stripPrivateMaterialFields) : ms)(stripCrawlImages(materials)),
       // 审查 r2:标签的经营者名称 / 地址 / 电话是本店的,不进 IP 分发包(以前买家覆盖导入后,标签弹窗预填的是 kororā 的经营者)
       printSettings: Object.fromEntries(Object.entries(printSettings || {}).filter(([k]) => !LABEL_SHOP_KEYS.includes(k))), customCompCats, productFamilies,
       cats,                     // 老价格表保留(里面也可能有价,用户自决是否清理 cats)
@@ -20089,6 +20102,7 @@ function App() {
                 // v11: priceRange 迁移；v14: imageUrls 格式升级
                 const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
                 const result = [...prev];
+                const nowIso = new Date().toISOString();
                 migrated.forEach(inc => {
                   const existingIdx = result.findIndex(m => m.id === inc.id);
                   if (existingIdx < 0) {
@@ -20096,7 +20110,8 @@ function App() {
                   } else {
                     // 已存在:修改时间更晚的一边为准;单价 / 参考价 / 币种三样永远同一边(以前字段级合并,
                     // 旧文件没有 currency,本机的「人民币」标签留着、单价却换成文件里的日元数,成本错 20 到 50 倍)
-                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
+                    // 第 4 批:合并规则只在 mergeMaterialEntry 里写
+                    result[existingIdx] = mergeMaterialEntry(result[existingIdx], inc, nowIso);
                   }
                 });
                 return result;
