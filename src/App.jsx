@@ -22599,7 +22599,9 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
   };
   const submitTake = (op, qty) => {
     const plan = prepTakePlan(item, cfg, qty, t);
-    const r = doOp([op], X.toastTake(name, storeName, q(plan.got), unit, q(Math.max(0, _r3(oh.usable - plan.got)))));
+    // 审查 ps1:扣不够时同厨房视图 / 生产单,写「账上只有 X,差 Y 没扣(去盘点)」(以前只写扣到的数,差的那几个之后做一批时会被悄悄补扣)
+    const r = doOp([op], X.toastTake(name, storeName, q(plan.got), unit, q(Math.max(0, _r3(oh.usable - plan.got))))
+      + (plan.short > 0 ? X.kitToastShort(storeName, name, q(plan.got), q(plan.short)) : ""));
     if (r) setPanel(null);
     return r;
   };
