@@ -27211,7 +27211,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           showToast={showToast}
           sub={todaySub}
-          onSubChange={setTodaySub}
+          onSubChange={(id) => { setTodaySub(id); setPrepFocusKey(null); /* 审查 pt1:自己切子页就不再对准从别处跳来的那张卡(同员工外壳 go()) */ }}
           prepFocusKey={prepFocusKey}
           prepStock={prepStock}
           onPrepOp={onPrepOp}
