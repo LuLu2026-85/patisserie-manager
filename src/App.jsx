@@ -19804,7 +19804,71 @@ const PREP_TXT = {
     moveType: { make: "做了", take: "取出", discard: "报废", count: "盘点", restore: "加回" },
     via: { sheet: "生产单", product: "商品页", card: "备货页", kitchen: "厨房", health: "数据体检" },
     staffMark: "员工",
-    // ── C 线:生产单 + 打印 ──
+    // ── C 线:生产单 + 打印 ──(数字由调用方先过 fmtQty,日期先过 md)
+    tagTake: (s) => (s === "freeze" ? "冷冻→烤" : s === "fridge" ? "冷藏→烤" : "取出→烤"),
+    tagMake: "做一批存着",
+    takeLine: (kind, s, n, u) => (kind === "component" ? `从${PREP_TXT.zh.storeName(s)}取 ${n} ${u}`
+      : s === "fridge" ? `从冷藏取 ${n} ${u} → 烤` : s === "room" ? `取 ${n} ${u} → 烤` : `从冷冻取 ${n} ${u} → 解冻 → 烤`),
+    thawLabel: "取出后",
+    have: (store, n, u) => `${store}现有 ${n} ${u}`,
+    firstLot: (d, m, u, tail) => `先用 ${d} 那批(${m} ${u}${tail ? "," + tail : ""})`,
+    untracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
+    goRegister: "去登记 →",
+    short: (have, sh, u) => `⚠ 只有 ${have} ${u},差 ${sh} ${u} —— 先做一批,或者改少`,
+    makeOnSheet: (n, u) => `今天单子上有做一批(${n} ${u}),做好记入后就够了`,
+    expiredWarn: (k, n, u) => `⚠ 有 ${k} 批过期了(共 ${n} ${u}),别用,去「备货」报废`,
+    makeHint: (store, n, u, date) => `做好点「记入」= ${store} +${n} ${u}(今天做的${date ? `,放到 ${date}` : ""})`,
+    zeroTake: "填今天要烤几个",
+    zeroTakeStaff: "店长没填数量 —— 烤了几个在这里记",
+    takeBtn: (n, u) => `记入 ${n} ${u}`, takeBtnZero: "记入",
+    actualTaken: "实际取了", actualMade: "实际做了", todayDate: (s) => `${PREP_TXT.zh.madeDate(s)}:今天`,
+    submit: "记入", cancel: "取消",
+    makeBtn: (n, u) => `做好了,记入 +${n} ${u}`,
+    loggedActual: (n, u) => `✓ 已记入 · 实际 ${n} ${u}`,
+    todayMade: (n, u) => `⚠ 今天已经登记过 ${n} ${u},再记会再加一批`,
+    blockedNoYield: "没填产出量,没法按个数记。去配方填上产出数量",
+    blockedUnit: "单位对不上,先去「备货」盘点一次",
+    goPrep: "去「备货」→",
+    willTake: (store, list) => `会从${store}扣:${list}`,
+    willTakeItem: (name, n, u, have) => `${name} ${n} ${u}(现有 ${have})`,
+    onProduct: (p) => `这个配方挂在商品「${p}」上;要同时加商品库存,请用「从商品加」加商品行。`,
+    burnt: "烤坏的也算进来,晚上日结记「烤坏」",
+    settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
+    takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
+    dupe: (name) => `「${name}」在两行里都会扣,同一批只记入一行`,
+    partHave: (n, u) => `· 现有 ${n} ${u}`,
+    partShort: (have, sh, u) => `· 只有 ${have} ${u},差 ${sh} ${u}`,
+    partNoUsed: "没填用量,没扣备货",
+    partUnit: "单位对不上,没扣",
+    partLocal: "本产品专用,没扣备货",
+    packed: (n, u, store) => `装烤好的 ${n} ${u}(不扣${store})`,
+    prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u ? " " + u : ""}`,
+    toastProduct: (name, n, prep) => `✓ 已记入生产「${name}」+${n}(库存 +${n}${prep ? ";" + prep : ""})`,
+    toastUse: (name, n, prep) => `✓ 已记入「${name}」+${n}${prep ? `(${prep})` : ""}`,
+    toastMake: (name, store, n, u, date) => `✓「${name}」${store} +${n} ${u}(今天做的${date ? `,放到 ${date}` : ""})`,
+    toastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
+    toastShort: (store, name, got, sh) => `;${store}「${name}」账上只有 ${got},差 ${sh} 没扣(去「备货」盘点)`,
+    toastUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
+    toastStart: (name) => `;从今天开始记「${name}」的库存,以前做好还冻着的请到「备货」补登`,
+    undoGone: "生产记录已经删了,只撤了备货",
+    remTitle: "备货提醒",
+    remExpired: (k, d, n, u) => `有 ${k} 批过期了(${d} 做的 ${n} ${u}),别再用`,
+    remShort: (need, u, store, n) => `今天要取 ${need} ${u},${store}只有 ${n} ${u}`,
+    remToday: (d, n, u) => `${d} 做的那批 ${n} ${u}今天到期,先用它`,
+    remSoon: (d, n, u, k) => `${d} 做的那批 ${n} ${u}还能放 ${k} 天,先用它`,
+    remLow: (store, n, u, min) => `${store}还剩 ${n} ${u}(低于 ${min})`,
+    remLowDays: (store, n, u, x) => `${store}还剩 ${n} ${u}(大约只够 ${x} 天)`,
+    remSuggest: (k, n, u) => (n ? (k > 1 ? `建议做 ${k} 批(${n} ${u})` : `建议做一批(${n} ${u})`) : "建议做一批"),
+    remAdd: "＋ 做一批加进今天", remAddNoYield: "＋ 做一批加进今天(一批多少没填)", remOnSheet: "✓ 今天单子上有了",
+    remHandle: "去处理", remMore: (k) => `还有 ${k} 项 → 看全部备货`, remStaff: "(店长加进生产单)",
+    remCollapsed: (k, a, b) => `备货提醒 ${k} 项(快到期 ${a} · 低于提醒线 ${b})▶`,
+    ffTitle: "今天从冷冻 / 冷藏取", ffHave: (n) => `现有 ${n}`, ffLack: (n) => `差 ${n}`,
+    stockList: (list) => `库存:${list}`, stockItem: (name, n, u, sh) => `${name} 现有 ${n} ${u}${sh ? `(差 ${sh} ${u})` : ""}`,
+    addTake: (n, u) => (n ? `＋ 取出烤 ${n} ${u}` : "＋ 取出烤"), addMake: (n, u) => `＋ 做一批 ${n} ${u}`,
+    pickToast: (name) => `✓ 加了「${name}」取出烤;要做面团点「＋ 在售中」里的「做一批」或备货提醒`,
+    printFirst: (d) => `先用 ${d} 做的`, sufTake: "(取出烤)", sufMake: "(做一批存着)", printActual: (u) => `实际做了 ____ ${u}`,
+    printPacked: (n, u) => `☐ 装烤好的 ${n} ${u}(不扣备货)`,
+    printMakeHint: (store, n, u, date) => `做好后记入:${store} +${n} ${u} · 今天做的${date ? `,放到 ${date}` : ""}`,
     // ── D 线:厨房视图 / 员工外壳 ──
     // ── E 线:备货页 / 编辑页 / 详情卡 / 角标 ──
     // ── F 线:商品页 / 采购页 / 数据体检 ──
@@ -19832,6 +19896,70 @@ const PREP_TXT = {
     via: { sheet: "製造リスト", product: "商品", card: "作り置き", kitchen: "キッチン", health: "データ診断" },
     staffMark: "スタッフ",
     // ── C 線:製造リスト + 印刷 ──
+    tagTake: (s) => (s === "freeze" ? "冷凍→焼成" : s === "fridge" ? "冷蔵→焼成" : "出して焼成"),
+    tagMake: "仕込み(保存用)",
+    takeLine: (kind, s, n, u) => (kind === "component" ? `${PREP_TXT.ja.storeName(s)}から ${n}${u}`
+      : s === "fridge" ? `冷蔵から ${n}${u} 出す → 焼成` : s === "room" ? `${n}${u} 出す → 焼成` : `冷凍から ${n}${u} 出す → 解凍 → 焼成`),
+    thawLabel: "取り出し後",
+    have: (store, n, u) => `${store}在庫 ${n}${u}`,
+    firstLot: (d, m, u, tail) => `${d} 仕込み分から(${m}${u}${tail ? "、" + tail : ""})`,
+    untracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
+    goRegister: "登録へ →",
+    short: (have, sh, u) => `⚠ 在庫 ${have}${u}、${sh}${u} 不足 —— 先に仕込むか数量を減らしてください`,
+    makeOnSheet: (n, u) => `本日のリストに仕込み(${n}${u})あり。記録すれば足ります`,
+    expiredWarn: (k, n, u) => `⚠ 期限切れ ${k} ロット(計 ${n}${u})。使わずに「作り置き」で廃棄`,
+    makeHint: (store, n, u, date) => `仕込み後「記録」で ${store} +${n}${u}(本日仕込み${date ? `、${date} まで` : ""})`,
+    zeroTake: "焼く数を入力してください",
+    zeroTakeStaff: "数量未入力です。焼いた数をここに記録してください",
+    takeBtn: (n, u) => `記録 ${n}${u}`, takeBtnZero: "記録",
+    actualTaken: "実際に出した数", actualMade: "実際の出来数", todayDate: (s) => `${PREP_TXT.ja.madeDate(s)}:本日`,
+    submit: "記録", cancel: "取消",
+    makeBtn: (n, u) => `仕込み完了 · 記録 +${n}${u}`,
+    loggedActual: (n, u) => `✓ 記録済み · 実数 ${n}${u}`,
+    todayMade: (n, u) => `⚠ 本日すでに ${n}${u} 記録済み。記録するとさらに加算されます`,
+    blockedNoYield: "出来数未入力のため記録できません(レシピに出来数を入力)",
+    blockedUnit: "単位が合いません。先に「作り置き」で棚卸ししてください",
+    goPrep: "「作り置き」へ →",
+    willTake: (store, list) => `${store}から引く分:${list}`,
+    willTakeItem: (name, n, u, have) => `${name} ${n}${u}(在庫 ${have})`,
+    onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で追加してください。`,
+    burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
+    settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
+    takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
+    dupe: (name) => `「${name}」は 2 行で引かれます。同じ分は 1 行だけ記録してください`,
+    partHave: (n, u) => `· 在庫 ${n}${u}`,
+    partShort: (have, sh, u) => `· 在庫 ${have}${u}、${sh}${u} 不足`,
+    partNoUsed: "使用量未入力のため未控除",
+    partUnit: "単位不一致のため未控除",
+    partLocal: "この製品専用のため未控除",
+    packed: (n, u, store) => `焼成済みを詰める ${n}${u}(${store}から引かない)`,
+    prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u || ""}`,
+    toastProduct: (name, n, prep) => `✓ 製造記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
+    toastUse: (name, n, prep) => `✓ 記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
+    toastMake: (name, store, n, u, date) => `✓「${name}」${store} +${n}${u}${date ? `(${date} まで)` : ""}`,
+    toastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
+    toastShort: (store, name, got, sh) => `・${store}「${name}」は在庫 ${got} のみ、${sh} 未控除(「作り置き」で棚卸し)`,
+    toastUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
+    toastStart: (name) => `・本日から「${name}」の在庫を記録します。以前の分は「作り置き」で登録してください`,
+    undoGone: "製造記録は削除済みのため、作り置きだけ戻しました",
+    remTitle: "作り置きアラート",
+    remExpired: (k, d, n, u) => `期限切れ ${k} ロット(${d} 仕込み ${n}${u})。使わないでください`,
+    remShort: (need, u, store, n) => `本日 ${need}${u} 必要、${store}は ${n}${u}`,
+    remToday: (d, n, u) => `${d} 仕込み分 ${n}${u} は本日期限。先に使ってください`,
+    remSoon: (d, n, u, k) => `${d} 仕込み分 ${n}${u} はあと ${k} 日。先に使ってください`,
+    remLow: (store, n, u, min) => `${store}残り ${n}${u}(補充ライン ${min})`,
+    remLowDays: (store, n, u, x) => `${store}残り ${n}${u}(残り約 ${x} 日分)`,
+    remSuggest: (k, n, u) => (n ? (k > 1 ? `${k} バッチ推奨(${n}${u})` : `1 バッチ仕込み推奨(${n}${u})`) : "1 バッチ仕込み推奨"),
+    remAdd: "＋ 本日の仕込みに追加", remAddNoYield: "＋ 本日の仕込みに追加(バッチ量未入力)", remOnSheet: "✓ 本日のリストにあり",
+    remHandle: "処理する", remMore: (k) => `ほか ${k} 件 → 作り置き一覧`, remStaff: "(店長が製造リストに追加します)",
+    remCollapsed: (k, a, b) => `作り置きアラート ${k} 件(期限間近 ${a} · 補充ライン割れ ${b})▶`,
+    ffTitle: "本日 冷凍・冷蔵から", ffHave: (n) => `在庫 ${n}`, ffLack: (n) => `${n} 不足`,
+    stockList: (list) => `在庫:${list}`, stockItem: (name, n, u, sh) => `${name} 在庫 ${n}${u}${sh ? `(${sh}${u} 不足)` : ""}`,
+    addTake: (n, u) => (n ? `＋ 出して焼く ${n}${u}` : "＋ 出して焼く"), addMake: (n, u) => `＋ 仕込み ${n}${u}`,
+    pickToast: (name) => `✓「${name}」を焼成で追加しました。仕込みは「＋ 販売中」かアラートから`,
+    printFirst: (d) => `${d} 仕込み分から`, sufTake: "(出して焼成)", sufMake: "(仕込み・保存用)", printActual: (u) => `実際の出来数 ____ ${u}`,
+    printPacked: (n, u) => `☐ 焼成済みを詰める ${n}${u}(作り置きから引かない)`,
+    printMakeHint: (store, n, u, date) => `仕込み後に記録:${store} +${n}${u} · 本日仕込み${date ? `、${date} まで` : ""}`,
     // ── D 線:キッチン表示 / スタッフ ──
     // ── E 線:作り置き / 編集画面 / 詳細カード / バッジ ──
     // ── F 線:商品 / 仕入 / データ診断 ──
@@ -20596,6 +20724,58 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
   const name = prodName(b.target, lang);
   // 员工模式(F4):每一块给一个「厨房视图」按钮,带着这一块要做的数量
   const kitchenBtn = onKitchen && b.target ? <div style={{ marginTop: 6 }}><Btn size="sm" onClick={() => onKitchen(b.type, b.target.id, b.need, b.prep, uid, fromLine)}>{X.kitchen}</Btn></div> : null;
+  // 备货(C 线,plan.md §2.3):prepView 由 ProductionSheetView 算好(只在 prepOn 时有);取出 / 装烤好的块没有 rows
+  const PX = prepTxt(lang);
+  const pvOf = (kind, id) => (prepView && prepView.get(prepKeyOf(kind, id))) || null;
+  if (b.type !== "creation" && (b.prep === "take" || b.prep === "packed")) {
+    const e = pvOf(b.type, b.target.id);
+    const store = PX.storeName(b.store);
+    const head = showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)} {b.unit}</span></div>;
+    if (b.prep === "packed") return (
+      <div data-prep-block="packed" style={{ marginTop: 10 }}>
+        {head}
+        <div style={{ ...T.fs.small, color: T.body, marginTop: 2, ...T.num }}>{PX.packed(fmtQty(b.need), b.unit, store)}</div>
+      </div>
+    );
+    const thaw = prodNote(lang === "ja" ? (b.thawJa || b.thawZh) : (b.thawZh || b.thawJa));
+    const oh = e && e.item ? e.oh : null;
+    const lackBy = oh && !oh.unitMismatch ? _r3(e.need - oh.usable) : 0;
+    return (
+      <div data-prep-block="take" style={{ marginTop: 10 }}>
+        {head}
+        <div style={{ ...T.fs.small, fontWeight: 500, marginTop: 2, ...T.num, overflowWrap: "anywhere" }}>{PX.takeLine(b.type, b.store, fmtQty(b.need), b.unit)}</div>
+        {thaw && <div style={{ ...T.fs.caption, color: T.body, marginTop: 2, overflowWrap: "anywhere" }}><span style={{ color: T.subtle }}>{PX.thawLabel}</span> {thaw}</div>}
+        <ProdMeta b={b} lang={lang} />
+        {kitchenBtn}
+        {prepView && !oh && (
+          <div data-prep-untracked="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+            <span>{PX.untracked(store)}</span>
+            {!prepView.staff && prepView.onOpenPrep && <button type="button" onClick={() => prepView.onOpenPrep(prepKeyOf(b.type, b.target.id))}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.ink, textDecoration: "underline", fontFamily: T.fontSans }}>{PX.goRegister}</button>}
+          </div>
+        )}
+        {oh && oh.unitMismatch && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>⚠ {PX.unitMismatch(e.item.unit, e.cfg.unit)}</div>}
+        {oh && !oh.unitMismatch && (
+          <div data-prep-stock="1" style={{ ...T.fs.caption, color: T.body, marginTop: 4, ...T.num, overflowWrap: "anywhere" }}>
+            {PX.have(store, fmtQty(oh.usable) || "0", b.unit)}
+            {oh.first && " · " + PX.firstLot(PX.md(oh.first.madeAt), fmtQty(oh.first.left), b.unit,
+              oh.first.status === "today" ? PX.lotToday : oh.first.daysLeft !== null ? PX.lotLeft(oh.first.daysLeft) : "")}
+          </div>
+        )}
+        {oh && !oh.unitMismatch && lackBy > 0 && (e.incoming > 0 && _r3(e.need - oh.usable - e.incoming) <= 0
+          ? <div data-prep-lack="covered" style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{PX.makeOnSheet(fmtQty(e.incoming), b.unit)}</div>
+          : <div data-prep-lack="1" style={{ ...T.fs.caption, color: T.danger, marginTop: 2, ...T.num }}>{PX.short(fmtQty(oh.usable) || "0", fmtQty(lackBy), b.unit)}</div>)}
+        {oh && oh.expiredLots.length > 0 && <div data-prep-expired="1" style={{ ...T.fs.caption, color: T.danger, marginTop: 2, ...T.num }}>{PX.expiredWarn(oh.expiredLots.length, fmtQty(oh.expired), b.unit)}</div>}
+      </div>
+    );
+  }
+  // 做一批块(标了备货的配方「做一批」行 / 标了备货的组件行):最上面一行灰字「做好点记入 = 冷冻 +N」
+  const makeCfg = prepView && b.type !== "creation" && !b.noYield && (b.prep === "make" || (b.type === "component" && !showHead)) ? prepCfgOf(b.type, b.target) : null;
+  const makeHint = makeCfg ? (
+    <div data-prep-makehint="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>
+      {PX.makeHint(PX.storeName(makeCfg.store), fmtQty(b.need), makeCfg.unit, makeCfg.shelfDays ? PX.md(plusDaysStr(prepView.today, makeCfg.shelfDays)) : "")}
+    </div>
+  ) : null;
   if (b.type === "creation") {
     const W = creationWords(creationStructureOf(b.target), lang);
     const batch = b.batch;
@@ -20617,7 +20797,20 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
               {p.noUsed && <div style={{ ...T.fs.caption, color: T.danger, marginTop: 4 }}>⚠ {X.noUsed}</div>}
               {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
               {p.stock ? (
-                <div style={{ ...T.fs.small, marginTop: 4 }}>{X.fromStock} <strong style={{ ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : ""}</strong></div>
+                <div style={{ ...T.fs.small, marginTop: 4 }}>{X.fromStock} <strong style={{ ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : ""}</strong>
+                  {(() => {
+                    // 备货(C 线):只对已开始记的组件,后面加「· 现有 Y」/ 不够 / 没扣的原因
+                    const e = p.comp ? pvOf("component", p.comp.id) : null;
+                    if (!e || !e.item) return null;
+                    const cap = (t, c) => <span data-prep-part="1" style={{ ...T.fs.caption, color: c, marginLeft: 6, ...T.num }}>{t}</span>;
+                    if (prepView.linkOf && prepView.linkOf(l) !== "follow") return cap(PX.partLocal, T.subtle);
+                    if (p.needed === null) return cap(PX.partNoUsed, T.warning);
+                    const cu = e.cfg.unit;
+                    const want = prepConvUnit(p.needed, u, cu, "g");
+                    if (want === null || e.oh.unitMismatch) return cap(PX.partUnit, T.warning);
+                    return e.oh.usable < want ? cap(PX.partShort(fmtQty(e.oh.usable) || "0", fmtQty(_r3(want - e.oh.usable)), cu), T.danger) : cap(PX.partHave(fmtQty(e.oh.usable), cu), T.body);
+                  })()}
+                </div>
               ) : (
                 <ProdIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings}
                   bad={p.noUsed ? [] : _prodBadRows(p.ings)} lang={lang} />
@@ -20632,6 +20825,7 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
   return (
     <div style={{ marginTop: 10 }}>
       {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)}{u ? " " + u : ""}</span></div>}
+      {makeHint}
       {b.noYield
         ? <div data-prod-noyield="1" style={{ ...T.fs.caption, color: T.warning, marginTop: 2, ...T.num }}>{X.noYield(fmtQty(b.scale))}</div>
         : <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, ...T.num }}>{X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), u ? " " + u : "")}</div>}
@@ -20657,6 +20851,87 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   const logged = isProduct ? Math.min(parseFloat(l.logged) || 0, todayLogged) : (parseFloat(l.logged) || 0);
   const pending = Math.round((s.qty - logged) * 1000) / 1000;
   const sq = { width: 36, height: 36, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, cursor: "pointer", fontSize: 18, lineHeight: 1, color: T.body, flexShrink: 0, fontFamily: T.fontSans };
+  // ── 备货(C 线,plan.md §2.2):prep = prepLineInfo(...);没有 prep 时下面一个节点都不多 ──
+  const PX = prepTxt(lang);
+  const [panel, setPanel] = useState(null);   // 「实际做了 / 实际取了」就地面板:{ val }(提交成功 / 取消就关)
+  const pBake = !!prep && prep.sub === "bake";                  // 标了备货的配方「取出烤」行
+  const pMake = !!prep && prep.mode === "make";                 // 「做一批存着」行(配方 stage make / 标了备货的组件行)
+  const pCfg = prep && prep.cfg ? prep.cfg : null;
+  const pUnit = pBake ? pCfg.unit : pMake && !prep.noYield ? pCfg.unit : unit;
+  const pStore = pCfg ? PX.storeName(pCfg.store) : "";
+  const shownUnit = prep && (pBake || pMake) ? pUnit : unit;
+  const txtLink = (label, onClick) => <button type="button" onClick={onClick}
+    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.ink, textDecoration: "underline", fontFamily: T.fontSans }}>{label}</button>;
+  const panelNum = panel ? parseFloat(String(panel.val).normalize("NFKC").trim()) : NaN;
+  const panelOk = panel && /^\s*\d*\.?\d+\s*$/.test(String(panel.val).normalize("NFKC")) && panelNum > 0;
+  const submitPanel = () => { if (!panelOk) return; setPanel(null); onLog(panelNum); };
+  // 商品行 / 组合产品行:这一行还没记的部分会从哪几样已开始记的备货扣(卡片灰字「会从冷冻扣」)
+  const trackedTakes = prep && prep.flow ? prep.flow.takes.filter(t => t.tracked && prepView && prepView.get(t.key)) : [];
+  const willTake = trackedTakes.length > 0 && prep.pending > 0 && prep.mode === "product" && !prep.blocked ? (() => {
+    const byStore = new Map();
+    trackedTakes.forEach(t => {
+      const e = prepView.get(t.key);
+      const st = PX.storeName(e.cfg.store);
+      if (!byStore.has(st)) byStore.set(st, []);
+      byStore.get(st).push({ txt: PX.willTakeItem(e.name, fmtQty(t.qty), e.cfg.unit, fmtQty(e.oh.usable) || "0"), lack: !e.oh.unitMismatch && t.qty > e.oh.usable });
+    });
+    return [...byStore].map(([st, xs]) => ({ st, xs }));
+  })() : null;
+  const logPrepBtn = (txt, first, onClick, title) => first
+    ? <Btn key="pfirst" size="sm" variant="success" onClick={onClick} title={title}>{txt}</Btn>
+    : <Btn key="pmore" size="sm" onClick={onClick} title={title}>{txt}</Btn>;
+  const prepArea = prep && !isProduct && s.obj ? (() => {
+    const u = pUnit;
+    const blockedTxt = prep.blocked === "noYield" ? PX.blockedNoYield : prep.blocked === "unit" ? PX.blockedUnit : prep.blocked === "readOnly" ? PX.readOnly : null;
+    if (pMake) return (
+      <div data-prep-log="make" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        {prep.logged > 0 && <span data-prep-logged="1" style={{ ...T.fs.caption, color: T.success, ...T.num }}>{PX.loggedActual(fmtQty(prep.actual) || "0", u)}</span>}
+        {blockedTxt ? (<>
+          <Btn key="pblocked" size="sm" disabled>{PX.makeBtn(fmtQty(prep.pending), u)}</Btn>
+          <span data-prep-blocked={prep.blocked} style={{ ...T.fs.caption, color: T.warning }}>{blockedTxt}</span>
+          {prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep && txtLink(PX.goPrep, () => prepView.onOpenPrep(prep.key))}
+        </>) : prep.pending > 0 && !panel && logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : PX.makeBtn(fmtQty(prep.pending), u), !(prep.logged > 0), () => setPanel({ val: String(prep.pending) }))}
+        {!blockedTxt && prep.pending > 0 && prep.todayMade > prep.actual && <span data-prep-todaymade="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.todayMade(fmtQty(prep.todayMade), u)}</span>}
+      </div>
+    );
+    if (pBake || prep.sub === "use") {
+      const zeroBake = pBake && s.zero;
+      return (
+        <div data-prep-log={pBake ? "take" : "use"} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {pBake && prep.actual > 0 && <span data-prep-logged="1" style={{ ...T.fs.caption, color: T.success, ...T.num }}>{PX.loggedActual(fmtQty(prep.actual), u)}</span>}
+          {!pBake && prep.logged > 0 && <span data-prep-logged="1" style={{ ...T.fs.caption, color: T.success }}>{X.logged(fmtQty(prep.logged))}</span>}
+          {prep.mode === "take" && (blockedTxt
+            ? <span data-prep-blocked={prep.blocked} style={{ ...T.fs.caption, color: T.warning }}>{blockedTxt}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep ? " " : ""}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep && txtLink(PX.goPrep, () => prepView.onOpenPrep(prep.key))}</span>
+            : !panel && (prep.pending > 0 || zeroBake) && (pBake
+              ? logPrepBtn(prep.logged > 0 || prep.actual > 0 ? (prep.pending > 0 ? X.logMore(fmtQty(prep.pending)) : PX.takeBtnZero) : prep.pending > 0 ? PX.takeBtn(fmtQty(prep.pending), u) : PX.takeBtnZero,
+                !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(prep.pending) : "" }))
+              : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
+          {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
+          {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{PX.onProduct(prep.onProducts.map(p => p.name).join("」「"))}</span>}
+        </div>
+      );
+    }
+    return null;
+  })() : null;
+  const panelEl = panel && prep ? (
+    <div data-prep-panel={pMake ? "make" : "take"} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, padding: "8px 10px", background: T.bgMuted }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, ...T.fs.small }}>
+        <span>{pMake ? PX.actualMade : PX.actualTaken}</span>
+        <input type="text" inputMode="decimal" data-prep-actual="1" value={panel.val} onChange={e => setPanel({ val: e.target.value })} onWheel={blurOnWheel}
+          onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) submitPanel(); }}
+          style={{ width: 72, height: 36, textAlign: "center", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
+        <span style={{ ...T.fs.caption, color: T.subtle }}>{pUnit}</span>
+      </label>
+      {pMake && <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.todayDate(pCfg.store)}</span>}
+      <Btn size="sm" variant="primary" disabled={!panelOk} onClick={submitPanel}>{PX.submit}</Btn>
+      <Btn size="sm" variant="ghost" onClick={() => setPanel(null)}>{PX.cancel}</Btn>
+      {pMake && prep.shortToday > 0 && panelOk && (
+        <span data-prep-settle="1" style={{ ...T.fs.caption, color: T.body, width: "100%", ...T.num }}>
+          {PX.settle(fmtQty(prep.shortToday), pUnit, pStore, fmtQty(Math.max(0, _r3(panelNum - Math.min(prep.shortToday, panelNum)))))}
+        </span>
+      )}
+    </div>
+  ) : null;
   return (
     <div data-prodline={l.uid} style={{ borderTop: `1px solid ${l.done ? T.success : T.border}`, borderRight: `1px solid ${l.done ? T.success : T.border}`, borderBottom: `1px solid ${l.done ? T.success : T.border}`, borderLeft: `3px solid ${l.done ? T.success : T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -20666,6 +20941,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
         <div style={{ flex: "1 1 160px", minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
             <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[l.kind]}</span>
+            {(pBake || pMake) && <span data-prep-tag={pBake ? "take" : "make"} style={{ ...T.fs.label, color: pBake ? T.ink : T.body, border: `1px solid ${T.border}`, padding: "0 6px", borderRadius: T.radius, whiteSpace: "nowrap" }}>{pBake ? PX.tagTake(pCfg.store) : PX.tagMake}</span>}
             <span style={{ ...T.fs.strong, textDecoration: l.done ? "line-through" : "none", overflowWrap: "anywhere" }}>{name}</span>
             {s.leadTimeDays > 0 && <span style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, padding: "0 6px", borderRadius: T.radius }}>{X.lead(fmtQty(s.leadTimeDays))}</span>}
           </div>
@@ -20673,7 +20949,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
         {readOnly ? (
           <div data-prodqty-ro="1" style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             <span style={{ fontSize: 24, fontFamily: T.fontSerif, fontWeight: 500, color: T.ink, ...T.num }}>{fmtQty(s.qty) || "0"}</span>
-            <span style={{ ...T.fs.caption, color: T.subtle }}>{unit}</span>
+            <span style={{ ...T.fs.caption, color: T.subtle }}>{shownUnit}</span>
           </div>
         ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -20681,7 +20957,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           <input type="text" inputMode="decimal" value={l.qty} onChange={e => onQty(e.target.value)}
             style={{ width: 64, height: 36, textAlign: "center", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
           <button type="button" onClick={() => onStep(1)} style={sq} aria-label="+1">+</button>
-          <span style={{ ...T.fs.caption, color: T.subtle, minWidth: 16 }}>{unit}</span>
+          <span style={{ ...T.fs.caption, color: T.subtle, minWidth: 16 }}>{shownUnit}</span>
           <button type="button" onClick={onRemove} title="✕" style={{ ...sq, border: "none", background: "transparent", color: T.subtle }}>✕</button>
         </div>
         )}
@@ -20693,12 +20969,27 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           {pending > 0 && todayLogged > logged && <span data-prod-todaylogged="1" style={{ ...T.fs.caption, color: T.warning }}>{X.todayLogged(fmtQty(todayLogged))}</span>}
           {/* 两种按钮给不同的 key:同一个 Btn 换 variant 会在重画时混用 border / borderColor(React 警告) */}
           {pending > 0 && (logged > 0
-            ? <Btn key="more" size="sm" onClick={onLog} title={X.logHint}>{X.logMore(fmtQty(pending))}</Btn>
-            : <Btn key="first" size="sm" variant="success" onClick={onLog} title={X.logHint}>{X.logBtn(fmtQty(pending))}</Btn>)}
+            ? <Btn key="more" size="sm" onClick={onLog} title={willTake ? X.logHint + " · " + PX.burnt : X.logHint}>{X.logMore(fmtQty(pending))}</Btn>
+            : <Btn key="first" size="sm" variant="success" onClick={onLog} title={willTake ? X.logHint + " · " + PX.burnt : X.logHint}>{X.logBtn(fmtQty(pending))}</Btn>)}
         </div>
       )}
+      {willTake && (
+        <div data-prep-willtake="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, ...T.num, overflowWrap: "anywhere" }}>
+          {willTake.map(({ st, xs }, i) => (
+            <div key={i}>{PX.willTake(st, "")}{xs.map((x, j) => <span key={j} style={{ color: x.lack ? T.danger : T.subtle }}>{j ? "、" : ""}{x.txt}</span>)}</div>
+          ))}
+        </div>
+      )}
+      {prepArea}
+      {panelEl}
+      {prep && Array.isArray(prep.dupes) && prep.pending > 0 && prep.dupes.map(d => (
+        <div key={d.key} data-prep-dupe={d.key} style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>⚠ {PX.dupe(d.name)}</div>
+      ))}
       {s.missing && <div style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>⚠ {X.missing}</div>}
-      {!s.missing && s.zero && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.zero}</div>}
+      {!s.missing && s.zero && (pBake
+        ? <div data-prep-zero="1" style={{ ...T.fs.caption, color: readOnly ? T.warning : T.subtle, marginTop: 8 }}>{readOnly ? PX.zeroTakeStaff : PX.zeroTake}</div>
+        : <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.zero}</div>)}
+      {!s.missing && s.zero && pBake && onKitchen && <div style={{ marginTop: 6 }}><Btn size="sm" onClick={() => onKitchen("recipe", s.obj.id, 0, "take", l.uid)}>{X.kitchen}</Btn></div>}
       {!s.missing && !s.zero && s.noItems && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.noItems}</div>}
       {s.blocks.length > 0 && (
         <div style={{ marginTop: 6 }}>
@@ -20706,7 +20997,11 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
             style={{ background: "none", border: "none", padding: "4px 0", cursor: "pointer", ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
             {open ? "▼ " + X.collapse : "▶ " + X.expand}
           </button>
-          {open && s.blocks.map((b, i) => <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} />)}
+          {open && s.blocks.map((b, i) => prepView
+            // 备货:取出配方行的块带 uid(厨房视图「烤好了,记下」走这一行);商品行 / 组合产品行里的块带 fromLine(厨房视图不给记入按钮)
+            ? <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} prepView={prepView}
+                uid={pBake ? l.uid : undefined} fromLine={isProduct || l.kind === "creation" ? { kind: l.kind, name } : undefined} />
+            : <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} />)}
         </div>
       )}
     </div>
@@ -20714,8 +21009,14 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
 }
 
 // 今天总共要称多少
-function ProdTotals({ totals, lang, noYieldNames = [] }) {
+// 备货(C 线,plan.md §2.4):prepView(ProductionSheetView 算好,只在 prepOn 时传)→「今天从冷冻 / 冷藏取」一块 + 「从库存取」底下一行库存小字
+function ProdTotals({ totals, lang, noYieldNames = [], prepView }) {
   const X = prodTxt(lang);
+  const PX = prepTxt(lang);
+  const ff = prepView && Array.isArray(totals.fromFrozen) ? totals.fromFrozen : [];
+  // 已开始记的备货组件(今天单子上还要取的):「库存:奶油霜 现有 2,000 g · 反转千层 现有 300 g(差 300 g)」
+  const compStock = prepView && totals.fromStock.length > 0 ? [...prepView.items.values()].filter(e => e.cfg.kind === "component" && e.item && !e.oh.unitMismatch && e.need > 0)
+    .map(e => { const lack = _r3(e.need - e.oh.usable - e.incoming); return PX.stockItem(e.name, fmtQty(e.oh.usable) || "0", e.cfg.unit, lack > 0 ? fmtQty(lack) : ""); }) : [];
   const row = (w, i) => (
     <div key={w.key || i} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, padding: "7px 0", borderBottom: `1px solid ${T.lineFaint}`, alignItems: "baseline" }}>
       <div style={{ minWidth: 0 }}>
@@ -20736,10 +21037,33 @@ function ProdTotals({ totals, lang, noYieldNames = [] }) {
       {totals.nonGram.length > 0 && (
         <div style={box}><div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.nonGram}</div>{totals.nonGram.map(row)}</div>
       )}
+      {ff.length > 0 && (
+        <div data-prep-fromfrozen="1" style={box}>
+          <div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{PX.ffTitle}</div>
+          {ff.map((f, i) => {
+            const e = prepView.get(f.key);
+            const tracked = !!(e && e.item && !e.oh.unitMismatch);
+            const lack = tracked ? _r3(e.need - e.oh.usable - e.incoming) : 0;
+            return (
+              <div key={f.key || i} data-prep-ffrow={f.key} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, padding: "7px 0", borderBottom: `1px solid ${T.lineFaint}`, alignItems: "baseline" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ ...T.fs.small, fontWeight: 500, overflowWrap: "anywhere" }}>{f.name} <span style={{ ...T.fs.label, color: T.subtle, letterSpacing: 0 }}>{PX.storeName(f.store)}</span></div>
+                  {f.srcs && f.srcs.length > 0 && <div style={{ ...T.fs.label, color: T.subtle, letterSpacing: 0, overflowWrap: "anywhere" }}>{f.srcs.join("、")}</div>}
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ ...T.fs.strong, fontFamily: T.fontSerif, ...T.num, whiteSpace: "nowrap" }}>{fmtQty(f.qty)} <span style={{ ...T.fs.caption, color: T.body }}>{f.unit}</span></div>
+                  {tracked && <div style={{ ...T.fs.label, letterSpacing: 0, color: lack > 0 ? T.danger : T.subtle, ...T.num, whiteSpace: "nowrap" }}>{PX.ffHave(fmtQty(e.oh.usable) || "0")}{lack > 0 ? " · " + PX.ffLack(fmtQty(lack)) : ""}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {totals.fromStock.length > 0 && (
         <div style={box}>
           <div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.stockTitle}</div>
           {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.missing ? f.name + X.stockMissing(f.missing) : f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
+          {compStock.length > 0 && <div data-prep-stocklist="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 6, ...T.num, overflowWrap: "anywhere" }}>{PX.stockList(compStock.join(" · "))}</div>}
         </div>
       )}
       {totals.skipped.length > 0 && (
@@ -20797,8 +21121,10 @@ function ProdAddProducts({ products, salesLog, lines, today, lang, onAdd, onClos
   );
 }
 
-function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
+// 备货(C 线,plan.md §2.5):prepStock(只在 prepOn 时传)→ 标了备货的配方一行两个按钮「＋ 取出烤」(近 14 天日均)和「＋ 做一批 N」(stage make)
+function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose, prepStock, today }) {
   const X = prodTxt(lang);
+  const PX = prepTxt(lang);
   const on = new Set((lines || []).map(prodLineKey));
   const items = [
     ...(recipes || []).filter(r => r && r.onSale).map(r => ({ kind: "recipe", obj: r })),
@@ -20815,6 +21141,24 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
         const already = on.has(prodLineKey({ kind, id: obj.id }));
         const q = defaultProdQty(kind, obj);
         const u = kind === "creation" ? creationWords(creationStructureOf(obj), lang).unit : _prodNoYield(kind, obj) ? X.batchUnit : (obj.unit || "");
+        const cfg = prepStock && kind === "recipe" ? prepCfgOf("recipe", obj) : null;
+        if (cfg) {
+          const bq = prepDefaultBakeQty(prepStock.items[cfg.key], today);
+          const onMake = on.has(prodLineKey({ kind, id: obj.id, stage: "make" }));
+          const mq = cfg.batch || 1;
+          return (
+            <div key={kind + obj.id} data-addonsale={kind + ":" + obj.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}`, flexWrap: "wrap" }}>
+              <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[kind]}</span>
+              <span style={{ ...T.fs.small, flex: "1 1 140px", minWidth: 0, overflowWrap: "anywhere" }}>{prodName(obj, lang)}</span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {already ? <span data-prep-addtake="on" style={{ ...T.fs.caption, color: T.success }}>{PX.tagTake(cfg.store)} {X.onSheet}</span>
+                  : <Btn size="sm" onClick={() => onAdd([{ kind, id: obj.id, qty: bq }])}>{PX.addTake(bq > 0 ? fmtQty(bq) : "", cfg.unit)}</Btn>}
+                {onMake ? <span data-prep-addmake="on" style={{ ...T.fs.caption, color: T.success }}>{PX.tagMake} {X.onSheet}</span>
+                  : <Btn size="sm" onClick={() => onAdd([{ kind, id: obj.id, qty: mq, stage: "make" }])}>{PX.addMake(fmtQty(mq), cfg.batch ? cfg.unit : X.batchUnit)}</Btn>}
+              </div>
+            </div>
+          );
+        }
         return (
           <div key={kind + obj.id} data-addonsale={kind + ":" + obj.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}`, flexWrap: "wrap" }}>
             <span style={{ ...T.fs.label, color: T.subtle }}>{X.kinds[kind]}</span>
@@ -20830,8 +21174,82 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose }) {
 
 // 备货提醒(生产单最上面,老板和员工都看得到;plan.md「每个页面怎么变 §2.1」)。C 线。第 0 步空壳
 // props:{ rows(prepAlertsOf(..., { forReminder: true }) 的结果), lang, staff, lines(今天的单子,判「单子上有了」), onAddMake(adds), onOpenPrep(key?) }
-function PrepReminder(props) {
-  return null;
+// 排序已由 prepAlertsOf 做好(过期 → 今天不够 → 今天到期 / 快到期 → 低于提醒线);最多 4 行。没有红行时收成一行(展开状态记 sessionStorage korora_prep_ui_v1 的 reminderOpen)
+const PREP_UI_KEY = "korora_prep_ui_v1";
+const _prepUiRead = () => { try { const o = JSON.parse(sessionStorage.getItem(PREP_UI_KEY) || "null"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } };
+const _prepUiWrite = (patch) => { try { sessionStorage.setItem(PREP_UI_KEY, JSON.stringify({ ..._prepUiRead(), ...patch })); } catch (e) {} };
+function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
+  const PX = prepTxt(lang);
+  const [open, setOpen] = useState(() => !!_prepUiRead().reminderOpen);
+  if (!rows || !rows.length) return null;
+  const red = rows.some(r => r.rank <= 1);
+  const on = new Set((lines || []).map(prodLineKey));
+  if (!red && !open) {
+    const a = rows.filter(r => r.rank === 2).length, b = rows.filter(r => r.rank === 3).length;
+    return (
+      <button type="button" data-prep-reminder="collapsed" onClick={() => { setOpen(true); _prepUiWrite({ reminderOpen: true }); }}
+        style={{ display: "block", width: "100%", textAlign: "left", marginBottom: 14, padding: "10px 12px", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.small,
+          color: T.ink, background: T.bgCard, borderTop: `1px solid ${T.border}`, borderRight: `1px solid ${T.border}`, borderBottom: `1px solid ${T.border}`, borderLeft: `3px solid ${T.warning}`, overflowWrap: "anywhere" }}>
+        {PX.remCollapsed(rows.length, a, b)}
+      </button>
+    );
+  }
+  const shown = rows.slice(0, 4);
+  const lineOf = (r) => {
+    const u = r.cfg.unit, st = PX.storeName(r.cfg.store), f = r.flags, lot = r.lot;
+    const q = (n) => fmtQty(n) || "0";
+    if (r.rank === 0 && lot) return PX.remExpired(r.oh.expiredLots.length, PX.md(lot.madeAt), q(lot.left), u);
+    if (r.rank === 1) return PX.remShort(q(r.need), u, st, q(r.oh.usable));
+    if (r.rank === 2 && lot) return lot.status === "today" ? PX.remToday(PX.md(lot.madeAt), q(lot.left), u) : PX.remSoon(PX.md(lot.madeAt), q(lot.left), u, lot.daysLeft);
+    if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? fmtQty(Math.round(r.days * 10) / 10) : "0");
+    return "";
+  };
+  return (
+    <div data-prep-reminder="open" style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+        <div style={{ ...T.fs.small, fontWeight: 500 }}>{PX.remTitle}</div>
+        {!red && <button type="button" onClick={() => { setOpen(false); _prepUiWrite({ reminderOpen: false }); }}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>▼</button>}
+      </div>
+      {shown.map(r => {
+        const isRed = r.rank <= 1;
+        const name = prodName(r.obj, lang) || r.key;
+        const f = r.flags;
+        const kind = r.cfg.kind;
+        const makeKey = prodLineKey(kind === "recipe" ? { kind, id: r.cfg.id, stage: "make" } : { kind, id: r.cfg.id });
+        const already = on.has(makeKey);
+        // 不够 / 低于提醒线的行给「＋ 做一批加进今天」;单子上已经有做一批行时写「✓ 今天单子上有了」(这时建议可能已经算成不用做)
+        const wantMake = (f.short || f.low) && (!!r.suggest || already);
+        const qty = r.suggest && r.suggest.qty ? r.suggest.qty : 1;
+        const add = kind === "recipe" ? { kind, id: r.cfg.id, qty, stage: "make" } : { kind, id: r.cfg.id, qty };
+        return (
+          <div key={r.key} data-prep-remrow={r.key} data-prep-rank={r.rank}
+            style={{ borderLeft: `3px solid ${isRed ? T.danger : T.warning}`, background: T.bgCard, padding: "8px 12px", marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ ...T.fs.small, fontWeight: 500, minWidth: 0, overflowWrap: "anywhere" }}>{name} <span style={{ ...T.fs.label, color: T.subtle, letterSpacing: 0 }}>· {PX.storeName(r.cfg.store)}</span></span>
+              {onOpenPrep && <Btn size="sm" variant="ghost" onClick={() => onOpenPrep(r.key)}>{PX.remHandle}</Btn>}
+            </div>
+            <div style={{ ...T.fs.caption, color: isRed ? T.danger : T.body, marginTop: 2, ...T.num, overflowWrap: "anywhere" }}>
+              {lineOf(r)}{wantMake && r.suggest ? " · " + PX.remSuggest(r.suggest.k, r.suggest.qty ? fmtQty(r.suggest.qty) : "", r.cfg.unit) : ""}
+            </div>
+            {wantMake && (
+              <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {already ? <span data-prep-remonsheet="1" style={{ ...T.fs.caption, color: T.success }}>{PX.remOnSheet}</span>
+                  : staff ? <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.remStaff}</span>
+                  : <Btn size="sm" onClick={() => onAddMake && onAddMake([add])}>{r.suggest && r.suggest.qty ? PX.remAdd : PX.remAddNoYield}</Btn>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {rows.length > shown.length && (
+        <div style={{ ...T.fs.caption, marginTop: 2 }}>
+          {onOpenPrep ? <button type="button" onClick={() => onOpenPrep()} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.ink, textDecoration: "underline", fontFamily: T.fontSans }}>{PX.remMore(rows.length - shown.length)}</button>
+            : <span style={{ color: T.subtle }}>{PX.remMore(rows.length - shown.length)}</span>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // 生产单页面。plan 的读写都在 App(updatePlan),这里只拿今天的那份来显示
@@ -20848,11 +21266,31 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const [adding, setAdding] = useState(null);      // null | "products" | "pick" | "onsale"
   const [closed, setClosed] = useState({});         // uid → true(收起了配料)
   const stale = rawPlan && typeof rawPlan === "object" && rawPlan.date && rawPlan.date !== today && Array.isArray(rawPlan.lines) && rawPlan.lines.length > 0 && plan.lines.length === 0;
-  const addLines = (adds0) => {
+  // ── 备货(C 线,plan.md §2):prepOn 为 false 时下面全是 null,页面一个节点都不多 ──
+  // prepView:每样标了备货的配方 / 组件 → { key, cfg, obj, name, item(账本里有 = 已开始记), oh(prepOnHand), need / incoming(今天单子上还没记的部分) };
+  //   另带 today / staff / onOpenPrep / linkOf(组合产品部分跟不跟组件库走)给块用。库存数字只从这里来(buildProdSheet / prodBlockOf 不读账本)
+  const stock = prepOn ? (prepStock && prepStock.items ? prepStock : prepStockRead(null)) : null;
+  const ctxS = prepOn ? { ...ctx, sheet } : null;   // ctx.sheet:prepLineInfo 才算「两行扣同一样」(dupes);提醒 / 卡片共用同一个 ctx,记忆化才命中
+  const pending = prepOn ? prepPendingOf(sheet, ctxS, stock, productionLog, today) : null;
+  const prepView = prepOn ? (() => {
+    const items = new Map();
+    [["recipe", recipes], ["component", components]].forEach(([kind, list]) => (list || []).forEach(o => {
+      const cfg = prepCfgOf(kind, o);
+      if (!cfg || items.has(cfg.key)) return;
+      const item = stock.items[cfg.key] || null;
+      const p = pending.get(cfg.key);
+      items.set(cfg.key, { key: cfg.key, cfg, obj: o, name: prodName(o, lang), item, oh: prepOnHand(item, cfg, today), need: p ? p.need : 0, incoming: p ? p.incoming : 0 });
+    }));
+    let matIds = null;
+    return { items, get: (k) => items.get(k) || null, today, staff, onOpenPrep,
+      linkOf: (l) => layerLinkState(l, components, matIds || (matIds = new Set((materials || []).map(m => m && m.id)))) };
+  })() : null;
+  const prepRows = prepOn ? prepAlertsOf({ recipes, components, stock, pending, today }, { forReminder: true }) : null;
+  const addLines = (adds0, msg) => {
     const adds = (adds0 || []).map(a => a ? { ...a, ..._prodLineSnap(_prodFind(a.kind === "product" ? products : a.kind === "creation" ? creations : a.kind === "component" ? components : recipes, a.id)) } : a);
     const r = mergeProdLines(plan.lines, adds);
     if (updatePlan(lines => mergeProdLines(lines, adds).lines) === false) return;   // 审查 r2:页面停在昨天 → App 刷新到今天并提示,这次不算
-    if (showToast) showToast(X.added(r.added, r.existed));
+    if (showToast) showToast(msg && r.added > 0 ? msg : X.added(r.added, r.existed));
   };
   const setLine = (uid, patch) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, ...patch } : l));
   // 审查 r2:撤销删除 / 清空时,同一样(种类 + id)已经重新加回单子的不再放回去(和 mergeProdLines 同一条规矩;以前会出现两行费南雪,配料算两遍、能记两次生产)
@@ -20877,12 +21315,23 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   };
   const copyStale = () => updatePlan(() => rawPlan.lines.filter(l => l && PROD_KINDS.includes(l.kind)).map(l => newProdLine(l.kind, l.id, l.qty, l)));
   const mLabel = (o) => prodName(o, lang);
+  // 打印(C 线):prepOn 时多带 prep = { today, first: { key: 最先用的那批做的日期 M/D } }(纸上不印现有多少:晚上就不对了)
+  const printData = () => {
+    if (!prepView) return { date: today, sheet, totals, lang };
+    const first = {};
+    prepView.items.forEach(e => { if (e.item && !e.oh.unitMismatch && e.oh.first) first[e.key] = prepTxt(lang).md(e.oh.first.madeAt); });
+    return { date: today, sheet, totals, lang, prep: { today, first } };
+  };
 
   if (adding === "pick") {
     return <ProductItemPicker recipes={recipes} components={components} creations={creations} mLabel={mLabel} lang={lang}
       onPick={(id, type) => {
         const list = type === "creation" ? creations : type === "component" ? components : recipes;
-        addLines([{ kind: type, id, qty: defaultProdQty(type, _prodFind(list, id)) }]);
+        const obj = _prodFind(list, id);
+        // 备货(C 线,§2.5):标了备货的配方加的是「取出烤」行,数量按近 14 天日均(prepDefaultBakeQty,没有记录 = 0),不是产出量
+        const cfg = prepOn && type === "recipe" ? prepCfgOf("recipe", obj) : null;
+        if (cfg) addLines([{ kind: type, id, qty: prepDefaultBakeQty(stock.items[cfg.key], today) }], prepTxt(lang).pickToast(prodName(obj, lang)));
+        else addLines([{ kind: type, id, qty: defaultProdQty(type, obj) }]);
         setAdding(null);
       }}
       onCancel={() => setAdding(null)} />;
@@ -20892,7 +21341,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     <div data-prodsheet="1">
       {staff ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, justifyContent: "flex-end" }}>
-          <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint({ date: today, sheet, totals, lang })}>{X.print}</Btn>
+          <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint(printData())}>{X.print}</Btn>
         </div>
       ) : (
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
@@ -20900,12 +21349,15 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
         <Btn size="sm" onClick={() => setAdding("pick")}>{X.addPick}</Btn>
         <Btn size="sm" onClick={() => setAdding(adding === "onsale" ? null : "onsale")}>{X.addOnSale}</Btn>
         <div style={{ flex: 1 }} />
-        <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint({ date: today, sheet, totals, lang })}>{X.print}</Btn>
+        <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint(printData())}>{X.print}</Btn>
         <Btn size="sm" variant="ghost" disabled={!plan.lines.length} onClick={clearAll}>{X.clearAll}</Btn>
       </div>
       )}
+      {prepRows && prepRows.length > 0 && <PrepReminder rows={prepRows} lang={lang} staff={staff} lines={plan.lines} onAddMake={(adds) => addLines(adds)} onOpenPrep={onOpenPrep} />}
       {adding === "products" && <ProdAddProducts products={products} salesLog={salesLog} lines={plan.lines} today={today} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
-      {adding === "onsale" && <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
+      {adding === "onsale" && (prepOn
+        ? <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} prepStock={stock} today={today} />
+        : <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />)}
       {stale && !staff && (
         <div style={{ ...T.fs.caption, color: T.body, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span>{X.stale(rawPlan.date)}</span>
@@ -20917,18 +21369,35 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
           actions={[{ label: X.addProducts, onClick: () => setAdding("products") }, { label: X.addPick, onClick: () => setAdding("pick") }]} />
       ) : (
         <>
-          {sheet.map(s => (
-            <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
-              onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
-              onQty={(v) => setLine(s.line.uid, { qty: v })}
-              onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d) })}
-              onRemove={() => remove(s.line.uid)}
-              onDone={() => setLine(s.line.uid, { done: !s.line.done })}
-              onLog={() => onLogProduction && onLogProduction(s.line.uid)}
-              readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined}
-              todayLogged={s.line.kind === "product" ? (productionLog || []).filter(x => x && String(x.productId) === String(s.line.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0) : 0} />
-          ))}
-          <ProdTotals totals={totals} lang={lang} noYieldNames={prodNoYieldNames(sheet, lang)} />
+          {sheet.map(s => {
+            const todayLogged = s.line.kind === "product" ? (productionLog || []).filter(x => x && String(x.productId) === String(s.line.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0) : 0;
+            if (!prepOn) return (
+              <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
+                onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
+                onQty={(v) => setLine(s.line.uid, { qty: v })}
+                onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d) })}
+                onRemove={() => remove(s.line.uid)}
+                onDone={() => setLine(s.line.uid, { done: !s.line.done })}
+                onLog={() => onLogProduction && onLogProduction(s.line.uid)}
+                readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined}
+                todayLogged={todayLogged} />
+            );
+            // 备货(C 线):「做一批」行 ± 一步 = 一批(产出量);记入可带「实际做了 / 实际取了」的数(商品行的按钮点下去传的是点击事件,不当数)
+            const info = prepLineInfo(s, ctxS, stock, today, productionLog);
+            const step = info && info.mode === "make" && info.cfg && info.cfg.batch ? info.cfg.batch : 1;
+            return (
+              <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
+                onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
+                onQty={(v) => setLine(s.line.uid, { qty: v })}
+                onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d * step) })}
+                onRemove={() => remove(s.line.uid)}
+                onDone={() => setLine(s.line.uid, { done: !s.line.done })}
+                onLog={(q) => onLogProduction && onLogProduction(s.line.uid, typeof q === "number" ? q : undefined)}
+                readOnly={staff} onKitchen={staff ? onOpenKitchen : undefined}
+                todayLogged={todayLogged} prep={info || undefined} prepView={prepView} />
+            );
+          })}
+          <ProdTotals totals={totals} lang={lang} noYieldNames={prodNoYieldNames(sheet, lang)} prepView={prepView || undefined} />
         </>
       )}
     </div>
@@ -21244,9 +21713,33 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
     );
   };
   const metaText = (b) => [[b.mold, X.mold], [b.temp, X.temp], [b.time, X.time]].filter(([v]) => v && v.v).map(([v, lab]) => `${lab} ${v.v}${v.fam ? `(${X.fam})` : ""}`).concat(b.size ? [`${X.size} ${b.size}`] : []).join("   ");
+  // 备货(C 线,plan.md §3):取出块只印一行 + 取出后说明 + 炉温 / 时间 / 模具,不印配料表;装烤好的一行;做一批块多印「做好后记入」和「实际做了 ____」。
+  // data.prep = { today, first }(页面在 prepOn 时带);纸上不印现有多少。取出 / 装烤好的块没有 rows,不能走 ingTable
+  const PX = prepTxt(L);
+  const pp = data && data.prep ? data.prep : null;
   const block = (b, showHead, key) => {
     if (b.missing) return <div key={key} style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {X.missing}</div>;
     const name = prodName(b.target, L);
+    if (b.type !== "creation" && (b.prep === "take" || b.prep === "packed")) {
+      const head = showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)} {b.unit}</div>;
+      if (b.prep === "packed") return (
+        <div key={key} data-prep-print="packed" style={{ marginTop: "6px" }}>{head}<div className="p-row" style={{ fontSize: "11pt" }}>{PX.printPacked(fmtQty(b.need), b.unit)}</div></div>
+      );
+      const first = pp && pp.first ? pp.first[prepKeyOf(b.type, b.target.id)] : "";
+      const thaw = prodNote(L === "ja" ? (b.thawJa || b.thawZh) : (b.thawZh || b.thawJa));
+      return (
+        <div key={key} data-prep-print="take" style={{ marginTop: "6px" }}>
+          {head}
+          <div className="p-row" style={{ fontSize: "12pt", fontWeight: 700 }}>
+            <span className="p-check" style={{ display: "inline-block", width: "14px", height: "14px", marginRight: "6px", verticalAlign: "-2px" }} />
+            {PX.takeLine(b.type, b.store, fmtQty(b.need), b.unit)}{first ? " · " + PX.printFirst(first) : ""}
+          </div>
+          {thaw && <div style={{ fontSize: "10pt" }}>{PX.thawLabel} {thaw}</div>}
+          {metaText(b) && <div style={{ fontSize: "10pt" }}>{metaText(b)}</div>}
+        </div>
+      );
+    }
+    const makeCfg = pp && b.type !== "creation" && !b.noYield && (b.prep === "make" || (b.type === "component" && !showHead)) ? prepCfgOf(b.type, b.target) : null;
     if (b.type === "creation") {
       const W = creationWords(creationStructureOf(b.target), L);
       return (
@@ -21277,8 +21770,20 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
         {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)}{b.noYield ? " " + X.batchUnit : b.unit ? " " + b.unit : ""}</div>}
         <div style={{ fontSize: "10pt", fontWeight: b.noYield ? 700 : undefined }}>{b.noYield ? X.noYield(fmtQty(b.scale)) : X.batchOf(fmtQty(b.scale), fmtQty(Math.max(1, b.yieldNum || 1)), b.unit ? " " + b.unit : "")}{metaText(b) ? "   " + metaText(b) : ""}</div>
         {ingTable(b.rows)}
+        {makeCfg && (
+          <div data-prep-print="make" className="p-row" style={{ fontSize: "10.5pt", marginTop: "4px", display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+            <span>{PX.printMakeHint(PX.storeName(makeCfg.store), fmtQty(b.need), makeCfg.unit, makeCfg.shelfDays ? PX.md(plusDaysStr(pp.today || date, makeCfg.shelfDays)) : "")}</span>
+            <span style={{ fontWeight: 700 }}>{PX.printActual(makeCfg.unit)}</span>
+          </div>
+        )}
       </div>
     );
+  };
+  // 生产记录表的品名后缀:做一批行「(做一批存着)」、取出行「(取出烤)」(只看标了备货的配方 / 组件行)
+  const recSuffix = (s) => {
+    if (!s.obj || !isPrepMarked(s.obj)) return "";
+    if (s.line.kind === "component" || (s.line.kind === "recipe" && s.line.stage === "make")) return PX.sufMake;
+    return s.line.kind === "recipe" ? PX.sufTake : "";
   };
   const lineName = (s) => s.obj ? prodName(s.obj, L) : prodLineGoneName(s.line, L);
   const lineUnit = (s) => s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
@@ -21331,6 +21836,10 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
         <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.nonGram}</div>
         <table><tbody>{totals.nonGram.map(totalRow)}</tbody></table>
       </>)}
+      {Array.isArray(totals.fromFrozen) && totals.fromFrozen.length > 0 && (<>
+        <div className="p-row" data-prep-print="fromfrozen" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{PX.ffTitle}</div>
+        <table><tbody>{totals.fromFrozen.map((f, i) => totalRow({ name: `${f.name}(${PX.storeName(f.store)})`, srcs: f.srcs, qty: f.qty, unit: f.unit }, i))}</tbody></table>
+      </>)}
       {totals.fromStock.length > 0 && (<>
         <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.stockTitle}</div>
         <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.missing ? f.name + X.stockMissing(f.missing) : f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}</tbody></table>
@@ -21348,7 +21857,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
         <tbody>
           {sheet.map((s, i) => (
             <tr key={i}>
-              <td className="p-td" style={{ fontSize: "11pt", fontWeight: 700, height: "30px" }}>{lineName(s)}</td>
+              <td className="p-td" style={{ fontSize: "11pt", fontWeight: 700, height: "30px" }}>{lineName(s)}{pp ? recSuffix(s) : ""}</td>
               <td className="p-td" style={{ textAlign: "center", fontSize: "11pt", ...T.num }}>{fmtQty(s.qty)}</td>
               {[0, 1, 2, 3, 4].map(k => <td key={k} className="p-td" style={{ borderLeft: "1px solid #D8D8D8" }} />)}
             </tr>
@@ -22930,11 +23439,112 @@ function App() {
   };
   // 「记入生产」:和商品页「记录生产」同一个写法(makeLogQty),库存照加。只记这一行还没记过的那部分(logged),给撤销
   // 备货第 0 步:第 2 个参数 actualQty(「实际取了 / 实际做了 N」、厨房视图「烤好了,记下」)先忽略,C 线接上
+  // 备货(C 线,plan.md §2.7):这一行和已开始记的备货有关 → 新路径(账本和单子的 logged 在同一次 writePrep 里写;商品行另外照旧 makeLogQty 带 { id });
+  //   actualQty =「实际做了 / 实际取了 N」(只对做一批行 / 取出烤行);撤销按记下的 prodLogId 找生产记录,找不到就只撤账本,logged 只在撤销里改一次。
+  //   和备货无关的行、组成里没有已开始记的备货的商品行 → 下面原来的代码,文字不变
   const logProdFromSheet = (uid, actualQty) => {
     if (staleSheetDay()) return;
     const today = localDateStr();
     const line = prodPlanForToday(appSettings.prodPlan, today).lines.find(l => l.uid === uid);
-    if (!line || line.kind !== "product") return;
+    if (!line) return;
+    if (prepOn && (() => {
+      const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
+      const s = buildProdSheet([line], ctx)[0];
+      const info = prepLineInfo(s, ctx, prepStock, today, productionLog);
+      if (!info) return false;
+      const X = prepTxt(lang);
+      const staffOp = staffMode ? { staff: true } : {};
+      const opId = "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const q = (n) => fmtQty(n) || "0";
+      const objOf = (kind, id) => _prodFind(kind === "component" ? components : recipes, id);
+      const lineName = s.obj ? prodName(s.obj, lang) : prodLineGoneName(line, lang);
+      // 记入:logged 设成「封顶后的已记入 + 这次的计划数」;撤销:减回这次的计划数(add = 0 时不动单子)
+      const setLogged = (add) => add > 0 ? (lines) => lines.map(l => l.uid === uid ? { ...l, logged: _r3(info.logged + add) } : l) : null;
+      const unLogged = (add) => add > 0 ? (lines) => lines.map(l => l.uid === uid ? { ...l, logged: Math.max(0, _r3((parseFloat(l.logged) || 0) - add)) } : l) : null;
+      const undoPrep = (add) => () => writePrep([{ type: "revert", opId }], unLogged(add), { uid, isUndo: true });
+      // 按渲染时的账本预算扣到多少(和 prepApply 同一个 prepTakePlan),给 toast 用
+      const takeParts = (takes) => takes.map(t => {
+        const o = objOf(t.kind, t.id), cfg = prepCfgOf(t.kind, o), it = prepStock.items[t.key];
+        const tp = prepTakePlan(it, cfg, t.qty, today);
+        // (App 里的 prepOnHand 是采购页用的 Map,这里按批次直接加:能用的 = 没过期的批剩的合计)
+        const usable = prepLotsView(it, cfg, today).filter(l => l.status !== "expired").reduce((a, l) => a + l.left, 0);
+        return { t, cfg, name: prodName(o, lang), store: X.storeName(cfg && cfg.store), got: tp.got, short: tp.short, left: _r3(usable - tp.got) };
+      }).filter(x => x.cfg);
+      const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
+      const untakenTxt = (untaken) => {
+        const by = new Map();
+        (untaken || []).forEach(u => { const k = u.src || u.name; by.set(k, (by.get(k) || 0) + 1); });
+        return [...by].map(([k, n]) => X.toastUntaken(k, n)).join("");
+      };
+      const takeOps = (parts, add, extra) => parts.map(x => ({ type: "take", key: x.t.key, cfg: x.cfg, opId, qty: x.t.qty, date: today, uid, planQty: add, via: "sheet", ...extra, ...staffOp }));
+
+      if (info.mode === "product") {
+        // 组成里没有已开始记的备货 / 账本只读 → 走原来的代码(商品库存照加,和旧版一样不扣)
+        if (info.blocked || !info.flow.takes.some(t => t.tracked)) return false;
+        const p = s.obj, add = info.pending;
+        if (!(add > 0)) return true;
+        const ex = findDayLog(productionLog, p.id, today);
+        const prodLogId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
+        const parts = takeParts(info.flow.takes.filter(t => t.tracked));
+        if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id }), setLogged(add), { uid })) return true;
+        makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add, undefined, { id: prodLogId });
+        const prepList = parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、");
+        showToast(X.toastProduct(pickLang(p, "name", lang) || p.nameZh || "", fmtQty(add), prepList) + shortTxt(parts) + untakenTxt(info.flow.untaken), { undo: () => {
+          // 按记下的生产记录 id 找;商品页已经删了这条 → 商品库存和生产记录都不动,只撤账本(删记录时本机扣过的已经加回,A 线规则 4 不再加第二遍)
+          const cur = (dataRef.current && dataRef.current.productionLog) || [];
+          const rec = cur.some(x => x && x.id === prodLogId);
+          if (rec) {
+            setProductionLog(prev => {
+              const c = (prev || []).find(x => x && x.id === prodLogId);
+              if (!c) return prev;
+              const left = _r3((parseFloat(c.batchQty) || 0) - add);
+              return left > 0 ? prev.map(x => x === c ? { ...x, batchQty: left, updatedAt: new Date().toISOString() } : x) : prev.filter(x => x !== c);
+            });
+            setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - add) } : x));
+          }
+          undoPrep(add)();
+          if (!rec) showToast(X.undoGone);
+        } });
+        return true;
+      }
+      if (info.mode === "make") {
+        if (info.blocked) return true;   // 按钮是灰的(没填产出量 / 单位对不上 / 账本只读)
+        const add = info.pending;
+        const a = parseFloat(actualQty);
+        const qty = actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add;
+        if (!(add > 0) || !(qty > 0)) return true;
+        const cfg = info.cfg;
+        if (!writePrep([{ type: "make", key: cfg.key, cfg, opId, lotId: "lot_" + opId, qty, madeAt: today, uid, planQty: add, via: "sheet", ...staffOp }], setLogged(add), { uid })) return true;
+        const nm = prodName(s.obj, lang);
+        showToast(X.toastMake(nm, X.storeName(cfg.store), q(qty), cfg.unit, cfg.shelfDays ? X.md(plusDaysStr(today, cfg.shelfDays)) : "") + (info.tracked ? "" : X.toastStart(nm)),
+          { undo: undoPrep(add) });
+        return true;
+      }
+      if (info.mode === "take") {
+        if (info.blocked) return true;
+        const add = info.pending;
+        if (info.sub === "bake") {
+          // 取出烤:「实际取了 N」(员工也能记;数量 0 的行 add = 0,只记实际取的,不改 logged)
+          const a = parseFloat(actualQty);
+          const qty = actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add;
+          if (!(qty > 0)) return true;
+          const parts = takeParts([{ key: info.cfg.key, kind: info.cfg.kind, id: info.cfg.id, qty }]);
+          if (!parts.length || !writePrep(takeOps(parts, add), setLogged(add), { uid })) return true;
+          const x = parts[0];
+          showToast(X.toastTake(x.name, x.store, q(x.got), x.cfg.unit, q(x.left)) + shortTxt(parts), { undo: undoPrep(add) });
+          return true;
+        }
+        // 组合产品行 / 用到备货组件的行:只从账本扣(已开始记的那几样)
+        if (!(add > 0)) return true;
+        const parts = takeParts(info.flow.takes.filter(t => t.tracked));
+        if (!parts.length || !writePrep(takeOps(parts, add), setLogged(add), { uid })) return true;
+        showToast(X.toastUse(lineName, fmtQty(add), parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、")) + shortTxt(parts) + untakenTxt(info.flow.untaken),
+          { undo: undoPrep(add) });
+        return true;
+      }
+      return line.kind !== "product";   // mode null(标了但还没开始记):没有按钮;商品行走原来的代码
+    })()) return;
+    if (line.kind !== "product") return;
     const p = products.find(x => String(x.id) === String(line.id));
     if (!p) return;
     const tl = (productionLog || []).filter(x => x && String(x.productId) === String(p.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0);
