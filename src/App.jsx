@@ -19864,7 +19864,7 @@ const PREP_TXT = {
     thawLabel: "取出后",
     have: (store, n, u) => `${store}现有 ${n} ${u}`,
     firstLot: (d, m, u, tail) => `先用 ${d} 那批(${m} ${u}${tail ? "," + tail : ""})`,
-    untracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
+    sheetUntracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
     goRegister: "去登记 →",
     short: (have, sh, u) => `⚠ 只有 ${have} ${u},差 ${sh} ${u} —— 先做一批,或者改少`,
     makeOnSheet: (n, u) => `今天单子上有做一批(${n} ${u}),做好记入后就够了`,
@@ -19872,9 +19872,9 @@ const PREP_TXT = {
     makeHint: (store, n, u, date) => `做好点「记入」= ${store} +${n} ${u}(今天做的${date ? `,放到 ${date}` : ""})`,
     zeroTake: "填今天要烤几个",
     zeroTakeStaff: "店长没填数量 —— 烤了几个在这里记",
-    takeBtn: (n, u) => `记入 ${n} ${u}`, takeBtnZero: "记入",
+    takeLogBtn: (n, u) => `记入 ${n} ${u}`, takeBtnZero: "记入",
     actualTaken: "实际取了", actualMade: "实际做了", todayDate: (s) => `${PREP_TXT.zh.madeDate(s)}:今天`,
-    submit: "记入", cancel: "取消",
+    submit: "记入", logCancel: "取消",
     makeBtn: (n, u) => `做好了,记入 +${n} ${u}`,
     loggedActual: (n, u) => `✓ 已记入 · 实际 ${n} ${u}`,
     todayMade: (n, u) => `⚠ 今天已经登记过 ${n} ${u},再记会再加一批`,
@@ -19898,7 +19898,7 @@ const PREP_TXT = {
     toastProduct: (name, n, prep) => `✓ 已记入生产「${name}」+${n}(库存 +${n}${prep ? ";" + prep : ""})`,
     toastUse: (name, n, prep) => `✓ 已记入「${name}」+${n}${prep ? `(${prep})` : ""}`,
     toastMake: (name, store, n, u, date) => `✓「${name}」${store} +${n} ${u}(今天做的${date ? `,放到 ${date}` : ""})`,
-    toastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
+    // toastTake(取出的 toast):用下面 E 段的同名键,文字一模一样(合并 C / E 时两段各有一份,留 E 的)
     toastShort: (store, name, got, sh) => `;${store}「${name}」账上只有 ${got},差 ${sh} 没扣(去「备货」盘点)`,
     toastUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     toastStart: (name) => `;从今天开始记「${name}」的库存,以前做好还冻着的请到「备货」补登`,
@@ -20057,7 +20057,7 @@ const PREP_TXT = {
     thawLabel: "取り出し後",
     have: (store, n, u) => `${store}在庫 ${n}${u}`,
     firstLot: (d, m, u, tail) => `${d} 仕込み分から(${m}${u}${tail ? "、" + tail : ""})`,
-    untracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
+    sheetUntracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
     goRegister: "登録へ →",
     short: (have, sh, u) => `⚠ 在庫 ${have}${u}、${sh}${u} 不足 —— 先に仕込むか数量を減らしてください`,
     makeOnSheet: (n, u) => `本日のリストに仕込み(${n}${u})あり。記録すれば足ります`,
@@ -20065,9 +20065,9 @@ const PREP_TXT = {
     makeHint: (store, n, u, date) => `仕込み後「記録」で ${store} +${n}${u}(本日仕込み${date ? `、${date} まで` : ""})`,
     zeroTake: "焼く数を入力してください",
     zeroTakeStaff: "数量未入力です。焼いた数をここに記録してください",
-    takeBtn: (n, u) => `記録 ${n}${u}`, takeBtnZero: "記録",
+    takeLogBtn: (n, u) => `記録 ${n}${u}`, takeBtnZero: "記録",
     actualTaken: "実際に出した数", actualMade: "実際の出来数", todayDate: (s) => `${PREP_TXT.ja.madeDate(s)}:本日`,
-    submit: "記録", cancel: "取消",
+    submit: "記録", logCancel: "取消",
     makeBtn: (n, u) => `仕込み完了 · 記録 +${n}${u}`,
     loggedActual: (n, u) => `✓ 記録済み · 実数 ${n}${u}`,
     todayMade: (n, u) => `⚠ 本日すでに ${n}${u} 記録済み。記録するとさらに加算されます`,
@@ -20091,7 +20091,7 @@ const PREP_TXT = {
     toastProduct: (name, n, prep) => `✓ 製造記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
     toastUse: (name, n, prep) => `✓ 記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
     toastMake: (name, store, n, u, date) => `✓「${name}」${store} +${n}${u}${date ? `(${date} まで)` : ""}`,
-    toastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
+    // toastTake(取出的 toast):用下面 E 段的同名键,文字一模一样(合并 C / E 时两段各有一份,留 E 的)
     toastShort: (store, name, got, sh) => `・${store}「${name}」は在庫 ${got} のみ、${sh} 未控除(「作り置き」で棚卸し)`,
     toastUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     toastStart: (name) => `・本日から「${name}」の在庫を記録します。以前の分は「作り置き」で登録してください`,
@@ -21000,7 +21000,7 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
         {kitchenBtn}
         {prepView && !oh && (
           <div data-prep-untracked="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
-            <span>{PX.untracked(store)}</span>
+            <span>{PX.sheetUntracked(store)}</span>
             {!prepView.staff && prepView.onOpenPrep && <button type="button" onClick={() => prepView.onOpenPrep(prepKeyOf(b.type, b.target.id))}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.ink, textDecoration: "underline", fontFamily: T.fontSans }}>{PX.goRegister}</button>}
           </div>
@@ -21154,7 +21154,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           {prep.mode === "take" && (blockedTxt
             ? <span data-prep-blocked={prep.blocked} style={{ ...T.fs.caption, color: T.warning }}>{blockedTxt}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep ? " " : ""}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep && txtLink(PX.goPrep, () => prepView.onOpenPrep(prep.key))}</span>
             : !panel && (prep.pending > 0 || zeroBake) && (pBake
-              ? logPrepBtn(prep.logged > 0 || prep.actual > 0 ? (prep.pending > 0 ? X.logMore(fmtQty(prep.pending)) : PX.takeBtnZero) : prep.pending > 0 ? PX.takeBtn(fmtQty(prep.pending), u) : PX.takeBtnZero,
+              ? logPrepBtn(prep.logged > 0 || prep.actual > 0 ? (prep.pending > 0 ? X.logMore(fmtQty(prep.pending)) : PX.takeBtnZero) : prep.pending > 0 ? PX.takeLogBtn(fmtQty(prep.pending), u) : PX.takeBtnZero,
                 !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(prep.pending) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
@@ -21175,7 +21175,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       </label>
       {pMake && <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.todayDate(pCfg.store)}</span>}
       <Btn size="sm" variant="primary" disabled={!panelOk} onClick={submitPanel}>{PX.submit}</Btn>
-      <Btn size="sm" variant="ghost" onClick={() => setPanel(null)}>{PX.cancel}</Btn>
+      <Btn size="sm" variant="ghost" onClick={() => setPanel(null)}>{PX.logCancel}</Btn>
       {pMake && prep.shortToday > 0 && panelOk && (
         <span data-prep-settle="1" style={{ ...T.fs.caption, color: T.body, width: "100%", ...T.num }}>
           {PX.settle(fmtQty(prep.shortToday), pUnit, pStore, fmtQty(Math.max(0, _r3(panelNum - Math.min(prep.shortToday, panelNum)))))}
@@ -21426,7 +21426,7 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose, prepSt
 // 备货提醒(生产单最上面,老板和员工都看得到;plan.md「每个页面怎么变 §2.1」)。C 线。第 0 步空壳
 // props:{ rows(prepAlertsOf(..., { forReminder: true }) 的结果), lang, staff, lines(今天的单子,判「单子上有了」), onAddMake(adds), onOpenPrep(key?) }
 // 排序已由 prepAlertsOf 做好(过期 → 今天不够 → 今天到期 / 快到期 → 低于提醒线);最多 4 行。没有红行时收成一行(展开状态记 sessionStorage korora_prep_ui_v1 的 reminderOpen)
-const PREP_UI_KEY = "korora_prep_ui_v1";
+// PREP_UI_KEY(sessionStorage korora_prep_ui_v1)在下面 E 线备货页那段定义,提醒条和备货页共用一个 key(合并时去掉了这里重复的 const)
 const _prepUiRead = () => { try { const o = JSON.parse(sessionStorage.getItem(PREP_UI_KEY) || "null"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } };
 const _prepUiWrite = (patch) => { try { sessionStorage.setItem(PREP_UI_KEY, JSON.stringify({ ..._prepUiRead(), ...patch })); } catch (e) {} };
 function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
@@ -23405,7 +23405,7 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
   const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
   const pages = (prepOn || page === "prep") ? STAFF_PAGES_PREP : STAFF_PAGES;
   const prepBadge = useMemo(() => (pages.length === 4 && prepStock
-    ? prepAlertsOf({ recipes, components, stock: prepStock, today }).filter(r => r.flags.expired || r.flags.low).length : 0), [pages.length, recipes, components, prepStock, today]);
+    ? prepBadgeCountOf(recipes, components, prepStock, today) : 0), [pages.length, recipes, components, prepStock, today]);
   const go = (id, focus) => {
     if (id === page && !(id === "kitchen" && kitchenItem)) { if (id === "prep" && focus !== undefined) setPrepFocus(focus || null); return; }
     // 日结有没保存的格子时先问(子页一换,日结页就卸载了);备货页的登记 / 盘点面板同样
