@@ -19620,7 +19620,7 @@ const _prepNewItem = (cfg, now, today) => ({ kind: cfg.kind, id: cfg.id, nameZh:
 // 一条 move 的公共字段;id = "mv_" + opId + "@" + key(同一个 op 在同一样上只有一条)。可选字段只在给了时写
 const _prepMove = (op, key, type, now, date, extra) => {
   const m = { id: "mv_" + op.opId + "@" + key, op: op.opId, at: now, date, type, ...extra };
-  ["uid", "planQty", "prodLogId", "productId", "via"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
+  ["uid", "planQty", "prodLogId", "productId", "via", "lineKey"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
   if (op.staff) m.staff = true;
   return m;
 };
@@ -20152,6 +20152,8 @@ const productPrepSkips = (p) => {
 };
 // 生产单一行的身份(判重 / 撤销放回用):种类 + id;配方行 stage === "make"(做一批存着)另算一样。没有 stage 的行和以前的判重一模一样
 const prodLineKey = (l) => l.kind + "\u0000" + String(l.id) + (l.kind === "recipe" && l.stage === "make" ? "\u0000make" : "");
+// 审查 ps3:写进账本 take move 的 lineKey(= prodLineKey,换成看得懂的「:」)—— 删掉又加回来的行(uid 变了)靠它认出今天已经记过
+const _prepLineTag = (l) => prodLineKey(l).split("\u0000").join(":");
 // 文字表。每条线只往自己那段加键,{} 插值写成函数,数字走 fmtQty,日期写 M/D。**任何一条都不许出现钱**(¥ 円 价格 成本 毛利 利润 售价 原価 粗利 利益 売価)
 const PREP_TXT = {
   zh: {
@@ -20208,6 +20210,7 @@ const PREP_TXT = {
     burnt: "烤坏的也算进来,晚上日结记「烤坏」",
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
+    usedElsewhere: (n) => `⚠ 今天已经记入过 ${n}(删掉的行记的),再点会再扣一遍备货`,
     dupe: (name) => `「${name}」在两行里都会扣,同一批只记入一行`,
     partHave: (n, u) => `· 现有 ${n} ${u}`,
     partShort: (have, sh, u) => `· 只有 ${have} ${u},差 ${sh} ${u}`,
@@ -20463,6 +20466,7 @@ const PREP_TXT = {
     burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
+    usedElsewhere: (n) => `⚠ 本日すでに ${n} 記録済み(削除した行の分)。押すと作り置きがさらに引かれます`,
     dupe: (name) => `「${name}」は 2 行で引かれます。同じ分は 1 行だけ記録してください`,
     partHave: (n, u) => `· 在庫 ${n}${u}`,
     partShort: (have, sh, u) => `· 在庫 ${have}${u}、${sh}${u} 不足`,
@@ -21251,9 +21255,17 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
   const logged = Math.min(lg, cap);
   const pending = pend(logged);
   const tracked = full.takes.some(canTake);
+  // 审查 ps3:今天同一样(lineKey)别的行(删掉又加回来的,uid 不同)已经记入过的数(按 op 去重的 planQty 合计;老 move 没有 lineKey 不算)。只给提示,账本行为不变
+  const tag = _prepLineTag(l), usedOps = new Map();
+  Object.keys(st.items).forEach(k => (((st.items[k] || {}).moves) || []).forEach(m => {
+    if (!m || m.type !== "take" || m.date !== today || m.lineKey !== tag || m.uid === l.uid || m.restoredBy) return;
+    const op = m.op || m.id;
+    if (!usedOps.has(op)) usedOps.set(op, _prepNum(m.planQty));
+  }));
+  const usedElsewhere = _r3([...usedOps.values()].reduce((a, v) => a + v, 0));
   // 已开始记的都单位对不上(审查 ps1):按钮灰掉写「单位对不上,先去盘点」(同做一批 / 取出烤行),不再点了说扣了、账本其实没动
   const badKey = tracked ? null : (full.takes.find(t => isTracked(t.key)) || {}).key || null;
-  return { mode: tracked || badKey ? "take" : null, sub: "use", ...(badKey ? { key: badKey } : {}), qty, logged, pending, tracked, flow: flowOf(pending), readOnly,
+  return { mode: tracked || badKey ? "take" : null, sub: "use", ...(badKey ? { key: badKey } : {}), qty, logged, pending, tracked, ...(usedElsewhere > 0 ? { usedElsewhere } : {}), flow: flowOf(pending), readOnly,
     blocked: (tracked || badKey) && readOnly ? "readOnly" : badKey ? "unit" : null };
 };
 // 整张单子每行还没记入的那部分要取 / 会做多少:Map key → { cfg, need, incoming, srcs }(标了备货的都列,开始记没有由 prepAlertsOf 自己筛)。
@@ -21628,6 +21640,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
                 !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(prep.pending) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
+          {!pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.usedElsewhere > 0 && <span data-prep-useelsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.usedElsewhere(fmtQty(prep.usedElsewhere))}</span>}
           {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{(readOnly ? PX.onProductStaff : PX.onProduct)(prep.onProducts.map(p => p.name).join("」「"))}</span>}
         </div>
       );
@@ -25161,7 +25174,7 @@ function App() {
         // 组合产品行 / 用到备货组件的行:只从账本扣(已开始记的那几样)
         if (!(add > 0)) return true;
         const parts = takeParts(info.flow.takes.filter(t => t.tracked));
-        if (!parts.length || !writePrep(takeOps(parts, add), setLogged(add), { uid })) return true;
+        if (!parts.length || !writePrep(takeOps(parts, add, { lineKey: _prepLineTag(line) }), setLogged(add), { uid })) return true;
         showToast(X.toastUse(lineName, fmtQty(add), parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、")) + shortTxt(parts) + untakenTxt(info.flow.untaken),
           { undo: undoPrep(add) });
         return true;
