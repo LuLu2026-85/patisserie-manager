@@ -18627,7 +18627,8 @@ const marginInfo = ({ price, priceCurrency, cost, incomplete = false, packaging 
     gap: suggested !== null && priceCNY > 0 ? priceCNY - suggested : null,
     approx: priceCurrency === "JPY" && priceCNY > 0,
     incomplete: !!incomplete,
-    belowTarget: pct !== null && pct < marginGoodLine() - 1e-9,
+    // 审查 b4r3:有包装费的看包装后(和差额格、建议价同一口径),以前只看包装前 → 包装后才没达标的商品「问题」列是「—」、「只看有问题的」筛掉
+    belowTarget: (pack > 0 ? afterPackPct : pct) !== null && (pack > 0 ? afterPackPct : pct) < marginGoodLine() - 1e-9,
   };
 };
 // 毛利率(售价先折人民币):成本 0 或没售价 → null(页面显示「—」)。f2_tests / harness 按名字取它,留着(和 marginInfo(...).pct 同一个数)
