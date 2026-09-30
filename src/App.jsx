@@ -6825,6 +6825,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           onPrepOp={onPrepOp}
           onOpenPrep={onOpenPrep}
           today={today}
+          confirmDialog={confirmDialog}
         />
       );
     }
