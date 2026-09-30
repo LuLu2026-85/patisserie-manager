@@ -697,7 +697,7 @@ const withMergedPriceHistory = (local, file, merged, kind, now) => {
   return ph === undefined ? merged : { ...merged, priceHistory: ph };
 };
 
-// 数据体检 H1(本店原料标币种)用:记录里没写币种、数值又和现价相同的项补上币种;别的不动。没有要改的 → null
+// 数据体检 H1(本店原料标币种)用:记录里没写币种、数值又和现价相同的项补上币种;标人民币时按人民币读和现价差一倍以内的(_phNearAsCNY)也补;别的不动。没有要改的 → null
 const _phCloserAsCNY = (v, p) => v > 0 && p > 0 && Math.abs(Math.log(v / p)) < Math.abs(Math.log(toCNY(v, "JPY") / p));
 // 审查 b4s1:「标对币种」(_phRelabelAsCNY)只认按人民币读和对方相差不到一倍(0.5 到 2 倍)的。只看「哪边更近」时,东京 2.08円 → 国内 0.5 元
 // (真涨约 5.6 倍)会被当成标币种:旧价记成 2.08 元、显示「↓76%」,同一时期的东京日元记录也被永久标成人民币
@@ -21535,7 +21535,7 @@ function App() {
       const zh = lang === "zh";
       const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
       // 第 4 批 B4-3(critic M5):价格记录里没写币种、数值又和现价相同的那几项一起补上 —— 不补的话,标成人民币后拿它和现价比会显示「↑ 2000%」。
-      // 数不同的不动(可能真是东京时期的日元价)。这是更正标签不是改价,所以不追加记录;撤销时整条换回原对象
+      // 标人民币时按人民币读差一倍以内的旧价一起补(_phNearAsCNY),差得更多的不动(可能真是东京时期的日元价,或者真改过价)。这是更正标签不是改价,所以不追加记录;撤销时整条换回原对象
       const phFix = currencyFixedHistory(item.obj, cur === "CNY" ? "CNY" : "JPY");
       dhReplaceOne(shopMaterials, setShopMaterials, item.obj, { currency: cur === "CNY" ? "CNY" : "JPY", updatedAt: new Date().toISOString(), ...(phFix ? { priceHistory: phFix } : {}) },
         zh ? `「${nm}」标成${cur === "CNY" ? "人民币" : "日元"}(数没变)` : `「${nm}」を${cur === "CNY" ? "人民元" : "円"}にしました(数値はそのまま)`);
