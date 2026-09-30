@@ -25213,7 +25213,10 @@ function App() {
         const parts = takeParts(used);
         if (!writePrep([{ type: "make", key: cfg.key, cfg, opId, lotId: "lot_" + opId, qty, madeAt: today, uid, planQty: add, via: "sheet", ...staffOp }, ...takeOps(parts, add)], setLogged(add), { uid })) return true;
         const nm = prodName(s.obj, lang);
-        showToast(X.toastMake(nm, X.storeName(cfg.store), q(qty), cfg.unit, cfg.shelfDays ? X.md(plusDaysStr(today, cfg.shelfDays)) : "") + (info.tracked ? "" : X.toastStart(nm))
+        // 审查 pt1:这一批补扣了今天取出时差的数 → 同备货卡「＋ 登记一批」写出来(以前写 +400、卡片上只多 380)
+        const settled = info.tracked ? Math.min(info.shortToday || 0, qty) : 0;
+        showToast(X.toastMake(nm, X.storeName(cfg.store), q(qty), cfg.unit, cfg.shelfDays ? X.md(plusDaysStr(today, cfg.shelfDays)) : "")
+          + (settled > 0 ? X.toastSettled(q(settled), cfg.unit, X.storeName(cfg.store), q(_r3(qty - settled))) : "") + (info.tracked ? "" : X.toastStart(nm))
           + (parts.length ? X.toastMakeUsed(parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、")) : "") + shortTxt(parts) + untakenTxt(info.flow.untaken),
           { undo: undoPrep(add) });
         return true;
