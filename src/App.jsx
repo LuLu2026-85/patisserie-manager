@@ -4943,6 +4943,8 @@ const _dhPrepChecks = (d, A) => {
         if (dateRe.test(String(it.movesCutTo || "")) && r.date <= it.movesCutTo) return;   // 审查 ps3:那天的记录被 80 条上限剪掉过(可能切在一天中间),对不了
         if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
         if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 这天之后盘点过:账已经对成实物(商品页补录这种日子也不扣,审查 ps1)
+        // 审查 ps4:同一天、记录之后(按记录最后改的时间)盘点过的也不报 —— H21 叫她去盘点,盘完这条就该消失(商品页当天照扣的规则不变)
+        if (mv.some(m => m.type === "count" && m.date === r.date && String(m.at || "") >= String(r.updatedAt || r.createdAt || ""))) return;
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
         const t = takes.find(x => x.key === k);
         const want = t ? _r3(t.qty) : 0;
