@@ -20046,17 +20046,28 @@ const prepSuggestBatch = (cfg, usable, need, incoming, dailyUse = 0) => {
 };
 // 近 14 天(含今天)take 的日均:按要扣的数算(含没扣到的 short,那是需求),删了生产记录加回过的不算。
 // 天数从有史以来第一次取出那天算起(最多 14、至少 1 天,同 salesSpanOf);没记录 = 0
+// 审查 ps4:盘点换过单位的,之前按旧单位记的 take 换算成现在的单位(g ↔ kg);换不了的(個 → 片)连同更早的都不算,天数从那次盘点之后算起。
+// 以前按原数加总:g 改 kg 后 9 天 1000 g + 1 kg 算成日均 900 kg,「大约够几天」、提醒线、建议批数、取出默认数全错两周
 const prepDailyUse = (item, today) => {
   if (!_prepIsObj(item) || !Array.isArray(item.moves)) return 0;
   const d = _prepDateRe.test(String(today || "")) ? today : localDateStr();
   const from = plusDaysStr(d, -13);
+  const def = item.kind === "component" ? "g" : "个", kept = [];
+  let u = item.unit, chg = "", floor = "";
+  for (let i = item.moves.length - 1; i >= 0; i--) {   // 从后往前走:u = 这条 move 记下时账上的单位,chg = 它之后最近那次换单位的盘点日期
+    const m = item.moves[i];
+    if (!_prepIsObj(m)) continue;
+    if (m.type === "count" && Object.prototype.hasOwnProperty.call(m, "unitBefore")) { u = m.unitBefore === null ? undefined : m.unitBefore; chg = String(m.date || ""); continue; }
+    if (m.type !== "take" || m.restoredBy || !_prepDateRe.test(String(m.date || "")) || m.date > d) continue;
+    const q = u === item.unit ? _prepPos(m.qty) : prepConvUnit(_prepPos(m.qty), u, item.unit, def);
+    if (q === null) { if (chg > floor) floor = chg; continue; }
+    if (q > 0) kept.push([m.date, q]);
+  }
   let total = 0, earliest = d, any = false;
-  item.moves.forEach(m => {
-    if (!_prepIsObj(m) || m.type !== "take" || m.restoredBy || !_prepDateRe.test(String(m.date || "")) || m.date > d) return;
-    const q = _prepPos(m.qty);
-    if (!(q > 0)) return;
-    if (m.date < earliest) earliest = m.date;
-    if (m.date >= from) { total += q; any = true; }
+  kept.reverse().forEach(([dt, q]) => {   // 按原来的先后加(和以前逐字节一样的浮点和)
+    if (dt < floor) return;
+    if (dt < earliest) earliest = dt;
+    if (dt >= from) { total += q; any = true; }
   });
   if (!any) return 0;
   return total / Math.min(14, Math.max(1, _daysBetween(earliest, d) + 1));
