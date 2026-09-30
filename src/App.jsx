@@ -679,12 +679,16 @@ const withMergedPriceHistory = (local, file, merged, kind, now) => {
 };
 
 // 数据体检 H1(本店原料标币种)用:记录里没写币种、数值又和现价相同的项补上币种;别的不动。没有要改的 → null
+const _phCloserAsCNY = (v, p) => v > 0 && p > 0 && Math.abs(Math.log(v / p)) < Math.abs(Math.log(toCNY(v, "JPY") / p));
 function currencyFixedHistory(obj, cur) {
   if (!obj || !Array.isArray(obj.priceHistory)) return null;
   const now = { pricePerG: obj.pricePerG };   // 两边都没币种 → 同按日元比,只比数值
   let changed = false;
   const out = obj.priceHistory.map(e => {
-    if (!e || typeof e !== "object" || e.currency || !(parseFloat(e.pricePerG) > 0) || !samePrice(e, now)) return e;
+    if (!e || typeof e !== "object" || e.currency || !(parseFloat(e.pricePerG) > 0)) return e;
+    // 审查 b4r1:标人民币时,没写币种的旧价当人民币读比当日元读离现价更近(同一时期、币种一样没定的,如改价前那条 0.04 → 0.05)也补上;
+    // 当日元读更近的(东京时期的 2.5円)不动。标日元不用猜:没写币种本来就按日元算
+    if (!samePrice(e, now) && !(cur === "CNY" && _phCloserAsCNY(parseFloat(e.pricePerG), parseFloat(obj.pricePerG)))) return e;
     changed = true;
     return { ...e, currency: cur };
   });
