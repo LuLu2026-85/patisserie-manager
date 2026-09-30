@@ -489,6 +489,33 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
 5. 顺带修:删家族时组合产品的 `familyId` 也清掉(以前只清配方)。
 6. 测试:`.claude/scripts/data_health/data_health_tests.cjs`(236)、`r2_tests.cjs`、`r3_tests.cjs`,用 `--quiet 1 --root <项目根> --data <导出>` 跑。
 
+## 2026-09-29 第 3 批:开店四项(今日生产单 / 日结 / 过敏原和标签 / 员工模式)
+
+施工说明 `.claude/batch3/plan.md`,代码方案 `.claude/batch3/code_design.md`,法规调查 `.claude/batch3/regulations.json`(已核实的条文 + 出处)。
+**测试一键全跑:`bash .claude/scripts/batch3/regress.sh`**(编辑页 / 数据体检 / 第 3 批各套 + 审查 5 轮的回归 + 组合产品回归 + 语法 + 日结随机测试);日结另有随机测试
+`node .claude/scripts/batch3/fuzz/daily_close_fuzz.cjs`(2 万轮约 106 万项)。改这四块之前先跑一遍。
+
+1. **不加顶层新键**:旧版 app 打开 0.8 秒就会把不认识的顶层键删掉。这批的新数据都放在已有对象里:
+   `appSettings.prodPlan`(今天的生产单)、`appSettings.staffPin`、`salesLog` 条目的 `waste / wasteOut / closedAt`、
+   `materials` 的 `allergenCodes / mayContainCodes / allergenChecked / labelNameZh / labelIngredientsZh`、`printSettings.labelShopName / labelAddress / labelPhone`。
+   **每台设备自己的**:员工模式开关 localStorage `korora_staff_mode_v1`,厨房视图打勾 sessionStorage(key 带日期)。
+2. **共用纯函数(模块顶层,改了要跑测试)**:`computeMaterialNeeds`(采购页和生产单的汇总,生产模式按名字合并没关联的配料)、
+   `salesSpanOf` / `avgDailySales`(起算日只看卖出 > 0 的记录)、`restockSuggest` / `isLowStock`、`makeLogQty`(商品页和生产单「记入生产」同一写法)、
+   `productUnitCost`(口径同采购页;组合产品按「整个」算,商品页写明)、`applyDailyClose` / `undoDailyClose`、`allergenSummaryOf`、`draftIngredientList`。
+3. **日结 `applyDailyClose`**:填的是当天**总数**。当天卖出 + 报损合起来算「当时没扣到的短缺」:**改小先抵短缺再还库存,改大只从现在的库存扣多出来的**,
+   以前卖超没扣到的件数不从后来生产的库存里扣;先卖出后报损;同样的数再存一次不变;撤销按这次的增减反过来,保存后又被改过的商品不撤。
+   商品页删记录回滚 `stockOut + wasteOut`。**旧版 app 删带报损的记录只加回 stockOut**(库存偏少,不会凭空多)。
+4. **过敏原**:`ALLERGENS` 八大类名字**照 GB 7718-2025 4.12.1 原文**,另加自愿标示的芝麻、椰子。汇总时没关联 / 材料没核对 / 材料已删 / 单位不是克
+   都算「未确认」,**只要有未确认就绝不显示「无」**;配方上手写的 `allergens` 并排显示、不一致标出、不自动覆盖。配料表草稿按投料重量从多到少,组合产品每部分作复合配料。
+5. **标签**:模板和页面都带草稿提示(店内现做现卖国标不强制;自己装袋 / 礼盒算散装还是现制现售要问朝阳区市场监管;过敏原强制标示 2027-03-16 起)。
+   **不写「已合规」「符合国标」**。经营者信息存 `printSettings`,不进 IP 分发包。配料行打印前可以手改(只对这一次打印有效)。
+6. **员工模式**:App **不提前 return**(hook 顺序、自动保存、跟组件库同步要继续跑),`{!staffMode && …}` 包住顶栏 / 底栏 / 抽屉 / 内容区,另渲染 `StaffShell`。
+   员工三页(生产单 / 厨房视图 / 日结只能今天和昨天)**单独写,别复用老板的详情组件**(会露价格)。退出输 4 位 PIN,忘了用 app 进入密码。
+   别的窗口进员工模式时,这个窗口有没存的改动先问、同时用不透明遮盖挡住老板界面(遮盖层在所有弹窗之上、PIN 框和确认框之下);
+   进员工模式时清掉 toast 队列(老板那边带价格的提示条不能留在员工界面)。厨房视图 `useWakeLock` 申请屏幕常亮,不支持时提示去 iPad 设置关自动锁定。
+7. **今日 tab**:`NAV` 第一个;手机在「更多」抽屉里。生产单存 `appSettings.prodPlan`(换日期显示为空,可「照那天的再来一份」),
+   「记入生产」只记没记过的部分、带撤销;「已记入 N」以当天真实的生产记录为上限(商品页删了记录,生产单跟着回来);「清除全部数据」连 prodPlan 一起清;打印模板不出现任何价格,配料备注里带价格的那段去掉。
+
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
