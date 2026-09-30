@@ -19186,8 +19186,15 @@ const stripPrivatePrepFields = (o) => {
   return rest;
 };
 // 商品记入生产扣不扣备货(09-30 LuLu 追加拍板):true = 不扣(装的是已经烤好的)。
-// p.prepSkip === true / false 显式说了算;没有这个键 → 组成只有一项、每件含 1 个 = 扣(false),其余(礼盒、几样组合、N 个装)= 不扣(true)。B 线(第 0 步:false)
-const productPrepSkips = (p) => false;
+// p.prepSkip === true / false 显式说了算;没有这个键 → 组成只有一项、每件含 1 个 = 扣(false),其余(礼盒、几样组合、N 个装)= 不扣(true)。B 线
+// (没有组成的商品也算「不扣」:本来就没东西可扣。商品编辑页显示的生效值就是它;和缺省一样时不写键)
+const productPrepSkips = (p) => {
+  if (!p) return false;
+  if (p.prepSkip === true) return true;
+  if (p.prepSkip === false) return false;
+  const items = Array.isArray(p.items) ? p.items : [];
+  return !(items.length === 1 && (parseFloat(items[0] && items[0].qty) || 1) === 1);
+};
 // 生产单一行的身份(判重 / 撤销放回用):种类 + id;配方行 stage === "make"(做一批存着)另算一样。没有 stage 的行和以前的判重一模一样
 const prodLineKey = (l) => l.kind + "\u0000" + String(l.id) + (l.kind === "recipe" && l.stage === "make" ? "\u0000make" : "");
 // 文字表。每条线只往自己那段加键,{} 插值写成函数,数字走 fmtQty,日期写 M/D。**任何一条都不许出现钱**(¥ 円 价格 成本 毛利 利润 售价 原価 粗利 利益 売価)
@@ -19225,8 +19232,20 @@ const prepTxt = (lang) => PREP_TXT[lang === "ja" ? "ja" : "zh"];
 //   weigh    今天要称的:关联了的按材料 + 单位、没关联的按名字 + 单位汇总,克 / 毫升一类(isGramUnit)
 //   nonGram  按 本 / 個 这类单位的,单列(不能和克加在一起)
 //   fromStock 组件标了备货的部分:只写「从库存取 X」,不展开原料
-// 备货库存(prepstock)第 0 步:lines[] 可带 stage("make" = 做一批存着)、opts 可带 prepFlow: true(生产单记入 / 提醒)/ onHand: Map(采购页,
-// prepOnHandMap 的结果)—— 现在都先忽略,B 线按 plan.md「数据 §7」接上。没有任何标记、不传这些时两种模式的输出逐字节不变
+// 备货库存(prepstock,plan.md「数据 §7」,B 线):
+//   lines[] 可带 stage("make" = 配方行「做一批存着」;只对配方行有意义)。
+//   生产模式:标了备货的配方在「取出」时(商品组成项,或 stage 不是 "make" 的配方行)不展开原料,进 fromFrozen(key = 配方 id);
+//     商品组成项是标了备货的组件 → 进 fromStock(和组合产品备货部分 / 「来自组件」备货行同一个 key,会合成一行);
+//     商品按组成判断「装的是已经烤好的」(productPrepSkips)时,它组成里的备货配方 / 组件进 packed,不展开、不进 fromFrozen / fromStock;
+//     配方行 stage: "make"、直接加的组件行:照旧展开去称。fromFrozen / packed 只在非空时加键。
+//   opts.prepFlow(只配合生产模式):同一个地方另外记 out.prepFlow = { takes: [{ key, kind, id, qty(这一样自己的单位), srcs }],
+//     untaken: [{ key, name, reason: "noUsed" | "unit" | "local", src }] } —— 这几行会从备货账本扣什么。组合产品的部分只有跟组件库走(layerLinkState
+//     === "follow")才扣;本产品专用 / 和组件库不一样 → untaken "local"。装烤好的商品整行不扣。
+//   opts.onHand(采购模式,prepOnHandMap 的结果,非空才生效):已开始记的备货(商品挂的备货配方 / 组件、组合产品里跟组件库走的备货部分、
+//     「来自组件」指向的备货组件)第一遍不展开、只累加要用多少;第二遍每样 deficit = 要用 + 提醒线 − 能用,> 0 才按整批展开原料;
+//     输出 out.prepPlan。换不了单位 / 没填用量 / 没有产出量 / 本产品专用的部分照旧走老路。
+//     已知限制:备货东西自己的配料里又用到另一个备货组件时,第二遍把它当普通原料展开,不扣第二层的库存。
+//   没有任何标记、不传这些时两种模式的输出逐字节不变
 const _prodUnitOf = (unit) => {
   const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
   if (isGramUnit(u)) return /^(?:ml|毫升)$/i.test(u) ? "ml" : "g";
@@ -19255,6 +19274,44 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   // 生产模式的累加
   const weigh = new Map();
   const fromStock = new Map(); // 审查 r4:同一个备货组件(同单位)合成一行 —— 以前每个部分 / 每行生产单各一行,热带水果 3 层 × 2 行出 6 行一样的名字
+  // ── 备货(B 线)──
+  const flowOn = prodMode && !!(opts && opts.prepFlow);
+  const onHand = !prodMode && opts && opts.onHand instanceof Map && opts.onHand.size > 0 ? opts.onHand : null;
+  const fromFrozen = new Map();   // 配方 id → { key, id, name, store, unit, qty, srcs }
+  const packed = new Map();       // prepKey → { key, kind, id, name, unit, qty, srcs }
+  const flowTakes = new Map();    // prepKey → { key, kind, id, qty, srcs }
+  const flowUntaken = [];
+  const prepNeed = new Map();     // 采购:prepKey → { key, kind, id, target, e, need, srcs }
+  let curSkip = false;            // 正在走的商品是「装烤好的」(productPrepSkips):组成里的备货进 packed,整行不扣
+  let divertOn = !!onHand;        // 采购第一遍:已开始记的备货只累加要用多少;第二遍关掉(第二层照原料展开)
+  let _mids = null;
+  const matIdSet = () => _mids || (_mids = new Set((materials || []).map(m => m && m.id)));
+  const takeAdd = (kind, id, qty, src) => {
+    if (!flowOn || curSkip) return;
+    const key = prepKeyOf(kind, id);
+    if (!flowTakes.has(key)) flowTakes.set(key, { key, kind, id, qty: 0, srcs: new Set() });
+    const t = flowTakes.get(key);
+    t.qty += qty;
+    if (src) t.srcs.add(src);
+  };
+  const untake = (kind, id, name, reason, src) => {
+    if (!flowOn || curSkip) return;
+    flowUntaken.push({ key: prepKeyOf(kind, id), name: name || "", reason, src: src || "" });
+  };
+  // 采购第一遍:这一样(已开始记、有产出量)要用 qty(从 fromUnit 换成账上的单位,def = 空单位的缺省);换不了 → false(调用方走老路)
+  const needAdd = (kind, target, qty, fromUnit, def, src) => {
+    if (!divertOn || !isPrepMarked(target)) return false;
+    const key = prepKeyOf(kind, target.id);
+    const e = onHand.get(key);
+    if (!e || !(parseFloat(e.batch) > 0)) return false;
+    const q = prepConvUnit(qty, fromUnit, e.unit, def);
+    if (q === null || !isFinite(q)) return false;
+    if (!prepNeed.has(key)) prepNeed.set(key, { key, kind, id: target.id, target, e, need: 0, srcs: new Set() });
+    const n = prepNeed.get(key);
+    n.need += q;
+    if (src) n.srcs.add(src);
+    return true;
+  };
   const addWeigh = (ing, qty, src) => {
     const unit = _prodUnitOf(ing.unit);
     const mat = ing.materialId ? (materials || []).find(m => m && m.id === ing.materialId) : null;
@@ -19294,9 +19351,16 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       if (f.parts.size > 1) f.name = f.compName;
       f.qty = (f.qty || 0) + amount;
       if (src) f.srcs.add(src);
+      // 备货:这一行会从组件的备货扣多少(换成组件自己的单位;换不了 → 不扣)
+      if (flowOn) {
+        const cq = prepConvUnit(amount, unit, _normTxt(comp.unit) || "g", "g");
+        if (cq === null) untake("component", comp.id, nm || compNm, "unit", src); else takeAdd("component", comp.id, cq, src);
+      }
       return true;
     }
     if (path.has(comp.id) || path.size >= 8) return fallback("compCycle");
+    // 备货(采购第一遍):指向已开始记的备货组件 → 只累加要用多少,第二遍按整批算
+    if (onHand && needAdd("component", comp, amount, ing.unit || "g", "g", src)) return true;
     const y = parseFloat(comp.yield);
     if (!(y > 0)) return fallback("compNoYield");
     const fr = ingWeightFactor(ing.unit), fc = ingWeightFactor(comp.unit);
@@ -19328,7 +19392,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     (obj.layers || []).forEach(l => collect(l, multiplier, src, path));
   };
   // count = 要做几个(配方 / 组件按它们自己的单位,组合产品按个 / 台)
-  const addTarget = (linkedType, target, count, src) => {
+  const addTarget = (linkedType, target, count, src, role, stage, outer) => {
     if (linkedType === "creation") {
       // v17.8: 组合产品要做 count 个,和整体配方同一套算法(creationBatch):每部分按「用量 ÷ 组件产出量」折。
       // 以前是「每部分整批 × 个数」,圣多诺黑做 12 个会算出 12 批千层。备货的部分也算(原料一样要买);没填用量的部分算不出,跳过
@@ -19348,8 +19412,20 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
           if (p.needed === null) f.missing += 1; else f.qty = (f.qty || 0) + p.needed;
           if (p.noUsed) f.noUsed = true;
           if (src) f.srcs.add(src);
+          // 备货:只有跟组件库走的部分才从组件的备货扣(本产品专用 / 和组件库不一样的,内容不是那份备货);没填用量 / 单位换不了 → 不扣
+          if (flowOn && p.comp) {
+            if (layerLinkState(p.layer, components, matIdSet()) !== "follow") untake("component", p.comp.id, nm, "local", src);
+            else if (p.needed === null) untake("component", p.comp.id, nm, "noUsed", src);
+            else {
+              const cq = prepConvUnit(p.needed, unit, _normTxt(p.comp.unit) || "g", "g");
+              if (cq === null) untake("component", p.comp.id, nm, "unit", src); else takeAdd("component", p.comp.id, cq, src);
+            }
+          }
           return;
         }
+        // 备货(采购第一遍):跟组件库走、填了用量的备货部分,组件已开始记 → 只累加要用多少
+        if (onHand && p.stock && p.comp && p.needed !== null && layerLinkState(p.layer, components, matIdSet()) === "follow"
+          && needAdd("component", p.comp, p.needed, p.layer.unit || "g", "g", src)) return;
         if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
         p.ings.forEach(({ ing, qty }) => {
           if (compIng(ing, qty, src, _hasCompId({ componentId: p.layer.sourceComponentId }) ? new Set([p.layer.sourceComponentId]) : new Set())) return;   // 第 4 批 B4-6:来自组件的行
@@ -19360,6 +19436,46 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
         });
       });
       return;
+    }
+    // 备货(B 线):role = "item"(商品组成项)/ "line"(生产单直接加的行,stage 是那一行的);outer = 商品名(组成项才有)
+    if (isPrepMarked(target) && (linkedType === "recipe" || linkedType === "component")) {
+      const isItem = role === "item";
+      if (prodMode && (isItem || (linkedType === "recipe" && stage !== "make"))) {
+        const cfg = prepCfgOf(linkedType, target);
+        const nm = mLabel(target) || target.nameFr || "";
+        const s2 = (isItem ? outer : src) || "";
+        if (isItem && curSkip) {
+          // 装的是已经烤好的:不展开、不扣
+          const key = cfg.key;
+          if (!packed.has(key)) packed.set(key, { key, kind: linkedType, id: target.id, name: nm, unit: cfg.unit, qty: 0, srcs: new Set() });
+          const pk = packed.get(key);
+          pk.qty += count;
+          if (s2) pk.srcs.add(s2);
+          return;
+        }
+        if (linkedType === "recipe") {
+          // 取出烤:从冷冻 / 冷藏取 count 个,不列配料
+          const k = String(target.id);
+          if (!fromFrozen.has(k)) fromFrozen.set(k, { key: cfg.key, id: target.id, name: nm, store: cfg.store, unit: cfg.unit, qty: 0, srcs: new Set() });
+          const f = fromFrozen.get(k);
+          f.qty += count;
+          if (s2) f.srcs.add(s2);
+        } else {
+          // 商品直接挂的备货组件:「从库存取」,和组合产品备货部分同一个 key
+          const unit = target.unit || "g";
+          const k = target.id + "\u0000" + _prodUnitOf(unit);
+          if (!fromStock.has(k)) fromStock.set(k, { name: nm, compName: nm, parts: new Set(), unit, qty: null, missing: 0, srcs: new Set(), noUsed: false });
+          const f = fromStock.get(k);
+          f.parts.add(nm);
+          if (f.parts.size > 1) f.name = f.compName;
+          f.qty = (f.qty || 0) + count;
+          if (s2) f.srcs.add(s2);
+        }
+        takeAdd(linkedType, target.id, count, s2);
+        return;
+      }
+      // 采购第一遍:商品挂的已开始记的备货配方 / 组件 → 只累加要用多少(直接加的行照旧展开)
+      if (onHand && isItem && needAdd(linkedType, target, count, _normTxt(target.unit), linkedType === "component" ? "g" : "个", outer)) return;
     }
     // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 count 个单位 → multiplier = count / yield
     const mult = count / Math.max(1, parseFloat(target.yield) || 1);
@@ -19375,21 +19491,38 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     if (line.kind !== "product") {
       const target = line.obj || findTarget(line.kind, line.id);
       if (!target) { skip("missingDirect", prodLineGoneName(line, lang)); return; }
-      addTarget(line.kind, target, planQty, mLabel(target) || target.nameFr || "");
+      addTarget(line.kind, target, planQty, mLabel(target) || target.nameFr || "", "line", line.stage);
       return;
     }
     const p = line.obj || (products || []).find(x => x.id === line.id);
     if (!p) { skip("missingDirect", prodLineGoneName(line, lang)); return; }
     if ((p.items || []).length === 0) skip("noItems", mLabel(p));
+    curSkip = prodMode && productPrepSkips(p);   // 采购模式不看它(装盒的饼干终归是面团烤出来的,原料照算)
+    const outer = mLabel(p) || p.nameFr || "";
     (p.items || []).forEach(it => {
       // [B6 修复] 支持 component(组件)
       const target = findTarget(it.linkedType, it.linkedId);
       if (!target) { skip("missing", mLabel(p)); return; }
       const src = mLabel(target) || target.nameFr || "";
       const unit = parseFloat(it.qty) || 1;
-      addTarget(it.linkedType, target, planQty * unit, src);
+      addTarget(it.linkedType, target, planQty * unit, src, "item", undefined, outer);
     });
+    curSkip = false;
   });
+  // 备货(采购第二遍):每样 deficit = 要用 + 提醒线 − 手上能用的,> 0 才按整批(k × 产出量)展开原料;第二层不再扣(divertOn 关掉)
+  const prepPlan = [];
+  if (onHand) {
+    divertOn = false;
+    prepNeed.forEach(n => {
+      const e = n.e, batch = parseFloat(e.batch);
+      const need = _r3(n.need), usable = _r3(parseFloat(e.usable) || 0), min = _r3(parseFloat(e.min) || 0);
+      const deficit = _r3(need + min - usable);
+      const batches = deficit > 0 ? Math.max(1, Math.ceil(deficit / batch - 1e-9)) : 0;
+      const name = mLabel(n.target) || n.target.nameFr || e.name || "";
+      if (batches > 0) addTarget(n.kind, n.target, batches * batch, name, "plan");
+      prepPlan.push({ key: n.key, kind: n.kind, id: n.id, name, unit: e.unit, need, usable, min, batches, qty: _r3(batches * batch), srcs: [...n.srcs] });
+    });
+  }
   const out = { grams, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })) };
   if (prodMode) {
     // 审查 r3:没关联百科的行并进同名(同单位)且只有一个的关联行 —— 以前「粉糖 1,978 g」「粉糖 1,800 g」分两行、按量排开,员工拿了一行就以为够了
@@ -19402,7 +19535,12 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     out.weigh = all.filter(w => w.gram);
     out.nonGram = all.filter(w => !w.gram);
     out.fromStock = [...fromStock.values()].map(({ parts, compName, ...f }) => ({ ...f, srcs: [...f.srcs] }));
+    // 备货:新键只在有内容时加(没有标记时输出对象和以前逐字节一样)
+    if (fromFrozen.size) out.fromFrozen = [...fromFrozen.values()].map(f => ({ ...f, srcs: [...f.srcs] }));
+    if (packed.size) out.packed = [...packed.values()].map(f => ({ ...f, srcs: [...f.srcs] }));
+    if (flowOn) out.prepFlow = { takes: [...flowTakes.values()].map(t => ({ ...t, srcs: [...t.srcs] })), untaken: flowUntaken };
   }
+  if (onHand) out.prepPlan = prepPlan;
   return out;
 };
 
@@ -19461,9 +19599,24 @@ const _prodIngRows = (ings, scale) => (ings || []).filter(i => i && (_normTxt(i.
 const _prodBadRows = (rows) => rows.filter(r => !(r.qty !== null && r.qty > 0));
 // 一个要做的东西(配方 / 组件 / 组合产品)做 need 个。配方 / 组件按「need ÷ max(1, 产出量)」缩放 —— 和采购页 / computeMaterialNeeds 同一个倍数;
 // 组合产品走 creationBatch(用量 × 个数 ÷ 制作个数,备货的部分只写从库存取)。模具 / 炉温 / 时间:配方自己没写就用家族通用参数(fam 标出来)
-// 备货第 0 步:第 5 个参数 prep("take" 取出烤 / "make" 做一批 / "packed" 装烤好的 / undefined)先忽略,B 线接上;prodBlockOf 永远不读账本
+// 备货(B 线):第 5 个参数 prep —— "take" 取出烤(标了备货的配方,或商品直接挂的备货组件):不列配料,只带 unit / store / 取出后说明 / 模具炉温时间;
+//   "make" 做一批:原块多一个 prep: "make";"packed" 装烤好的(商品按组成判断不扣):只带 unit / store;undefined / 组合产品:和以前一样。
+//   prodBlockOf 永远不读账本(现有多少由页面另算)
 const prodBlockOf = (type, target, need, ctx, prep) => {
   if (!target) return { type, missing: true, need };
+  if (type !== "creation" && (prep === "take" || prep === "packed")) {
+    const cfg = prepCfgOf(type, target) || prepCfgOf(type, { ...target, prepMode: "stock" });
+    if (prep === "packed") return { type, target, need, prep, unit: cfg.unit, store: cfg.store };
+    const fam = type === "recipe" && target.familyId ? _prodFind(ctx.productFamilies, target.familyId) : null;
+    const pickP = (own, famv) => _normTxt(own) ? { v: _normTxt(own), fam: false } : (fam && _normTxt(famv) ? { v: _normTxt(famv), fam: true } : { v: "", fam: false });
+    return {
+      type, target, need, prep, unit: cfg.unit, store: cfg.store, thawZh: cfg.thawZh, thawJa: cfg.thawJa,
+      mold: pickP(target.mold, fam && fam.commonMold),
+      temp: type === "recipe" ? pickP(target.temp, fam && fam.commonTemp) : { v: "", fam: false },
+      time: type === "recipe" ? pickP(target.baketime, fam && fam.commonTime) : { v: "", fam: false },
+    };
+  }
+  if (type !== "creation" && prep === "make") return { ...prodBlockOf(type, target, need, ctx), prep };
   if (type === "creation") {
     const batch = creationBatch(target, need, ctx.components || [], ctx.materials || [], ctx.brands || []);
     const bad = [];
@@ -19491,11 +19644,15 @@ const buildProdSheet = (lines, ctx) => (lines || []).map(line => {
     if (!p) return { line, qty, missing: true, blocks: [] };
     const base = { line, qty, obj: p, leadTimeDays: parseFloat(p.leadTimeDays) || 0, noItems: (p.items || []).length === 0 };
     if (!(qty > 0)) return { ...base, zero: true, blocks: [] };
+    // 备货(B 线):组成项是标了备货的配方 / 组件 → 取出块(商品按组成判断「装烤好的」时 → 装烤好的块);没标的和以前一样(不带 prep)
+    const skips = productPrepSkips(p);
     const blocks = (p.items || []).map(it => {
       const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
       const list = type === "creation" ? ctx.creations : type === "component" ? ctx.components : ctx.recipes;
       const per = parseFloat(it.qty) || 1;
-      return { ...prodBlockOf(type, _prodFind(list, it.linkedId), qty * per, ctx), per };
+      const target = _prodFind(list, it.linkedId);
+      const prep = type !== "creation" && isPrepMarked(target) ? (skips ? "packed" : "take") : undefined;
+      return { ...(prep ? prodBlockOf(type, target, qty * per, ctx, prep) : prodBlockOf(type, target, qty * per, ctx)), per };
     });
     return { ...base, blocks };
   }
@@ -19503,26 +19660,215 @@ const buildProdSheet = (lines, ctx) => (lines || []).map(line => {
   const target = _prodFind(list, line.id);
   if (!target) return { line, qty, missing: true, blocks: [] };
   if (!(qty > 0)) return { line, qty, obj: target, zero: true, blocks: [] };
+  // 备货(B 线):标了备货的配方行 —— stage: "make" = 做一批块,其余 = 取出块。组件行一律是做一批,块上**不**带 prep
+  // (第 0 步起 prep_step0_tests 要求 croquant 标了备货时的组件行块和以前逐字节一样;要认「做一批」用 prepMakeOf / prepLineInfo 的 mode)
+  if (line.kind === "recipe" && isPrepMarked(target)) return { line, qty, obj: target, blocks: [prodBlockOf("recipe", target, qty, ctx, line.stage === "make" ? "make" : "take")] };
   return { line, qty, obj: target, blocks: [prodBlockOf(line.kind, target, qty, ctx)] };
 });
-// 今天总共要称多少(computeMaterialNeeds 的生产模式)
-const prodSheetTotals = (sheet, ctx) => computeMaterialNeeds(
-  (sheet || []).map(s => ({ kind: s.line.kind, id: s.line.id, qty: s.qty, obj: s.obj, ..._prodLineNames(s.line) })), ctx, { production: true });
+// 今天总共要称多少(computeMaterialNeeds 的生产模式)。行上有 stage 时带过去(只对配方行有意义);
+// 备货(B 线):第 3 个参数 opts 可选,{ prepFlow: true } 时结果多 prepFlow(整张单子按数量算会扣什么;记入 / 提醒按「还没记的」算请用 prepFlowOfSheetRow)
+const prodSheetTotals = (sheet, ctx, opts) => computeMaterialNeeds(
+  (sheet || []).map(s => ({ kind: s.line.kind, id: s.line.id, qty: s.qty, obj: s.obj, ..._prodLineNames(s.line), ...(s.line.stage ? { stage: s.line.stage } : {}) })), ctx,
+  opts && opts.prepFlow ? { production: true, prepFlow: true } : { production: true });
 
 // ─── BEGIN prepstock sheet helpers ───
-// 生产单 / 采购页和备货账本之间的计算(B 线,plan.md「顺序和分工 → 第 1 段 B」)。签名不许改。第 0 步都先返回中性值。
+// 生产单 / 采购页和备货账本之间的计算(B 线,plan.md「顺序和分工 → 第 1 段 B」)。签名不许改。
 // 这一段可以调 computeMaterialNeeds / buildProdSheet / creationBatch / layerLinkState,读账本只通过传进来的 stock(prepStockRead 的结果),不许有 React / setState / localStorage
-// 这一行(line)还没记入的 add 份会从账本扣什么:{ takes: [{ key, kind, id, qty, srcs }], untaken: [{ key, name, reason: "noUsed" | "unit" | "local" }] }。
-// 实现 = computeMaterialNeeds([{ ...line, qty: add }], ctx, { production: true, prepFlow: true }).prepFlow;add ≤ 0 不调(直接返回空)
-const prepFlowOfSheetRow = (line, add, ctx) => ({ takes: [], untaken: [] });
-// 这一行(配方 stage "make" / 组件行,标了备货)会做出什么:{ key, kind, id, unit, qty } | null
-const prepMakeOf = (line, target) => null;
-// 整张单子每行还没记入的那部分要取 / 会做多少:Map key → { cfg, need, incoming, srcs }
-const prepPendingOf = (sheet, ctx, stock, productionLog, today) => new Map();
-// 生产单一行(buildProdSheet 的 s)的备货信息,给 ProdLineCard 的 prep prop:{ mode: "product" | "make" | "take" | null, pending, logged, … } | null(和备货无关 = null)
-const prepLineInfo = (s, ctx, stock, today, productionLog) => null;
-// 采购页:这次计划里数量 > 0 的商品,组成里真用得到 onHand 里某一样 → true(才出「按手上的备货算」勾选)
-const prepReachable = (products, plan, ctx, onHand) => false;
+// (_prepInfoCache 只是按参数引用做的记忆化:同一次渲染里提醒 / 每张卡 / 两行扣同一样共用一份,结果和不缓存一样)
+// 这一行(line)还没记入的 add 份会从账本扣什么:{ takes: [{ key, kind, id, qty, srcs }], untaken: [{ key, name, reason: "noUsed" | "unit" | "local", src }] }。
+// 实现 = computeMaterialNeeds([{ ...line, qty: add }], ctx, { production: true, prepFlow: true }).prepFlow;add ≤ 0 不调(直接返回空 ——
+// creationBatch(c, 0) 会按一整批算)。**以后新写扣备货的地方一律走它**,别自己拼
+const prepFlowOfSheetRow = (line, add, ctx) => {
+  const a = parseFloat(add);
+  if (!line || !(a > 0) || !isFinite(a)) return { takes: [], untaken: [] };
+  const r = computeMaterialNeeds([{ ...line, qty: a }], ctx || {}, { production: true, prepFlow: true });
+  return r.prepFlow || { takes: [], untaken: [] };
+};
+// 这一行(配方 stage "make" / 组件行,标了备货)会做出什么:{ key, kind, id, unit, qty(= 行数量), cfg, noYield } | null
+// noYield = 没填产出量:这时行数量其实是「几批」,不能当个数写进账本(生产单按钮灰掉)
+const prepMakeOf = (line, target) => {
+  if (!line || !target) return null;
+  const kind = line.kind;
+  if (!(kind === "component" || (kind === "recipe" && line.stage === "make"))) return null;
+  const cfg = prepCfgOf(kind, target);
+  if (!cfg) return null;
+  const q = parseFloat(line.qty);
+  return { key: cfg.key, kind, id: target.id, unit: cfg.unit, qty: q > 0 ? q : 0, cfg, noYield: cfg.batch === null };
+};
+const _prepNum = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+const _prepLotIdsOf = (m) => Array.isArray(m.newLots) ? m.newLots : (m.lotId ? [m.lotId] : []);
+// 做一批行「已记入」的封顶(裁决 #11):今天挂这一行 uid、新批次还在账本里的 make move 的 planQty 合计(没写 planQty = 不封顶,安全方向);
+// actual = 这些新批的 made 合计(「✓ 已记入 · 实际 390 個」)
+const _prepMakeCap = (item, uid, today) => {
+  if (!item) return { cap: 0, actual: 0 };
+  const lots = new Map((item.lots || []).map(l => [l.id, l]));
+  let cap = 0, actual = 0;
+  (item.moves || []).forEach(m => {
+    if (!m || m.type !== "make" || m.date !== today || !uid || m.uid !== uid) return;
+    const alive = _prepLotIdsOf(m).filter(id => lots.has(id));
+    if (!alive.length) return;
+    const pq = parseFloat(m.planQty);
+    cap += isFinite(pq) ? pq : Infinity;
+    alive.forEach(id => { actual += _prepNum(lots.get(id).made); });
+  });
+  return { cap, actual: _r3(actual) };
+};
+// 取出行 / 组合产品行 / 用到备货组件的行「已记入」的封顶:今天挂这个 uid 的 take move,按 op 去重后的 planQty 合计(跨所有东西;没写 planQty = 不封顶)
+const _prepTakeCap = (stock, uid, today) => {
+  const ops = new Map();
+  Object.keys(stock.items).forEach(k => (((stock.items[k] || {}).moves) || []).forEach(m => {
+    if (!m || m.type !== "take" || m.date !== today || !uid || m.uid !== uid) return;
+    const op = m.op || m.id;
+    if (ops.has(op)) return;
+    const pq = parseFloat(m.planQty);
+    ops.set(op, isFinite(pq) ? pq : Infinity);
+  }));
+  let cap = 0;
+  ops.forEach(v => { cap += v; });
+  return cap;
+};
+const _prepEmptyStock = { v: PREP_V, items: {}, readOnly: false };
+const _prepInfoCache = new WeakMap();
+// 一行的备货信息(不含「两行扣同一样」)。flow 按这一行还没记的 pending 算(pending ≤ 0 = 空)
+const _prepLineBase = (s, ctx, stock, today, productionLog) => {
+  if (!s || typeof s !== "object" || !s.line || s.missing || !s.obj) return null;
+  const hit = _prepInfoCache.get(s);
+  if (hit && hit.ctx === ctx && hit.stock === stock && hit.today === today && hit.log === productionLog) return hit.val;
+  const val = _prepLineCalc(s, ctx || {}, stock && stock.items ? stock : _prepEmptyStock, today, productionLog);
+  _prepInfoCache.set(s, { ctx, stock, today, log: productionLog, val });
+  return val;
+};
+const _prepLineCalc = (s, ctx, st, today, productionLog) => {
+  const l = s.line, kind = l.kind, obj = s.obj;
+  const qty = parseFloat(s.qty) || 0;
+  const lineObj = { ...l, obj };
+  const lg = _prepNum(l.logged);
+  const isTracked = (key) => !!st.items[key];
+  const flowOf = (add) => {
+    const f = prepFlowOfSheetRow(lineObj, add, ctx);
+    return { takes: f.takes.map(t => ({ ...t, tracked: isTracked(t.key) })), untaken: f.untaken };
+  };
+  const readOnly = !!st.readOnly;
+  const pend = (logged) => Math.max(0, _r3(qty - logged));
+  const takesToday = (key) => ((st.items[key] || {}).moves || []).filter(m => m && m.type === "take" && m.date === today);
+  if (kind === "product") {
+    const full = prepFlowOfSheetRow(lineObj, qty > 0 ? qty : 1, ctx);
+    if (!full.takes.length && !full.untaken.length) return null;   // 组成里没有备货 / 装烤好的:和备货无关
+    // 同 ProdLineCard:以今天真实的生产记录封顶
+    const todayLogged = (productionLog || []).filter(x => x && String(x.productId) === String(l.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0);
+    const logged = Math.min(lg, todayLogged);
+    const pending = pend(logged);
+    const flow = flowOf(pending);
+    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(t => isTracked(t.key)), flow, readOnly, blocked: readOnly ? "readOnly" : null };
+  }
+  const cfg = (kind === "recipe" || kind === "component") ? prepCfgOf(kind, obj) : null;
+  if (cfg) {
+    const item = st.items[cfg.key] || null;
+    const unitMismatch = !!item && !prepSameUnit(item, cfg);
+    const noYield = cfg.batch === null;
+    if (kind === "component" || l.stage === "make") {
+      // 做一批存着:记入 = 账本加一批
+      const { cap, actual } = _prepMakeCap(item, l.uid, today);
+      const logged = Math.min(lg, cap);
+      const pending = pend(logged);
+      const moves = item ? (item.moves || []) : [];
+      const todayMade = _r3(moves.filter(m => m && m.type === "make" && m.date === today).reduce((a, m) => a + _prepNum(m.qty), 0));
+      const shortToday = _r3(takesToday(cfg.key).filter(m => _prepNum(m.short) > 0 && !m.settledBy && !m.restoredBy).reduce((a, m) => a + _prepNum(m.short), 0));
+      const mk = prepMakeOf(l, obj);
+      return { mode: "make", sub: null, key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
+        todayMade, shortToday, make: mk ? { ...mk, qty: pending } : null, flow: flowOf(pending), readOnly,
+        blocked: readOnly ? "readOnly" : noYield ? "noYield" : unitMismatch ? "unit" : null };
+    }
+    // 取出烤(标了备货的配方行,没写 stage):还没开始记 → mode null(没有按钮,块上写「还没登记」)
+    const cap = _prepTakeCap(st, l.uid, today);
+    const logged = Math.min(lg, cap);
+    const pending = pend(logged);
+    const tk = takesToday(cfg.key);
+    const actual = _r3(tk.filter(m => m.uid === l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
+    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
+    // 这个配方挂在哪些商品上(卡片灰字「要同时加商品库存,请用『从商品加』」;linkedType 缺省也算 recipe,同 13a 的判定)
+    const onProducts = (ctx.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(obj.id)))
+      .map(p => ({ id: p.id, name: prodName(p, ctx.lang) }));
+    return { mode: item ? "take" : null, sub: "bake", key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
+      takenElsewhere, onProducts, flow: flowOf(pending), readOnly, blocked: !item ? null : readOnly ? "readOnly" : unitMismatch ? "unit" : null };
+  }
+  // 组合产品行 / 没标备货但用到备货组件(「来自组件」)的配方 / 组件行:记入 = 只从账本扣
+  const full = prepFlowOfSheetRow(lineObj, qty > 0 ? qty : 1, ctx);
+  if (!full.takes.length && !full.untaken.length) return null;
+  const cap = _prepTakeCap(st, l.uid, today);
+  const logged = Math.min(lg, cap);
+  const pending = pend(logged);
+  const tracked = full.takes.some(t => isTracked(t.key));
+  return { mode: tracked ? "take" : null, sub: "use", qty, logged, pending, tracked, flow: flowOf(pending), readOnly, blocked: tracked && readOnly ? "readOnly" : null };
+};
+// 整张单子每行还没记入的那部分要取 / 会做多少:Map key → { cfg, need, incoming, srcs }(标了备货的都列,开始记没有由 prepAlertsOf 自己筛)。
+// 商品行按 qty − min(logged, 今天生产记录),其他行按 qty − 封顶后的 logged(同 prepLineInfo);做一批行没填产出量 / 单位对不上的不算 incoming
+const prepPendingOf = (sheet, ctx, stock, productionLog, today) => {
+  const out = new Map();
+  const c = ctx || {};
+  const ensure = (kind, id) => {
+    const key = prepKeyOf(kind, id);
+    if (out.has(key)) return out.get(key);
+    const cfg = prepCfgOf(kind, _prodFind(kind === "component" ? c.components : c.recipes, id));
+    if (!cfg) return null;
+    const e = { cfg, need: 0, incoming: 0, srcs: [] };
+    out.set(key, e);
+    return e;
+  };
+  (sheet || []).forEach(s => {
+    const info = _prepLineBase(s, ctx, stock, today, productionLog);
+    if (!info) return;
+    info.flow.takes.forEach(t => {
+      const e = ensure(t.kind, t.id);
+      if (!e) return;
+      e.need = _r3(e.need + t.qty);
+      (t.srcs || []).forEach(x => { if (x && !e.srcs.includes(x)) e.srcs.push(x); });
+    });
+    if (info.mode === "make" && info.pending > 0 && !info.noYield && !info.unitMismatch) {
+      const e = ensure(info.cfg.kind, info.cfg.id);
+      if (e) e.incoming = _r3(e.incoming + info.pending);
+    }
+  });
+  return out;
+};
+// 生产单一行(buildProdSheet 的 s)的备货信息,给 ProdLineCard 的 prep prop;和备货无关 = null。
+// { mode: "product" | "make" | "take" | null, sub: null | "bake"(标了备货的配方取出行)| "use"(组合产品行 / 用到备货组件的行),
+//   qty, logged(封顶后,裁决 #11), pending(= qty − logged,≥ 0;记入的 add 就是它), flow(按 pending 算的 prepFlowOfSheetRow,takes 各带 tracked),
+//   tracked, readOnly, blocked: null | "readOnly" | "noYield" | "unit",
+//   商品行另有 todayLogged;做一批行另有 key / cfg / actual(挂这一行的新批 made 合计)/ todayMade(今天这一样一共做了多少)/ shortToday(今天没结的取出短缺)/ make / unitMismatch / noYield;
+//   取出行另有 key / cfg / actual(挂这一行 uid 的 take qty 合计)/ takenElsewhere(今天别处取的)/ onProducts([{ id, name }] 挂着这个配方的商品)/ unitMismatch / noYield;
+//   dupes: [{ key, kind, id, name, uids }] 只在 ctx.sheet(整张单子 buildProdSheet 的结果)给了时算:今天单子上还没记完的别的行也会扣的、已开始记的东西 }
+// 标了备货但还没开始记的取出行 / 组合产品行:mode null(没有按钮)
+const prepLineInfo = (s, ctx, stock, today, productionLog) => {
+  const base = _prepLineBase(s, ctx, stock, today, productionLog);
+  if (!base || !ctx || !Array.isArray(ctx.sheet)) return base;
+  const mine = base.flow.takes.filter(t => t.tracked);
+  if (!mine.length) return { ...base, dupes: [] };
+  const dupes = [];
+  mine.forEach(t => {
+    const uids = [];
+    ctx.sheet.forEach(r => {
+      if (!r || r === s || !r.line || r.line.uid === s.line.uid) return;
+      const rb = _prepLineBase(r, ctx, stock, today, productionLog);
+      if (rb && rb.flow.takes.some(x => x.tracked && x.key === t.key)) uids.push(r.line.uid);
+    });
+    if (uids.length) {
+      const o = _prodFind(t.kind === "component" ? ctx.components : ctx.recipes, t.id);
+      dupes.push({ key: t.key, kind: t.kind, id: t.id, name: o ? prodName(o, ctx.lang) : String(t.id), uids });
+    }
+  });
+  return { ...base, dupes };
+};
+// 采购页:这次计划里数量 > 0 的商品,组成里真用得到 onHand 里某一样 → true(才出「按手上的备货算」勾选)。
+// plan = 采购页的 { productId: 数量 },或者现成的 lines 数组。判定和 computeMaterialNeeds 第一遍同一套(有 prepPlan 才算够得着)
+const prepReachable = (products, plan, ctx, onHand) => {
+  if (!(onHand instanceof Map) || onHand.size === 0) return false;
+  const lines = Array.isArray(plan) ? plan : (products || []).filter(Boolean).map(p => ({ kind: "product", id: p.id, qty: plan ? plan[p.id] : 0, obj: p }));
+  const L = lines.filter(l => l && parseFloat(l.qty) > 0);
+  if (!L.length) return false;
+  const r = computeMaterialNeeds(L, { ...(ctx || {}), products: (ctx && ctx.products) || products }, { onHand });
+  return Array.isArray(r.prepPlan) && r.prepPlan.length > 0;
+};
 // ─── END prepstock sheet helpers ───
 
 const PROD_TXT = {
