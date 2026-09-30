@@ -4806,6 +4806,158 @@ const _dhCountPack = /[個个本枚缶罐袋粒片箱入支张張盒瓶根颗顆
 // 每克价 → 每 100g 的数(两位小数,去尾零)
 const _dh100 = (p) => { const n = parseFloat(p); return (isFinite(n) && n > 0) ? String(Math.round(n * 100 * 100) / 100) : ""; };
 
+// ── 备货账本(冷冻面团 / 备货库存,F 线)的 H18 到 H23 ──
+// 返回 { main: [H18..H22], info: [H23] }。**没有标记也没有账本时两个都是空**(computeDataHealth 的结果和以前逐字节一样);
+// 有账本时 H18 到 H22 一直列出,只标了备货、没账本时每项只在有条目时出现(同 H17);账本是更新版本写的只出 H23。
+// 只读传进来的数据;条目里 raw 是账本里那一样的原对象(一键改认身份用),prepKey = 账本的 key
+const _dhPrepChecks = (d, A) => {
+  const recipes = A(d.recipes), components = A(d.components), creations = A(d.creations), materials = A(d.materials), brands = A(d.brands);
+  const products = A(d.products), productionLog = A(d.productionLog), productFamilies = A(d.productFamilies);
+  const appSettings = (d.appSettings && typeof d.appSettings === "object") ? d.appSettings : {};
+  const raw = appSettings.prepStock;
+  const main = [], info = [];
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+  const hasRaw = raw !== undefined && raw !== null;
+  if (!hasRaw && !recipes.some(isPrepMarked) && !components.some(isPrepMarked)) return { main, info };
+  const Z = prepTxt("zh"), J = prepTxt("ja");
+  // 有账本(已经在用备货)时 H18 到 H22 一直列出(没有就「✓ 没有」),一键改完最后一条时那一类不会整段消失、下面的内容不会顶上来;
+  // 只标了备货、还没账本时只在有条目时出现(croquant 标备货的老测试数据面板一字不差)
+  const push = (id, level, items) => { if (items.length || hasRaw) (level === "info" ? info : main).push({ id, audit: "prep", level, titleZh: Z.fH[id][0], titleJa: J.fH[id][0], whyZh: Z.fH[id][1], whyJa: J.fH[id][1], items }); };
+  const S = prepStockRead(raw);
+  if (S.readOnly) { info.push({ id: "H23", audit: "prep", level: "info", items: [], titleZh: Z.fH.H23[0], titleJa: J.fH.H23[0], whyZh: Z.fH.H23[1], whyJa: J.fH.H23[1] }); return { main, info }; }
+  const today = localDateStr();
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const nonNeg = (v) => typeof v === "number" && isFinite(v) && v >= 0;
+  const objOf = (kind, id) => (kind === "component" ? components : recipes).find(o => String(o.id) === String(id)) || null;
+  const itName = (it, lang) => isObj(it) ? (_normTxt(lang === "ja" ? it.nameJa : it.nameZh) || _normTxt(it.nameZh) || _normTxt(it.nameJa)) : "";
+  const nm = (o, it, key, lang) => _dhName(o, lang) || itName(it, lang) || key;
+  const where = (key, it) => {
+    const k = String(key);
+    const kind = isObj(it) && (it.kind === "recipe" || it.kind === "component") ? it.kind : (k.startsWith("component:") ? "component" : "recipe");
+    const id = isObj(it) && it.id !== undefined && it.id !== null ? it.id : k.slice(k.indexOf(":") + 1);
+    return { kind, id };
+  };
+  const holdOf = (it) => isObj(it) && Array.isArray(it.lots) ? _r3(it.lots.reduce((a, l) => a + (isObj(l) && nonNeg(l.left) && nonNeg(l.made) && dateRe.test(String(l.madeAt || "")) && l.left > 0 ? l.left : 0), 0)) : 0;
+  const rawItems = isObj(raw) && isObj(raw.items) ? raw.items : {};
+
+  // H18 账本里找不到的东西 / 账坏了
+  const h18 = [];
+  if (hasRaw && (!isObj(raw) || (raw.items !== undefined && !isObj(raw.items))))
+    h18.push({ key: "H18:ledger", kind: "prep", id: null, fix: null, labelZh: Z.fHd.ledger, labelJa: J.fHd.ledger, detailZh: Z.fHd.ledgerBroken, detailJa: J.fHd.ledgerBroken });
+  Object.keys(rawItems).forEach(key => {
+    const it = rawItems[key];
+    const { kind, id } = where(key, it);
+    const obj = objOf(kind, id);
+    const zh = [], ja = [];
+    const add = (f, ...a) => { zh.push(typeof Z.fHd[f] === "function" ? Z.fHd[f](...a) : Z.fHd[f]); ja.push(typeof J.fHd[f] === "function" ? J.fHd[f](...a) : J.fHd[f]); };
+    let tidyOnly = true;
+    if (!isObj(it)) { add("broken"); tidyOnly = false; }
+    else {
+      if (!obj) { add("orphan"); tidyOnly = false; }
+      if (!Array.isArray(it.lots) || !Array.isArray(it.moves)) { add("broken"); tidyOnly = false; }
+      let bad = 0, fut = 0, dup = 0, over = 0, used = 0, live = 0;
+      const ids = new Set();
+      (Array.isArray(it.lots) ? it.lots : []).forEach(l => {
+        if (!(isObj(l) && nonNeg(l.made) && nonNeg(l.left) && dateRe.test(String(l.madeAt || "")) && l.id !== undefined && l.id !== null)) { bad++; return; }
+        if (l.madeAt > today) fut++;
+        if (ids.has(l.id)) dup++; else ids.add(l.id);
+        if (l.left > l.made) over++;
+        if ((l.left > 0 && l.usedUpAt) || (l.left === 0 && !l.usedUpAt)) used++;
+        if (l.left > 0) live++;
+      });
+      if (bad) add("badLots", bad);
+      if (fut) add("future", fut);
+      if (dup) add("dupId", dup);
+      if (over) add("overMade", over);
+      if (used) add("usedUp", used);
+      if (live > 40) add("tooMany", live);
+      if (bad || fut || dup || over || live > 40) tidyOnly = false;
+    }
+    if (!zh.length) return;
+    h18.push({ key: `H18:${key}`, kind: "prep", id: key, prepKey: key, raw: it, fix: tidyOnly ? "tidy" : "drop", holdQty: holdOf(it), holdUnit: isObj(it) ? _normTxt(it.unit) : "",
+      jump: obj && isObj(it) ? { kind: "prep", id: key } : null,
+      labelZh: `${nm(obj, it, key, "zh")}(${Z.fHd.kind(kind)})`, labelJa: `${nm(obj, it, key, "ja")}(${J.fHd.kind(kind)})`, detailZh: zh.join(";"), detailJa: ja.join("・") });
+  });
+  push("H18", "tidy", h18);
+
+  // H19 账上有库存,但这一样现在没标备货
+  const h19 = [];
+  Object.keys(S.items).forEach(key => {
+    const it = S.items[key];
+    const { kind, id } = where(key, it);
+    const obj = objOf(kind, id);
+    if (!obj || isPrepMarked(obj)) return;
+    const n = prepOnHand(it, null, today).onHand;
+    if (!(n > 0)) return;
+    const u = _normTxt(it.unit);
+    h19.push({ key: `H19:${key}`, kind: "prep", id: key, prepKey: key, raw: rawItems[key], holdQty: n, holdUnit: u, jump: { kind, id: obj.id },
+      labelZh: nm(obj, it, key, "zh"), labelJa: nm(obj, it, key, "ja"), detailZh: `${Z.fHd.kind(kind)} · ${Z.fHd.hold(n, u)}`, detailJa: `${J.fHd.kind(kind)} · ${J.fHd.hold(n, u)}` });
+  });
+  push("H19", "display", h19);
+
+  // H20 标了、已开始记,但没写能放多久 / H21 产出量没填、账上单位对不上
+  const h20 = [], h21 = [];
+  [["recipe", recipes], ["component", components]].forEach(([kind, list]) => list.forEach(o => {
+    const cfg = prepCfgOf(kind, o);
+    if (!cfg) return;
+    const it = S.items[cfg.key];
+    const base = { kind: "prep", id: cfg.key, prepKey: cfg.key, labelZh: nm(o, it, cfg.key, "zh"), labelJa: nm(o, it, cfg.key, "ja") };
+    if (it && cfg.shelfDays === null) h20.push({ ...base, key: `H20:${cfg.key}`, jump: { kind, id: o.id }, detailZh: `${Z.fHd.kind(kind)} · ${Z.fHd.noShelf}`, detailJa: `${J.fHd.kind(kind)} · ${J.fHd.noShelf}` });
+    const noYield = cfg.batch === null, unitBad = !!it && !prepSameUnit(it, cfg);
+    if (!noYield && !unitBad) return;
+    const zh = [Z.fHd.kind(kind)], ja = [J.fHd.kind(kind)];
+    if (noYield) { zh.push(Z.fHd.noYield); ja.push(J.fHd.noYield); }
+    if (unitBad) { zh.push(Z.fHd.unit(_normTxt(it.unit), cfg.unit)); ja.push(J.fHd.unit(_normTxt(it.unit), cfg.unit)); }
+    h21.push({ ...base, key: `H21:${cfg.key}`, noYield, unitBad, jump: noYield ? { kind, id: o.id } : null, countJump: unitBad ? { kind: "prep", id: cfg.key } : null,
+      detailZh: zh.join(" · "), detailJa: ja.join(" · ") });
+  }));
+  push("H20", "display", h20);
+  push("H21", "display", h21);
+
+  // H22 商品生产记录没扣备货(只查开始记之后、账上还留着 move 的日子;不自动补扣)
+  const h22 = [];
+  const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang: "zh" };
+  products.forEach(p => {
+    if (productPrepSkips(p)) return;
+    const recs = productionLog.filter(r => r.productId === p.id && parseFloat(r.batchQty) > 0 && dateRe.test(String(r.date || "")));
+    if (!recs.length) return;
+    // 这个商品的组成会扣哪些已开始记、单位对得上的
+    const keys = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, 1, ctx).takes.map(t => t.key).filter(k => {
+      const it = S.items[k];
+      if (!it || !Array.isArray(it.moves) || !it.moves.length) return false;
+      const { kind, id } = where(k, it);
+      const cfg = prepCfgOf(kind, objOf(kind, id));
+      return !!cfg && prepSameUnit(it, cfg);
+    });
+    if (!keys.length) return;
+    recs.forEach(r => {
+      const q = parseFloat(r.batchQty);
+      let takes = null;
+      keys.forEach(k => {
+        const it = S.items[k];
+        const mv = it.moves.filter(isObj);
+        const firstAt = mv.reduce((a, m) => (m.at && (!a || String(m.at) < a) ? String(m.at) : a), "");
+        const minDate = mv.reduce((a, m) => (dateRe.test(String(m.date || "")) && (!a || m.date < a) ? m.date : a), "");
+        const since = String(it.since || "");
+        if (!firstAt || !minDate || r.date < minDate) return;
+        if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
+        if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
+        const t = takes.find(x => x.key === k);
+        const want = t ? _r3(t.qty) : 0;
+        const got = _r3(mv.filter(m => m.type === "take" && m.prodLogId === r.id).reduce((a, m) => a + (parseFloat(m.qty) || 0), 0));
+        if (!(want > got + 0.0005)) return;
+        const { kind, id } = where(k, it);
+        const o = objOf(kind, id), u = _normTxt(it.unit);
+        h22.push({ key: `H22:${r.id}:${k}`, kind: "prep", id: k, prepKey: k, jump: { kind: "prep", id: k },
+          labelZh: _dhName(p, "zh") || Z.fHd.kind(kind), labelJa: _dhName(p, "ja") || J.fHd.kind(kind),
+          detailZh: Z.fHd.notTaken(r.date, q, nm(o, it, k, "zh"), want, got, u), detailJa: J.fHd.notTaken(r.date, q, nm(o, it, k, "ja"), want, got, u) });
+      });
+    });
+  });
+  push("H22", "display", h22);
+  return { main, info };
+};
+
 function computeDataHealth(data) {
   const d = data || {};
   const A = (x) => Array.isArray(x) ? x.filter(v => v && typeof v === "object") : [];
@@ -5254,6 +5406,10 @@ function computeDataHealth(data) {
       items });
   }
 
+  // ── H18 到 H22 备货账本(F 线,见 _dhPrepChecks;没有标记也没有账本时一项都不加)──
+  const prepHealth = _dhPrepChecks(d, A);
+  checks.push(...prepHealth.main);
+
   // ── H16 打印设置(data-16,只是说明,不算问题)──
   {
     const logo = _normTxt(printSettings.logoUrl);
@@ -5264,6 +5420,8 @@ function computeDataHealth(data) {
       whyJa: `${logo ? "ロゴは設定した画像 URL を使用。" : "ロゴ未設定のため、確定版ロゴ kororā で印刷されます ✓。"}サブタイトルは「${sub || "(空・印刷しない)"}」。変更は印刷プレビュー上部の「⚙ ロゴ設定」から。`,
     });
   }
+  // H23 账本是更新版本写的(说明,排在 H16 后面)
+  checks.push(...prepHealth.info);
 
   return DH_LEVEL_ORDER.flatMap(lv => checks.filter(c => c.level === lv));
 }
@@ -5271,7 +5429,7 @@ function computeDataHealth(data) {
 // 面板:数据 tab「🩺 数据体检」打开,盖满屏(zIndex 在 toast 下面,撤销提示看得见)
 // fix:App 给的一键改 { shopCurrency(item, cur), category(item, catId), clearFamily(item), layerFollow(item), clearCats(item) }
 function DataHealthPanel({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, lang, onClose, onJump, fix, topInset,
-  products = [], productionLog = [] }) {   // 备货第 0 步:两个新 prop 先不用,F 线(H18 到 H23,memo 依赖跟上)
+  products = [], productionLog = [] }) {   // 备货 F 线:products / productionLog 给 H22(商品生产记录没扣备货)用
   const zh = lang !== "ja";
   // topInset:App 顶上正显示「别的窗口改过 / 有新版本」提示条(z 比面板高,会盖住面板的标题和关闭键)。
   // 面板从提示条下沿开始:提示条照样看得见、能点刷新,关闭键也露在外面(iPad 没有 Esc)
@@ -5283,8 +5441,8 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
     return () => window.removeEventListener("resize", m);
   }, [topInset, lang]);
   const checks = useMemo(
-    () => computeDataHealth({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings }),
-    [recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings]);
+    () => computeDataHealth({ recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, products, productionLog }),
+    [recipes, components, creations, knowledge, materials, brands, shopMaterials, productFamilies, cats, printSettings, appSettings, products, productionLog]);
   const problems = checks.filter(c => c.level !== "info" && c.items.length > 0);
   const moneyN = problems.filter(c => c.level === "money").length;
   // 一开始只展开「会算错钱」的几类;其他点标题展开
@@ -5352,10 +5510,29 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
         {jumpBtn(it.jumpB, zh ? "去看 B" : "B を見る")}
       </>;
       case "H14": return <Btn size="sm" variant="danger" onClick={() => fix.clearCats(it)}>{zh ? "清掉旧价格表" : "旧価格表を削除"}</Btn>;
+      // 备货 F 线:清掉 / 整理只写账本(fix.prepClear),去看 / 去盘点跳「今日 → 备货」那一样(jumpToItem 的 prep),去改跳编辑页
+      case "H18": {
+        const B = prepTxt(lang).fHb;
+        return <>
+          {it.fix === "tidy" && <Btn size="sm" onClick={() => { if (fix.prepClear(it, "tidy")) markDone(c, it, idx, prepTxt("zh").fHb.tidyDone, prepTxt("ja").fHb.tidyDone); }}>{B.tidy}</Btn>}
+          {it.fix === "drop" && <Btn size="sm" variant="danger" onClick={() => { if (fix.prepClear(it, "drop")) markDone(c, it, idx, prepTxt("zh").fHb.clearDone, prepTxt("ja").fHb.clearDone); }}>{B.clear}</Btn>}
+          {jumpBtn(it.jump, B.look)}
+        </>;
+      }
+      case "H19": {
+        const B = prepTxt(lang).fHb;
+        return <>
+          {jumpBtn(it.jump, B.edit)}
+          <Btn size="sm" variant="danger" onClick={() => { if (fix.prepClear(it, "drop")) markDone(c, it, idx, prepTxt("zh").fHb.clearDone, prepTxt("ja").fHb.clearDone); }}>{B.clear}</Btn>
+        </>;
+      }
+      case "H21": return <>{jumpBtn(it.jump, prepTxt(lang).fHb.edit)}{jumpBtn(it.countJump, prepTxt(lang).fHb.count)}</>;
+      case "H22": return jumpBtn(it.jump, prepTxt(lang).fHb.look);
       default: return jumpBtn(it.jump);
     }
   };
-  const info = checks.find(c => c.level === "info");
+  // 说明类(H16 打印抬头,备货账本是更新版本写的时再多一条 H23)逐条列在最后;只有 H16 时和以前一样
+  const infos = checks.filter(c => c.level === "info");
   return (
     <div ref={panelRef} className="k-data-health" role="dialog" aria-modal="true" aria-label={zh ? "数据体检" : "データ診断"}
       style={{ position: "fixed", top: topOff, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
@@ -5429,13 +5606,13 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
             </section>
           );
         })}
-        {info && (
-          <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 14, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        {infos.map(info => (
+          <div key={info.id} style={{ borderTop: `1px solid ${T.line}`, paddingTop: 14, display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
             {levelTag("info")}
             <span style={{ ...T.fs.small, fontWeight: 500, color: T.ink, fontFamily: T.fontSans }}>{zh ? info.titleZh : info.titleJa}</span>
             <div style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, flexBasis: "100%", overflowWrap: "anywhere" }}>{zh ? info.whyZh : info.whyJa}</div>
           </div>
-        )}
+        ))}
         {problems.length > 0 && <div style={{ display: "flex", justifyContent: "center", marginTop: T.sp.xxl }}><Btn onClick={onClose}>{zh ? "关闭" : "閉じる"}</Btn></div>}
       </div>
     </div>
@@ -17370,7 +17547,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components 参数,商品可关联组件
 function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet, onPrintLabel,
-  onLogProdWithPrep, prepRestorePreviewOf, onProdLogDeleted }) {   // 备货第 0 步:三个新 prop 先不用,F 线(没传 / 返回 false = 走原来的代码)
+  onLogProdWithPrep, prepRestorePreviewOf, onProdLogDeleted }) {   // 备货 F 线:「记录生产」先问 onLogProdWithPrep(没传 / 返回 false = 走原来的代码);删生产记录的确认框 + 加回
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
   // v12: 销售/生产按天 upsert,同日累加(2026-09-29 第 3 批:原样搬到模块顶层 makeLogQty,今日生产单「记入生产」用同一个)
@@ -17393,6 +17570,29 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
       const delta = kind === "sale" ? q : -q;
       return { ...p, currentStock: Math.max(0, (p.currentStock || 0) + delta) };
     }));
+    // 备货 F 线:删了生产记录,本机账本里挂着这条记录扣过的备货加回去(App 写 restoreRecord;之后盘点过 / 报废过的不加回,别的设备记的不动)
+    if (kind === "prod" && onProdLogDeleted) onProdLogDeleted(log);
+  };
+  // 备货 F 线:删生产记录的确认框多写的几句(这条记录扣过哪些备货、会不会加回);本机账本里没有挂这条记录的 take → 空串,确认框和以前一字不差
+  const prodLogPrepNote = (logId) => {
+    const pv = prepRestorePreviewOf ? prepRestorePreviewOf(logId) : null;
+    const lines = pv && Array.isArray(pv.lines) ? pv.lines : [];
+    if (!lines.length) return "";
+    const X = prepTxt(lang);
+    const out = [];
+    lines.forEach(ln => {
+      const key = String(ln.key || ""), kind = key.startsWith("component:") ? "component" : "recipe", id = key.slice(kind.length + 1);
+      const obj = (kind === "component" ? components : recipes).find(o => o && String(o.id) === id);
+      const name = String(obj ? (pickLang(obj, "name", lang) || obj.nameZh || obj.nameJa || "") : ((lang === "ja" ? ln.nameJa : ln.nameZh) || ln.name || id)).trim();
+      const cfg = obj ? prepCfgOf(kind, { ...obj, prepMode: "stock" }) : null;
+      const store = X.storeName(cfg ? cfg.store : (kind === "recipe" ? "freeze" : null));
+      if (ln.qty > 0) out.push(X.fRestoreConfirm(store, name, ln.qty, ln.unit));
+      (ln.skipped || []).forEach(s => {
+        const t = s.reason === "count" ? X.skipCount(name) : s.reason === "discard" ? X.skipDiscard(name, X.md(s.madeAt)) : s.reason === "unit" ? X.skipUnit(name) : X.skipGone(name, s.madeAt ? X.md(s.madeAt) : "");
+        if (!out.includes(t)) out.push(t);
+      });
+    });
+    return out.length ? "\n" + out.join("\n") : "";
   };
   const mLabel = (obj) => obj ? (lang === "zh" ? (obj.nameZh || obj.nameJa) : (obj.nameJa || obj.nameZh)) : "";
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
@@ -17560,14 +17760,15 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           {/* v12: 生产录入(加库存) */}
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem" }}>
             <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, marginBottom: 10 }}>📈 {lang === "zh" ? "生产录入" : "製造記録"}</div>
-            <SalesInput kind="prod" today={today} onSubmit={(qty, d) => { logQty("prod", p.id, qty, d); showToast(lang === "zh" ? `✓ ${d === today ? "今日" : d} 生产 +${qty}(库存 +${qty})` : `✓ ${d} 製造 ${qty} 件`); }} lang={lang} />
+            {/* 备货 F 线:组成里有已开始记的备货(商品不是装烤好的)→ App 的 onLogProdWithPrep 记生产 + 扣备货 + 撤销,返回 true;否则走原来的代码(文字不变) */}
+            <SalesInput kind="prod" today={today} onSubmit={(qty, d) => { if (onLogProdWithPrep && onLogProdWithPrep(p.id, qty, d)) return; logQty("prod", p.id, qty, d); showToast(lang === "zh" ? `✓ ${d === today ? "今日" : d} 生产 +${qty}(库存 +${qty})` : `✓ ${d} 製造 ${qty} 件`); }} lang={lang} />
             <div style={{ marginTop: 12, fontSize: 11, color: T.textTertiary, marginBottom: 6 }}>{lang === "zh" ? "最近 10 条" : "過去 10 件"}</div>
             {prods.length === 0 ? <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic" }}>—</div> : prods.slice(0, 10).map(l => (
               <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0", borderBottom: `0.5px dashed ${T.borderSoft}` }}>
                 <span>{l.date}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ color: T.success }}>+{l.batchQty || 0}</span>
-                  <button onClick={() => confirmDialog(lang === "zh" ? `删除 ${l.date} 生产 ${l.batchQty} 件? 库存会扣回 ${l.batchQty}` : `${l.date} の製造 ${l.batchQty} 件を削除?`, () => deleteLog("prod", l.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  <button onClick={() => confirmDialog((lang === "zh" ? `删除 ${l.date} 生产 ${l.batchQty} 件? 库存会扣回 ${l.batchQty}` : `${l.date} の製造 ${l.batchQty} 件を削除?`) + prodLogPrepNote(l.id), () => deleteLog("prod", l.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
                 </div>
               </div>
             ))}
@@ -17814,8 +18015,19 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
     const pk = parseFloat(String(form.packagingCost ?? "").normalize("NFKC"));
     if (pk > 0) { out.packagingCost = pk; out.packagingCurrency = "CNY"; }
     else { delete out.packagingCost; delete out.packagingCurrency; }
+    // 备货 F 线(09-30 追加拍板):prepSkip 只在和「按组成判断的缺省」不一样时才写 true / false;一样(或不是布尔)就删键 ——
+    // 老商品打开不改就保存不会多出键
+    if (!(typeof out.prepSkip === "boolean" && out.prepSkip !== productPrepSkips({ items: out.items }))) delete out.prepSkip;
     onSave(out);
   };
+  // 备货 F 线:组成里有标了备货的配方 / 组件时,组成下面多一个勾选「装的是已经烤好的,不扣备货」。显示生效值(productPrepSkips);
+  // 勾成和缺省一样时表单里直接删键(敲了又改回不算改过)
+  const prepMarkedInItems = (form.items || []).some(it => {
+    if (!it || it.linkedType === "creation") return false;
+    const list = it.linkedType === "component" ? components : recipes;
+    return (list || []).some(o => o && String(o.id) === String(it.linkedId) && isPrepMarked(o));
+  });
+  const setPrepSkip = (v) => setForm(f => { const { prepSkip, ...rest } = f; return v === productPrepSkips(rest) ? rest : { ...rest, prepSkip: v }; });
 
   const addItem = (linkedId, linkedType) => {
     setForm(f => ({ ...f, items: [...(f.items || []), { linkedId, linkedType, qty: 1 }] }));
@@ -17886,6 +18098,15 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
               );
             })}
           </div>
+        )}
+        {prepMarkedInItems && (
+          <label data-prep-skip="1" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, cursor: "pointer", minWidth: 0 }}>
+            <input type="checkbox" checked={productPrepSkips(form)} onChange={e => setPrepSkip(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+              <span style={{ ...T.fs.small, color: T.ink, fontFamily: T.fontSans }}>{prepTxt(lang).fSkipLabel}</span>
+              <span style={{ display: "block", ...T.fs.caption, color: T.secondary, marginTop: 2, lineHeight: 1.5, fontFamily: T.fontSans }}>{prepTxt(lang).fSkipHint}</span>
+            </span>
+          </label>
         )}
       </div>
 
@@ -18184,7 +18405,7 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components,采购计算支持组件
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang,
-  prepOnHand = null }) {   // 备货第 0 步:prepOnHand(prepOnHandMap 的结果)先不用;空 / 没传 = 调用和 DOM 和以前一样,F 线
+  prepOnHand = null }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
   const today = localDateStr();
   const plus = plusDaysStr;
@@ -18220,11 +18441,20 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
   const mLabel = (o) => o ? (lang === "zh" ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) : "";
   const inputStyle = { padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary };
 
-  const compute = () => {
+  // 备货 F 线「按手上的备货算」:只在这次计划里数量 > 0 的商品真用得到已开始记的备货时出勾选(prepReachable)。
+  // 默认勾上;她关掉时本机 localStorage 记 "0"(读写都 try/catch,读不到按默认)。prepOnHand 空 = 不算、不出勾选,调用和 DOM 和以前一样
+  const prepCtx = { products, recipes, creations, components, materials, brands, lang };
+  const prepReach = useMemo(() => !!(prepOnHand && prepOnHand.size > 0) && prepReachable(products, plan, prepCtx, prepOnHand),
+    // eslint-disable-next-line
+    [prepOnHand, plan, products, recipes, creations, components, materials, brands]);
+  const [usePrepStock, setUsePrepStock] = useState(() => { try { return localStorage.getItem("korora_purchase_prep_v1") !== "0"; } catch (e) { return true; } });
+  const compute = (prepFlag) => {
     // 2026-09-29 第 3 批:汇总原料的算法原样搬到模块顶层 computeMaterialNeeds(今日生产单用它的生产模式);
     // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
-    const { grams, skipped } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
-      { products, recipes, creations, components, materials, brands, lang });
+    // 备货 F 线:勾着「按手上的备货算」且够得着时传 { onHand }(结果多 prepPlan);否则第三个参数照旧不传。prepFlag = 勾选刚变、state 还没到这一帧时的新值
+    const withPrep = prepReach && (typeof prepFlag === "boolean" ? prepFlag : usePrepStock);
+    const { grams, skipped, prepPlan } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
+      { products, recipes, creations, components, materials, brands, lang }, ...(withPrep ? [{ onHand: prepOnHand }] : []));
     // 按 supplier 分组
     const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
     Object.entries(grams).forEach(([materialId, g]) => {
@@ -18235,7 +18465,13 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     });
     // 每组排序: 按克数降序
     Object.values(bySupplier).forEach(arr => arr.sort((a, b) => b.grams - a.grams));
-    setComputed({ grams, bySupplier, skipped, computedAt: new Date().toISOString() });
+    setComputed({ grams, bySupplier, skipped, computedAt: new Date().toISOString(), ...(prepPlan ? { prepPlan } : {}) });
+  };
+  // 勾 / 不勾:记本机;已经算过就立刻按新的勾选重算(结果区和说明不会和勾选对不上)
+  const togglePrepStock = (v) => {
+    setUsePrepStock(v);
+    try { if (v) localStorage.removeItem("korora_purchase_prep_v1"); else localStorage.setItem("korora_purchase_prep_v1", "0"); } catch (e) { /* 存不了就只在这一页有效 */ }
+    if (computed) compute(v);
   };
 
   // 闭店窗口判定(YYYY-MM-DD 绝对日期, v16+)
@@ -18342,10 +18578,34 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
             })}
           </div>
         )}
+        {prepReach && (
+          <label data-prep-buy="1" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, cursor: "pointer", minWidth: 0 }}>
+            <input type="checkbox" checked={usePrepStock} onChange={e => togglePrepStock(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+            <span style={{ ...T.fs.small, color: T.ink, fontFamily: T.fontSans, minWidth: 0, overflowWrap: "anywhere" }}>{prepTxt(lang).fBuyToggle}</span>
+          </label>
+        )}
         <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
           <Btn variant="primary" onClick={compute}>{lang === "zh" ? "📦 计算采购清单" : "📦 仕入計算"}</Btn>
         </div>
       </div>
+
+      {/* 备货 F 线:按手上的备货算了的,每样一行说明(只在算的时候传了 onHand 才有) */}
+      {computed && Array.isArray(computed.prepPlan) && computed.prepPlan.length > 0 && (() => {
+        const X = prepTxt(lang);
+        const nameOf = (r) => { const o = (r.kind === "component" ? components : recipes).find(x => x && String(x.id) === String(r.id)); return String((o && (pickLang(o, "name", lang) || o.nameZh || o.nameJa)) || r.name || "").trim(); };
+        return (
+          <div data-prep-plan="1" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${T.accent}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
+            <div style={{ display: "grid", gap: 6 }}>
+              {computed.prepPlan.map(r => (
+                <div key={r.key} data-prep-plan-row={r.key} style={{ ...T.fs.small, color: T.ink, lineHeight: 1.6, overflowWrap: "anywhere", fontFamily: T.fontSans, ...T.num }}>
+                  {X.fBuyLine(nameOf(r), r.need, r.unit, r.usable, r.min, r.batches, r.qty)}
+                </div>
+              ))}
+            </div>
+            <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, fontFamily: T.fontSans }}>{X.fBuyFoot}</div>
+          </div>
+        );
+      })()}
 
       {/* 采购结果 */}
       {computed && (() => {
@@ -20026,6 +20286,48 @@ const PREP_TXT = {
     tag: "备货",
     tagHave: (s, n, u) => `${s} · 现有 ${n} ${u}`,
     // ── F 线:商品页 / 采购页 / 数据体检 ──
+    fToday: "今日",
+    fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u ? " " + u : ""}`,
+    fProdToast: (d, n, prep) => `✓ ${d} 生产 +${fmtQty(n)}(库存 +${fmtQty(n)};${prep})`,
+    fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
+    fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
+    fUndoNoRecord: "生产记录已经删了,只撤了备货",
+    fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
+    fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
+    fSkipHint: "只装一样、每件 1 个的默认会扣(记入生产 = 烤出来);礼盒和几个装的默认不扣",
+    fBuyToggle: "按手上的备货算(扣掉现有的、按整批做、留够提醒线;可能比不勾多)",
+    fBuyLine: (name, need, u, have, min, k, qty) => `备货:${name} 这段时间要用 ${fmtQty(need)} ${u},手上能用 ${fmtQty(have)}${min > 0 ? `(提醒线 ${fmtQty(min)})` : ""}` +
+      (k > 0 ? ` → 要做 ${k} 批(${fmtQty(qty)} ${u}),按 ${k} 批算原料` : " → 不用做,原料不算"),
+    fBuyFoot: "过期的不算;成品库存(商品页的库存)这里一直不扣。",
+    fHealthClear: (name, n, u) => `已清掉「${name}」的备货库存(${fmtQty(n)}${u ? " " + u : ""}),可以撤销`,
+    fHealthTidy: (name) => `已按剩余数整理「${name}」的批次记录`,
+    fH: {
+      H18: ["备货账本里有找不到的东西", "备货账本(冷冻面团等的库存记录)里有这些对不上的:配方 / 组件已经删了、账坏了(数量不是数、日期不对或在今天之后、同一批记了两次、用完的标记和剩余数对不上、还有剩的批超过 40 个)。「清掉」只删账本里这一样(配方和组件一个字不动),5 秒内可以撤销;只是「用完的标记」对不上的,点「按剩余数整理」。"],
+      H19: ["有库存但没标备货", "账上还记着这些东西的库存,但配方 / 组件已经取消了「备货」,生产单不会再扣它。要继续用就「去改」重新勾上;不用了就「清掉」(可以撤销)。"],
+      H20: ["标了备货但没写能放多久", "没写「能放多久」的备货不会提醒快到期 / 过期。去编辑页的「📦 备货」填上天数。"],
+      H21: ["备货的数量口径对不上", "标了备货但「产出数量」没填(算不出一批做多少,生产单上「做一批」记不进库存);或者账上记的单位和现在的单位对不上(改过单位、「同步回组件库」改了单位),这一样先不自动加减,去「备货」盘点一次就好。"],
+      H22: ["有生产记录没扣备货", "这些商品生产记录按组成应该从备货里扣,但账上没有扣的记录。多半是旧版 App 或别的设备记的(合并导入进来的),或者后来改过商品组成。这里不自动补扣:去「备货」看一眼,对不上就盘点。"],
+      H23: ["备货账本是更新版本写的", "库存账是更新版本的 App 写的,这台先不显示也不改。请刷新到最新版(页面顶上有「新版本」提示时点刷新)。"],
+    },
+    fHd: {
+      ledger: "整本备货账",
+      ledgerBroken: "整本备货账读不出来,App 当空账显示;下次登记 / 记入时会从头记",
+      orphan: "配方 / 组件已经删了",
+      broken: "账本这一样读不出来",
+      badLots: (k) => `${k} 批的数量或日期不对`,
+      future: (k) => `${k} 批的日期在今天之后`,
+      dupId: (k) => `${k} 批重复记了`,
+      overMade: (k) => `${k} 批剩的比做的多`,
+      usedUp: (k) => `${k} 批「用完」的标记和剩余数对不上`,
+      tooMany: (k) => `还有剩的批有 ${k} 个(超过 40 个)`,
+      hold: (n, u) => `还记着 ${fmtQty(n)}${u ? " " + u : ""}`,
+      noShelf: "没写能放多久",
+      noYield: "产出数量没填",
+      unit: (o, n) => `账上按「${o}」记,现在单位是「${n}」`,
+      notTaken: (d, n, name, want, got, u) => `${d} 生产 ${fmtQty(n)} 件 · 应扣「${name}」${fmtQty(want)}${u ? " " + u : ""},记下扣了 ${fmtQty(got)}`,
+      kind: (k) => (k === "component" ? "组件" : "配方"),
+    },
+    fHb: { tidy: "按剩余数整理", clear: "清掉", edit: "去改", count: "去盘点", look: "去看", tidyDone: "✓ 已整理", clearDone: "✓ 已清掉" },
     // ── G 线:导入 / 清除 / 删除 / 数据页 ──
   },
   ja: {
@@ -20214,6 +20516,48 @@ const PREP_TXT = {
     tag: "作り置き",
     tagHave: (s, n, u) => `${s} · 在庫 ${n}${u}`,
     // ── F 線:商品 / 仕入 / データ診断 ──
+    fToday: "本日",
+    fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u || ""}`,
+    fProdToast: (d, n, prep) => `✓ ${d} 製造 ${fmtQty(n)} 件(${prep})`,
+    fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
+    fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
+    fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
+    fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
+    fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
+    fSkipHint: "1 品・1 個入りは既定で引きます(製造記録 = 焼成)。詰め合わせ・複数個入りは既定で引きません",
+    fBuyToggle: "手持ちの作り置きで計算(在庫を差し引き・バッチ単位・補充ラインを確保。チェックなしより多くなる場合あり)",
+    fBuyLine: (name, need, u, have, min, k, qty) => `作り置き:${name} 必要 ${fmtQty(need)}${u}、使用可 ${fmtQty(have)}${min > 0 ? `(補充ライン ${fmtQty(min)})` : ""}` +
+      (k > 0 ? ` → ${k} バッチ(${fmtQty(qty)}${u})で材料計算` : " → 仕込み不要(材料に含めず)"),
+    fBuyFoot: "期限切れは除外。商品在庫はここでは差し引きません。",
+    fHealthClear: (name, n, u) => `「${name}」の在庫記録(${fmtQty(n)}${u || ""})を消去しました(元に戻せます)`,
+    fHealthTidy: (name) => `「${name}」のロット記録を整理しました`,
+    fH: {
+      H18: ["作り置き在庫に見つからない品目", "作り置き在庫の記録に合わないものがあります:レシピ・パーツが削除済み、記録の破損(数量が数字でない・日付が不正または未来・同じロットの重複・使い切り印と残数の不一致・残りのあるロットが 40 超)。「消去」は在庫記録のこの品目だけを消します(レシピ・パーツは変わりません。5 秒以内なら元に戻せます)。使い切り印だけの不一致は「残数で整理」を。"],
+      H19: ["在庫があるのに作り置き指定なし", "在庫の記録が残っていますが、作り置き指定が外れています。製造リストでは引かれません。使うなら「直す」で指定し直し、不要なら「消去」(元に戻せます)。"],
+      H20: ["作り置きの保存期間が未入力", "保存期間がないと期限間近・期限切れのお知らせが出ません。編集画面の「📦 作り置き」で日数を入力してください。"],
+      H21: ["作り置きの単位・出来数が合わない", "作り置き指定があるのに出来数が未入力(1 バッチの量が分からず、仕込み行を在庫に記録できません)、または記録の単位と現在の単位が合いません(自動の増減を止めています。「作り置き」で棚卸ししてください)。"],
+      H22: ["作り置きを引いていない製造記録", "構成上は作り置きから引くはずの製造記録に、引いた記録がありません。旧バージョンや他の端末の記録(マージインポート)か、後で商品構成を変えた可能性があります。自動では引きません。「作り置き」で確認し、合わなければ棚卸しを。"],
+      H23: ["新しいバージョンの在庫記録", "在庫記録が新しいバージョンで書かれています。最新版に更新してください。"],
+    },
+    fHd: {
+      ledger: "作り置き在庫の記録全体",
+      ledgerBroken: "在庫記録全体が読めないため空として表示しています。次の登録・記録から新しく記録します",
+      orphan: "レシピ・パーツが削除済み",
+      broken: "この品目の記録が読めません",
+      badLots: (k) => `${k} ロットの数量・日付が不正`,
+      future: (k) => `${k} ロットの日付が未来`,
+      dupId: (k) => `${k} ロットが重複`,
+      overMade: (k) => `${k} ロットの残数が仕込み数より多い`,
+      usedUp: (k) => `${k} ロットの使い切り印と残数が不一致`,
+      tooMany: (k) => `残りのあるロットが ${k} 件(40 超)`,
+      hold: (n, u) => `在庫 ${fmtQty(n)}${u || ""} が残っています`,
+      noShelf: "保存期間未入力",
+      noYield: "出来数未入力",
+      unit: (o, n) => `記録は「${o}」、現在の単位は「${n}」`,
+      notTaken: (d, n, name, want, got, u) => `${d} 製造 ${fmtQty(n)} 件 · 「${name}」${fmtQty(want)}${u || ""} を引くはずが記録は ${fmtQty(got)}`,
+      kind: (k) => (k === "component" ? "パーツ" : "レシピ"),
+    },
+    fHb: { tidy: "残数で整理", clear: "消去", edit: "直す", count: "棚卸しへ", look: "見る", tidyDone: "✓ 整理しました", clearDone: "✓ 消去しました" },
     // ── G 線:インポート / 削除 / データ ──
   },
 };
@@ -24230,6 +24574,45 @@ function App() {
           { title: zh ? "备份没存上" : "バックアップ失敗", confirmText: zh ? "仍然清掉" : "削除する", refs: [zh ? `旧价格表:${orig.length} 条(已停用,成本不读它)` : `旧価格表:${orig.length} 件`] });
       } finally { dhClearCatsBusy.current = false; }
     },
+    // 备货 F 线:H18 / H19 一键改,只写账本(走 writePrep),配方和组件一个字不动。
+    // mode "drop" = 清掉这一样(撤销 = putItem 放回;这几秒里又开始记了就不放,提示一句);
+    // mode "tidy" = 只按剩余数补 / 删「用完」的标记(dropItem + putItem 整理后的那一样;撤销时账本里还是整理后的那一个对象才换回)
+    prepClear: (item, mode) => {
+      const X = prepTxt(lang);
+      const key = item && item.prepKey;
+      const raw0 = appSettings.prepStock;
+      const items0 = raw0 && typeof raw0 === "object" && raw0.items && typeof raw0.items === "object" ? raw0.items : {};
+      if (!key || !Object.prototype.hasOwnProperty.call(items0, key) || items0[key] !== item.raw) { dhStale(); return false; }
+      const orig = item.raw;
+      const nm = lang === "zh" ? item.labelZh : (item.labelJa || item.labelZh);
+      const isObj = !!orig && typeof orig === "object" && !Array.isArray(orig);
+      const itemNow = () => { const r = prepRawLatestRef.current; return r && typeof r === "object" && r.items && typeof r.items === "object" ? r.items[key] : undefined; };
+      if (mode === "tidy") {
+        if (!isObj || !Array.isArray(orig.lots)) { dhStale(); return false; }
+        const d0 = localDateStr();
+        const lots = orig.lots.map(l => {
+          if (!l || typeof l !== "object" || typeof l.left !== "number" || !(l.left >= 0)) return l;
+          if (l.left > 0 && l.usedUpAt) { const { usedUpAt, ...r } = l; return r; }
+          if (l.left === 0 && !l.usedUpAt) return { ...l, usedUpAt: d0 };
+          return l;
+        });
+        const fixed = { ...orig, lots };
+        if (!writePrep([{ type: "dropItem", key }, { type: "putItem", key, item: fixed }])) return false;
+        showToast(X.fHealthTidy(nm), { undo: () => {
+          if (itemNow() !== fixed) { dhNoUndo(); return; }
+          writePrep([{ type: "dropItem", key }, { type: "putItem", key, item: orig }], null, { isUndo: true });
+        } });
+        return true;
+      }
+      if (!writePrep([{ type: "dropItem", key }])) return false;
+      const msg = X.fHealthClear(nm, item.holdQty || 0, item.holdUnit || "");
+      if (!isObj) { showToast(msg); return true; }   // 读不出来的那一样放不回去(putItem 只收对象),不给撤销
+      showToast(msg, { undo: () => {
+        if (itemNow() !== undefined) { dhNoUndo(); return; }
+        writePrep([{ type: "putItem", key, item: orig }], null, { isUndo: true });
+      } });
+      return true;
+    },
   };
 
   const handleSaveRecipe = (r) => {
@@ -24368,12 +24751,74 @@ function App() {
   // 顶栏「今日」角标:已开始记的备货里有过期批或低于提醒线的样数(手机「更多」抽屉那一行和「更多」按钮也画)
   const prepBadge = useMemo(() => prepBadgeCountOf(recipes, components, prepStock, today), [recipes, components, prepStock, today]);
   // F 线:商品页「记录生产」。组成里有已开始记的备货、商品不跳过(productPrepSkips)→ App 处理(makeLogQty 带 { id } + 账本 take + toast + 撤销)并返回 true;
-  // 返回 false = 商品页走原来的代码(第 0 步永远 false)
-  const logProdWithPrep = (productId, qty, date) => false;
+  // 返回 false = 商品页走原来的代码(没有能扣的备货 / 账本只读 / 装的是烤好的)
+  // 撤销闭包要看「那一刻」的账本(预告撤不全)—— dataRef 不含 appSettings,另记一个
+  const prepStockLatestRef = useRef(prepStock);
+  prepStockLatestRef.current = prepStock;
+  const prepRawLatestRef = useRef(appSettings.prepStock);
+  prepRawLatestRef.current = appSettings.prepStock;
+  const logProdWithPrep = (productId, qty, date) => {
+    const p = products.find(x => x && x.id === productId);
+    const q = _r3(parseFloat(qty) || 0);
+    if (!p || !(q > 0) || productPrepSkips(p) || prepStock.readOnly) return false;
+    const d = date || today;
+    const X = prepTxt(lang);
+    const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
+    const flow = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx);
+    // 只扣已开始记、单位对得上的(prepApply 的 take 对别的什么都不做;全都扣不了 = 走老路,文字不变)
+    const objOf = (t) => (t.kind === "component" ? components : recipes).find(o => o && String(o.id) === String(t.id));
+    const acts = flow.takes.map(t => {
+      const obj = objOf(t), cfg = obj ? prepCfgOf(t.kind, obj) : null, it = prepStock.items[t.key];
+      return cfg && it && prepSameUnit(it, cfg) ? { t, obj, cfg, it } : null;
+    }).filter(Boolean);
+    if (!acts.length) return false;
+    const ex = findDayLog(productionLog, p.id, d);
+    const logId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
+    const opId = "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product" })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
+    makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, q, d, { id: logId });
+    // toast:按记入这一刻的账本算扣了多少 / 差多少(prepApply 用同一个 prepTakePlan)
+    const bits = [], shorts = [];
+    acts.forEach(a => {
+      const nm = String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim();
+      const store = X.storeName(a.cfg.store);
+      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, localDateStr());
+      bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
+      if (tp.short > 0) shorts.push(X.fShort(store, nm, tp.got, tp.short, a.it.unit));
+    });
+    const srcs = new Map();
+    // 没扣到的只说已开始记的那几样(没开始记的本来就不算账);本产品专用的部分是有意不扣,不提
+    flow.untaken.forEach(u => { if (u.reason === "local" || !prepStock.items[u.key]) return; const k = u.src || u.name || ""; srcs.set(k, (srcs.get(k) || 0) + 1); });
+    flow.takes.forEach(t => { if (!acts.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
+    const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("");
+    showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.join(lang === "ja" ? "・" : "、")) + shorts.join("") + untaken, { undo: () => {
+      // 撤销:按记下的生产记录 id 找;找不到(商品页已经删了)→ 生产记录和商品库存都不动,只撤备货
+      const cur = ((dataRef.current && dataRef.current.productionLog) || []).find(x => x && x.id === logId);
+      const pv = prepRevertPreview(prepStockLatestRef.current, opId);
+      if (cur) {
+        setProductionLog(prev => {
+          const c = (prev || []).find(x => x && x.id === logId);
+          if (!c) return prev;
+          const left = _r3((parseFloat(c.batchQty) || 0) - q);
+          return left > 0 ? prev.map(x => x === c ? { ...x, batchQty: left, updatedAt: new Date().toISOString() } : x) : prev.filter(x => x !== c);
+        });
+        setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - q) } : x));
+      }
+      writePrep([{ type: "revert", opId }], null, { isUndo: true });
+      if (!cur) showToast(X.fUndoNoRecord);
+      else if (pv.partial) showToast(X.partial);
+    } });
+    return true;
+  };
   // F 线:删一条生产记录前,确认框要多写的那几句(本机账本里挂着这条记录的 take 会加回多少 / 为什么不加回)
   const prepRestorePreviewOf = (logId) => prepRestorePreview(prepStock, logId);
-  // F 线:商品页删完一条生产记录后调(log = 删掉的那条),App 写 restoreRecord。第 0 步什么都不做
-  const onProdLogDeleted = (log) => {};
+  // F 线:商品页删完一条生产记录后调(log = 删掉的那条),App 写 restoreRecord:只加回本机账本里挂着这条记录、还没加回过的 take
+  // (别的设备记的 / 旧版记的没有 → 什么都不写;之后盘点过 / 报废过的按共同规则不加回,确认框已经写明)
+  const onProdLogDeleted = (log) => {
+    if (!log || log.id === undefined || log.id === null || log.id === "") return;
+    if (!prepRestorePreview(prepStock, log.id).lines.length) return;
+    writePrep([{ type: "restoreRecord", prodLogId: log.id, opId: "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) }]);
+  };
   // G 线:删配方 / 组件时把账本里这一样一起删(dropItem),撤销时放回(putItem)。第 0 步什么都不做
   const onPrepDrop = (key) => {};
   // 采购页「按手上的备货算」用(F 线);第 0 步 prepOnHandMap 返回空 Map = 采购页和以前一样
