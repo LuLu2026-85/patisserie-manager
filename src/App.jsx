@@ -1930,13 +1930,20 @@ const _matMap = (ctx) => {
   if (!ctx._matById) ctx._matById = new Map((ctx.materials || []).filter(Boolean).map(m => [m.id, m]));
   return ctx._matById;
 };
+// 第 4 批 B4-6 第二段:过敏原 / 配料表草稿 / 采购认「来自组件」的行,都按 ctx.components 找(纯函数,不读渲染期注入的 _componentsById)
+const _hasCompId = (ing) => !!ing && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "";
+const _compMap = (ctx) => {
+  if (!ctx._compById) { const m = new Map(); (ctx.components || []).forEach(c => { if (c && c.id !== undefined && c.id !== null && !m.has(c.id)) m.set(c.id, c); }); ctx._compById = m; }
+  return ctx._compById;
+};
 
 // 汇总一个配方 / 组件 / 组合产品 / 商品的过敏原。
 // 返回 { contains, mayContain, unknown, sources, maySources, lines, complete }
 //   · contains / mayContain:ALLERGENS 顺序的 code;可能含有里不再重复含有的
 //   · unknown:没法确认的配料 [{ name, part, reason, unit, count }],reason:
 //       unlinked 没关联材料 / missingMaterial 关联的材料已删 / unchecked 材料还没核对过敏原 /
-//       nonGram 单位不是克(本 / 個 / 片) / missingItem 商品组成里的配方已删 / noIngredients 一行配料都没有
+//       nonGram 单位不是克(本 / 個 / 片) / missingItem 商品组成里的配方已删 / noIngredients 一行配料都没有 /
+//       missingComponent「来自组件」的行指向的组件已删 / cycle 组件互相引用(第 4 批 B4-6:来自组件的行递归进组件的配料)
 //   · complete = unknown 为空。**只要 complete 是 false,页面和标签都绝不能说「无过敏原」。**
 // 没核对的材料如果已经勾了几项,照样算进 contains(宁可多报),同时列进 unknown。
 function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
@@ -1952,6 +1959,29 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
     const prev = unknownMap.get(key);
     if (prev) prev.count += (u.count || 1); else unknownMap.set(key, { part: "", unit: "", ...u, count: u.count || 1 });
   };
+  // 第 4 批 B4-6 第二段:「来自组件」行 → 递归汇总那个组件。防循环:ctx._compVisiting 放「正在汇总的上层组件」,
+  // 当前这个组件自己(selfId)进去之前放进去、出来拿掉;行指向自己或上层 → cycle。嵌套超过 12 层也按 cycle 停
+  const compById = _compMap(ctx);
+  const visiting = ctx._compVisiting || (ctx._compVisiting = new Set());
+  const selfId = (kind === "component" && entity && _hasCompId({ componentId: entity.id }) && compById.has(entity.id)) ? entity.id : undefined;
+  const visitCompRow = (ing, U, disp, dispJa, part, partJa) => {
+    const comp = compById.get(ing.componentId);
+    if (!comp) { pushUnknown({ ...U, reason: "missingComponent" }); return; }
+    if (comp.id === selfId || visiting.has(comp.id) || _depth >= 12) { pushUnknown({ ...U, reason: "cycle" }); return; }
+    const added = selfId !== undefined && !visiting.has(selfId);
+    if (added) visiting.add(selfId);
+    let sub;
+    try { sub = allergenSummaryOf("component", comp, ctx, _depth + 1); } finally { if (added) visiting.delete(selfId); }
+    // 「含有 / 可能含有」的来源写这一行的名字(标签和卡片上看得懂是哪一样带进来的)
+    sub.contains.forEach(c => { contains.add(c); addSrc(sources, c, disp); addSrc(sourcesJa, c, dispJa); });
+    sub.mayContain.forEach(c => { may.add(c); addSrc(maySources, c, disp); addSrc(maySourcesJa, c, dispJa); });
+    // 组件里没法确认的,出处前面加上这一行的名字(「巧克力脆底 · 杏仁酥粒(母面) · 杏仁粉(材料还没核对过敏原)」)
+    sub.unknown.forEach(u => {
+      if (u.reason === "noIngredients" && !u.partLevel) { pushUnknown({ ...U, reason: "noIngredients", count: u.count }); return; }
+      pushUnknown({ ...u, part: [part, disp, u.part].filter(Boolean).join(" · "), partJa: [partJa || part, dispJa, u.partJa || u.part].filter(Boolean).join(" · ") });
+    });
+    if (ingWeightFactor(ing.unit) === 0) pushUnknown({ ...U, reason: "nonGram", unit: _normTxt(ing.unit) });
+  };
   const visitIngs = (ings, part, partJa) => {
     (ings || []).forEach(ing => {
       if (!ing) return;
@@ -1961,6 +1991,9 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
       const disp = name || "(没写名字)";
       const dispJa = _normTxt(ing.nameJa) || disp;
       const U = { name: disp, nameJa: dispJa, part, partJa: partJa || part };
+      // 第 4 批 B4-6 第二段:「来自组件」的行(没有还在的材料关联时)递归进组件的配料。优先级同成本链:材料还在 → 按材料;
+      // 否则 componentId → 组件还在就递归、已删记 missingComponent、绕回自己记 cycle。「不计价」不免过敏原(照样走这里)
+      if (_hasCompId(ing) && !(ing.materialId && matById.get(ing.materialId))) { visitCompRow(ing, U, disp, dispJa, part, partJa); return; }
       if (!ing.materialId) { pushUnknown({ ...U, reason: "unlinked" }); return; }
       const m = matById.get(ing.materialId);
       if (!m) { pushUnknown({ ...U, reason: "missingMaterial" }); return; }
@@ -2011,6 +2044,8 @@ const ALLERGEN_UNKNOWN_REASONS = {
   nonGram:         { zh: "单位不是克",           ja: "単位がグラムでない" },
   missingItem:     { zh: "组成里的配方已删除",   ja: "構成のレシピが削除済み" },
   noIngredients:   { zh: "还没有配料",           ja: "材料が未入力" },
+  missingComponent: { zh: "引用的组件已删除",    ja: "参照先のパーツが削除済み" },
+  cycle:           { zh: "组件互相引用(绕回了自己)", ja: "パーツが循環参照しています" },
 };
 
 // 配方上手写的过敏原(「小麦・卵・乳・ナッツ」「乳(バター)、ナッツ(アーモンド)、小麦」)→ code。
@@ -2075,9 +2110,33 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
   // 只去括号,不去末尾的字母(「维生素 C」)
   const stripNote = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || s;
   const e = entity || {};
+  // 第 4 批 B4-6 第二段:「来自组件」的行(没有还在的材料关联时)= 复合配料「行名(组件的配料…)」,重量 = 这一行的克数;
+  // 合并键 "c:" + 组件 id(同一个组件用了几行合成一项)。组件已删 / 绕回自己 / 嵌套太深 → 当普通的没关联行按名字列(过敏原那边会报)
+  const compById = _compMap(ctx);
+  const visiting = ctx._draftVisiting || (ctx._draftVisiting = new Set());
+  const selfId = (kind === "component" && _hasCompId({ componentId: e.id }) && compById.has(e.id)) ? e.id : undefined;
+  const compRow = (ing) => {
+    if (!_hasCompId(ing) || (ing.materialId && matById.get(ing.materialId))) return false;
+    const comp = compById.get(ing.componentId);
+    if (!comp || comp.id === selfId || visiting.has(comp.id) || _depth >= 12) return false;
+    const name = _ingDisplayName(ing) || _entityNameZh(comp);
+    if (!name) return false;
+    const added = selfId !== undefined && !visiting.has(selfId);
+    if (added) visiting.add(selfId);
+    let sub;
+    try { sub = draftIngredientList("component", comp, ctx, _depth + 1); } finally { if (added) visiting.delete(selfId); }
+    const exp = sub.text || "";
+    const text = exp ? `${name}(${exp})` : name;
+    const g = ingGramsOf(ing);
+    const mkey = "c:" + comp.id;
+    if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty", mkey, exp);
+    else addItem(name, text, g, !!exp, mkey, exp);
+    return true;
+  };
   const visitIngs = (ings) => {
     (ings || []).forEach(ing => {
       if (!ing) return;
+      if (compRow(ing)) return;
       const m = ing.materialId ? matById.get(ing.materialId) : null;
       const name = (m && _normTxt(m.labelNameZh)) || _ingDisplayName(ing);
       if (!name) return;
@@ -3992,6 +4051,52 @@ function stripPrivateMaterialFields(m) {
   ["priceHistory", ...DOMESTIC_KEYS].forEach(k => { delete rest[k]; });
   return rest;
 }
+// 第 4 批 B4-6 第二段(critic M8):合并导入时组件按 id / 中文名 / 日文名去重。文件里的组件因为「本机已有同名的」被跳过、
+// id 却和本机那条不一样时,文件里别的条目按 id 引用它的地方会指空:配料行的 componentId(来自组件)、组合产品部分的 sourceComponentId。
+// idMap = 文件组件 id → 本机(或同一个文件里先加进来的)那条的 id,由 mergeImportData 的 pickNew 在跳过时记下来。
+// 这里把新加进来的配方 / 组件 / 组合产品里的引用改写过去。跟组件库走(follow)的部分改指以后,内容和本机那个组件不一样的
+// 先去掉 follow(变成「老数据、和组件库不一样」,详情页提示她选「用组件库的 / 保留」),绝不悄悄把文件带来的内容换掉。
+// 没有要改的条目原样返回同一个对象;idMap 为空时整个数组原样返回。
+function remapImportedComponentRefs(list, idMap, compById, matIds) {
+  const stat = { rows: 0, layers: 0, unfollowed: 0 };
+  if (!Array.isArray(list) || !idMap || idMap.size === 0) return { list, ...stat };
+  const mapRows = (ings) => {
+    if (!Array.isArray(ings)) return ings;
+    let ch = false;
+    const next = ings.map(i => {
+      if (!_hasCompId(i) || !idMap.has(i.componentId)) return i;
+      ch = true; stat.rows++;
+      return { ...i, componentId: idMap.get(i.componentId) };
+    });
+    return ch ? next : ings;
+  };
+  const out = list.map(x => {
+    if (!x || typeof x !== "object") return x;
+    let y = x;
+    const ings = mapRows(x.ingredients);
+    if (ings !== x.ingredients) y = { ...y, ingredients: ings };
+    if (Array.isArray(x.layers)) {
+      let ch = false;
+      const layers = x.layers.map(l => {
+        if (!l || typeof l !== "object") return l;
+        let m = l;
+        const li = mapRows(l.ingredients);
+        if (li !== l.ingredients) m = { ...m, ingredients: li };
+        if (_hasCompId({ componentId: l.sourceComponentId }) && idMap.has(l.sourceComponentId)) {
+          m = { ...m, sourceComponentId: idMap.get(l.sourceComponentId) };
+          stat.layers++;
+          const comp = compById.get(m.sourceComponentId);
+          if (m.follow && !m.localVariant && comp && !sameLayerContent(m, comp, matIds)) { const { follow, ...rest } = m; m = rest; stat.unfollowed++; }
+        }
+        if (m !== l) ch = true;
+        return m;
+      });
+      if (ch) y = { ...y, layers };
+    }
+    return y;
+  });
+  return { list: out, ...stat };
+}
 
 // ─── 编辑页「有没有没保存的改动」(2026-09-29 体检修)────────────────────────
 // 以前编辑页没保存就点顶部导航 / 手机底栏,内容当场丢,没有任何提醒。
@@ -4867,6 +4972,76 @@ function computeDataHealth(data) {
       titleZh: "组合产品里内容是空的部分", titleJa: "中身が空のパーツ",
       whyZh: "这些部分一行原料都没有,但组件库里的那个组件有 —— 成本和整体配方都缺了这一块。点「用组件库的」:这一部分改成跟组件库走,内容换成组件库现在的(和组合产品详情页的同名按钮一样,5 秒内可以撤销)。",
       whyJa: "材料が 0 行のパーツですが、部品庫の元パーツには材料があります。「部品庫に合わせる」でこのパーツを部品庫と連動させ、中身を部品庫の最新に置き換えます(5 秒以内なら元に戻せます)。",
+      items });
+  }
+
+  // ── H17 配料行的「来自组件」/「不计价」有问题(第 4 批 B4-6)──
+  // 在自己的 compById 上算(不读渲染期注入值)。和成本链同一个优先级:不计价 → 材料(还在)→ 组件(还在)→ 手写价 / 快照。
+  // 只在有问题时才列这一项(老数据没有这两种行,体检页和以前一模一样)
+  {
+    const items = [];
+    const has = (v) => v !== undefined && v !== null && v !== "";
+    // 组件顺着「计价的来自组件行」能不能绕回它自己(同成本链 _compOnCycle:不计价的、材料说了算的行不算)
+    const priced = (i) => !!i && !i.noCost && has(i.componentId) && !(has(i.materialId) && matById.get(i.materialId));
+    const onCycle = (cid) => {
+      const start = compById.get(cid);
+      if (!start) return false;
+      const seen = new Set(), stack = [start];
+      while (stack.length) {
+        const c = stack.pop();
+        for (const i of (Array.isArray(c.ingredients) ? c.ingredients : [])) {
+          if (!priced(i)) continue;
+          const n = compById.get(i.componentId);
+          if (!n) continue;
+          if (n.id === start.id) return true;
+          if (!seen.has(n.id)) { seen.add(n.id); stack.push(n); }
+        }
+      }
+      return false;
+    };
+    const scan = (ings, base) => (Array.isArray(ings) ? ings : []).forEach((ing, ri) => {
+      if (!ing || !(_normTxt(ing.nameZh) || _normTxt(ing.nameJa))) return;
+      const cid = has(ing.componentId) ? ing.componentId : null;
+      const m = has(ing.materialId) ? matById.get(ing.materialId) : null;
+      const probs = [];   // [zh, ja]
+      if (ing.noCost && m && matHasPrice(m)) probs.push([`标了「不计价」,但关联的材料「${zhN(m)}」有价 → 这一行成本按 0 算`, `「原価に含めない」だが連動材料「${jaN(m)}」に価格あり → 原価 0 で計算`]);
+      if (cid !== null) {
+        const comp = compById.get(cid);
+        if (m) probs.push([`同时关联了材料「${zhN(m)}」和组件${comp ? `「${zhN(comp)}」` : ""} → 现在按材料算`, `材料「${jaN(m)}」とパーツ${comp ? `「${jaN(comp)}」` : ""}の両方に連動 → 材料で計算`]);
+        else if (!comp) probs.push(["引用的组件已删除 → 成本按删除前的快照算,不会再更新", "参照先のパーツが削除済み → 削除前のスナップショットで計算"]);
+        else if (!ing.noCost) {
+          const fr = ingWeightFactor(ing.unit), fc = ingWeightFactor(comp.unit);
+          if (onCycle(cid)) probs.push([`组件「${zhN(comp)}」又用回了这个组件(绕了一圈)→ 算不出价`, `パーツ「${jaN(comp)}」が循環参照 → 原価不明`]);
+          else if (!(parseFloat(comp.yield) > 0)) probs.push([`组件「${zhN(comp)}」没填产出量 → 算不出每克价`, `パーツ「${jaN(comp)}」の出来高が未入力 → 単価不明`]);
+          else if (!((fr > 0 && fc > 0) || (fr === 0 && fc === 0 && _normCountUnit(ing.unit) === _normCountUnit(comp.unit)))) probs.push([`单位对不上:这一行写「${_normTxt(ing.unit) || "g"}」,组件按「${_normTxt(comp.unit) || "g"}」产出 → 算不出价`, `単位が合わない:行は「${_normTxt(ing.unit) || "g"}」、パーツは「${_normTxt(comp.unit) || "g"}」 → 原価不明`]);
+        }
+      }
+      if (!probs.length) return;
+      const nmZh = zhN(ing) || noName.zh, nmJa = jaN(ing) || noName.ja;
+      items.push({
+        key: `${base.key}:${ri}`, kind: base.kind, id: base.id, jump: base.jump,
+        labelZh: `${base.ownerZh} · ${nmZh}`, labelJa: `${base.ownerJa} · ${nmJa}`,
+        detailZh: `${TYPE[base.type][0]} · ${probs.map(p => p[0]).join(";")}${base.noteZh ? " · " + base.noteZh : ""}`,
+        detailJa: `${TYPE[base.type][1]} · ${probs.map(p => p[1]).join("。")}${base.noteJa ? " · " + base.noteJa : ""}`,
+      });
+    });
+    recipes.forEach((r, i) => scan(r.ingredients, { key: `H17:r:${r.id != null ? r.id : "#" + i}`, type: "recipe", kind: "recipe", id: r.id, jump: { kind: "recipe", id: r.id }, ownerZh: zhN(r) || noName.zh, ownerJa: jaN(r) || noName.ja }));
+    components.forEach((c, i) => scan(c.ingredients, { key: `H17:p:${c.id != null ? c.id : "#" + i}`, type: "component", kind: "component", id: c.id, jump: { kind: "component", id: c.id }, ownerZh: zhN(c) || noName.zh, ownerJa: jaN(c) || noName.ja }));
+    creations.forEach((cr, i) => (Array.isArray(cr.layers) ? cr.layers : []).forEach((l, li) => {
+      if (!l) return;
+      const comp = l.sourceComponentId ? compById.get(l.sourceComponentId) : null;
+      // 跟组件库走的部分:问题在组件里,组件那一条已经列了,这里不重复
+      if (comp && layerLinkState(l, components, matIds) === "follow") return;
+      scan(l.ingredients, {
+        key: `H17:c:${cr.id != null ? cr.id : "#" + i}:${li}`, type: "creation", kind: "creation", id: cr.id,
+        jump: { kind: "creation", id: cr.id },
+        ownerZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || noName.zh}`, ownerJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || noName.ja}`,
+      });
+    }));
+    if (items.length) checks.push({ id: "H17", audit: "b4-6", level: "money",
+      titleZh: "配料行引用的组件 / 「不计价」有问题", titleJa: "パーツ参照 /「原価に含めない」の問題",
+      whyZh: "这些配料行的价从组件来,或者标了「不计价」,但现在算不对:引用的组件删了(按删除前的快照算)、组件没填产出量、单位一边按克一边按个、组件互相引用;或者同时关联了材料和组件(按材料算);或者「不计价」的行关联了有价的材料(成本按 0 算)。点「去改」在配料表里重新选(行首的 🔗 / 🧩)。",
+      whyJa: "パーツから原価を取る行、または「原価に含めない」行で、原価が正しく計算できていません(参照先パーツの削除・出来高未入力・単位不一致・循環参照、材料とパーツの両方に連動、価格のある材料に連動した「原価に含めない」行)。「直す」から配合表の行頭 🔗 / 🧩 で選び直してください。",
       items });
   }
 
@@ -6219,6 +6394,22 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 }
 
 // ─── 组件仓库 View ───────────────────────────────────────────────
+// 第 4 批 B4-6 第二段:哪些配方 / 组件 / 组合产品的配料行「来自组件」用了 compId(当原料用)。
+// 每个配方 / 组件算一处;组合产品每个部分算一处,跟组件库走的部分不算(它的配料是组件的副本,组件那一处已经算了)。
+// 返回 [{ type: "recipe" | "component" | "creation", obj, layer? }]。只读,不写数据
+const componentIngredientUses = (compId, { recipes = [], components = [], creations = [] } = {}) => {
+  if (!_hasCompId({ componentId: compId })) return [];
+  const uses = (ings) => (Array.isArray(ings) ? ings : []).some(i => i && i.componentId === compId);
+  const out = [];
+  (recipes || []).forEach(r => { if (r && uses(r.ingredients)) out.push({ type: "recipe", obj: r }); });
+  (components || []).forEach(c => { if (c && c.id !== compId && uses(c.ingredients)) out.push({ type: "component", obj: c }); });
+  (creations || []).forEach(cr => (cr && Array.isArray(cr.layers) ? cr.layers : []).forEach(l => {
+    if (!l || !uses(l.ingredients)) return;
+    if (l.follow && !l.localVariant && l.sourceComponentId !== compId && (components || []).some(c => c && c.id === l.sourceComponentId)) return;
+    out.push({ type: "creation", obj: cr, layer: l });
+  }));
+  return out;
+};
 function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
@@ -6255,10 +6446,19 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const cName = pickLang(snap, "name", lang) || snap.nameFr || "";
           const usedByCreations = (creations || []).filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === snap.id));
           const usedByProducts = (products || []).filter(p => (p.items || []).some(it => it && it.linkedType === "component" && String(it.linkedId) === String(snap.id)));
+          // 第 4 批 B4-6:配料行「来自组件」用它当原料的配方 / 组件 / 组合产品部分也列出来(删了以后这些行按删除前的快照算)
+          const asIng = componentIngredientUses(snap.id, { recipes, components, creations });
+          const ingTag = lang === "zh" ? "(当原料)" : "(材料として)";
           const refs = [
             ...usedByCreations.map(cr => `${lang === "zh" ? "组合产品" : "組立製品"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`),
             ...usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa || ""}`),
+            ...asIng.map(u => u.type === "recipe" ? `${lang === "zh" ? "配方" : "レシピ"}：${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""}${ingTag}`
+              : u.type === "component" ? `${lang === "zh" ? "组件" : "パーツ"}：${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""}${ingTag}`
+              : `${lang === "zh" ? "组合产品" : "組立製品"}：${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""} · ${u.layer.customName || pickLang(u.layer, "name", lang) || ""}${ingTag}`),
           ];
+          const ingNote = asIng.length === 0 ? "" : (lang === "zh"
+            ? "\n\n标「当原料」的是配料表里「来自组件」的行:删除后这些行按删除前的成本快照算,不再跟着组件价变;撤销删除就恢复。"
+            : "\n\n「材料として」はパーツから原価を取る配合行です。削除後は削除前のスナップショット原価で計算されます(元に戻すと復帰)。");
           const doDelete = () => {
             const idx = components.findIndex(x => x.id === snap.id);
             setComponents(prev => prev.filter(x => x.id !== snap.id));
@@ -6275,8 +6475,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           if (refs.length > 0) {
             confirmDialog(
               lang === "zh"
-                ? "下面这些地方在用这个组件。删除后，组合产品里的这一部分保留当时的内容，但不再跟组件库同步；商品里这一项会显示「已删除」，采购计划会少算它。"
-                : "以下で使われています。削除すると組立製品のパーツは部品庫と連動しなくなり、商品は「削除済み」になります。",
+                ? "下面这些地方在用这个组件。删除后，组合产品里的这一部分保留当时的内容，但不再跟组件库同步；商品里这一项会显示「已删除」，采购计划会少算它。" + ingNote
+                : "以下で使われています。削除すると組立製品のパーツは部品庫と連動しなくなり、商品は「削除済み」になります。" + ingNote,
               doDelete,
               {
                 kicker: lang === "zh" ? "删除组件" : "部品を削除",
@@ -6363,6 +6563,13 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
     new Set((cr.layers || []).map(l => l && l.sourceComponentId).filter(Boolean))
       .forEach(id => { (usedIn[id] = usedIn[id] || []).push(crName); });
   });
+  // 第 4 批 B4-6:被配料行「来自组件」当原料用了几处(老数据没有这种行 → 空对象,卡片和以前一样)
+  const asIngCount = {};
+  const anyCompRow = (ings) => (Array.isArray(ings) ? ings : []).some(i => _hasCompId(i));
+  if ((recipes || []).some(r => r && anyCompRow(r.ingredients)) || components.some(c => c && anyCompRow(c.ingredients))
+    || (creations || []).some(cr => cr && (cr.layers || []).some(l => l && anyCompRow(l.ingredients)))) {
+    components.forEach(c => { if (!c) return; const u = componentIngredientUses(c.id, { recipes, components, creations }); if (u.length) asIngCount[c.id] = u; });
+  }
   const emptyChips = [];
   if (filterCat !== "all") {
     const ct = filterCat === "inuse" ? null : getCompCat(filterCat);
@@ -6381,6 +6588,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
       : lang === "zh"
         ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合产品`)
         : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
+    const ingUses = asIngCount[c.id] || [];
+    const ingUseText = ingUses.length === 0 ? null : (lang === "zh" ? `当原料用在 ${ingUses.length} 处` : `材料として ${ingUses.length} か所`);
     const liveCost = getIngsLiveCost(c.ingredients, materials, brands);  // 不读 c.totalCost,见 getIngsLiveCost
     // 第 4 批:只靠原料搜到的,写出是哪一行原料
     const ingHits = ingHitOf.get(c.id) || [];
@@ -6462,12 +6671,13 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           </div>
 
           {/* 信息行 */}
-          <div title={uses.length > 1 ? uses.join(" / ") : undefined} style={{ fontSize: 11, color: T.textTertiary, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div title={ingUses.length ? [uses.length > 1 ? uses.join(" / ") : "", ingUses.map(u => (pickLang(u.obj, "name", lang) || u.obj.nameFr || "") + (u.layer ? ` · ${u.layer.customName || pickLang(u.layer, "name", lang) || ""}` : "")).join(" / ")].filter(Boolean).join("\n") : (uses.length > 1 ? uses.join(" / ") : undefined)} style={{ fontSize: 11, color: T.textTertiary, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {[
               c.yield ? `${c.yield} ${c.unit || "g"}` : null,
               (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
               liveCost > 0 ? `¥${liveCost.toFixed(0)}` : null,
               usageText,
+              ingUseText,
               ingHitText,
             ].filter(Boolean).map((t, i, arr) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -18047,6 +18257,8 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
                 noUsed: zh ? "这几个部分没填「用量」,整部分没算" : "使用量未入力のパーツ",
                 unlinked: zh ? "没关联材料百科" : "百科未関連",
                 badQty: zh ? "用量没填或不是数字" : "分量が数字でない",
+                // 第 4 批 B4-6:配料行「来自组件」展不开成原料的
+                ...PURCHASE_COMP_SKIP[zh ? "zh" : "ja"],
               };
               const total = computed.skipped.reduce((a, x) => a + Math.max(1, x.names.length), 0);
               return (
@@ -18767,6 +18979,11 @@ const _prodUnitOf = (unit) => {
   return u;
 };
 const _prodNameKey = (s) => String(s || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+// 第 4 批 B4-6:「来自组件」的行展不开成原料时的原因(采购页「这些没算进来」和生产单共用)
+const PURCHASE_COMP_SKIP = {
+  zh: { compMissing: "引用的组件已删除,原料没算", compNoYield: "引用的组件没填产出量,原料没法按量算", compUnit: "这一行的单位和组件的单位对不上(一边按克、一边按个),原料没算", compCycle: "组件互相引用(绕回了自己),原料没算" },
+  ja: { compMissing: "参照先のパーツが削除済み(材料未計算)", compNoYield: "参照先のパーツの出来高が未入力", compUnit: "行とパーツの単位が合わない(g と個)", compCycle: "パーツが循環参照しています" },
+};
 const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   const { products, recipes, creations, components = [], materials, brands, lang } = ctx || {};
   const prodMode = !!(opts && opts.production);
@@ -18793,11 +19010,56 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     w.qty += qty;
     if (src) w.srcs.add(src);
   };
-  const collect = (obj, multiplier, src) => {
+  // 第 4 批 B4-6 第二段:配料行「来自组件」(componentId,且没有还在的材料关联 —— 优先级同成本链)。
+  // 采购:展开成组件的原料,倍数 = 这一行的量(按重量换算)÷ 组件产出量;组件已删 / 没产出量 / 单位对不上 / 绕回自己 → 列进「这些没算进来」。
+  // 生产:组件标了备货 → 「从库存取」(键 = 组件 id + 单位,和组合产品备货的部分同一个键,会合成一行);没标 → 展开进今天要称的。
+  //       展不开的照旧按名字称这一行(和以前没关联的行一样),同时列进「这些没算进来」。
+  // 「不计价」且没有还在的材料关联的行:采购不买(她说了这不是要花钱买的),不列进「没算进来」;生产照称 / 照展开。
+  const compById = new Map();
+  (components || []).forEach(c => { if (c && c.id !== undefined && c.id !== null && !compById.has(c.id)) compById.set(c.id, c); });
+  const matAlive = (ing) => !!ing.materialId && (materials || []).some(m => m && m.id === ing.materialId);
+  // 返回 true = 这一行已经处理完(调用方直接 return)
+  const compIng = (ing, amount, src, path) => {
+    if (!_hasCompId(ing) || matAlive(ing)) {
+      if (ing.noCost && !prodMode && !matAlive(ing)) return true;
+      return false;
+    }
+    if (ing.noCost && !prodMode) return true;
+    const nm = ingName(ing);
+    const comp = compById.get(ing.componentId);
+    const fallback = (reason) => { skip(reason, src, nm); if (prodMode && nm && amount > 0) addWeigh(ing, amount, src); return true; };
+    if (!comp) return fallback("compMissing");
+    if (!(amount > 0)) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return true; }
+    const compNm = mLabel(comp) || comp.nameFr || nm;
+    if (prodMode && comp.prepMode === "stock") {
+      const unit = ing.unit || "g";
+      const k = comp.id + "\u0000" + _prodUnitOf(unit);
+      if (!fromStock.has(k)) fromStock.set(k, { name: nm || compNm, compName: compNm, parts: new Set(), unit, qty: null, missing: 0, srcs: new Set(), noUsed: false });
+      const f = fromStock.get(k);
+      f.parts.add(nm || compNm);
+      if (f.parts.size > 1) f.name = f.compName;
+      f.qty = (f.qty || 0) + amount;
+      if (src) f.srcs.add(src);
+      return true;
+    }
+    if (path.has(comp.id) || path.size >= 8) return fallback("compCycle");
+    const y = parseFloat(comp.yield);
+    if (!(y > 0)) return fallback("compNoYield");
+    const fr = ingWeightFactor(ing.unit), fc = ingWeightFactor(comp.unit);
+    let mult;
+    if (fr > 0 && fc > 0) mult = amount * fr / (y * fc);
+    else if (fr === 0 && fc === 0 && _normCountUnit(ing.unit) === _normCountUnit(comp.unit)) mult = amount / y;
+    else return fallback("compUnit");
+    const next = new Set(path); next.add(comp.id);
+    collect(comp, mult, src ? `${src} › ${compNm}` : compNm, next);
+    return true;
+  };
+  const collect = (obj, multiplier, src, path = new Set()) => {
     (obj.ingredients || []).forEach(ing => {
       if (!ing) return;
       const q = parseFloat(ing.qty) || 0;
       const nm = ingName(ing);
+      if (compIng(ing, q * multiplier, src, path)) return;
       if (!ing.materialId) {
         if (!prodMode) { if (nm) skip("unlinked", src, nm); return; }
         if (!nm) return;
@@ -18809,7 +19071,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
       if (prodMode) addWeigh(ing, q * multiplier, src);
     });
-    (obj.layers || []).forEach(l => collect(l, multiplier, src));
+    (obj.layers || []).forEach(l => collect(l, multiplier, src, path));
   };
   // count = 要做几个(配方 / 组件按它们自己的单位,组合产品按个 / 台)
   const addTarget = (linkedType, target, count, src) => {
@@ -18836,6 +19098,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
         }
         if (p.noUsed) { skip("noUsed", src, p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`); return; }
         p.ings.forEach(({ ing, qty }) => {
+          if (compIng(ing, qty, src, _hasCompId({ componentId: p.layer.sourceComponentId }) ? new Set([p.layer.sourceComponentId]) : new Set())) return;   // 第 4 批 B4-6:来自组件的行
           if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
           if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
           if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
@@ -18846,7 +19109,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     }
     // recipe/component: 每份 item 需要 X.yield 个单位;实际要做 count 个单位 → multiplier = count / yield
     const mult = count / Math.max(1, parseFloat(target.yield) || 1);
-    collect(target, mult, src);
+    collect(target, mult, src, linkedType === "component" && _hasCompId({ componentId: target.id }) ? new Set([target.id]) : new Set());
   };
   const findTarget = (type, id) => type === "creation" ? creations.find(c => c.id === id)
     : type === "component" ? components.find(c => c.id === id)
@@ -19010,7 +19273,7 @@ const PROD_TXT = {
     whole: (f) => `整批 × ${f}`, collapse: "收起", expand: "展开配料",
     totals: "今天总共要称多少", totalsHint: "关联了材料百科的按材料合并,没关联的按名字 + 单位合并。组件标了「备货」的部分不展开,只写从库存取多少。",
     nonGram: "按个 / 本 这类单位的(不能和克加在一起)", stockTitle: "从库存取(备货的部分)", stockMissing: (n) => `(另有 ${n} 个部分没填用量)`, skippedTitle: (n) => `这些没算进来(${n} 项)`,
-    reasons: { noItems: "商品没挂任何配方 / 组合产品 / 组件", missing: "商品挂的配方 / 组合产品 / 组件已删除", missingDirect: "这一行的东西已删除", noUsed: "这几个部分没填「用量」,整部分没算", badQty: "用量没填或不是数字", unlinked: "没关联材料百科" },
+    reasons: { noItems: "商品没挂任何配方 / 组合产品 / 组件", missing: "商品挂的配方 / 组合产品 / 组件已删除", missingDirect: "这一行的东西已删除", noUsed: "这几个部分没填「用量」,整部分没算", badQty: "用量没填或不是数字", unlinked: "没关联材料百科", ...PURCHASE_COMP_SKIP.zh },
     close: "收起", pickProducts: "从商品加", lowAll: (n) => `＋ 低库存的全加(${n} 个)`, stockOf: (s, t) => `库存 ${s} · 补货线 ${t}`, avg: (a, n = 30) => `近 ${n} 天日均 ${a}`,
     addRestock: (n) => `＋ ${n}(补库存)`, addAvg: (n) => `＋ ${n}(按日均)`, addOne: "＋ 加入", onSheet: "已在单子上",
     noProducts: "还没有商品(去「商品」页新建)", onSaleTitle: "在售中的配方 / 组合产品", noOnSale: "还没有标「在售中」的(在配方一览里点行首的圆点)",
@@ -19037,7 +19300,7 @@ const PROD_TXT = {
     whole: (f) => `全量 × ${f}`, collapse: "閉じる", expand: "材料を表示",
     totals: "本日の計量合計", totalsHint: "材料事典に関連付けた材料は材料ごと、未関連は名前 + 単位ごとに合計。作り置きのパーツは展開せず、ストックから取る量のみ。",
     nonGram: "個 / 本 などの単位(g と合算不可)", stockTitle: "ストックから(作り置き)", stockMissing: (n) => `(使用量未入力 ${n} 件)`, skippedTitle: (n) => `計算に含まれていないもの(${n} 件)`,
-    reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連" },
+    reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連", ...PURCHASE_COMP_SKIP.ja },
     close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a, n = 30) => `${n} 日平均 ${a}/日`,
     addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
     noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組立製品", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
@@ -21645,12 +21908,12 @@ function App() {
             const genId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
             const nameOf = (x) => (x && (x.nameZh || x.nameJa || x.nameFr || x.titleZh || x.titleJa || x.title || x.id)) || "";
             // 按 isDup 去重,返回要追加的条目(文件里自己重复的也只加第一条)
-            const pickNew = (base, incoming, isDup, makeId, label) => {
+            const pickNew = (base, incoming, isDup, makeId, label, onDup) => {
               const add = [];
               (incoming || []).forEach(inc => {
                 if (!inc || typeof inc !== "object") return;
                 const dup = (base || []).find(x => x && isDup(x, inc)) || add.find(x => isDup(x, inc));
-                if (dup) { if (label) skipped.push(`${label}「${nameOf(inc)}」`); return; }
+                if (dup) { if (label) skipped.push(`${label}「${nameOf(inc)}」`); if (onDup) onDup(inc, dup); return; }
                 add.push(makeId ? { ...inc, id: inc.id || makeId() } : inc);
               });
               return add;
@@ -21708,20 +21971,43 @@ function App() {
             }
 
             // 2. 组件 / 3. 配方 / 4. 组合产品(按 id 或 nameZh / nameJa 去重,已有的不动)
+            // 第 4 批 B4-6 第二段:文件里被跳过的组件,id 和本机那条不一样时记下「文件 id → 本机 id」,
+            // 新加进来的配方 / 组件 / 组合产品里按 id 引用它的地方(配料行 componentId、部分 sourceComponentId)改写过去(remapImportedComponentRefs)
+            const compIdMap = new Map();
+            let compAdd = [];
+            const refStat = { rows: 0, layers: 0, unfollowed: 0 };
+            const remap = (list) => {
+              if (!compIdMap.size) return list;
+              const compById = new Map();
+              [...(cur.components || []), ...compAdd].forEach(c => { if (c && c.id !== undefined && c.id !== null && !compById.has(c.id)) compById.set(c.id, c); });
+              const matIds = new Set([...(cur.materials || []), ...(Array.isArray(d.materials) ? d.materials : [])].map(m => m && m.id));
+              const r = remapImportedComponentRefs(list, compIdMap, compById, matIds);
+              refStat.rows += r.rows; refStat.layers += r.layers; refStat.unfollowed += r.unfollowed;
+              return r.list;
+            };
             if (Array.isArray(d.components)) {
-              const add = pickNew(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ");
+              const add0 = pickNew(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ",
+                (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); });
+              compAdd = add0;
+              const add = remap(add0);
+              compAdd = add;
               appendTo(setComponents, add);
               if (add.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + add.length);
             }
             if (Array.isArray(d.recipes)) {
-              const add = pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ");
+              const add = remap(pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ"));
               appendTo(setRecipes, add);
               if (add.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + add.length);
             }
             if (Array.isArray(d.creations)) {
-              const add = pickNew(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品");
+              const add = remap(pickNew(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品"));
               appendTo(setCreations, add);
               if (add.length) lines.push((zh ? "+ 新组合产品 " : "+ 組立製品 ") + add.length);
+            }
+            if (refStat.rows || refStat.layers) {
+              lines.push(zh
+                ? `· 文件里的组件本机已有同名的(id 不同):${refStat.rows ? `${refStat.rows} 行「来自组件」的配料` : ""}${refStat.rows && refStat.layers ? "、" : ""}${refStat.layers ? `${refStat.layers} 个组合产品部分` : ""}改指本机那个组件${refStat.unfollowed ? `;其中 ${refStat.unfollowed} 个部分和本机组件内容不一样,先不跟组件库走(组合产品详情页会提示你选)` : ""}`
+                : `· 同名パーツが既にあるため(id 違い):${refStat.rows ? `配合 ${refStat.rows} 行` : ""}${refStat.rows && refStat.layers ? "・" : ""}${refStat.layers ? `パーツ ${refStat.layers} 件` : ""}を既存パーツに付け替え${refStat.unfollowed ? `(内容が違う ${refStat.unfollowed} 件は連動を外しました。詳細ページで選べます)` : ""}`);
             }
 
             // 5. 知识:按 id,或中文 / 日文标题(去掉空格、全半角、大小写差别后)相同去重
