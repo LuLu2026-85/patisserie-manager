@@ -20111,7 +20111,8 @@ const productPrepSkips = (p) => {
   if (p.prepSkip === true) return true;
   if (p.prepSkip === false) return false;
   const items = Array.isArray(p.items) ? p.items : [];
-  return !(items.length === 1 && (parseFloat(items[0] && items[0].qty) || 1) === 1);
+  // 只挂一个组件的商品(组件按克 / 按组件自己的单位挂,比如一罐 200 g 焦糖酱)= 从备货里分出来,扣;不按「每件 1 个」判断(那条只对按个数的配方有意义)
+  return !(items.length === 1 && items[0] && (items[0].linkedType === "component" || (parseFloat(items[0].qty) || 1) === 1));
 };
 // 生产单一行的身份(判重 / 撤销放回用):种类 + id;配方行 stage === "make"(做一批存着)另算一样。没有 stage 的行和以前的判重一模一样
 const prodLineKey = (l) => l.kind + "\u0000" + String(l.id) + (l.kind === "recipe" && l.stage === "make" ? "\u0000make" : "");
@@ -20316,7 +20317,7 @@ const PREP_TXT = {
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
-    fSkipHint: "只装一样、每件 1 个的默认会扣(记入生产 = 烤出来);礼盒和几个装的默认不扣",
+    fSkipHint: "只装一样、每件 1 个的(或只挂一个组件的)默认会扣(记入生产 = 烤出来 / 从备货分出来);礼盒和几个装的默认不扣",
     fBuyToggle: "按手上的备货算(扣掉现有的、按整批做、留够提醒线;可能比不勾多)",
     fBuyLine: (name, need, u, have, min, k, qty) => `备货:${name} 这段时间要用 ${fmtQty(need)} ${u},手上能用 ${fmtQty(have)}${min > 0 ? `(提醒线 ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → 要做 ${k} 批(${fmtQty(qty)} ${u}),按 ${k} 批算原料` : " → 不用做,原料不算"),
@@ -20554,7 +20555,7 @@ const PREP_TXT = {
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
-    fSkipHint: "1 品・1 個入りは既定で引きます(製造記録 = 焼成)。詰め合わせ・複数個入りは既定で引きません",
+    fSkipHint: "1 品・1 個入り(またはパーツ 1 つだけ)は既定で引きます(製造記録 = 焼成 / 作り置きから小分け)。詰め合わせ・複数個入りは既定で引きません",
     fBuyToggle: "手持ちの作り置きで計算(在庫を差し引き・バッチ単位・補充ラインを確保。チェックなしより多くなる場合あり)",
     fBuyLine: (name, need, u, have, min, k, qty) => `作り置き:${name} 必要 ${fmtQty(need)}${u}、使用可 ${fmtQty(have)}${min > 0 ? `(補充ライン ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → ${k} バッチ(${fmtQty(qty)}${u})で材料計算` : " → 仕込み不要(材料に含めず)"),
@@ -23037,7 +23038,7 @@ const STAFF_TXT = {
     pin1: "PIN(4 位数字)", pin2: "再输一次", badPin: "要 4 位数字", mismatch: "两次输的不一样",
     setupOk: "设好并进入", skipPin: "不设 PIN,直接进入", cancel: "取消", changePin: "换一个 PIN",
     enterTitle: "进入员工模式", enterOk: "进入",
-    enterHint: "员工模式下看不到价格、成本和利润,不能改配方、不能删东西。只有「生产单 / 厨房视图 / 日结(今天和昨天)」三页。退出要输 PIN。\n\n开关只记在这台设备上,别的设备不受影响。",
+    enterHint: "员工模式下看不到价格、成本和利润,不能改配方、不能删东西。能看「生产单 / 厨房视图 / 日结(今天和昨天)」;有东西标了备货时还有「备货」页(能登记、取出、盘点、报废,都能撤销,不能改设置)。退出要输 PIN。\n\n开关只记在这台设备上,别的设备不受影响。",
     noPinNote: "还没设 PIN:谁都能直接退出。",
     exitTitle: "退出员工模式", exitHint: "输 4 位 PIN", wrongPin: "PIN 不对,再试一次",
     forgot: "忘了 PIN?用 app 进入密码", pwd: "app 进入密码", pwdOk: "退出", wrongPwd: "密码不对", backToPin: "← 用 PIN",
@@ -23052,7 +23053,7 @@ const STAFF_TXT = {
     pin1: "PIN(4 桁)", pin2: "もう一度", badPin: "4 桁の数字にしてください", mismatch: "2 回の入力が一致しません",
     setupOk: "設定して開始", skipPin: "PIN なしで開始", cancel: "キャンセル", changePin: "PIN を変更",
     enterTitle: "スタッフモード", enterOk: "開始",
-    enterHint: "スタッフモードでは価格・原価・利益が見えず、レシピの編集や削除もできません。「製造リスト / キッチン / 日次締め(今日と昨日)」の 3 ページだけです。終了には PIN が必要です。\n\nこの端末だけの設定です。",
+    enterHint: "スタッフモードでは価格・原価・利益が見えず、レシピの編集や削除もできません。「製造リスト / キッチン / 日次締め(今日と昨日)」を使えます。作り置きを登録している場合は「作り置き」ページも表示されます(登録・取り出し・棚卸し・廃棄は可能・取り消し可、設定変更は不可)。終了には PIN が必要です。\n\nこの端末だけの設定です。",
     noPinNote: "PIN 未設定:だれでも終了できます。",
     exitTitle: "スタッフモード終了", exitHint: "4 桁の PIN を入力", wrongPin: "PIN が違います",
     forgot: "PIN を忘れた?アプリのパスワードで", pwd: "アプリのパスワード", pwdOk: "終了", wrongPwd: "パスワードが違います", backToPin: "← PIN で",
