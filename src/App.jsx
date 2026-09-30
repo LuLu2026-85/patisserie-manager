@@ -22438,7 +22438,9 @@ const prepUnitChangeToast = (kind, before, saved, prepStock, lang, showToast) =>
   if (!saved || !prepStock || prepStock.readOnly || !prepStock.items || typeof showToast !== "function") return;
   const it = prepStock.items[prepKeyOf(kind, saved.id)];
   if (!it || !before || _normTxt(before.unit) === _normTxt(saved.unit)) return;
-  const cfg = prepCfgOf(kind, { ...saved, prepMode: "stock" });
+  // 审查 ps4:同时取消了「备货」的不提(没标的卡片只有「清掉 / 去标回来」,没有盘点按钮;账上还留着的由那张卡片和 H19 管)
+  if (!isPrepMarked(saved)) return;
+  const cfg = prepCfgOf(kind, saved);
   if (!prepSameUnit(it, cfg)) showToast(prepTxt(lang).unitChanged(it.unit || "", fmtQty(prepOnHand(it, null, localDateStr()).onHand) || "0"));
 };
 // 勾上以后的几项(配方和组件共用)。props:{ kind, form, setForm, lang, prepStock, products, onGoTab }
@@ -27384,8 +27386,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             {
               const orig = components.find(c => c && c.id === updated.id);
               const pItem = prepStock.items[prepKeyOf("component", updated.id)];
-              if (orig && pItem && !prepStock.readOnly) {
-                const pCfg = prepCfgOf("component", { ...orig, ...updated, prepMode: "stock" });
+              if (orig && pItem && !prepStock.readOnly && isPrepMarked({ ...orig, ...updated })) {   // 审查 ps4:没标备货的不叫她去盘点(卡片上没有盘点按钮)
+                const pCfg = prepCfgOf("component", { ...orig, ...updated });
                 if (!prepSameUnit(pItem, pCfg)) refs.push(prepTxt(lang).syncUnitRef(pItem.unit || "", fmtQty(_r3(prepLotsView(pItem, null, today).reduce((x, l) => x + l.left, 0))) || "0", pCfg.unit));
               }
             }
