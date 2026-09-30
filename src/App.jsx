@@ -6014,9 +6014,12 @@ function StickySaveBar({ onSave, label = "保存" }) {
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
 function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel, onKitchen,
-  prepStock = null, onPrepOp, onOpenPrep, today }) {   // 备货第 0 步:四个新 prop 先不用,E 线挂备货卡
+  prepStock = null, onPrepOp, onOpenPrep, today, products = [], onGoTab, confirmDialog }) {   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡 + 标签;都没有时 DOM 不变
   const name = pickLang(r, "name", lang);
   const nameOther = rawLang(r, "name", lang);
+  const _prepCfg = prepCfgOf("recipe", r);
+  const _prepItem = prepStock && !prepStock.readOnly && prepStock.items ? (prepStock.items[prepKeyOf("recipe", r.id)] || null) : null;
+  const _prepOh = prepOnHand(_prepItem, _prepCfg, today || localDateStr());
 
   // 🔢 缩放计算器
   const [targetYield, setTargetYield] = useState("");
@@ -6144,6 +6147,14 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
           <div style={{ ...T.fs.label, color: T.subtle, marginTop: T.sp.l }}>
             {[r.mold, r.yield ? `${r.yield}${r.unit || "個"}` : null, r.temp, r.baketime, r.category].filter(Boolean).join("  ·  ")}
           </div>
+          {/* 备货(prepstock E 线):标了备货才有这个标签;已开始记时带「冷冻 · 现有 380 個」 */}
+          {_prepCfg && (
+            <div style={{ marginTop: T.sp.s }}>
+              <span data-prep-tag="1" style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, background: T.surface, padding: "2px 8px", borderRadius: T.radiusPill, display: "inline-block" }}>
+                {prepTxt(lang).tag}{_prepItem && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
+              </span>
+            </div>
+          )}
         </div>
 
         {r.price > 0 && (
@@ -6192,6 +6203,14 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               {lang === "zh" ? "重置" : "リセット"}
             </button>
           )}
+        </div>
+      )}
+
+      {/* 备货卡(prepstock E 线,紧凑:最早 3 批 +「看全部备货 →」)。没标、账上也没有时不渲染 */}
+      {(_prepCfg || _prepItem) && (
+        <div data-prep-detail="1" style={{ marginTop: T.sp.l }}>
+          <PrepStockCard kind="recipe" obj={r} cfg={_prepCfg} item={_prepItem} lang={lang} today={today || localDateStr()} products={products}
+            onPrepOp={onPrepOp} compact onOpenPrep={onOpenPrep} onGoTab={onGoTab} confirmDialog={confirmDialog} readOnly={!!(prepStock && prepStock.readOnly)} />
         </div>
       )}
 
@@ -7116,8 +7135,11 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
 // ─── 组件详情 View ───────────────────────────────────────────────
 function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [],
-  prepStock = null, onPrepOp, onOpenPrep, today }) {   // 备货第 0 步:四个新 prop 先不用,E 线挂备货卡
+  prepStock = null, onPrepOp, onOpenPrep, today, confirmDialog }) {   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡,「备货」标签带现有多少;都没有时 DOM 不变
   const cat = getCompCat(c.componentCategory);
+  const _prepCfg = prepCfgOf("component", c);
+  const _prepItem = prepStock && !prepStock.readOnly && prepStock.items ? (prepStock.items[prepKeyOf("component", c.id)] || null) : null;
+  const _prepOh = prepOnHand(_prepItem, _prepCfg, today || localDateStr());
   const name = pickLang(c, "name", lang);
   const nameOther = rawLang(c, "name", lang);
   const notes = pickLang(c, "notes", lang) || c.notes;
@@ -7226,7 +7248,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
             {c.prepMode === "stock" && (
               <span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
                 style={{ background: "#FFFFFF", color: T.warning, border: `0.5px solid ${T.warning}`, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
-                {lang === "zh" ? "备货" : "作り置き"}
+                {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
               </span>
             )}
           </div>
@@ -7245,6 +7267,14 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
           </div>
         </div>
       </div>
+
+      {/* 备货卡(prepstock E 线,紧凑)。没标、账上也没有时不渲染 */}
+      {(_prepCfg || _prepItem) && (
+        <div data-prep-detail="1" style={{ marginBottom: "1rem" }}>
+          <PrepStockCard kind="component" obj={c} cfg={_prepCfg} item={_prepItem} lang={lang} today={today || localDateStr()}
+            onPrepOp={onPrepOp} compact onOpenPrep={onOpenPrep} confirmDialog={confirmDialog} readOnly={!!(prepStock && prepStock.readOnly)} />
+        </div>
+      )}
 
       {/* 🔢 缩放计算器 - RURU 风格 */}
       {originalYield > 0 && (c.ingredients || []).length > 0 && (
@@ -8303,7 +8333,7 @@ function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang,
 
 // ─── 组件编辑 Form ────────────────────────────────────────────────
 function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast, confirmDialog,
-  prepStock = null, products = [] }) {   // 备货第 0 步:两个新 prop 先不用,E 线(改单位 toast / 提醒线 placeholder)
+  prepStock = null, products = [] }) {   // 备货(E 线):勾上「备货」后展开的几项(PrepCfgFields)/ 提醒线 placeholder / 改单位 toast
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 材料选择弹窗
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
@@ -8375,7 +8405,8 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
     }
     const total = refreshedIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
-    onSave({
+    // 备货(E 线):备货的几个键按规矩整理(空 = 删键);老数据没有这些键 → 原样
+    const payload = prepFieldsForSave({
       ...form,
       id: (component && component.id) ? component.id : "comp_" + Date.now(),
       yield: parseFloat(form.yield) || 0,
@@ -8385,7 +8416,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       steps: undefined,
       totalCost: total,
       updatedAt: new Date().toISOString(),
-    });
+    }, "component");
+    prepUnitChangeToast("component", component && component.id ? component : null, payload, prepStock, lang, showToast);
+    onSave(payload);
   };
 
   const handleSave = () => {
@@ -8507,6 +8540,12 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             </label>
           </div>
         </div>
+        {/* 备货(prepstock E 线):勾上以后展开存在哪 / 能放多久 / 低于多少提醒 / 取出后说明;没勾时 DOM 和以前一样 */}
+        {form.prepMode === "stock" && (
+          <div data-prep-cfg="1" style={{ borderTop: `0.5px solid ${T.borderSoft}`, marginTop: 12 }}>
+            <PrepCfgFields kind="component" form={form} setForm={setForm} lang={lang} prepStock={prepStock} products={products} />
+          </div>
+        )}
       </div>
 
       {/* 🏷 风味标签（用于矩阵视图和研发） */}
@@ -16713,7 +16752,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 
 // ─── Edit Form ────────────────────────────────────────────────────
 function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast, confirmDialog,
-  prepStock = null, products = [] }) {   // 备货第 0 步:两个新 prop 先不用,E 线(备货卡 / 没挂商品提示 / 改单位 toast)
+  prepStock = null, products = [], onGoTab }) {   // 备货(E 线):「📦 备货」卡 / 没挂商品提示 / 改单位 toast;onGoTab 给「去新建商品 →」(App 的 goTab,有没保存的改动先问)
   const isNew = !recipe;
   const [errorMsg, setErrorMsg] = useState("");
   const [nameZhMissing, setNameZhMissing] = useState(false);   // 2026-09-29 体检第 2 批:点保存时中文名空 → 名字框旁边标红
@@ -16790,7 +16829,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     // 清理临时字段 _priceModified / _originalPrice
     const cleanIngs = refreshedIngs.map(({ _id, _priceModified, _originalPrice, _preNoCost, ...rest }) => rest);
-    onSave({
+    // 备货(E 线):备货的几个键按规矩整理(空 = 删键);老数据没有这些键 → 原样
+    const payload = prepFieldsForSave({
       ...form,
       id: recipe ? recipe.id : Date.now(),
       yield: q, price: p,
@@ -16799,7 +16839,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       steps: undefined,
       totalCost: total, unitCost: uc, margin: mg,
       updatedAt: new Date().toISOString()
-    });
+    }, "recipe");
+    prepUnitChangeToast("recipe", recipe, payload, prepStock, lang, showToast);
+    onSave(payload);
   };
 
   const handleSave = () => {
@@ -16868,6 +16910,16 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
         {grid("1fr 1fr", [fld("保存方法", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
       </>)}
+
+      {/* 📦 备货(prepstock E 线):没勾时只有标题 + 勾选框一行;设置只在这里写,库存数不在编辑页显示也不能改 */}
+      <div data-prep-cfg="1" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", minWidth: 0 }}>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 8, color: T.textPrimary }}>{prepTxt(lang).cfgTitle}</div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, cursor: "pointer", color: T.textSecondary, overflowWrap: "anywhere" }}>
+          <input type="checkbox" data-prep-field="mode" checked={form.prepMode === "stock"} onChange={e => { const on = e.target.checked; setForm(prev => ({ ...prev, prepMode: on ? "stock" : undefined })); }} style={{ marginTop: 3 }} />
+          <span>{prepTxt(lang).cfgCheck(_normTxt(form.unit) || "个")}</span>
+        </label>
+        {form.prepMode === "stock" && <PrepCfgFields kind="recipe" form={form} setForm={setForm} lang={lang} prepStock={prepStock} products={products} onGoTab={onGoTab} />}
+      </div>
 
       {/* 🏷 产品家族归属（可选） */}
       {card(<>
@@ -19895,6 +19947,84 @@ const PREP_TXT = {
     kitAgain: "再记一次",
     kitNamesJoin: "、",
     // ── E 线:备货页 / 编辑页 / 详情卡 / 角标 ──
+    // 编辑页(配方 / 组件)
+    cfgTitle: "📦 备货",
+    cfgCheck: (u) => `先整批做好存着,要用时再取出来烤(库存按「${u}」记)`,
+    cfgHint: (u) => `比如饼干面团做好冷冻、费南雪面糊做好冷藏。标了以后,生产单上只写「从冷冻取几个 → 解冻 → 烤」,不再列配料;做面团另起一行。库存按「${u}」数。`,
+    cfgStore: "存在哪",
+    cfgShelf: "能放多久(天)· 从做好那天算,不填 = 不提醒到期",
+    cfgMin: (u) => `低于多少提醒(${u})· 不填 = 只在不够今天用、快到期时提醒`,
+    cfgThaw: "取出来以后怎么处理(解冻 / 回温,可选)",
+    cfgThawZh: "中文", cfgThawJa: "日本語",
+    cfgNoYield: "⚠ 没填「产出数量」:算不出「一批做多少」,生产单上「做一批」记不进库存;库存本身照样能记",
+    cfgGram: (u) => `⚠ 这个配方的产出按「${u}」记,库存也按「${u}」记。想按个数记,把产出数量改成个数、单位写「个」。`,
+    cfgAfter: "勾上以后去「今日 → 备货」登记一下现在手上有多少,之后生产单记入时会自动加减。",
+    cfgMinHint: (x) => `建议 ${x}(约 3 天用量)`,
+    cfgMinHintBatch: (x) => `建议 ${x}(一批的 1/4)`,
+    notOnProduct: "这个配方没挂在商品上:柜台上的成品不会提醒你烤,采购页也算不到它的原料",
+    goNewProduct: "去新建商品 →",
+    unitChanged: (o, n) => `备货库存按「${o}」记着 ${n},改单位后请到「今日 → 备货」盘点一次`,
+    syncUnitRef: (o, n, u) => `备货库存按「${o}」记着 ${n},同步后单位变「${u}」,请到「今日 → 备货」盘点一次`,
+    // 今日 → 备货
+    sub: "备货",
+    pageTitle: "备货库存",
+    pageHint: "先做好存着的面团、面糊和组件。先用最早做的;黄 = 快到期,红 = 过期。生产单上点「记入」会自动加减,对不上时点「盘点」按实际改。库存记在这台设备上,合并导入不会带到别的设备。",
+    summary: (a, b, c, d) => `过期 ${a} 批 · 快到期 ${b} 批 · 低于提醒线 ${c} 样 · 还没开始记 ${d} 样`,
+    filters: { all: "全部", todo: "要处理的", freeze: "冷冻", fridge: "冷藏", room: "常温" },
+    filterEmpty: "没有符合条件的备货",
+    kindRecipe: "配方", kindComp: "组件",
+    lotMade: (d) => `${d} 做`,
+    lotOf: (m) => `(做了 ${m})`,
+    lotUntil: (e) => `放到 ${e}`,
+    settingMin: (m) => `低于 ${m} 提醒`,
+    settingShelf: (k) => `能放 ${k} 天`,
+    settingDays: (x) => `大约够 ${x} 天`,
+    usableOf: (n) => `能用 ${n}`,
+    btnRegister: "＋ 登记一批", btnTake: "− 取出", btnCount: "盘点", btnDiscard: "报废",
+    btnDiscardExpired: (k) => `报废过期的(${k} 批)`,
+    btnRecent: "最近记录", btnEditCfg: "改设置", seeAll: "看全部备货 →",
+    untracked: "还没开始记", registerFirst: "＋ 登记现在手上有多少",
+    unmarked: (n, u) => `已经没标备货了,但还记着 ${n} ${u}`,
+    btnClear: "清掉", btnMarkBack: "去标回来",
+    cleared: (name, n, u) => `已清掉「${name}」的备货库存(${n} ${u}),可以撤销`,
+    // 登记 / 取出 / 盘点面板
+    regQty: (u) => `做了多少(${u})`,
+    regBtn: "登记",
+    regHint: "生产单上「做一批」点记入会自动登记,这里补登漏记的或者以前做的",
+    errQty: "「做了多少」要填大于 0 的数",
+    errDate: "日期不能晚于今天",
+    errTitle: "这一格填得不对",
+    cancel: "取消",
+    takeQty: (u) => `取了多少(${u})`,
+    takeBtn: "记下",
+    takeOnProduct: (s) => `这样只扣${s};柜台库存请在生产单上记商品行`,
+    errTakeQty: "「取了多少」要填大于 0 的数",
+    countTitle: "盘点:按实际改",
+    countHint: "一批一批数(袋子上写着日期),数到 0 = 这批用完了",
+    countAdd: "＋ 漏记的一批",
+    countWrong: "这一批是记错的",
+    countRestore: "恢复",
+    countPreview: (a, b, d) => `记着 ${a} → 改成 ${b}(${d})`,
+    countOver: (m, n) => `(比记着做的 ${m} 多,按 ${n} 算)`,
+    countApply: "按这个改",
+    countUnitMode: (o, n) => `账上按「${o}」记,现在是「${n}」:请按「${n}」重新数每一批`,
+    errCountFill: "改单位时每一批都要按新单位重新填(用完的填 0)",
+    errCountAdd: "漏记的那一批要填大于 0 的数",
+    // toast
+    toastRegister: (name, n, u, d) => `✓ 登记了「${name}」${n} ${u}(${d} 做的)`,
+    toastCount: (name, a, b) => `✓ 盘点「${name}」${a} → ${b}`,
+    toastDiscard: (name, n, u) => `已报废「${name}」${n} ${u}`,
+    toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n} ${u}(还剩 ${left})`,
+    // 最近记录 / 空状态 / 详情页标签 / 角标
+    recentEmpty: "还没有记录",
+    reasonExpired: "过期", reasonBad: "报废",
+    emptyOwner: "还没有标「备货」的配方或组件",
+    emptyOwnerHint: "在配方或组件的编辑页勾「先整批做好存着」,这里就会列出来,生产单也会开始提醒",
+    goList: "去配方一览",
+    emptyStaff: "还没有备货",
+    emptyStaffHint: "店长在配方里标了以后这里会列出来",
+    tag: "备货",
+    tagHave: (s, n, u) => `${s} · 现有 ${n} ${u}`,
     // ── F 线:商品页 / 采购页 / 数据体检 ──
     // ── G 线:导入 / 清除 / 删除 / 数据页 ──
   },
@@ -20010,6 +20140,79 @@ const PREP_TXT = {
     kitAgain: "もう一度記録",
     kitNamesJoin: "・",
     // ── E 線:作り置き / 編集画面 / 詳細カード / バッジ ──
+    cfgTitle: "📦 作り置き",
+    cfgCheck: (u) => `まとめて仕込んで保存し、使う分だけ出して焼く(在庫は「${u}」で管理)`,
+    cfgHint: (u) => `例:クッキー生地を冷凍、フィナンシェ生地を冷蔵で保存。指定すると製造リストは「冷凍から何個出す → 解凍 → 焼成」だけになり、材料は出ません。仕込みは別の行です。在庫は「${u}」で数えます。`,
+    cfgStore: "保存場所",
+    cfgShelf: "保存期間(日)· 仕込んだ日から。空欄 = 期限のお知らせなし",
+    cfgMin: (u) => `補充ライン(${u})· 空欄 = 本日分の不足と期限のみ`,
+    cfgThaw: "取り出し後の処理(解凍・室温戻し、任意)",
+    cfgThawZh: "中国語", cfgThawJa: "日本語",
+    cfgNoYield: "⚠ 出来数が未入力:「1 バッチ何個」が分からず、製造リストの仕込み行は在庫に記録できません(在庫自体は数えられます)",
+    cfgGram: (u) => `⚠ 出来数が「${u}」のため在庫も「${u}」で数えます。個数で数えるなら出来数を個数に、単位を「個」に。`,
+    cfgAfter: "チェック後「本日 → 作り置き」で今ある数を登録すると、以後は製造リストの記録で自動で増減します。",
+    cfgMinHint: (x) => `目安 ${x}(約 3 日分)`,
+    cfgMinHintBatch: (x) => `目安 ${x}(1 バッチの 1/4)`,
+    notOnProduct: "このレシピは商品に含まれていません。店頭在庫のお知らせと仕入計算の対象外です",
+    goNewProduct: "商品を作成 →",
+    unitChanged: (o, n) => `在庫は「${o}」で ${n}。単位変更後は「本日 → 作り置き」で棚卸ししてください`,
+    syncUnitRef: (o, n, u) => `在庫は「${o}」で ${n}。同期後は単位が「${u}」になります。「本日 → 作り置き」で棚卸ししてください`,
+    sub: "作り置き",
+    pageTitle: "作り置き在庫",
+    pageHint: "仕込んで保存している生地・パーツ。古いものから使います。黄 = 期限間近、赤 = 期限切れ。製造リストの「記録」で自動で増減し、合わない時は「棚卸し」で実数に合わせます。在庫はこの端末に記録され、マージインポートでは他の端末に移りません。",
+    summary: (a, b, c, d) => `期限切れ ${a} ロット · 期限間近 ${b} ロット · 補充ライン割れ ${c} 品 · 未登録 ${d} 品`,
+    filters: { all: "すべて", todo: "要対応", freeze: "冷凍", fridge: "冷蔵", room: "常温" },
+    filterEmpty: "条件に合う作り置きはありません",
+    kindRecipe: "レシピ", kindComp: "パーツ",
+    lotMade: (d) => `${d} 仕込み`,
+    lotOf: (m) => `(仕込み ${m})`,
+    lotUntil: (e) => `${e} まで`,
+    settingMin: (m) => `補充ライン ${m}`,
+    settingShelf: (k) => `保存 ${k} 日`,
+    settingDays: (x) => `約 ${x} 日分`,
+    usableOf: (n) => `使用可 ${n}`,
+    btnRegister: "＋ ロット登録", btnTake: "− 使用", btnCount: "棚卸し", btnDiscard: "廃棄",
+    btnDiscardExpired: (k) => `期限切れを廃棄(${k} ロット)`,
+    btnRecent: "最近の記録", btnEditCfg: "設定を変更", seeAll: "一覧を見る →",
+    untracked: "まだ数えていません", registerFirst: "＋ 今ある数を登録",
+    unmarked: (n, u) => `作り置き指定なし、在庫 ${n}${u} が残っています`,
+    btnClear: "消去", btnMarkBack: "指定し直す",
+    cleared: (name, n, u) => `「${name}」の在庫記録(${n}${u})を消去しました(元に戻せます)`,
+    regQty: (u) => `仕込んだ量(${u})`,
+    regBtn: "登録",
+    regHint: "製造リストの仕込み行を記録すると自動で登録されます。ここでは記録漏れや以前の分を登録します",
+    errQty: "「仕込んだ量」は 0 より大きい数を",
+    errDate: "日付は本日まで",
+    errTitle: "入力を確認してください",
+    cancel: "キャンセル",
+    takeQty: (u) => `使用数(${u})`,
+    takeBtn: "記録",
+    takeOnProduct: (s) => `${s}だけ引きます。店頭在庫は製造リストの商品行で記録`,
+    errTakeQty: "「使用数」は 0 より大きい数を",
+    countTitle: "棚卸し:実数に合わせる",
+    countHint: "ロットごとに数えてください(袋の日付)。0 = 使い切り",
+    countAdd: "＋ 記録漏れのロット",
+    countWrong: "このロットは誤記録",
+    countRestore: "戻す",
+    countPreview: (a, b, d) => `記録 ${a} → ${b}(${d})`,
+    countOver: (m, n) => `(記録の仕込み数 ${m} より多いため ${n} とします)`,
+    countApply: "この数に合わせる",
+    countUnitMode: (o, n) => `記録は「${o}」、現在は「${n}」:ロットごとに「${n}」で数え直してください`,
+    errCountFill: "単位変更時は全ロットを新しい単位で入力してください(使い切りは 0)",
+    errCountAdd: "記録漏れのロットは 0 より大きい数を",
+    toastRegister: (name, n, u, d) => `✓「${name}」${n}${u} を登録(${d} 仕込み)`,
+    toastCount: (name, a, b) => `✓ 棚卸し「${name}」${a} → ${b}`,
+    toastDiscard: (name, n, u) => `「${name}」${n}${u} を廃棄`,
+    toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n}${u}(残り ${left})`,
+    recentEmpty: "記録はまだありません",
+    reasonExpired: "期限切れ", reasonBad: "廃棄",
+    emptyOwner: "作り置き指定のレシピ・パーツがありません",
+    emptyOwnerHint: "編集画面で「まとめて仕込んで保存」にチェックすると、ここに表示され製造リストでお知らせが出ます",
+    goList: "レシピ一覧へ",
+    emptyStaff: "作り置きはまだありません",
+    emptyStaffHint: "店長が指定するとここに表示されます",
+    tag: "作り置き",
+    tagHave: (s, n, u) => `${s} · 在庫 ${n}${u}`,
     // ── F 線:商品 / 仕入 / データ診断 ──
     // ── G 線:インポート / 削除 / データ ──
   },
@@ -21676,29 +21879,530 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
     </div>
   );
 }
-// ─── 备货库存(prepstock)页面空壳(E 线,plan.md「每个页面怎么变 §6」)。第 0 步都 return null ───
-// 今日 → 备货 / 员工外壳 → 备货。props:{ lang, today, recipes, components, products, prepStock, productionLog, onPrepOp, staff, focusKey, onJump, confirmDialog, showToast }
-function PrepStockView(props) {
-  return null;
-}
-// 一样东西的备货卡(备货页和配方 / 组件详情页共用)。props:{ kind, obj, cfg, item, lang, today, products, onPrepOp, staff, compact, focus, onOpenPrep, onJump }
-function PrepStockCard(props) {
-  return null;
-}
-// 登记一批(卡片里就地展开)。props:{ cfg, item, lang, today, onSubmit(op), onCancel }
-function PrepRegisterPanel(props) {
-  return null;
-}
-// 盘点(卡片里就地展开;单位对不上时是「改单位模式」)。props:{ cfg, item, lang, today, onSubmit(op), onCancel }
-function PrepCountPanel(props) {
-  return null;
+// ─── 备货库存(prepstock)页面(E 线,plan.md「每个页面怎么变 §6 / §7 / §10」)───
+// 这一段只读账本(prepStock = prepStockRead 的结果)、只经 onPrepOp 写(App 的 writePrep → prepApply;先做 + 撤销 toast,都不用确认框)。
+// **备货设置(prepMode / prepStore / prepShelfDays / prepMinStock / prepThaw*)这里一个字都不写**:只由编辑页写(编辑页开着时别处写了会被它盖回去)。
+// 员工(staff)能看、登记、取出、盘点、报废;没有「改设置」「清掉」「去标回来」「去新建商品」。**任何地方都不显示钱。**
+const TODAY_SUBS_PREP = [{ id: "sheet", zh: "生产单", ja: "製造リスト" }, { id: "prep", zh: "备货", ja: "作り置き" }, { id: "close", zh: "日结", ja: "日次締め" }];
+// 每台设备自己的界面状态(筛选 / 展开的「最近记录」):sessionStorage korora_prep_ui_v1。
+// 这个 key 生产单的提醒条(C 线)也用 —— 一律读出整个对象、只改自己的子键再写回;读写都 try/catch,读不到按默认
+const PREP_UI_KEY = "korora_prep_ui_v1";
+const prepUiRead = () => { try { const v = JSON.parse(sessionStorage.getItem(PREP_UI_KEY) || "null"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } };
+const prepUiWrite = (patch) => { try { sessionStorage.setItem(PREP_UI_KEY, JSON.stringify({ ...prepUiRead(), ...patch })); } catch (e) { /* 隐私模式 / 被禁:只是记不住 */ } };
+// 操作 id(登记 / 盘点 / 取出面板一展开就生成,提交时复用:面板没关时连点两下落在同一个 op 上,被 prepApply 挡掉)
+const prepNewOpId = () => "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// 顶栏「今日」角标 / 员工外壳「备货」tab 的数:已经开始记的备货里「有过期批 或 低于提醒线」的**样数**(同一样又过期又低于线只算 1;
+// 低于线的口径同提醒条,含没填提醒线时的「大约够 ≤ 2 天」)。平时 0
+const prepBadgeCountOf = (recipes, components, stock, today) =>
+  prepAlertsOf({ recipes, components, stock, today }).filter(r => r.flags && (r.flags.expired || r.flags.low)).length;
+// 这一样叫什么:现在的对象优先(跟着语言),找不到用账上的名字快照
+const prepItemName = (obj, item, lang) => String((obj && (pickLang(obj, "name", lang) || obj.nameFr)) || (item && ((lang === "ja" && item.nameJa) || item.nameZh || item.nameJa)) || "").trim();
+// 挂着这个配方 / 组件的商品(组成项 linkedType 缺省 = recipe,id 按字符串比)
+const prepProductsUsing = (products, kind, id) => (Array.isArray(products) ? products : []).filter(p => p && Array.isArray(p.items)
+  && p.items.some(it => it && (it.linkedType || "recipe") === kind && String(it.linkedId) === String(id)));
+const _prepHm = (iso) => { const d = new Date(iso); return isFinite(d.getTime()) ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : ""; };
+// 「大约够几天」:和提醒条同一个算法(usable ÷ 近 14 天日均);< 10 天留一位小数
+const _prepDaysTxt = (x) => (x >= 10 ? String(Math.floor(x)) : String(Math.floor(x * 10) / 10));
+
+// ── 编辑页的备货设置(配方 EditForm 的「📦 备货」卡 / 组件 ComponentEditForm 勾上「备货」后展开的几项)──
+// 保存时整理这几个键(只动出现的键,没有的不补):数字框空 / 读不出正数 → 删键(不存 "");能放多久取整;说明去首尾空格、空了删键;
+// 存在哪只认 PREP_STORES;配方取消勾选 → 删 prepMode(组件照原来的写法写 undefined,JSON 里一样没有)。
+// 老数据没有这些键 → 原样返回同一个对象(打开不改就保存,写出去的东西一个字节不变)
+const PREP_CFG_KEYS = ["prepMode", "prepStore", "prepShelfDays", "prepMinStock", "prepThawZh", "prepThawJa"];
+const prepFieldsForSave = (o, kind) => {
+  if (!o || typeof o !== "object" || !PREP_CFG_KEYS.some(k => Object.prototype.hasOwnProperty.call(o, k))) return o;
+  const x = { ...o };
+  const has = (k) => Object.prototype.hasOwnProperty.call(x, k);
+  if (kind === "recipe" && has("prepMode") && x.prepMode !== "stock") delete x.prepMode;
+  if (has("prepStore") && !PREP_STORES.includes(x.prepStore)) delete x.prepStore;
+  if (has("prepShelfDays")) { const n = Math.floor(parseFloat(x.prepShelfDays)); if (isFinite(n) && n >= 1) x.prepShelfDays = n; else delete x.prepShelfDays; }
+  if (has("prepMinStock")) { const n = parseFloat(x.prepMinStock); if (isFinite(n) && n > 0) x.prepMinStock = _r3(n); else delete x.prepMinStock; }
+  ["prepThawZh", "prepThawJa"].forEach(k => { if (!has(k)) return; const v = typeof x[k] === "string" ? x[k].trim() : ""; if (v) x[k] = v; else delete x[k]; });
+  return x;
+};
+// 保存后单位和账上对不上(已经开始记、单位改了)→ toast 提醒去盘点(不拦、不弹框:只影响这一样、改回来就好)
+const prepUnitChangeToast = (kind, before, saved, prepStock, lang, showToast) => {
+  if (!saved || !prepStock || prepStock.readOnly || !prepStock.items || typeof showToast !== "function") return;
+  const it = prepStock.items[prepKeyOf(kind, saved.id)];
+  if (!it || !before || _normTxt(before.unit) === _normTxt(saved.unit)) return;
+  const cfg = prepCfgOf(kind, { ...saved, prepMode: "stock" });
+  if (!prepSameUnit(it, cfg)) showToast(prepTxt(lang).unitChanged(it.unit || "", fmtQty(prepOnHand(it, null, localDateStr()).onHand) || "0"));
+};
+// 勾上以后的几项(配方和组件共用)。props:{ kind, form, setForm, lang, prepStock, products, onGoTab }
+function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], onGoTab }) {
+  const X = prepTxt(lang);
+  const u = _normTxt(form.unit) || (kind === "component" ? "g" : "个");
+  const set = (k) => (e) => { const v = e.target.value; setForm(prev => ({ ...prev, [k]: v })); };
+  const store = PREP_STORES.includes(form.prepStore) ? form.prepStore : (kind === "recipe" ? "freeze" : null);
+  const item = form.id !== undefined && prepStock && !prepStock.readOnly && prepStock.items ? prepStock.items[prepKeyOf(kind, form.id)] : null;
+  const daily = item ? prepDailyUse(item, localDateStr()) : 0;
+  const y = parseFloat(form.yield);
+  const ph = daily > 0 ? X.cfgMinHint(fmtQty(Math.ceil(daily * 3))) : (y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
+  const onProduct = kind === "recipe" && form.id !== undefined && prepProductsUsing(products, "recipe", form.id).length > 0;
+  const lab = { ...T.fs.label, color: T.textTertiary, display: "block", marginBottom: 5 };
+  const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
+  return (
+    <div style={{ marginTop: T.sp.m, minWidth: 0 }}>
+      {kind === "recipe" && <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: T.sp.m, overflowWrap: "anywhere" }}>{X.cfgHint(u)}</div>}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: T.sp.m }}>
+        <span style={{ ...T.fs.label, color: T.textTertiary }}>{X.cfgStore}</span>
+        {PREP_STORES.map(s => {
+          const active = store === s;
+          return (
+            <button key={s} type="button" data-prep-store={s} aria-pressed={active} onClick={() => setForm(prev => ({ ...prev, prepStore: s }))}
+              style={{ padding: "4px 12px", minHeight: 32, fontSize: 12, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
+                border: `${active ? 1 : 0.5}px solid ${active ? T.brand : T.border}`, background: active ? T.brand : T.bgCard, color: active ? T.bgApp : T.textSecondary, fontWeight: active ? 500 : 400 }}>
+              {X.storeName(s)}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: 12, marginBottom: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <label style={lab}>{X.cfgShelf}</label>
+          <input type="number" inputMode="numeric" min="1" data-prep-field="shelf" value={form.prepShelfDays === undefined || form.prepShelfDays === null ? "" : form.prepShelfDays} onWheel={blurOnWheel} onChange={set("prepShelfDays")} style={inp} />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <label style={lab}>{X.cfgMin(u)}</label>
+          <input type="number" inputMode="decimal" min="0" data-prep-field="min" value={form.prepMinStock === undefined || form.prepMinStock === null ? "" : form.prepMinStock} placeholder={ph} onWheel={blurOnWheel} onChange={set("prepMinStock")} style={inp} />
+        </div>
+      </div>
+      <label style={lab}>{X.cfgThaw}</label>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))", gap: 8 }}>
+        <input data-prep-field="thawZh" value={form.prepThawZh || ""} onChange={set("prepThawZh")} placeholder={X.cfgThawZh} style={inp} />
+        <input data-prep-field="thawJa" value={form.prepThawJa || ""} onChange={set("prepThawJa")} placeholder={X.cfgThawJa} style={inp} />
+      </div>
+      {!(y > 0) && <div data-prep-warn="noYield" style={{ ...T.fs.caption, color: T.warning, marginTop: T.sp.m, overflowWrap: "anywhere" }}>{X.cfgNoYield}</div>}
+      {kind === "recipe" && ingWeightFactor(u) > 0 && <div data-prep-warn="gram" style={{ ...T.fs.caption, color: T.warning, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.cfgGram(u)}</div>}
+      {!item && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.cfgAfter}</div>}
+      {kind === "recipe" && !onProduct && (
+        <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>
+          {X.notOnProduct}
+          {typeof onGoTab === "function" && <> · <button type="button" className="k-btn" onClick={() => onGoTab("products")}
+            style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
+        </div>
+      )}
+    </div>
+  );
 }
 
-// 备货第 0 步:新可选 props sub / onSubChange / prepFocusKey(子页状态提到 App;没收到时用自己的状态),E 线接上。第 0 步不读
+// 登记一批(卡片里就地展开)。props:{ cfg, item, lang, today, onSubmit(op), onCancel, confirmDialog, opId, lotId }
+// 数量 > 0、日期不晚于今天;读不出就地 InlineError 说哪一格、怎么改。登记成功由卡片关掉面板(下一次点开拿新的 opId)
+function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDialog, opId, lotId }) {
+  const X = prepTxt(lang);
+  const t = today || localDateStr();
+  const [qty, setQty] = useState("");
+  const [date, setDate] = useState(t);
+  const [err, setErr] = useState(null);
+  const bind = useDirtyGuard(() => ({ qty, date }));
+  const sent = useRef(false);   // 提交成功过(面板马上要关):同一次渲染里的第二下点击不再提交
+  const unit = (item && item.unit) || (cfg && cfg.unit) || "";
+  const submit = () => {
+    const q = parseFloat(qty);
+    const bad = [];
+    if (!(isFinite(q) && q > 0)) bad.push(X.errQty);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > t) bad.push(X.errDate);
+    if (bad.length) { setErr(bad.join(";")); return; }
+    setErr(null);
+    if (sent.current) return;
+    if (onSubmit({ type: "make", key: cfg.key, cfg, opId, lotId, qty: q, madeAt: date, via: "card" })) sent.current = true;
+  };
+  const inp = { padding: "8px 10px", minHeight: 40, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small, ...T.num, boxSizing: "border-box", minWidth: 0 };
+  return (
+    <div {...bind} data-prep-panel="register" style={{ marginTop: T.sp.m, padding: T.sp.m, border: `1px solid ${T.line}`, background: T.paper }}>
+      <div style={{ display: "flex", gap: T.sp.m, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 120px", minWidth: 0 }}>
+          <span style={{ ...T.fs.label, color: T.subtle }}>{X.regQty(unit)}</span>
+          <input type="number" inputMode="decimal" min="0" value={qty} onWheel={blurOnWheel} onChange={e => setQty(e.target.value)} style={inp} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: "1 1 140px", minWidth: 0 }}>
+          <span style={{ ...T.fs.label, color: T.subtle }}>{X.madeDate(cfg && cfg.store)}</span>
+          <input type="date" max={t} value={date} onChange={e => setDate(e.target.value)} style={inp} />
+        </label>
+      </div>
+      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.regHint}</div>
+      {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
+      <div style={{ display: "flex", gap: T.sp.s, marginTop: T.sp.m, flexWrap: "wrap" }}>
+        <Btn size="sm" variant="primary" onClick={submit}>{X.regBtn}</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => confirmLeave(bind.isDirty, confirmDialog, lang, onCancel)}>{X.cancel}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// 取出(卡片里就地展开;老板和员工都有)。props:{ cfg, item, lang, today, onSubmit(op, qty), onCancel, confirmDialog, opId, onProducts, defQty }
+function PrepTakePanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDialog, opId, onProducts, defQty }) {
+  const X = prepTxt(lang);
+  const [qty, setQty] = useState(defQty > 0 ? String(defQty) : "");
+  const [err, setErr] = useState(null);
+  const bind = useDirtyGuard(() => ({ qty }));
+  const sent = useRef(false);
+  const unit = (item && item.unit) || cfg.unit;
+  const submit = () => {
+    const q = parseFloat(qty);
+    if (!(isFinite(q) && q > 0)) { setErr(X.errTakeQty); return; }
+    setErr(null);
+    if (sent.current) return;
+    if (onSubmit({ type: "take", key: cfg.key, cfg, opId, qty: q, date: today || localDateStr(), via: "card" }, q)) sent.current = true;
+  };
+  return (
+    <div {...bind} data-prep-panel="take" style={{ marginTop: T.sp.m, padding: T.sp.m, border: `1px solid ${T.line}`, background: T.paper }}>
+      <label style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 220 }}>
+        <span style={{ ...T.fs.label, color: T.subtle }}>{X.takeQty(unit)}</span>
+        <input type="number" inputMode="decimal" min="0" value={qty} onWheel={blurOnWheel} onChange={e => setQty(e.target.value)}
+          style={{ padding: "8px 10px", minHeight: 40, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small, ...T.num, boxSizing: "border-box", minWidth: 0 }} />
+      </label>
+      {onProducts && onProducts.length > 0 && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.takeOnProduct(X.storeName(cfg.store))}</div>}
+      {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
+      <div style={{ display: "flex", gap: T.sp.s, marginTop: T.sp.m, flexWrap: "wrap" }}>
+        <Btn size="sm" variant="primary" onClick={submit}>{X.takeBtn}</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => confirmLeave(bind.isDirty, confirmDialog, lang, onCancel)}>{X.cancel}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// 盘点(卡片里就地展开)。props:{ cfg, item, lang, today, onSubmit(op, before, after), onCancel, confirmDialog, opId }
+// 每个还有剩的批(含过期)一行:数字框预填现在的数 +「这一批是记错的」(划掉,可恢复);「＋ 漏记的一批」;底下预览。
+// **改单位模式**(账上单位和现在的对不上,prepSameUnit 为假):数字框不预填、每批必填,按这个改之后账上单位换成现在的(prepApply 的 count)
+function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDialog, opId }) {
+  const X = prepTxt(lang);
+  const t = today || localDateStr();
+  const unitMode = !!item && !!cfg && !prepSameUnit(item, cfg);
+  const lots = prepLotsView(item, cfg, t);
+  const [rows, setRows] = useState(() => lots.map(l => ({ lotId: l.id, madeAt: l.madeAt, made: l.made, left: l.left, status: l.status, value: unitMode ? "" : String(l.left), wrong: false })));
+  const [adds, setAdds] = useState([]);
+  const [err, setErr] = useState(null);
+  const bind = useDirtyGuard(() => ({ rows: rows.map(r => [r.value, r.wrong]), adds }));
+  const sent = useRef(false);
+  const newUnit = cfg ? cfg.unit : (item && item.unit) || "";
+  const num = (v) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : 0; };
+  const before = _r3(lots.reduce((s, l) => s + l.left, 0));
+  const after = _r3(rows.reduce((s, r) => s + (r.wrong ? 0 : num(r.value)), 0) + adds.reduce((s, a) => s + num(a.qty), 0));
+  const d = _r3(after - before);
+  const setRow = (i, patch) => setRows(prev => prev.map((r, j) => j === i ? { ...r, ...patch } : r));
+  const submit = () => {
+    const bad = [];
+    if (unitMode && rows.some(r => !r.wrong && String(r.value).trim() === "")) bad.push(X.errCountFill);
+    if (adds.some(a => !(num(a.qty) > 0))) bad.push(X.errCountAdd);
+    if (adds.some(a => !/^\d{4}-\d{2}-\d{2}$/.test(a.madeAt) || a.madeAt > t)) bad.push(X.errDate);
+    if (bad.length) { setErr(bad.join(";")); return; }
+    setErr(null);
+    if (sent.current) return;
+    if (onSubmit({ type: "count", key: cfg.key, cfg, opId,
+      set: rows.filter(r => !r.wrong).map(r => ({ lotId: r.lotId, left: num(r.value) })),
+      add: adds.map(a => ({ madeAt: a.madeAt, qty: num(a.qty) })),
+      drop: rows.filter(r => r.wrong).map(r => r.lotId) }, before, after)) sent.current = true;
+  };
+  const inp = { width: 96, padding: "6px 8px", minHeight: 36, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small, ...T.num, boxSizing: "border-box", textAlign: "right" };
+  return (
+    <div {...bind} data-prep-panel="count" style={{ marginTop: T.sp.m, padding: T.sp.m, border: `1px solid ${T.line}`, background: T.paper }}>
+      <div style={{ ...T.fs.small, color: T.ink, fontWeight: 500 }}>{X.countTitle}</div>
+      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2, overflowWrap: "anywhere" }}>{X.countHint}</div>
+      {unitMode && <div data-prep-unitmode="1" style={{ ...T.fs.caption, color: T.warning, marginTop: T.sp.s, overflowWrap: "anywhere" }}>⚠ {X.countUnitMode(item.unit || "", newUnit)}</div>}
+      <div style={{ marginTop: T.sp.s }}>
+        {rows.map((r, i) => (
+          <div key={r.lotId} data-prep-countrow={String(r.lotId)} style={{ display: "flex", alignItems: "center", gap: T.sp.s, flexWrap: "wrap", padding: "6px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+            <span style={{ ...T.fs.small, ...T.num, color: r.wrong ? T.muted : (r.status === "expired" ? T.danger : T.body), textDecoration: r.wrong ? "line-through" : "none", minWidth: 64 }}>{X.lotMade(X.md(r.madeAt))}</span>
+            {!r.wrong && <input type="number" inputMode="decimal" min="0" value={r.value} placeholder={unitMode ? newUnit : ""} onWheel={blurOnWheel} onChange={e => setRow(i, { value: e.target.value })} style={inp} />}
+            {!r.wrong && <span style={{ ...T.fs.caption, color: T.subtle }}>{unitMode ? newUnit : (item.unit || newUnit)}</span>}
+            {!r.wrong && !unitMode && num(r.value) > r.made && <span style={{ ...T.fs.caption, color: T.subtle }}>{X.countOver(fmtQty(r.made), fmtQty(num(r.value)))}</span>}
+            <button type="button" className="k-btn" onClick={() => setRow(i, { wrong: !r.wrong })}
+              style={{ ...T.fs.caption, marginLeft: "auto", background: "none", border: "none", color: r.wrong ? T.info : T.subtle, cursor: "pointer", fontFamily: T.fontSans, padding: "4px 0" }}>
+              {r.wrong ? X.countRestore : X.countWrong}
+            </button>
+          </div>
+        ))}
+        {adds.map((a, i) => (
+          <div key={"a" + i} style={{ display: "flex", alignItems: "center", gap: T.sp.s, flexWrap: "wrap", padding: "6px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+            <input type="date" max={t} value={a.madeAt} onChange={e => setAdds(prev => prev.map((x, j) => j === i ? { ...x, madeAt: e.target.value } : x))} style={{ ...inp, width: 150, textAlign: "left" }} />
+            <input type="number" inputMode="decimal" min="0" value={a.qty} onWheel={blurOnWheel} onChange={e => setAdds(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))} style={inp} />
+            <span style={{ ...T.fs.caption, color: T.subtle }}>{newUnit}</span>
+            <button type="button" className="k-btn" onClick={() => setAdds(prev => prev.filter((_, j) => j !== i))}
+              style={{ ...T.fs.caption, marginLeft: "auto", background: "none", border: "none", color: T.subtle, cursor: "pointer", fontFamily: T.fontSans, padding: "4px 0" }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="k-btn" onClick={() => setAdds(prev => [...prev, { madeAt: t, qty: "" }])}
+        style={{ ...T.fs.caption, marginTop: T.sp.s, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: "4px 0" }}>{X.countAdd}</button>
+      <div data-prep-countpreview="1" style={{ ...T.fs.small, ...T.num, color: T.ink, marginTop: T.sp.s }}>
+        {X.countPreview(fmtQty(before), fmtQty(after), (d > 0 ? "+" : d < 0 ? "−" : "±") + fmtQty(Math.abs(d)))}
+      </div>
+      {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
+      <div style={{ display: "flex", gap: T.sp.s, marginTop: T.sp.m, flexWrap: "wrap" }}>
+        <Btn size="sm" variant="primary" onClick={submit}>{X.countApply}</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => confirmLeave(bind.isDirty, confirmDialog, lang, onCancel)}>{X.cancel}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// 一样东西的备货卡(备货页和配方 / 组件详情页共用;详情页 compact:只列最早 3 批 +「看全部备货 →」)。
+// props:{ kind, obj, cfg, item, lang, today, products, onPrepOp, staff, compact, focus, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly }
+// cfg = prepCfgOf(kind, obj)(没标 = null);item = 账本里这一样(没开始记 = null)
+function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPrepOp, staff = false, compact = false, focus = false, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly = false }) {
+  const X = prepTxt(lang);
+  const t = today || localDateStr();
+  const tracked = !!item && typeof item === "object";
+  const oh = prepOnHand(tracked ? item : null, cfg, t);
+  const key = cfg ? cfg.key : tracked ? prepKeyOf(item.kind || kind, item.id) : "";
+  const unit = tracked ? (item.unit || (cfg && cfg.unit) || "") : (cfg ? cfg.unit : "");
+  const name = prepItemName(obj, item, lang);
+  const daily = tracked ? prepDailyUse(item, t) : 0;
+  const onProducts = kind === "recipe" && obj ? prepProductsUsing(products, "recipe", obj.id) : [];
+  const [panel, setPanel] = useState(null);   // { type: "register" | "take" | "count", opId, lotId? }
+  const [logOpen, setLogOpen] = useState(() => !!focus || !!(prepUiRead().logOpen || {})[key]);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!focus) return;
+    setLogOpen(true);
+    if (ref.current && ref.current.scrollIntoView) { try { ref.current.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { /* 老浏览器 */ } }
+  }, [focus]);
+  const toggleLog = () => { const n = !logOpen; setLogOpen(n); const lo = { ...(prepUiRead().logOpen || {}) }; if (n) lo[key] = 1; else delete lo[key]; prepUiWrite({ logOpen: lo }); };
+  const open = (type) => setPanel({ type, opId: prepNewOpId(), lotId: "lot_" + prepNewOpId() });
+  const meta = (toast) => ({ toast, staff });
+  const doOp = (ops, toast) => (typeof onPrepOp === "function" ? onPrepOp(ops, meta(toast)) : false);
+  const storeName = X.storeName(cfg ? cfg.store : null);
+  const kindLabel = (cfg ? cfg.kind : kind) === "component" ? X.kindComp : X.kindRecipe;
+  const q = (n) => fmtQty(n) || "0";
+
+  const submitRegister = (op) => {
+    const r = doOp([op], X.toastRegister(name, q(op.qty), unit, X.md(op.madeAt)));
+    if (r) setPanel(null);
+    return r;
+  };
+  const submitTake = (op, qty) => {
+    const plan = prepTakePlan(item, cfg, qty, t);
+    const r = doOp([op], X.toastTake(name, storeName, q(plan.got), unit, q(Math.max(0, _r3(oh.usable - plan.got)))));
+    if (r) setPanel(null);
+    return r;
+  };
+  const submitCount = (op, before, after) => {
+    const r = doOp([op], X.toastCount(name, q(before), q(after)));
+    if (r) setPanel(null);
+    return r;
+  };
+  const discard = (lots, reason) => {
+    const n = _r3(lots.reduce((s, l) => s + l.left, 0));
+    doOp([{ type: "discard", key, opId: prepNewOpId(), lotIds: lots.map(l => l.id), reason }], X.toastDiscard(name, q(n), unit));
+  };
+  const clearItem = () => {
+    if (typeof onPrepOp !== "function") return;
+    onPrepOp([{ type: "dropItem", key }], { toast: X.cleared(name, q(oh.onHand), unit), staff, undoOps: [{ type: "putItem", key, item }] });
+  };
+  const jump = (target) => { if (typeof onJump === "function") confirmLeaveEditor(confirmDialog, lang, () => onJump(target)); };
+  const goTab = (tb) => { if (typeof onGoTab === "function") onGoTab(tb); };
+
+  const lots = oh.lots;
+  const shownLots = compact ? lots.slice(0, 3) : lots;
+  const lotColor = (l) => l.status === "expired" ? T.danger : (l.status === "today" || l.status === "soon") ? T.warning : T.line;
+  const lotStatus = (l) => l.status === "expired" ? X.lotExpired(-l.daysLeft) : l.status === "today" ? X.lotToday : l.status === "nodate" ? X.lotNoDate : X.lotLeft(l.daysLeft);
+  const unmarked = !cfg;
+  const moves = tracked && Array.isArray(item.moves) ? item.moves.filter(m => m && typeof m === "object").slice(-10).reverse() : [];
+  const productName = (pid) => { const p = (products || []).find(x => x && x.id === pid); return p ? (pickLang(p, "name", lang) || p.nameZh || "") : ""; };
+  const moveText = (m) => {
+    const got = m.type === "take" ? _r3((parseFloat(m.qty) || 0) - (parseFloat(m.short) || 0)) : (parseFloat(m.qty) || 0);
+    const head = `${X.md(m.date)} ${_prepHm(m.at)} ${(X.moveType && X.moveType[m.type]) || m.type}`;
+    let body = "";
+    if (m.type === "count") body = ` ${q(m.before)} → ${q(m.after)}`;
+    else if (m.type === "make" || m.type === "restore") body = ` +${q(got)}`;
+    else if (m.type === "take" || m.type === "discard") body = ` −${q(got)}`;
+    const src = [];
+    if (m.type === "discard") src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
+    if (m.productId) { const pn = productName(m.productId); if (pn) src.push(pn); }
+    if (m.via && X.via && X.via[m.via] && !(m.productId && m.via === "sheet")) src.push(X.via[m.via]);
+    if (m.staff) src.push(X.staffMark);
+    return head + body + (src.length ? `(${src.join(" · ")})` : "");
+  };
+  const busy = !!panel;
+
+  return (
+    <div ref={ref} data-prep-card={key} style={{ border: `1px solid ${focus ? T.ink : T.line}`, background: unmarked ? T.sunken : T.surface, padding: compact ? T.sp.m : T.sp.l, minWidth: 0, overflowWrap: "anywhere", opacity: unmarked ? 0.85 : 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: T.sp.s, flexWrap: "wrap" }}>
+        <span style={{ ...T.fs.label, color: T.subtle }}>{kindLabel}{cfg ? ` · ${storeName}` : ""}</span>
+        {!staff && cfg && obj && onJump && !readOnly && <button type="button" className="k-btn" onClick={() => jump({ kind: cfg.kind, id: obj.id })}
+          style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.btnEditCfg}</button>}
+      </div>
+      {!compact && <div style={{ ...T.fs.strong, color: T.ink, marginTop: 2 }}>{name}</div>}
+      {readOnly ? (
+        <div style={{ ...T.fs.caption, color: T.warning, marginTop: T.sp.s }}>{X.readOnly}</div>
+      ) : unmarked ? (
+        <>
+          <div data-prep-unmarked="1" style={{ ...T.fs.small, color: T.body, marginTop: T.sp.s }}>{X.unmarked(q(oh.onHand), unit)}</div>
+          {!staff && <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", marginTop: T.sp.m }}>
+            <Btn size="sm" onClick={clearItem}>{X.btnClear}</Btn>
+            {obj && onJump && <Btn size="sm" variant="ghost" onClick={() => jump({ kind: (item && item.kind) || kind, id: obj.id })}>{X.btnMarkBack}</Btn>}
+          </div>}
+        </>
+      ) : !tracked ? (
+        <>
+          <div data-prep-untracked="1" style={{ ...T.fs.titleS, color: T.subtle, marginTop: T.sp.s }}>{X.untracked}</div>
+          {!busy && <div style={{ marginTop: T.sp.m }}><Btn size="sm" variant="primary" onClick={() => open("register")}>{X.registerFirst}</Btn></div>}
+        </>
+      ) : oh.unitMismatch ? (
+        <>
+          <div data-prep-unitmismatch="1" style={{ ...T.fs.caption, color: T.warning, border: `1px solid ${T.warning}`, padding: T.sp.s, marginTop: T.sp.s }}>{X.unitMismatch(item.unit || "", cfg.unit)}</div>
+          {!busy && <div style={{ marginTop: T.sp.m }}><Btn size="sm" onClick={() => open("count")}>{X.btnCount}</Btn></div>}
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.s, flexWrap: "wrap", marginTop: 2 }}>
+            <span data-prep-onhand="1" style={{ fontFamily: T.fontSerif, ...(compact ? T.fs.titleS : T.fs.title), ...T.num, color: T.ink }}>{q(oh.onHand)} {unit}</span>
+            {oh.expired > 0 && <span style={{ ...T.fs.caption, color: T.danger }}>{X.usableOf(q(oh.usable))}</span>}
+          </div>
+          {(() => {
+            const parts = [];
+            if (cfg.min > 0) parts.push(X.settingMin(q(cfg.min)));
+            if (cfg.shelfDays) parts.push(X.settingShelf(cfg.shelfDays));
+            if (daily > 0) parts.push(X.settingDays(_prepDaysTxt(oh.usable / daily)));
+            return parts.length ? <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{parts.join(" · ")}</div> : null;
+          })()}
+          {shownLots.length > 0 && (
+            <div style={{ marginTop: T.sp.s }}>
+              {shownLots.map(l => (
+                <div key={String(l.id)} data-prep-lot={String(l.id)} data-prep-lotstatus={l.status} style={{ display: "flex", alignItems: "center", gap: T.sp.s, borderLeft: `3px solid ${lotColor(l)}`, padding: "4px 0 4px 8px", marginTop: 4, flexWrap: "wrap" }}>
+                  <span style={{ ...T.fs.caption, ...T.num, color: l.status === "expired" ? T.danger : T.body, flex: "1 1 180px", minWidth: 0 }}>
+                    {X.lotMade(X.md(l.madeAt))} · {q(l.left)} {unit}{l.made !== l.left ? X.lotOf(q(l.made)) : ""}{l.expiresOn ? ` · ${X.lotUntil(X.md(l.expiresOn))}` : ""}({lotStatus(l)})
+                  </span>
+                  {!busy && <button type="button" className="k-btn" onClick={() => discard([l], l.status === "expired" ? "expired" : "bad")}
+                    style={{ ...T.fs.caption, background: "none", border: `1px solid ${T.border}`, color: T.body, cursor: "pointer", fontFamily: T.fontSans, padding: "2px 8px", minHeight: 28 }}>{X.btnDiscard}</button>}
+                </div>
+              ))}
+              {compact && lots.length > shownLots.length && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 4 }}>…</div>}
+            </div>
+          )}
+          {!busy && (
+            <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", marginTop: T.sp.m }}>
+              <Btn size="sm" onClick={() => open("register")}>{X.btnRegister}</Btn>
+              {oh.usable > 0 && <Btn size="sm" onClick={() => open("take")}>{X.btnTake}</Btn>}
+              <Btn size="sm" onClick={() => open("count")}>{X.btnCount}</Btn>
+              {oh.expiredLots.length > 0 && <Btn size="sm" variant="danger" onClick={() => discard(oh.expiredLots, "expired")}>{X.btnDiscardExpired(oh.expiredLots.length)}</Btn>}
+            </div>
+          )}
+        </>
+      )}
+      {!readOnly && panel && panel.type === "register" && cfg && (
+        <PrepRegisterPanel cfg={cfg} item={tracked ? item : null} lang={lang} today={t} opId={panel.opId} lotId={panel.lotId} confirmDialog={confirmDialog}
+          onSubmit={submitRegister} onCancel={() => setPanel(null)} />
+      )}
+      {!readOnly && panel && panel.type === "take" && cfg && tracked && (
+        <PrepTakePanel cfg={cfg} item={item} lang={lang} today={t} opId={panel.opId} confirmDialog={confirmDialog} onProducts={onProducts}
+          defQty={prepDefaultBakeQty(item, t)} onSubmit={submitTake} onCancel={() => setPanel(null)} />
+      )}
+      {!readOnly && panel && panel.type === "count" && cfg && tracked && (
+        <PrepCountPanel cfg={cfg} item={item} lang={lang} today={t} opId={panel.opId} confirmDialog={confirmDialog}
+          onSubmit={submitCount} onCancel={() => setPanel(null)} />
+      )}
+      {!readOnly && cfg && kind === "recipe" && obj && onProducts.length === 0 && (
+        <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.m, overflowWrap: "anywhere" }}>
+          {X.notOnProduct}
+          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => confirmLeaveEditor(confirmDialog, lang, () => goTab("products"))}
+            style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
+        </div>
+      )}
+      {!readOnly && tracked && (
+        <div style={{ marginTop: T.sp.s }}>
+          <button type="button" className="k-btn" onClick={toggleLog} aria-expanded={logOpen}
+            style={{ ...T.fs.caption, background: "none", border: "none", color: T.subtle, cursor: "pointer", fontFamily: T.fontSans, padding: "4px 0" }}>{logOpen ? "▼" : "▶"} {X.btnRecent}</button>
+          {logOpen && (
+            <div data-prep-recent="1" style={{ ...T.fs.caption, ...T.num, color: T.body }}>
+              {moves.length === 0 ? <div style={{ color: T.subtle }}>{X.recentEmpty}</div> : moves.map(m => <div key={String(m.id)} style={{ padding: "2px 0" }}>{moveText(m)}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+      {compact && onOpenPrep && (
+        <div style={{ marginTop: T.sp.s }}>
+          <button type="button" className="k-btn" onClick={() => onOpenPrep(key)}
+            style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.seeAll}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 今日 → 备货 / 员工外壳 → 备货。
+// props:{ lang, today, recipes, components, products, prepStock, productionLog, onPrepOp, staff, focusKey, onJump, onGoTab, confirmDialog, showToast }
+// 排序同提醒条(prepAlertsOf 的 all 模式):有事的 → 正常的 → 还没开始记的 → 已经没标、账上还有的。宽屏两栏,375 一栏
+function PrepStockView({ lang, today, recipes = [], components = [], products = [], prepStock = null, productionLog, onPrepOp, staff = false, focusKey = null, onJump, onGoTab, confirmDialog, showToast }) {
+  const X = prepTxt(lang);
+  const t = today || localDateStr();
+  const stock = prepStock || prepStockRead(null);
+  const [filter, setFilterRaw] = useState(() => { const f = prepUiRead().filter; return ["all", "todo", "freeze", "fridge", "room"].includes(f) ? f : "all"; });
+  const setFilter = (f) => { setFilterRaw(f); prepUiWrite({ filter: f }); };
+  // 从提醒 / 详情卡 / 数据体检跳过来:那一张筛掉了就回到「全部」
+  const rows = useMemo(() => prepAlertsOf({ recipes, components, stock, today: t }, { all: true }), [recipes, components, stock, t]);
+  useEffect(() => { if (focusKey && filter !== "all" && !rows.some(r => r.key === focusKey && passes(r, filter))) setFilter("all"); }, [focusKey]);   // eslint-disable-line
+  function passes(r, f) {
+    if (f === "all") return true;
+    if (f === "todo") return r.rank < 5;
+    return !!r.cfg && r.cfg.store === f;
+  }
+  const head = (
+    <div style={{ marginBottom: T.sp.l }}>
+      <div style={{ ...T.fs.titleS, color: T.ink, fontFamily: T.fontSerif }}>{X.pageTitle}</div>
+      <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.xs, lineHeight: 1.6, overflowWrap: "anywhere" }}>{X.pageHint}</div>
+    </div>
+  );
+  if (stock.readOnly) return <div data-prep-view="1">{head}<div data-prep-readonly="1" style={{ ...T.fs.small, color: T.warning, border: `1px solid ${T.warning}`, padding: T.sp.m }}>{X.readOnly}</div></div>;
+  if (rows.length === 0) {
+    return (
+      <div data-prep-view="1">
+        {head}
+        {staff
+          ? <EmptyState variant="first" lang={lang} title={X.emptyStaff} hint={X.emptyStaffHint} />
+          : <EmptyState variant="first" lang={lang} title={X.emptyOwner} hint={X.emptyOwnerHint} actions={onGoTab ? [{ label: X.goList, onClick: () => onGoTab("list") }] : []} />}
+      </div>
+    );
+  }
+  const tracked = rows.filter(r => !r.untracked && !r.unmarked);
+  const sum = {
+    expired: tracked.reduce((s, r) => s + r.oh.expiredLots.length, 0),
+    soon: tracked.reduce((s, r) => s + r.oh.soonLots.length, 0),
+    low: tracked.filter(r => r.flags.low).length,
+    untracked: rows.filter(r => r.untracked).length,
+  };
+  const shown = rows.filter(r => passes(r, filter));
+  const FILTERS = ["all", "todo", "freeze", "fridge", "room"];
+  return (
+    <div data-prep-view="1">
+      {head}
+      <div data-prep-summary="1" style={{ ...T.fs.small, ...T.num, color: T.body, marginBottom: T.sp.m, overflowWrap: "anywhere" }}>{X.summary(sum.expired, sum.soon, sum.low, sum.untracked)}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: T.sp.l }}>
+        {FILTERS.map(f => {
+          const on = filter === f;
+          return (
+            <button key={f} type="button" data-prep-filter={f} aria-pressed={on} onClick={() => setFilter(f)}
+              style={{ padding: "6px 12px", minHeight: 32, ...T.fs.caption, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
+                border: `1px solid ${on ? T.ink : T.border}`, background: on ? T.ink : T.surface, color: on ? T.paper : T.body }}>{X.filters[f]}</button>
+          );
+        })}
+      </div>
+      {shown.length === 0 ? (
+        <EmptyState variant="filter" lang={lang} title={X.filterEmpty} chips={[{ label: X.filters[filter], onRemove: () => setFilter("all") }]} onClearAll={() => setFilter("all")} />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(320px, 100%), 1fr))", gap: T.sp.m }}>
+          {shown.map(r => (
+            <PrepStockCard key={r.key} kind={r.cfg ? r.cfg.kind : (r.item && r.item.kind) || "recipe"} obj={r.obj} cfg={r.cfg} item={r.item} lang={lang} today={t}
+              products={products} onPrepOp={onPrepOp} staff={staff} focus={!!focusKey && focusKey === r.key} onJump={staff ? undefined : onJump} onGoTab={staff ? undefined : onGoTab}
+              confirmDialog={confirmDialog} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 今日:生产单 | (备货) | 日结。子页状态提到 App(sub / onSubChange / prepFocusKey);没收到时用自己的状态(单独渲染的测试照旧)。
+// 「备货」子页只在 prepOn(有东西标了备货或账本不空)时有;她在备货页上清掉最后一样时留在备货页(prepOn || sub === "prep"),不掉到日结
 function TodayView(props) {
   const { lang, today, confirmDialog } = props;
-  const [sub, setSub] = useState("sheet");
-  // 日结有没保存的格子时,切回生产单先问一句(子页一换,日结页就卸载了)
+  const [ownSub, setOwnSub] = useState("sheet");
+  const controlled = props.sub !== undefined && typeof props.onSubChange === "function";
+  const sub = controlled ? props.sub : ownSub;
+  const setSub = controlled ? props.onSubChange : setOwnSub;
+  const subs = (props.prepOn || sub === "prep") ? TODAY_SUBS_PREP : TODAY_SUBS;
+  // 日结 / 备货页有没保存的格子时,切子页先问一句(子页一换,那一页就卸载了)
   const goSub = (id) => { if (id === sub) return; confirmLeaveEditor(confirmDialog, lang, () => setSub(id)); };
   return (
     <div>
@@ -21708,16 +22412,20 @@ function TodayView(props) {
           <div style={{ ...T.fs.title, fontFamily: T.fontSerif, ...T.num, color: T.ink, marginTop: T.sp.xs }}>{today}</div>
         </div>
         <div role="tablist" style={{ display: "flex", border: `1px solid ${T.ink}` }}>
-          {TODAY_SUBS.map((t, i) => (
+          {subs.map((t, i) => (
             <button key={t.id} type="button" role="tab" aria-selected={sub === t.id} onClick={() => goSub(t.id)}
-              style={{ padding: "8px 18px", minHeight: 40, border: "none", borderLeft: i ? `1px solid ${T.ink}` : "none", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.small,
+              style={{ padding: subs.length > 2 ? "8px 14px" : "8px 18px", minHeight: 40, border: "none", borderLeft: i ? `1px solid ${T.ink}` : "none", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.small,
                 background: sub === t.id ? T.ink : T.paper, color: sub === t.id ? T.paper : T.ink }}>
               {lang === "ja" ? t.ja : t.zh}
             </button>
           ))}
         </div>
       </div>
-      {sub === "sheet" ? <ProductionSheetView {...props} /> : <DailyCloseView {...props} onSave={props.onDailyClose} />}
+      {sub === "sheet" ? <ProductionSheetView {...props} />
+        : sub === "prep" ? <PrepStockView lang={lang} today={today} recipes={props.recipes} components={props.components} products={props.products}
+            prepStock={props.prepStock} productionLog={props.productionLog} onPrepOp={props.onPrepOp} staff={false} focusKey={props.prepFocusKey || null}
+            onJump={props.onJump} onGoTab={props.onGoTab} confirmDialog={confirmDialog} showToast={props.showToast} />
+        : <DailyCloseView {...props} onSave={props.onDailyClose} />}
     </div>
   );
 }
@@ -23393,6 +24101,8 @@ function App() {
   // 跳到对应的编辑页 / 详情页:先关面板,同一次操作里先设对象再切 tab(切 tab 的 effect 只清「不在那个 tab」的编辑对象,
   // 和「内容质量扫描」跳材料是同一个做法)。从数据 tab 出发,没有编辑页开着,不用走 goTab 的未保存提醒
   const jumpToItem = ({ kind, id } = {}) => {
+    // 备货(prepstock E 线):id = 账本 key("recipe:…" / "component:…")→ 今日 → 备货,展开那一张(东西删了也能看账上那一样)
+    if (kind === "prep") { openPrep(id); return; }
     const byId = (arr) => (arr || []).find(x => x && x.id === id);
     // 第 4 批第 0 步:加了四种「打开查看页」(recipeView / componentView / creationView / productView),给毛利一览 / 材料使用情况 / 待换国产看板用
     const target = (kind === "recipe" || kind === "recipeView") ? byId(recipes) : (kind === "component" || kind === "componentView") ? byId(components)
@@ -23627,10 +24337,36 @@ function App() {
     return true;
   };
   // 以下是给后面各线的空壳(签名定死,各线只填函数体):
-  // E 线:备货页 / 备货卡 / 详情卡上的操作。ops 同 writePrep;meta = { toast?: 文字, staff?: 员工点的 } → 先做 + 撤销 toast(revert 同一个 opId),返回有没有写
-  const onPrepOp = (ops, meta = {}) => writePrep(ops);
-  // E 线:「去处理」「看全部备货」「看全部备货 →」→ 今日 → 备货,展开 key 那一张(key 空 = 不指定)。第 0 步什么都不做
-  const openPrep = (key) => {};
+  // E 线:备货页 / 备货卡 / 详情卡上的操作。ops 同 writePrep;meta = { toast?: 文字, staff?: 员工点的, undoOps?: 撤销时写的 ops } → 先做 + 撤销 toast,返回有没有写。
+  // 撤销缺省 = 按 ops 里的 opId 各写一条 revert(A 线的共同规则:之后盘点 / 报废过的不加回);清掉整样(dropItem)的撤销由调用方给 putItem。
+  // 员工点的(meta.staff)每条 op 带 staff: true(账本「最近记录」标「员工」)。撤销闭包不读 dataRef(没有 appSettings),读 prepRawRef 算撤不全的提示
+  const prepRawRef = useRef(null);
+  prepRawRef.current = appSettings.prepStock;
+  const onPrepOp = (ops, meta = {}) => {
+    const m = meta || {};
+    const list = (Array.isArray(ops) ? ops : []).filter(o => o && typeof o === "object").map(o => (m.staff && o.type !== "dropItem" && o.type !== "putItem" ? { ...o, staff: true } : o));
+    if (!list.length) return false;
+    if (!writePrep(list)) return false;
+    const opIds = [...new Set(list.map(o => o.opId).filter(Boolean))];
+    const undoOps = Array.isArray(m.undoOps) ? m.undoOps : opIds.map(opId => ({ type: "revert", opId }));
+    const undo = undoOps.length ? () => {
+      const partial = undoOps.some(o => o && o.type === "revert" && prepRevertPreview(prepRawRef.current, o.opId).partial);
+      if (writePrep(undoOps, null, { isUndo: true }) && partial) showToast(prepTxt(lang).partial);
+    } : null;
+    if (m.toast) showToast(m.toast, undo ? { undo } : {});
+    return true;
+  };
+  // E 线:「去处理」「看全部备货」「看全部备货 →」、数据体检「去看」(jumpToItem kind "prep")→ 今日 → 备货,展开 key 那一张(key 空 = 不指定)。
+  // 同 goTab:有没保存的编辑页先问;在确认之后才一起设子页 / 展开的那一样 / 切 tab(取消 = 什么都不变)
+  const openPrep = (key) => {
+    const go = () => { setShowDataHealth(false); setTodaySub("prep"); setPrepFocusKey(key || null); setTab("today"); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); };
+    if ((tab !== "today" || familyEditTarget !== null) && anyEditorDirty()) { confirmLeaveEditor(confirmDialog, lang, go); return; }
+    go();
+  };
+  // 离开今日 tab 时子页回到「生产单」、不再指定展开哪一张(和以前 TodayView 卸载就回到生产单一样)
+  useEffect(() => { if (tab !== "today") { setTodaySub("sheet"); setPrepFocusKey(null); } }, [tab]);
+  // 顶栏「今日」角标:已开始记的备货里有过期批或低于提醒线的样数(手机「更多」抽屉那一行和「更多」按钮也画)
+  const prepBadge = useMemo(() => prepBadgeCountOf(recipes, components, prepStock, today), [recipes, components, prepStock, today]);
   // F 线:商品页「记录生产」。组成里有已开始记的备货、商品不跳过(productPrepSkips)→ App 处理(makeLogQty 带 { id } + 账本 take + toast + 撤销)并返回 true;
   // 返回 false = 商品页走原来的代码(第 0 步永远 false)
   const logProdWithPrep = (productId, qty, date) => false;
@@ -23910,7 +24646,7 @@ function App() {
   // mZh / mJa 是手机底栏用的短标签（底栏只有 5 格，塞不下「材料百科」四个字）
   // 第 3 批:加「今日」(生产单 | 日结),手机不进底栏、在「更多」抽屉里
   const NAV = [
-    { id: "today", zh: "今日", ja: "本日" },
+    { id: "today", zh: "今日", ja: "本日", badge: () => prepBadge },   // 备货:过期 / 低于提醒线的样数(平时 0,不画)
     { id: "products", zh: "商品", ja: "商品", mZh: "商品", mJa: "商品", badge: () => products.filter(p => (p.currentStock || 0) <= (p.threshold || 0)).length },
     { id: "purchase", zh: "采购", ja: "仕入" },
     { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
@@ -25102,6 +25838,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             fontSize: 12, fontFamily: T.fontSans,
           }}>
           {lang === "zh" ? "更多" : "その他"}
+          {/* 备货 E 线:抽屉里各项角标的合计(手机底栏没有「今日」,不画在这里等于看不见);0 不画 */}
+          {(() => { const nb = NAV.filter(n => !MOBILE_NAV.includes(n.id) && n.badge).reduce((s, n) => s + (n.badge() || 0), 0);
+            return nb > 0 ? <span data-more-badge="1" style={{ fontFamily: T.fontSerif, fontSize: 9, color: T.danger, marginLeft: 3, ...T.num }}>{nb}</span> : null; })()}
         </button>
       </div>
       )}
@@ -25123,7 +25862,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   borderLeft: tab === n.id ? `3px solid ${T.ink}` : "3px solid transparent",
                   color: tab === n.id ? T.ink : T.body, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
                 }}>
-                <span>{lang === "zh" ? n.zh : n.ja}</span>
+                <span>{lang === "zh" ? n.zh : n.ja}{(() => { const b = n.badge ? n.badge() : 0; return b > 0 ? <span data-drawer-badge={n.id} style={{ fontFamily: T.fontSerif, fontSize: 11, color: T.danger, marginLeft: 6, ...T.num }}>{b}</span> : null; })()}</span>
                 <span style={{ color: T.muted }}>→</span>
               </button>
             ))}
@@ -25533,7 +26272,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
           <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
-            prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} />
+            prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog} />
         </div>
       )}
 
@@ -25544,7 +26283,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
           else { setTab("list"); }
         }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog}
-          prepStock={prepStock} products={products} />
+          prepStock={prepStock} products={products} onGoTab={goTab} />
       )}
 
       {/* MATERIALS */}
@@ -25716,6 +26455,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onPrepOp={onPrepOp}
           onOpenPrep={openPrep}
           prepOn={prepOn}
+          onJump={jumpToItem}
+          onGoTab={goTab}
         />
       )}
 
@@ -25894,6 +26635,15 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             const matIds = new Set((materials || []).map(m => m && m.id));
             const followers = creations.filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === updated.id && layerLinkState(l, components, matIds) === "follow"));
             const refs = followers.map(cr => `${lang === "zh" ? "会跟着变" : "連動して変わる"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`);
+            // 备货(prepstock E 线):这个组件已经开始记库存,同步后的单位和账上的对不上(prepSameUnit)→ 多一行提醒去盘点(同步后这一样停止自动加减)
+            {
+              const orig = components.find(c => c && c.id === updated.id);
+              const pItem = prepStock.items[prepKeyOf("component", updated.id)];
+              if (orig && pItem && !prepStock.readOnly) {
+                const pCfg = prepCfgOf("component", { ...orig, ...updated, prepMode: "stock" });
+                if (!prepSameUnit(pItem, pCfg)) refs.push(prepTxt(lang).syncUnitRef(pItem.unit || "", fmtQty(_r3(prepLotsView(pItem, null, today).reduce((x, l) => x + l.left, 0))) || "0", pCfg.unit));
+              }
+            }
             confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
