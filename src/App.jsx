@@ -5830,8 +5830,12 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                 if (src === "shop") badges.push({ t: lang === "zh" ? "本店" : "仕入", c: T.success, tip: lang === "zh" ? "本店采购价" : "仕入れ価" });
                 else if (src === "ref") badges.push({ t: lang === "zh" ? "参考" : "参考", c: T.secondary, tip: lang === "zh" ? "百科参考价" : "百科参考価" });
                 else if (src === "manual") badges.push({ t: lang === "zh" ? "手写" : "手入", c: T.info, tip: lang === "zh" ? "手写单价" : "手入力" });
-                else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? "无价格信息" : "価格情報なし" });
+                // 第 4 批 B4-6(critic M1):不计价 / 来自组件。组件里有原料没价时组件徽章用警示色(这一行也算进「N 项没价」)
+                else if (src === "nocost") badges.push({ t: lang === "zh" ? "不计价" : "原価外", c: T.muted, tip: lang === "zh" ? "这一行不计价,成本按 0 算" : "原価に入れない行" });
+                else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "コンポ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "コンポーネント:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
+                else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? (ingLiveComp(ing, materials) ? "来自组件,但算不出单价(组件没填产出量 / 单位对不上 / 循环 / 没价)" : "无价格信息") : "価格情報なし" });
                 if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
+                else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のコンポーネントは削除済み" });
                 const shown = badges.slice(0, 2), rest = badges.slice(2);
                 return (
                   <div
@@ -7192,6 +7196,13 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
     delete unitAtFocus.current[id];
     if (from === undefined) return;
     setIngs(prev => prev.map(i => (i._id === id && i._priceModified && isGramUnit(from) !== isGramUnit(i.unit)) ? revertRow(i) : i));
+    // 第 4 批 B4-6:来自组件的行换了单位 → 按新单位重算快照(kg 行 = g 价 × 1000;对不上就清空)
+    setIngs(prev => {
+      const r = prev.find(i => i._id === id);
+      if (!r || r.noCost || from === (r.unit || "") || !ingLiveComp(r, materials)) return prev;   // 老行 / 单位没变:原样,不多一次渲染
+      const snap = componentRowSnapshot(r, materials);
+      return prev.map(i => i === r ? { ...i, ...snap, _originalPrice: snap.unitPrice } : i);
+    });
   };
 
   return (
@@ -7295,7 +7306,11 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               const basis = unitMismatch && getMaterialEffectivePrice(linkedMat) > 0 ? { per100: false, label: "g" } : ingPriceBasis(ing.unit);
               // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
               // 材料被删掉的行价格其实是手写价在算,以前没有按钮,币种改不了
-              const curBtnShown = !linkedMat;
+              // 第 4 批 B4-6:来自组件(组件还在,没有还在的材料)/ 组件已删(按快照 = 手写价算)/ 不计价
+              const liveComp = ingLiveComp(ing, materials);
+              const compGone = !linkedMat && !liveComp && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "";
+              const compPrice = liveComp && !ing.noCost ? componentRowPrice(ing, materials) : null;
+              const curBtnShown = !linkedMat && !liveComp && !ing.noCost;
               // 检查价格是否和价格表当前值不一致
               const priceDrift = linked && linkedBrand && linkedBrand.price && ing.unitPrice && curOf(ing) !== "CNY" &&   // 旧价格表是东京时期的日元价,人民币行不拿它比(点了会把日元数原样写成人民币)
                 Math.abs(parseFloat(linkedBrand.price) - parseFloat(ing.unitPrice)) > 0.001
@@ -7303,19 +7318,26 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
               return (
                 <tr key={ing._id} style={{ borderBottom: "0.5px solid #E5E5E5", borderLeft: `4px solid ${g.border}` }}>
                   <td style={{ padding: "3px 4px" }}>
+                    {/* 第 4 批 B4-6:来自组件 = 蓝底 🧩;组件已删 = 黄底(按快照价算);不计价 = 灰底。老行颜色不变 */}
+                    {(() => { const lc = linkedMat ? "#059669" : liveComp ? T.info : compGone ? "#F59E0B" : null; return (
                     <button
                       onClick={() => onPickMaterial(ing._id)}
-                      title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang)) : tx.pick}
+                      title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang))
+                        : liveComp ? (lang === "zh" ? `🧩 来自组件:${pickLang(liveComp, "name", lang)}\n点击换一个或取消` : `🧩 コンポーネント:${pickLang(liveComp, "name", lang)}\nクリックで変更・解除`)
+                        : compGone ? (lang === "zh" ? "这一行原来来自的组件已经删了,现在按上次存下的单价算。点击重新选" : "元のコンポーネントは削除済み。前回の単価で計算中")
+                        : ing.noCost ? (lang === "zh" ? "这一行不计价(成本按 0 算)。点击改回" : "原価に入れない行。クリックで変更")
+                        : tx.pick}
                       style={{
                         padding: "3px 6px", fontSize: 13, cursor: "pointer",
-                        background: linkedMat ? "#059669" : T.bgCard,
-                        color: linkedMat ? "#FFFFFF" : T.textSecondary,
-                        border: `0.5px solid ${linkedMat ? "#059669" : T.border}`,
+                        background: lc || (ing.noCost ? T.bgMuted : T.bgCard),
+                        color: lc ? "#FFFFFF" : T.textSecondary,
+                        border: `0.5px solid ${lc || T.border}`,
                         borderRadius: 4,
                         width: 30, height: 26,
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
                       }}
-                    >🔗</button>
+                    >{liveComp ? "🧩" : "🔗"}</button>
+                    ); })()}
                   </td>
                   <td style={{ padding: "3px 4px" }}>
                     <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameZh")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
@@ -7331,6 +7353,11 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       <div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         🔗 {linkedMatBrand ? (lang === "zh" ? (linkedMatBrand.nameZh || linkedMatBrand.nameJa) : (linkedMatBrand.nameJa || linkedMatBrand.nameZh)) : (ing.brand || "—")}
                       </div>
+                    ) : liveComp ? (
+                      // 第 4 批 B4-6:来自组件 —— 品牌格只读写组件名
+                      <div title={lang === "zh" ? `来自组件:${pickLang(liveComp, "name", lang)}` : `コンポーネント:${pickLang(liveComp, "name", lang)}`} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: T.info, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        🧩 {lang === "zh" ? "组件" : "コンポ"} · {pickLang(liveComp, "name", lang)}
+                      </div>
                     ) : linked ? (
                       <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{ ...ist, width: 78, padding: "4px 3px" }} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
                         <option value="">{lang === "zh" ? "—未定—" : "—未定—"}</option>
@@ -7341,6 +7368,24 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     )}
                   </td>
                   <td style={{ padding: "3px 4px", position: "relative" }}>
+                    {/* 第 4 批 B4-6:不计价 / 来自组件的行单价只读(不计价点标签 = 打开 🔗 弹窗改回;来自组件的价跟组件走) */}
+                    {ing.noCost ? (
+                      <button type="button" onClick={() => onPickMaterial(ing._id)} title={lang === "zh" ? "这一行不计价:成本按 0 算,不算「没价」。点这里(或行首 🔗)改回" : "原価に入れない行。クリックで変更"}
+                        style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: T.bgMuted, border: `0.5px solid ${T.border}`, color: T.textSecondary, whiteSpace: "nowrap" }}>
+                        {lang === "zh" ? "不计价" : "原価外"}
+                      </button>
+                    ) : liveComp ? (
+                      <div title={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "コンポーネント原価 ÷ 出来高(自動)"}
+                        style={{ fontSize: 11, color: compPrice && compPrice.perUnit > 0 ? T.info : "#92400E", whiteSpace: "nowrap", padding: "4px 2px" }}>
+                        {compPrice && compPrice.perUnit > 0
+                          ? (ingWeightFactor(ing.unit) > 0 ? fmtUnitPrice(compPrice.perUnit / ingWeightFactor(ing.unit), "CNY") : `${fmtCost(compPrice.perUnit)}/${_normTxt(ing.unit)}`)
+                          : (compPrice && compPrice.reason === "noYield" ? (lang === "zh" ? "组件没填产出量" : "出来高未入力")
+                            : compPrice && compPrice.reason === "unit" ? (lang === "zh" ? `单位对不上(组件按 ${_normTxt(liveComp.unit) || "g"})` : `単位不一致(${_normTxt(liveComp.unit) || "g"})`)
+                            : compPrice && compPrice.reason === "cycle" ? (lang === "zh" ? "循环引用,算不出" : "循環参照")
+                            : (lang === "zh" ? "组件没价" : "価格なし"))}
+                        {compPrice && compPrice.perUnit > 0 && compPrice.incomplete && <span style={{ color: "#92400E" }}>{lang === "zh" ? " · 不全" : " · 一部なし"}</span>}
+                      </div>
+                    ) : (
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                       {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
                       <IngPriceInput ing={ing} placeholder={`${curOf(ing) === "CNY" ? "¥" : "円"}/${basis.label}`}
@@ -7355,6 +7400,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                         <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + fmtUnitPrice(ing._originalPrice, curOf(ing)) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                       )}
                     </div>
+                    )}
                     {priceDrift !== null && (
                       <button onClick={() => {
                         setIngs(prev => prev.map(i => {
@@ -7365,7 +7411,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={tx.drift}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
                     )}
                   </td>
+                  {/* 第 4 批 B4-6:不计价写「—」;来自组件只读(用量 × 组件单价,快照随用量 / 单位更新) */}
+                  {ing.noCost || liveComp ? (
+                    <td style={{ padding: "3px 4px" }}><div style={{ width: 56, padding: "4px 3px", fontSize: 12, textAlign: "right", color: ing.noCost ? T.textTertiary : T.info }}>{ing.noCost ? "—" : (fmtCost(ing.cost) || "—")}</div></td>
+                  ) : (
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
+                  )}
                   <td style={{ padding: "3px 4px" }}>
                     {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
                     <select value={grp} onChange={e=>updateIng(ing._id,"group",e.target.value)} style={{ ...ist, width: 80, padding: "4px 3px" }}>
@@ -7567,20 +7618,35 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
 
 // 配料表的两个弹窗。渲染在编辑页根元素里(useDirtyGuard 靠根元素的捕获阶段拍快照),位置和以前一样。
 // pickerTargetIngId:要选材料的那一行的 _id(可能是 0,所以判断用 !== null)
-function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang, pickerTargetIngId, setPickerTargetIngId, showBulkMatch, setShowBulkMatch }) {
+// 第 4 批 B4-6:selfCompId = 正在编辑的组件自己(组件编辑页传组件 id,部分编辑页传部分的来源组件 id),选组件时排除它和会绕回它的组件
+function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang, pickerTargetIngId, setPickerTargetIngId, showBulkMatch, setShowBulkMatch, selfCompId }) {
   const where = (ING_TABLE_VARIANTS[variant] || ING_TABLE_VARIANTS.recipe).where;
+  const pickRow = pickerTargetIngId !== null ? (ings.find(i => i._id === pickerTargetIngId) || {}) : {};
+  const setRow = (fn) => setIngs(prev => prev.map(i => i._id !== pickerTargetIngId ? i : fn(i)));
   return (
     <>
-      {/* 🔗 材料百科选择弹窗 */}
+      {/* 🔗 材料百科选择弹窗(第 4 批起多一页「组件」和「这一行不计价」) */}
       {pickerTargetIngId !== null && (
         <MaterialPickerModal
           materials={materials}
           brands={brands}
-          currentMaterialId={(ings.find(i => i._id === pickerTargetIngId) || {}).materialId || null}
+          currentMaterialId={pickRow.materialId || null}
           lang={lang}
           onClose={() => setPickerTargetIngId(null)}
           onSelect={(mat) => {
             pickMaterialForRow(setIngs, pickerTargetIngId, mat, brands, lang);   // 选中 / 取消关联;名字联想(C9)点一条也走这个
+            setPickerTargetIngId(null);
+          }}
+          currentComponentId={(pickRow.componentId !== undefined && pickRow.componentId !== null && pickRow.componentId !== "") ? pickRow.componentId : null}
+          selfCompId={selfCompId}
+          rowUnit={pickRow.unit}
+          noCost={!!pickRow.noCost}
+          onSelectComponent={(comp) => {
+            setRow(i => applyComponentPick(i, comp, materials));
+            setPickerTargetIngId(null);
+          }}
+          onToggleNoCost={(on) => {
+            setRow(i => applyNoCost(i, on, materials, brands, lang));
             setPickerTargetIngId(null);
           }}
         />
@@ -7954,7 +8020,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
       {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
       <IngredientLinkModals variant="component" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
-        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
+        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} selfCompId={component && component.id} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
@@ -12064,7 +12130,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       </div>
       {/* 🔗 选材料 / 🤖 批量关联 两个弹窗(三个编辑页共用,见 IngredientLinkModals) */}
       <IngredientLinkModals variant="layer" ings={ings} setIngs={setIngs} materials={materials} brands={brands} lang={lang}
-        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} />
+        pickerTargetIngId={pickerTargetIngId} setPickerTargetIngId={setPickerTargetIngId} showBulkMatch={showBulkMatch} setShowBulkMatch={setShowBulkMatch} selfCompId={layer && layer.sourceComponentId} />
 
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
@@ -13595,7 +13661,84 @@ function BrandManageView({ brands, setBrands, materials, lang, onBack, onViewBra
 }
 
 // ═══ 材料百科选择弹窗 (配方 ingredient 用它来关联) ═══
-function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSelect, onClose }) {
+// 第 4 批 B4-6:🔗 弹窗的「组件」页。排除正在编辑的组件自己和会绕回它的组件(A 用 B、B 又用 A);
+// 每条写产出量和单价(人民币,按克的写每 100g);没填产出量的灰掉、点不了;单位和这一行对不上的照样能选,但先说清楚
+function PickerComponentList({ lang, materials, selfCompId, rowUnit, currentComponentId, onPick }) {
+  const zh = lang === "zh";
+  const [q, setQ] = useState("");
+  const has = (v) => v !== undefined && v !== null && v !== "";
+  const all = _componentsLookup.filter(c => c && has(c.id));
+  const loops = (c) => has(selfCompId) && (c.id === selfCompId || componentReaches(all, c.id, selfCompId));
+  const k = q.trim().toLowerCase();
+  const shown = all.filter(c => !loops(c))
+    .filter(c => !k || `${c.nameZh || ""} ${c.nameJa || ""} ${c.nameFr || ""}`.toLowerCase().includes(k))
+    .sort((a, b) => ((b.inUse ? 1 : 0) - (a.inUse ? 1 : 0)) || String(a.nameZh || a.nameJa || "").localeCompare(String(b.nameZh || b.nameJa || "")));
+  const nLoop = all.filter(loops).length;
+  const rowWeight = ingWeightFactor(rowUnit) > 0;
+  return (
+    <>
+      <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder={zh ? "🔍 搜索组件名..." : "🔍 コンポーネント名検索..."}
+        style={{ padding: "8px 12px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radius, outline: "none", fontFamily: T.fontSans }} />
+      <div style={{ fontSize: 11, color: T.textTertiary }}>
+        {zh ? `${shown.length} / ${all.length} 个组件` : `${shown.length} / ${all.length}`}
+        {nLoop > 0 && (zh ? ` · 另有 ${nLoop} 个会绕回正在编辑的组件,没列出来` : ` · 循環する ${nLoop} 件は非表示`)}
+      </div>
+      <div style={{ overflowY: "auto", flex: 1, border: `0.5px solid ${T.border}`, borderRadius: T.radius }}>
+        {shown.length === 0 && (
+          <div style={{ padding: "2rem", textAlign: "center", color: T.textTertiary, fontSize: 12 }}>
+            {all.length === 0 ? (zh ? "组件库还是空的" : "コンポーネントがありません") : (zh ? "没有对得上的组件" : "一致なし")}
+          </div>
+        )}
+        {shown.map(c => {
+          const y = parseFloat(c.yield);
+          const noYield = !(y > 0);
+          const unit = _normTxt(c.unit) || "g";
+          const info = noYield ? null : componentCostInfo(c, materials);
+          const fc = ingWeightFactor(c.unit);
+          const price = !info || !(info.total > 0) ? "" : (fc > 0 ? fmtUnitPrice(info.total / (y * fc), "CNY") : `${fmtCost(info.total / y)}/${unit}`);
+          const unitOff = !noYield && (rowWeight ? !(fc > 0) : (fc > 0 || _normCountUnit(rowUnit) !== _normCountUnit(c.unit)));
+          const isCurrent = has(currentComponentId) && currentComponentId === c.id;
+          const cat = getCompCat(c.componentCategory);
+          return (
+            <div key={String(c.id)} role="button" aria-disabled={noYield}
+              onClick={noYield ? undefined : () => onPick(c)}
+              title={noYield ? (zh ? "这个组件还没填产出量,算不出单价。先去组件编辑页填上" : "出来高が未入力のため単価を計算できません") : ""}
+              style={{ padding: "10px 14px", borderBottom: `0.5px solid ${T.borderSoft}`, cursor: noYield ? "not-allowed" : "pointer",
+                display: "flex", alignItems: "center", gap: 10, opacity: noYield ? 0.5 : 1,
+                background: isCurrent ? T.bgSoft : T.bgCard, borderLeft: `3px solid ${cat ? cat.color : "transparent"}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>
+                  {zh ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh)}
+                  {c.inUse && <span style={{ fontSize: 9, padding: "1px 5px", border: `1px solid ${T.success}`, color: T.success, marginLeft: 6, whiteSpace: "nowrap", verticalAlign: "middle" }}>{zh ? "在用" : "使用中"}</span>}
+                </div>
+                <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>
+                  {cat ? (zh ? cat.zh : cat.ja) : ""}
+                  {noYield ? (zh ? " · 先填产出量" : " · 出来高未入力") : ` · ${zh ? "产出" : "出来高"} ${fmtQty(y)} ${unit}`}
+                  {price ? " · " + price : (!noYield ? (zh ? " · 没价" : " · 価格なし") : "")}
+                  {info && info.incomplete && info.total > 0 && (zh ? "(有原料没价)" : "(一部価格なし)")}
+                </div>
+                {unitOff && (
+                  <div style={{ fontSize: 10, color: "#92400E", marginTop: 2 }}>
+                    {zh ? `这一行按「${_normTxt(rowUnit) || "g"}」计量,组件按「${unit}」,对不上算不出价。选了以后把这一行的单位改成和组件一样的口径` : `単位が合いません(行「${_normTxt(rowUnit) || "g"}」/ コンポーネント「${unit}」)`}
+                  </div>
+                )}
+              </div>
+              {isCurrent && (
+                <div style={{ fontSize: 10, color: T.accent, padding: "2px 6px", background: T.bgSoft, borderRadius: 3 }}>{zh ? "当前" : "現在"}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// 第 4 批 B4-6:三个编辑页的配料行传 onSelectComponent / onToggleNoCost 时,顶上多「材料百科 | 组件」两页,底栏多「这一行不计价」。
+// 组件列表读渲染期注入的 _componentsLookup(同下面读 _shopMaterials),三个编辑页不用多传组件
+function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSelect, onClose, currentComponentId = null, selfCompId, rowUnit, noCost = false, onSelectComponent, onToggleNoCost }) {
+  const compMode = typeof onSelectComponent === "function";
+  const [tab, setTab] = useState(() => (compMode && !currentMaterialId && currentComponentId !== null && _componentsById.has(currentComponentId)) ? "comp" : "mat");
   const [searchQ, setSearchQ] = useState("");
   const [catFilter, setCatFilter] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
@@ -13656,11 +13799,26 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.brand }}>
-            {lang === "zh" ? "🔗 从材料百科选择" : "🔗 材料事典から選択"}
+            {tab === "comp" ? (lang === "zh" ? "🧩 这一行来自组件" : "🧩 コンポーネントから") : (lang === "zh" ? "🔗 从材料百科选择" : "🔗 材料事典から選択")}
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
 
+        {/* 第 4 批 B4-6:材料百科 | 组件 */}
+        {compMode && (
+          <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[["mat", lang === "zh" ? "材料百科" : "材料事典"], ["comp", lang === "zh" ? "组件(自家做的半成品)" : "コンポーネント(自家製)"]].map(([k, label]) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+                style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: T.radius, fontFamily: T.fontSans,
+                  background: tab === k ? T.brand : T.bgCard, color: tab === k ? "#FFFFFF" : T.textSecondary,
+                  border: `0.5px solid ${tab === k ? T.brand : T.border}` }}>{label}</button>
+            ))}
+          </div>
+        )}
+
+        {tab === "comp" ? (
+          <PickerComponentList lang={lang} materials={materials} selfCompId={selfCompId} rowUnit={rowUnit} currentComponentId={currentComponentId} onPick={onSelectComponent} />
+        ) : (<>
         {/* 搜索 + 过滤器 */}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <input
@@ -13765,12 +13923,29 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
             );
           })}
         </div>
+        </>)}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: compMode ? "wrap" : undefined }}>
           <div style={{ fontSize: 10, color: T.textTertiary, fontStyle: "italic" }}>
-            {lang === "zh" ? "💡 选中后自动填入名称、品牌、单价;百科价格变动时配方成本自动更新" : "💡 選択で自動入力、百科更新時に自動連動"}
+            {tab === "comp"
+              ? (lang === "zh" ? "💡 单价 = 组件现在的成本 ÷ 产出量,组件改了价这里自动跟着变" : "💡 単価 = コンポーネントの原価 ÷ 出来高(自動連動)")
+              : (lang === "zh" ? "💡 选中后自动填入名称、品牌、单价;百科价格变动时配方成本自动更新" : "💡 選択で自動入力、百科更新時に自動連動")}
           </div>
-          {currentMaterialId && (
+          {compMode && typeof onToggleNoCost === "function" && (
+            <button
+              type="button"
+              onClick={() => onToggleNoCost(!noCost)}
+              title={lang === "zh" ? "水、冰、装饰用的一点点这类不花钱或不值得算的:成本按 0 算,不算「没价」。只管钱,过敏原照样要查" : "水・氷など原価に入れない行:原価 0、「価格なし」に数えない。アレルゲンは通常どおり確認"}
+              style={{
+                padding: "6px 12px", fontSize: 11, color: noCost ? T.textPrimary : T.textSecondary,
+                background: noCost ? T.bgMuted : T.bgCard, border: `0.5px solid ${T.border}`,
+                borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans, marginLeft: "auto",
+              }}
+            >
+              {noCost ? (lang === "zh" ? "↺ 改回计价" : "↺ 原価に戻す") : (lang === "zh" ? "这一行不计价" : "この行は原価に入れない")}
+            </button>
+          )}
+          {(currentMaterialId || (compMode && currentComponentId !== null)) && (
             <button
               onClick={() => onSelect(null)}
               style={{
