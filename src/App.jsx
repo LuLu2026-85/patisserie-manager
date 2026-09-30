@@ -20200,6 +20200,7 @@ const PREP_TXT = {
     toastShort: (store, name, got, sh) => `;${store}「${name}」账上只有 ${got},差 ${sh} 没扣(去「备货」盘点)`,
     toastUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     toastStart: (name) => `;从今天开始记「${name}」的库存,以前做好还冻着的请到「备货」补登`,
+    toastMakeUsed: (list) => `;用掉 ${list}`,
     undoGone: "生产记录已经删了,只撤了备货",
     remTitle: "备货提醒",
     remExpired: (k, d, n, u) => `有 ${k} 批过期了(${d} 做的 ${n} ${u}),别再用`,
@@ -20444,6 +20445,7 @@ const PREP_TXT = {
     toastShort: (store, name, got, sh) => `・${store}「${name}」は在庫 ${got} のみ、${sh} 未控除(「作り置き」で棚卸し)`,
     toastUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     toastStart: (name) => `・本日から「${name}」の在庫を記録します。以前の分は「作り置き」で登録してください`,
+    toastMakeUsed: (list) => `・使用 ${list}`,
     undoGone: "製造記録は削除済みのため、作り置きだけ戻しました",
     remTitle: "作り置きアラート",
     remExpired: (k, d, n, u) => `期限切れ ${k} ロット(${d} 仕込み ${n}${u})。使わないでください`,
@@ -25022,9 +25024,14 @@ function App() {
         const qty = actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add;
         if (!(add > 0) || !(qty > 0)) return true;
         const cfg = info.cfg;
-        if (!writePrep([{ type: "make", key: cfg.key, cfg, opId, lotId: "lot_" + opId, qty, madeAt: today, uid, planQty: add, via: "sheet", ...staffOp }], setLogged(add), { uid })) return true;
+        // 审查 ps1:这一批的配料里「来自组件」的备货组件(单子上写「从库存取」、提醒也按它算)同一次从账本扣,同一个 opId(撤销一起撤)。
+        // 按实际做的数算(实际 390、计划 400 → 按 390 / 400 缩);不扣 take 封顶(那只看取出行 / 用到备货的行自己的 uid)
+        const used = info.flow.takes.filter(t => t.tracked).map(t => ({ ...t, qty: _r3(t.qty * qty / add) })).filter(t => t.qty > 0);
+        const parts = takeParts(used);
+        if (!writePrep([{ type: "make", key: cfg.key, cfg, opId, lotId: "lot_" + opId, qty, madeAt: today, uid, planQty: add, via: "sheet", ...staffOp }, ...takeOps(parts, add)], setLogged(add), { uid })) return true;
         const nm = prodName(s.obj, lang);
-        showToast(X.toastMake(nm, X.storeName(cfg.store), q(qty), cfg.unit, cfg.shelfDays ? X.md(plusDaysStr(today, cfg.shelfDays)) : "") + (info.tracked ? "" : X.toastStart(nm)),
+        showToast(X.toastMake(nm, X.storeName(cfg.store), q(qty), cfg.unit, cfg.shelfDays ? X.md(plusDaysStr(today, cfg.shelfDays)) : "") + (info.tracked ? "" : X.toastStart(nm))
+          + (parts.length ? X.toastMakeUsed(parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、")) : "") + shortTxt(parts) + untakenTxt(info.flow.untaken),
           { undo: undoPrep(add) });
         return true;
       }
