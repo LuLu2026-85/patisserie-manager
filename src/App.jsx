@@ -5801,10 +5801,11 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
   const liveUnitCost = _yieldNum > 0 ? liveTotalCost / _yieldNum : 0;
   const _priceNum = toCNY(r.price, priceCurOf(r));   // v17: 售价折人民币,才能跟已折算的成本比
   const liveMargin = _priceNum > 0 && liveUnitCost > 0 ? ((_priceNum - liveUnitCost) / _priceNum) * 100 : 0;
-  const mc = liveMargin >= 50 ? "green" : liveMargin >= 30 ? "amber" : "red";
   // 2026-09-29 体检第 2 批:以前有原料没价时利润率照常显示、看着像准确值;成本为 0 时显示红色 0.0% 像亏本。
   // 和下面「成本算不全」红框同一个判定(getIngPriceSource === "none")
   const _missingPriceCount = (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length;
+  // 第 4 批 B4-1:颜色走 marginInfo(跟目标原料成本率;有原料没价 = 算不全,不给绿色)
+  const _mi = marginInfo({ price: r.price, priceCurrency: priceCurOf(r), cost: liveUnitCost, incomplete: _missingPriceCount > 0 });
   // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的是原配方的量。缩放过就把按倍数算好的副本交给打印(只给打印用,不写回数据)
   const handlePrint = () => {
     if (!onPrint) return;
@@ -5916,12 +5917,12 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             <div style={{ fontFamily: T.fontSerif, fontSize: 38, fontWeight: 300, letterSpacing: "-0.02em", marginTop: 4, ...T.num, color: T.ink, lineHeight: 1.1 }}>
               {fmtSellPrice(r.price, r)}
             </div>
-            <div style={{ ...T.fs.caption, marginTop: 6, color: liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted }}>
-              {lang === "zh" ? "利润率" : "利益率"} {liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
+            <div style={{ ...T.fs.caption, marginTop: 6, color: liveUnitCost > 0 ? _mi.color : T.muted }}>
+              {lang === "zh" ? "原料毛利率" : "原材料粗利率"} {liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
             </div>
             {_missingPriceCount > 0 && liveUnitCost > 0 && (
               <div style={{ ...T.fs.label, marginTop: 2, color: T.warning }}>
-                {lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は実際より高く出ます"}
+                {lang === "zh" ? "成本不全·毛利率虚高" : "原価不完全・粗利率は過大"}
               </div>
             )}
           </div>
@@ -6092,10 +6093,10 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               {lang === "zh" ? "原料总成本" : "材料原価合計"}
               {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
             </div>
-            <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? (liveMargin >= 50 ? T.success : liveMargin >= 30 ? T.warning : T.danger) : T.muted, ...T.num }}>
+            <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? _mi.color : T.muted, ...T.num }}>
               {_priceNum > 0 && liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
               {_priceNum > 0 && liveUnitCost > 0 && _missingPriceCount > 0 && (
-                <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は過大"}</div>
+                <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·毛利率虚高" : "原価不完全・粗利率は過大"}</div>
               )}
             </div>
             {/* 2026-09-29 体检第 2 批:单个成本以前只在电脑宽度显示、只到 0.1 元 —— 挪到总成本下面,所有屏幕都显示,走 fmtCost */}
@@ -10693,6 +10694,8 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           const priceNum = toCNY(c.price, priceCurOf(c));
           const costPerPortion = totalCost / servesNum / portionsNum;
           const marginPct = priceNum > 0 && costPerPortion > 0 ? ((priceNum - costPerPortion) / priceNum * 100) : 0;
+          // 第 4 批 B4-1:颜色和「算不全」和详情页同一个判定(creationMarginView → marginInfo);以前卡片只提醒用量,原料没价的照样绿
+          const cardMargin = priceNum > 0 && costPerPortion > 0 ? creationMarginView({ batch: creationBatch(c, null, components, materials, brands), priceNum, costPerPortion, marginPercent: marginPct, lang }) : null;
           // 2026-09-29 体检第 2 批:列表上以前看不出哪款的用量没填 / 读不准(成本按 0 或只按开头的数算)
           const usedWarnCount = layers.filter(l => l && ((parseFloat(l.yield) > 0 && !(parseUsedAmount(l.usedAmount, l.unit) > 0)) || usedAmountAmbiguous(l.usedAmount))).length;
 
@@ -10808,7 +10811,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                     <span style={{ marginLeft: usedWarnCount > 0 ? 8 : "auto", fontSize: 11, color: T.textTertiary }}>
                       {lang === "zh" ? "原料" : "原価"} ¥{totalCost.toFixed(0)}
                       {/* 2026-09-29 体检第 2 批:以前 marginPct > 0 才显示,亏本(负毛利)的反而整栏空着;负数走红色 */}
-                      {priceNum > 0 && costPerPortion > 0 && <span style={{ marginLeft: 8, color: marginPct >= 65 ? T.success : marginPct >= 50 ? T.warning : T.danger }}>· {marginPct.toFixed(0)}%</span>}
+                      {cardMargin && <span data-cardmargin="1" title={cardMargin.note || undefined} style={{ marginLeft: 8, color: cardMargin.color }}>· {marginPct.toFixed(0)}%{cardMargin.badge ? ` · ${cardMargin.badge}` : ""}</span>}
                     </span>
                   )}
                 </div>
@@ -11072,10 +11075,18 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   ].filter(Boolean);
   const showPct = priceNum > 0 && !zeroCost;
   return {
-    unsure,
+    unsure, incomplete,
     text: showPct ? `${marginPercent.toFixed(1)}%` : "—",
     // 低于 50% 先标红:成本算不全时实际毛利只会更低,不能因为「不确定」降成黄色(审查发现)
-    color: !showPct ? T.textSecondary : marginPercent < 50 ? T.danger : unsure ? T.warning : marginPercent >= 65 ? T.success : T.warning,
+    // 第 4 批 B4-1:门槛从 65 / 50 改成跟目标原料成本率(marginLevelOf,默认绿 ≥ 70%),和配方 / 商品同一套
+    color: !showPct ? T.textSecondary : marginColor(marginPercent, unsure),
+    // 毛利率健康提示(详情 / 编辑两张卡片共用),门槛跟目标走
+    health: !showPct ? "" : (() => {
+      const lv = marginLevelOf(marginPercent, false), g = fmtQty(marginGoodLine()), lo = fmtQty(Math.min(50, marginGoodLine()));
+      return lv === "good" ? (zh ? `✅ 原料毛利率达标（≥${g}%）` : `✅ 原材料粗利率 OK（≥${g}%）`)
+        : lv === "mid" ? (zh ? `⚠️ 原料毛利率偏低（${lo}-${g}%）` : `⚠️ 原材料粗利率やや低め（${lo}-${g}%）`)
+        : (zh ? `🚨 原料毛利率过低（<${lo}%）` : `🚨 原材料粗利率が低すぎます（<${lo}%）`);
+    })(),
     badge: unsure ? (incomplete ? (zh ? "算不全" : "未確定") : (zh ? "用量待确认" : "使用量要確認")) : "",
     note: unsure ? `⚠ ${zh ? "成本" : "原価"}${incomplete ? (zh ? "算不全" : "未確定") : (zh ? "可能不准" : "要確認")}：${reasons.join(zh ? "，" : "、")}${showPct && incomplete ? (zh ? "。这里的毛利率虚高，实际比这里低。" : "。この粗利率は過大で、実際はもっと低くなります。") : ""}` : "",
   };
@@ -11297,29 +11308,29 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         <AllergenSummaryCard kind="creation" entity={c} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} onPrintLabel={onPrintLabel} />
       )}
 
-      {/* 💰 成本与毛利分析（仅详细模式） */}
+      {/* 💰 成本与毛利分析（仅详细模式）。第 4 批 B4-2:「毛利率」→「原料毛利率」、补日文、健康提示门槛跟目标原料成本率 */}
       {viewMode === "detail" && (
         <div style={{ background: "#F0FDF4", border: "0.5px solid #86EFAC", borderRadius: "12px", padding: "1.25rem", marginBottom: "1rem" }}>
-          <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>💰 成本与毛利分析</div>
+          <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>💰 {lang === "ja" ? "原価と粗利" : "成本与原料毛利分析"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8 }}>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>总批次成本</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{lang === "ja" ? "バッチ原価" : "总批次成本"}</div>
               <div style={{ fontSize: 16, fontWeight: 500, color: "#166534" }}>¥{totalCostAll.toFixed(0)}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>{W.perUnitCost}</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{lang === "ja" ? (W.isStack ? "1 台原価" : "1 個原価") : W.perUnitCost}</div>
               <div style={{ fontSize: 16, fontWeight: 500, color: "#166534" }}>¥{costPerCake.toFixed(0)}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>单份成本</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{lang === "ja" ? "1 カット原価" : "单份成本"}</div>
               <div style={{ fontSize: 16, fontWeight: 500, color: "#166534" }}>¥{costPerPortion.toFixed(0)}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>单份售价</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{lang === "ja" ? "1 カット売価" : "单份售价"}</div>
               <div style={{ fontSize: 16, fontWeight: 500 }}>{priceNum > 0 ? `¥${priceNum.toFixed(0)}` : "—"}</div>
             </div>
             <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, color: "#666" }}>毛利率</div>
+              <div style={{ fontSize: 11, color: "#666" }}>{lang === "ja" ? "原材料粗利率" : "原料毛利率"}</div>
               {/* 2026-09-29 体检第 2 批:成本 0 → 「—」;算不全 → 不给绿色 + 标签(以前绿色 100%) */}
               <div style={{ fontSize: 16, fontWeight: 500, color: marginView.color }}>
                 {marginView.text}
@@ -11332,10 +11343,10 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           {marginView.note && (
             <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
           )}
-          {/* 成本算不全但已经低于 50%:照样亮红线(实际只会更低) */}
-          {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < 50) && (
+          {/* 成本算不全但已经低于 50%(目标线更低时跟目标线):照样亮红线(实际只会更低) */}
+          {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < Math.min(50, marginGoodLine())) && (
             <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
-              {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）" : "🚨 毛利率过低（<50%）"}
+              {marginView.health}
             </div>
           )}
         </div>
@@ -11638,6 +11649,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [form, setForm] = useState(creation ? {
     ...empty,
     ...creation,
+    // 第 4 批 D 线顺带修:定了价的老组合产品没有 priceCurrency(= 日元),以前被 empty 的 "CNY" 盖掉,打开再保存售价就从円变成¥。没定价的照旧
+    ...(parseFloat(creation.price) > 0 ? { priceCurrency: priceCurOf(creation) } : {}),
     tasting: creation.tasting || { date: "", notes: "", feedback: "", improvement: "" },
     flavorTags: creation.flavorTags || [],
   } : empty);
@@ -11802,7 +11815,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中文名必填，日文可以不填。规格和售价用于自动计算成本和毛利率。
+        💡 提示：中文名必填，日文可以不填。规格和售价用于自动计算成本和原料毛利率。
       </div>
 
       {/* 基本信息 */}
@@ -11910,28 +11923,28 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         </div>
       </div>
 
-      {/* 💰 成本与毛利分析 */}
+      {/* 💰 成本与毛利分析。第 4 批 B4-2:「毛利率」→「原料毛利率」、补日文、健康提示门槛跟目标原料成本率 */}
       <div style={{ background: "#F0FDF4", border: "0.5px solid #86EFAC", borderRadius: "12px", padding: "1.25rem", marginBottom: "1rem" }}>
-        <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>💰 成本与毛利（自动计算）</div>
+        <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>💰 {lang === "ja" ? "原価と粗利（自動計算）" : "成本与原料毛利（自动计算）"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, fontSize: 12 }}>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>总批次成本</div>
+            <div style={{ color: "#666" }}>{lang === "ja" ? "バッチ原価" : "总批次成本"}</div>
             <div style={{ fontSize: 15, fontWeight: 500, color: "#166534" }}>¥{totalCostAll.toFixed(0)}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>{W.perUnitCost}</div>
+            <div style={{ color: "#666" }}>{lang === "ja" ? (W.isStack ? "1 台原価" : "1 個原価") : W.perUnitCost}</div>
             <div style={{ fontSize: 15, fontWeight: 500, color: "#166534" }}>¥{costPerCake.toFixed(0)}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>单份成本</div>
+            <div style={{ color: "#666" }}>{lang === "ja" ? "1 カット原価" : "单份成本"}</div>
             <div style={{ fontSize: 15, fontWeight: 500, color: "#166534" }}>¥{costPerPortion.toFixed(0)}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>售价</div>
+            <div style={{ color: "#666" }}>{lang === "ja" ? "売価" : "售价"}</div>
             <div style={{ fontSize: 15, fontWeight: 500 }}>{priceNum > 0 ? fmtSellPrice(form.price, form) : "—"}</div>
           </div>
           <div style={{ background: "#FFFFFF", borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: "#666" }}>毛利率</div>
+            <div style={{ color: "#666" }}>{lang === "ja" ? "原材料粗利率" : "原料毛利率"}</div>
             {/* 2026-09-29 体检第 2 批:成本 0 → 「—」;算不全 → 不给绿色 + 标签(以前绿色 100%) */}
             <div style={{ fontSize: 15, fontWeight: 500, color: marginView.color }}>
               {marginView.text}
@@ -11944,9 +11957,9 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         {marginView.note && (
           <div style={{ fontSize: 11, color: T.warning, marginTop: 8, lineHeight: 1.6 }}>{marginView.note}</div>
         )}
-        {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < 50) && (
+        {priceNum > 0 && costPerPortion > 0 && (!marginView.note || marginPercent < Math.min(50, marginGoodLine())) && (
           <div style={{ fontSize: 11, color: "#166534", marginTop: 8, lineHeight: 1.6 }}>
-            📊 {marginPercent >= 65 ? "✅ 毛利率健康（≥65%）" : marginPercent >= 50 ? "⚠️ 毛利率偏低（50-65%）建议调整" : "🚨 毛利率过低（<50%）需要涨价或降本"}
+            📊 {marginView.health}{marginView.health && marginPercent < marginGoodLine() ? (lang === "ja" ? (marginPercent < Math.min(50, marginGoodLine()) ? " 値上げかコスト削減を" : " 調整をおすすめ") : (marginPercent < Math.min(50, marginGoodLine()) ? "需要涨价或降本" : "建议调整")) : ""}
           </div>
         )}
         {(form.layers || []).length > 0 && !form.layers.every(l => l.usedAmount) && (
@@ -15656,6 +15669,19 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
             : "「人民元に統一」だと円建ては上のレートで換算表示(≈ 付き)。保存される値は元のまま、入力欄も元の通貨です。"}
         </div>
       </div>
+
+      {/* 第 4 批 B4-1:目标原料成本率(配方一览「毛利一览」表头也能改,同一个值) */}
+      <div style={{ borderTop: `0.5px solid ${T.border}`, marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginBottom: 8 }}>
+          {zh ? "💹 目标原料成本率" : "💹 目標原価率"}
+        </div>
+        <TargetCostRateInput appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.7 }}>
+          {zh
+            ? "毛利的颜色和「毛利一览」的建议售价按这个算:建议售价 = 单个原料成本 ÷ 目标原料成本率。只存在这台设备上。"
+            : "粗利の色分けと「粗利一覧」の推奨売価に使います(推奨売価 = 1 個原価 ÷ 目標原価率)。この端末だけに保存されます。"}
+        </div>
+      </div>
     </div>
   );
 }
@@ -16086,7 +16112,10 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const price = toCNY(form.price, priceCurOf(form));   // v17: 同上,折算后再比
   const unitCost = qty > 0 ? totalCost / qty : 0;
   const margin = price > 0 ? ((price - unitCost) / price) * 100 : 0;
-  const mc = margin >= 50 ? "green" : margin >= 30 ? "amber" : "red";
+  // 第 4 批 B4-1:颜色档位走 marginLevelOf(跟目标原料成本率);有名字的行里有没价的 = 算不全,不给绿色。色值沿用本卡片原来的三种
+  const _editNoPrice = ings.some(ing => ingHasName(ing) && ingNoPrice(ing, materials));
+  const _editLevel = price > 0 && unitCost > 0 ? marginLevelOf(margin, _editNoPrice) : "none";
+  const mc = _editLevel === "good" ? "green" : _editLevel === "low" ? "red" : _editLevel === "none" ? "" : "amber";
 
   // 改单价追踪(_priceModified)和 ↺ 撤销改价在共用配料表 IngredientTable 里;提示条是 PriceChangeBanner,写本店原料是 saveIngPricesToShop
 
@@ -16223,7 +16252,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
         {/* Cost summary */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: "1rem" }}>
-          {[["原料总成本", `¥${totalCost.toFixed(0)}`, ""], ["单个成本", unitCost > 0 ? `¥${unitCost.toFixed(1)}` : "—", ""], ["利润率", price > 0 && unitCost > 0 ? margin.toFixed(1) + "%" : "—", mc]].map(([label, val, c], i) => (
+          {[["原料总成本", `¥${totalCost.toFixed(0)}`, ""], ["单个成本", unitCost > 0 ? `¥${unitCost.toFixed(1)}` : "—", ""], ["原料毛利率", price > 0 && unitCost > 0 ? margin.toFixed(1) + "%" : "—", mc]].map(([label, val, c], i) => (
             <div key={i} style={{ background: "#F5F5F5", borderRadius: "6px", padding: "10px 12px" }}>
               <div style={{ fontSize: 11, color: "#666666", marginBottom: 4 }}>{label}</div>
               <div style={{ fontSize: 18, fontWeight: 500, color: c === "green" ? "#0F6E56" : c === "amber" ? "#854F0B" : c === "red" ? "#A32D2D" : "#111111" }}>{val}</div>
@@ -16704,6 +16733,8 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
     // 第 3 批 F2:单件成本和毛利率(口径同采购页,见 productUnitCost)
     const uc = productUnitCost(p, costCtx);
     const mg = productMarginOf(p, uc.cost);
+    // 第 4 批 B4-2:包装费 + 包装后毛利率(只在填了包装费时出现)
+    const pmi = marginInfo({ price: p.sellPrice, priceCurrency: priceCurOf(p), cost: uc.cost, incomplete: uc.incomplete, packaging: productPackagingCNY(p) });
     const prods = productionLog.filter(l => l.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return (
       <div>
@@ -16744,8 +16775,20 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
             )}
             {(p.items || []).length > 0 && (p.sellPrice || 0) > 0 && (
               <div data-margin="1" style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
-                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "毛利率" : "粗利率"}</div>
-                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: marginColor(mg), marginTop: 2, ...T.num }}>{mg !== null ? `${mg.toFixed(1)}%` : "—"}</div>
+                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "原料毛利率" : "原材料粗利率"}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: marginColor(mg, uc.incomplete), marginTop: 2, ...T.num }}>{mg !== null ? `${mg.toFixed(1)}%` : "—"}</div>
+              </div>
+            )}
+            {pmi.packaging > 0 && (
+              <div data-pack="1" style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
+                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "包装费 / 件" : "包装費 / 個"}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.textPrimary, marginTop: 2, ...T.num }}>{fmtCost(pmi.packaging)}</div>
+              </div>
+            )}
+            {pmi.packaging > 0 && (p.items || []).length > 0 && (p.sellPrice || 0) > 0 && (
+              <div data-pack="1" style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
+                <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "包装后毛利率" : "包装後粗利率"}</div>
+                <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: pmi.afterPackColor, marginTop: 2, ...T.num }}>{pmi.afterPackPct !== null ? `${pmi.afterPackPct.toFixed(1)}%` : "—"}</div>
               </div>
             )}
           </div>
@@ -16885,6 +16928,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
               const adjust = (delta) => setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) + delta) } : x));
               const uc = (p.items || []).length > 0 ? productUnitCost(p, costCtx) : null;
               const mg = uc ? productMarginOf(p, uc.cost) : null;
+              const pack = productPackagingCNY(p);   // 第 4 批 B4-2:每件包装费(人民币)
               return (
                 <div key={p.id} onClick={() => setViewId(p.id)} style={{ background: T.bgCard, border: `0.5px solid ${low ? T.danger : T.border}`, borderLeft: `3px solid ${low ? T.danger : T.accent}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -16892,11 +16936,17 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                     <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>
                       {(p.items || []).length > 0 ? `${p.items.length} ${lang === "zh" ? "项组成" : "項目"}` : (lang === "zh" ? "未关联配方" : "未関連")}
                       {p.sellPrice > 0 && " · " + fmtSellPrice(p.sellPrice, p)}
-                      {/* 第 3 批 F2:单件成本 / 毛利率;算不全标「成本不全·利润率虚高」(同配方一览) */}
+                      {/* 第 3 批 F2:单件成本 / 毛利率;算不全标「成本不全·毛利率虚高」(同配方一览)。第 4 批:颜色走 marginColor(跟目标,算不全不绿) */}
                       {uc && uc.cost > 0 && <span data-listcost="1">{" · "}{lang === "zh" ? "成本 " : "原価 "}{fmtCost(uc.cost)}</span>}
                       {uc && (uc.wholeCreation || []).length > 0 && <span data-listwhole="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? `按整个(${fmtQty(uc.wholeCreation[0].portions)} 份)算` : `1 台(${fmtQty(uc.wholeCreation[0].portions)} カット)で計算`}</span>}
-                      {mg !== null && <span data-listmargin="1" style={{ color: marginColor(mg) }}>{" · "}{lang === "zh" ? "毛利 " : "粗利 "}{mg.toFixed(1)}%</span>}
-                      {uc && uc.incomplete && mg !== null && <span data-listincomplete="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? "成本不全·利润率虚高" : "原価不完全・利益率は過大"}</span>}
+                      {mg !== null && <span data-listmargin="1" style={{ color: marginColor(mg, uc.incomplete) }}>{" · "}{lang === "zh" ? "原料毛利 " : "原材料粗利 "}{mg.toFixed(1)}%</span>}
+                      {uc && uc.incomplete && mg !== null && <span data-listincomplete="1" style={{ color: T.textTertiary }}>{" · "}{lang === "zh" ? "成本不全·毛利率虚高" : "原価不完全・粗利率は過大"}</span>}
+                      {/* 第 4 批 B4-2:填了包装费才出现「包装 ¥x · 包装后 y%」 */}
+                      {pack > 0 && <span data-listpack="1">{" · "}{lang === "zh" ? "包装 " : "包装 "}{fmtCost(pack)}</span>}
+                      {pack > 0 && mg !== null && (() => {
+                        const mi = marginInfo({ price: p.sellPrice, priceCurrency: priceCurOf(p), cost: uc.cost, incomplete: uc.incomplete, packaging: pack });
+                        return <span data-listpack="1" style={{ color: mi.afterPackColor }}>{" · "}{lang === "zh" ? "包装后 " : "包装後 "}{mi.afterPackPct.toFixed(1)}%</span>;
+                      })()}
                     </div>
                   </div>
                   {/* v12: 快捷 -1 / +1 按钮 */}
@@ -17016,12 +17066,17 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
 // [B6 修复] 加 components,商品可关联组件
 function ProductEditForm({ product, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {
   // [B5 修复] note → notesZh/notesJa 双语
-  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, priceCurrency: "CNY", notesZh: "", notesJa: "" };
+  // 第 4 批 B4-2:packagingCost 每件包装费(人民币;"" = 没填,离开保护把 "" 当没有这个字段)
+  const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, priceCurrency: "CNY", packagingCost: "", notesZh: "", notesJa: "" };
   // 旧数据兼容:有 note 但没 notesZh/notesJa,迁移到 notesZh
-  const initial = product ? { ...empty, ...product } : empty;
+  // 第 4 批 D 线顺带修:老商品没有 priceCurrency(= 日元,CLAUDE.md 币种第 6 条),以前被 empty 的 "CNY" 盖掉 ——
+  // 编辑页币种按钮显示 ¥,不改售价点保存 450 円 就变成 ¥450(贵 23 倍)。打开时按 priceCurOf 补上真实币种
+  const initial = product ? { ...empty, ...product, ...(parseFloat(product.sellPrice) > 0 ? { priceCurrency: priceCurOf(product) } : {}) } : empty;
   if (initial.note && !initial.notesZh && !initial.notesJa) {
     initial.notesZh = initial.note;
   }
+  // 包装费框按人民币填;万一导入来的数据写了日元,打开时折成人民币(保存一律写 CNY)
+  if (initial.packagingCurrency === "JPY" && parseFloat(initial.packagingCost) > 0) initial.packagingCost = convCur(initial.packagingCost, "JPY", "CNY", 2);
   const [form, setForm] = useState(initial);
   const [picker, setPicker] = useState(null); // { forItemIdx? null=新增 }
   // 没保存就切页 / 取消时先问一句。要写在下面「选组成项」那个提前 return 之前(hook 顺序不能变);
@@ -17037,7 +17092,7 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
-    onSave({
+    const out = {
       ...form,
       id: product ? product.id : ("prod_" + Date.now() + Math.random().toString(36).slice(2, 6)),
       currentStock: parseFloat(form.currentStock) || 0,
@@ -17047,7 +17102,13 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
       priceCurrency: priceCurOf(form),
       items: (form.items || []).map(it => ({ ...it, qty: parseFloat(it.qty) || 1 })),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    // 第 4 批 B4-2:包装费只在 > 0 时写,并且**显式写 packagingCurrency: "CNY"**(新字段缺省按人民币,和全局「没 currency = 日元」相反,
+    // 写明了旧版 / 别的读者就不会猜错);没填或填 0 → 两个键都不留
+    const pk = parseFloat(String(form.packagingCost ?? "").normalize("NFKC"));
+    if (pk > 0) { out.packagingCost = pk; out.packagingCurrency = "CNY"; }
+    else { delete out.packagingCost; delete out.packagingCurrency; }
+    onSave(out);
   };
 
   const addItem = (linkedId, linkedType) => {
@@ -17138,10 +17199,20 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
             <input type="number" value={form.leadTimeDays} onChange={e => setForm({ ...form, leadTimeDays: e.target.value })} style={inputStyle} />
           </label>
           <label>
-            <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "销售单价(¥)" : "販売価(¥)"}</div>
+            {/* 第 4 批:标签跟着币种按钮写 ¥ / 円(以前日元售价也写「(¥)」) */}
+            <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "销售单价" : "販売価"}({priceCurOf(form) === "CNY" ? "¥" : "円"})</div>
             <div style={{ display: "flex", alignItems: "center" }}>
               <input type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
               {priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, sellPrice: p })), lang, form.sellPrice)}
+            </div>
+          </label>
+          {/* 第 4 批 B4-2:包装费 / 件(人民币)。算「包装后毛利率」和建议售价用;日结只按卖出的件数算 */}
+          <label data-packinput="1">
+            <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "包装费 / 件(¥)" : "包装費 / 個(¥)"}</div>
+            <input type="number" min="0" step="0.1" value={form.packagingCost ?? ""} onChange={e => setForm({ ...form, packagingCost: e.target.value })}
+              onWheel={blurOnWheel} placeholder={lang === "zh" ? "没有就空着" : "なければ空欄"} style={inputStyle} />
+            <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 3, lineHeight: 1.5 }}>
+              {lang === "zh" ? "盒子、贴纸、干燥剂、丝带,每件摊多少" : "箱・シール・乾燥剤・リボンなど 1 個あたり"}
             </div>
           </label>
         </div>
@@ -17881,13 +17952,409 @@ const productUnitCost = (p, ctx) => {
   });
   return { cost, incomplete: missing.length > 0, missing, noYield, wholeCreation, noItems: items.length === 0 };
 };
-// 毛利率(售价先折人民币):成本 0 或没售价 → null(页面显示「—」)
+// BEGIN margin helpers (B4)
+// 第 4 批 B4-1/2(2026-09-30):所有显示「原料毛利率」的地方(配方一览 / 配方详情 / 配方编辑 / 组合产品列表、详情、编辑 / 商品列表、详情 /
+// 日结 / 毛利一览)共用这一个判定。以前 9 处各写各的:颜色门槛有 50/30 和 65/50 两套,商品页和配方一览成本算不全时照样绿色(2a 第 6 条)。
+// 「原料毛利率」= (售价 − 单个原料成本)÷ 售价,没算人工房租,所以叫「原料」。
+// 目标原料成本率 appSettings.targetCostRate(存 0.30 这样的小数,5% 到 90%,没有这个键 / 填错 = 0.30),App 渲染期注入(同汇率,不放 useEffect)。
+const DEFAULT_TARGET_COST_RATE = 0.30;
+let _targetCostRate = DEFAULT_TARGET_COST_RATE;
+const normTargetCostRate = (v) => { const n = typeof v === "number" ? v : parseFloat(v); return n >= 0.05 && n <= 0.9 ? n : DEFAULT_TARGET_COST_RATE; };
+const setTargetCostRateForLookup = (v) => { _targetCostRate = normTargetCostRate(v); };
+const getTargetCostRate = () => _targetCostRate;
+// 目标毛利线(%):目标成本率 30% → 70
+const marginGoodLine = (rate = _targetCostRate) => Math.round((1 - rate) * 10000) / 100;
+// 建议售价向上取整到「好看的价」:< 10 → 0.5 / < 50 → 1 / < 200 → 5 / 其余 → 10。一律向上,按建议价卖时成本率 ≤ 目标
+const roundSuggestPrice = (v) => {
+  const x = Number(v);
+  if (!(x > 0) || !isFinite(x)) return null;
+  const step = x < 10 ? 0.5 : x < 50 ? 1 : x < 200 ? 5 : 10;
+  return Math.round(Math.ceil(x / step - 1e-9) * step * 100) / 100;
+};
+// 毛利率 → 档位。≥ 目标线绿;50% 到目标线黄;< 50% 红(目标成本率 > 50% 时红线跟着降到目标线);
+// **算不全(incomplete)永远不给绿色**,但 < 50% 仍先标红(实际只会更低)
+const marginLevelOf = (pct, incomplete = false) => {
+  if (pct === null || pct === undefined || !isFinite(pct)) return "none";
+  const good = marginGoodLine();
+  if (pct < Math.min(50, good)) return "low";
+  if (incomplete) return "unsure";
+  return pct >= good - 1e-9 ? "good" : "mid";
+};
+const MARGIN_LEVEL_COLOR = { none: "textSecondary", low: "danger", unsure: "warning", mid: "warning", good: "success" };
+const marginLevelColor = (level) => T[MARGIN_LEVEL_COLOR[level] || "textSecondary"];
+// 唯一的毛利判定。cost / packaging 已是人民币(成本链出口);price 是原币种原值 + priceCurrency(= priceCurOf(x) 的结果)
+const marginInfo = ({ price, priceCurrency, cost, incomplete = false, packaging = 0 } = {}) => {
+  const priceCNY = toCNY(price, priceCurrency);
+  const c = Number(cost) > 0 ? Number(cost) : 0;
+  const pack = Number(packaging) > 0 ? Number(packaging) : 0;
+  const pct = priceCNY > 0 && c > 0 ? ((priceCNY - c) / priceCNY) * 100 : null;
+  const level = marginLevelOf(pct, incomplete);
+  const afterPackPct = pack > 0 && pct !== null ? ((priceCNY - c - pack) / priceCNY) * 100 : null;
+  const afterPackLevel = afterPackPct === null ? "none" : marginLevelOf(afterPackPct, incomplete);
+  // 建议售价 = (单个原料成本 + 包装费)÷ 目标原料成本率,向上取整;成本 0 → null(页面「—」);算不全 → 「至少 ¥X」
+  const suggested = c > 0 ? roundSuggestPrice((c + pack) / _targetCostRate) : null;
+  return {
+    priceCNY, cost: c, packaging: pack, pct, level, color: marginLevelColor(level),
+    text: pct === null ? "—" : `${pct.toFixed(1)}%`,
+    costRate: pct === null ? null : c / priceCNY,
+    afterPackPct, afterPackLevel, afterPackColor: marginLevelColor(afterPackLevel),
+    suggested, suggestedAtLeast: !!incomplete && suggested !== null,
+    gap: suggested !== null && priceCNY > 0 ? priceCNY - suggested : null,
+    approx: priceCurrency === "JPY" && priceCNY > 0,
+    incomplete: !!incomplete,
+    belowTarget: pct !== null && pct < marginGoodLine() - 1e-9,
+  };
+};
+// 毛利率(售价先折人民币):成本 0 或没售价 → null(页面显示「—」)。f2_tests / harness 按名字取它,留着(和 marginInfo(...).pct 同一个数)
 const productMarginOf = (p, cost) => {
   const price = toCNY(p && p.sellPrice, priceCurOf(p));
   return price > 0 && cost > 0 ? ((price - cost) / price) * 100 : null;
 };
-// 颜色同配方一览:≥ 50% 绿、≥ 30% 黄、以下红;算不出灰
-const marginColor = (mg) => mg === null || mg === undefined ? T.textSecondary : mg >= 50 ? T.success : mg >= 30 ? T.warning : T.danger;
+// 颜色:跟目标走(见 marginLevelOf);算不全传 incomplete,不给绿色。算不出灰
+const marginColor = (mg, incomplete = false) => marginLevelColor(marginLevelOf(mg, incomplete));
+// 商品包装费(每件,人民币)。**新字段缺省按人民币** —— 和全局「没 currency = 日元」刻意相反:包装费是 2026-09-30 才有的字段,不存在东京时期的日元老数据;
+// 保存时一律显式写 packagingCurrency: "CNY"。读取只走这里
+const productPackagingCNY = (p) => toCNY(p && p.packagingCost, p && p.packagingCurrency === "JPY" ? "JPY" : "CNY");
+// 配方的单个原料成本(人民币)。和配方一览 / 配方详情同一个写法(实时算,不读 r.totalCost / r.margin 快照)
+const recipeCostInfo = (r, materials, brands) => {
+  const ings = (r && r.ingredients) || [];
+  const total = ings.reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
+  const yieldN = parseFloat(r && r.yield) || 0;
+  return { total, yieldN, unitCost: yieldN > 0 ? total / yieldN : 0, unit: (r && r.unit) || "個",
+    noPriceN: ings.filter(ing => ingNoPrice(ing, materials)).length, noYield: !(yieldN > 0) };
+};
+// 组合产品的成本(人民币)。和组合产品页同一口径:单份 = 总成本 ÷ 制作个数 ÷ 每个分几份;算不全 / 用量读不准走 creationMarginView 的判定
+const creationCostInfo = (c, components, materials, brands) => {
+  const layers = (c && c.layers) || [];
+  const total = layers.reduce((s, l) => s + calcLayerLiveCost(l, materials, brands), 0);
+  const perUnit = total / (parseFloat(c && c.serves) || 1);
+  const perPortion = perUnit / (parseFloat(c && c.portions) || 1);
+  const batch = creationBatch(c, null, components, materials, brands);
+  const parts = batch.parts || [];
+  const noUsedN = parts.filter(p => p.noUsed).length;
+  const missingN = new Set(parts.flatMap(p => p.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size;
+  const ambiguousN = parts.filter(p => !p.noUsed && usedAmountAmbiguous(p.layer.usedAmount)).length;
+  const incomplete = !!batch.incomplete || (!(perPortion > 0) && parts.length > 0);
+  return { batch, total, perUnit, perPortion, noUsedN, missingN, ambiguousN, incomplete, unsure: incomplete || ambiguousN > 0 };
+};
+// 毛利一览(配方一览的第 4 个模式)的行,纯函数:给页面和测试共用。钱全是人民币。
+// 配方:每 r.unit;组合产品:每份(= 总成本 ÷ serves ÷ portions,和售价同口径);商品:每件(组合产品按整个算,见 productUnitCost)+ 包装费
+const marginOverviewRows = (data) => {
+  const { recipes = [], creations = [], products = [], components = [], materials = [], brands = [], productFamilies = [] } = data || {};
+  const famOk = (id) => !!id && productFamilies.some(f => f && f.id === id);
+  const items = [];
+  recipes.forEach(r => {
+    if (!r) return;
+    const ci = recipeCostInfo(r, materials, brands);
+    const mi = marginInfo({ price: r.price, priceCurrency: priceCurOf(r), cost: ci.unitCost, incomplete: ci.unitCost > 0 && ci.noPriceN > 0 });
+    const issues = [];
+    if (ci.noPriceN > 0) issues.push({ code: "noPrice", n: ci.noPriceN });
+    if (ci.noYield && ci.total > 0) issues.push({ code: "noYield" });
+    if (!(ci.total > 0)) issues.push({ code: "noCost" });
+    items.push({ kind: "recipe", id: r.id, x: r, familyId: famOk(r.familyId) ? r.familyId : null, onSale: !!r.onSale,
+      unitKind: "unit", unit: ci.unit, cost: ci.unitCost, mi, issues: finishIssues(issues, mi) });
+  });
+  creations.forEach(c => {
+    if (!c) return;
+    const ci = creationCostInfo(c, components, materials, brands);
+    const mi = marginInfo({ price: c.price, priceCurrency: priceCurOf(c), cost: ci.perPortion, incomplete: ci.unsure });
+    const issues = [];
+    if (ci.missingN > 0) issues.push({ code: "noPrice", n: ci.missingN });
+    if (ci.noUsedN > 0) issues.push({ code: "noUsed", n: ci.noUsedN });
+    if (ci.ambiguousN > 0) issues.push({ code: "ambiguous", n: ci.ambiguousN });
+    if (!(ci.perPortion > 0)) issues.push({ code: "noCost" });
+    items.push({ kind: "creation", id: c.id, x: c, familyId: famOk(c.familyId) ? c.familyId : null, onSale: !!c.onSale,
+      unitKind: (parseFloat(c.portions) || 1) > 1 ? "portion" : "unit", structure: creationStructureOf(c),
+      cost: ci.perPortion, mi, issues: finishIssues(issues, mi) });
+  });
+  const ctx = { recipes, creations, components, materials, brands };
+  const prods = [];
+  products.forEach(p => {
+    if (!p) return;
+    const uc = productUnitCost(p, ctx);
+    const pack = productPackagingCNY(p);
+    const mi = marginInfo({ price: p.sellPrice, priceCurrency: priceCurOf(p), cost: uc.cost, incomplete: uc.incomplete, packaging: pack });
+    const issues = [];
+    if (uc.noItems) issues.push({ code: "noItems" });
+    else {
+      uc.missing.forEach(m => issues.push(m.reason === "missing" ? { code: "missingLink" } : { code: "noPrice", n: m.noPrice || 0, noUsed: m.noUsed || 0 }));
+      if (uc.noYield.length) issues.push({ code: "noYield" });
+      if (!(uc.cost > 0)) issues.push({ code: "noCost" });
+    }
+    prods.push({ kind: "product", id: p.id, x: p, cost: uc.cost, packaging: pack, costWithPack: uc.cost > 0 ? uc.cost + pack : 0,
+      wholeCreation: uc.wholeCreation || [], hasPrice: toCNY(p.sellPrice, priceCurOf(p)) > 0, mi, issues: finishIssues(issues, mi) });
+  });
+  return { items, products: prods };
+};
+// 问题列:再补「未定价 / 日元售价 / 低于目标」
+const finishIssues = (issues, mi) => {
+  const out = [...issues];
+  if (!(mi.priceCNY > 0)) out.push({ code: "unpriced" });
+  else if (mi.approx) out.push({ code: "jpyPrice" });
+  if (mi.belowTarget) out.push({ code: "belowTarget" });
+  return out;
+};
+// END margin helpers (B4)
+
+// ─── 第 4 批 B4-1:目标原料成本率输入框(毛利一览表头 + 数据页汇率卡片共用)──────────
+// 存 appSettings.targetCostRate(0.30 这样的小数)。按「%」填,失焦 / 回车才提交,只收 5 到 90;
+// 和现在一样的值不写(没有这个键的存档不会因为点了一下就多一个键)。每台设备各一份(合并导入不合并 appSettings)
+function TargetCostRateInput({ appSettings, setAppSettings, lang, compact = false }) {
+  const zh = lang !== "ja";
+  const [draft, setDraft] = useState(null);
+  const [err, setErr] = useState("");
+  const cur = normTargetCostRate(appSettings && appSettings.targetCostRate);
+  const shown = String(Math.round(cur * 1000) / 10);
+  const commit = () => {
+    if (draft === null) return;
+    const s = String(draft).normalize("NFKC").trim().replace(/%$/, "").trim();
+    setDraft(null);
+    if (s === "") { setErr(""); return; }
+    const n = Number(s);
+    if (!(n >= 5 && n <= 90)) { setErr(zh ? "填 5 到 90 之间的数,没改" : "5 から 90 の数を入力してください(未変更)"); return; }
+    setErr("");
+    const rate = Math.round(n * 10) / 1000;
+    if (Math.abs(rate - cur) > 1e-9) setAppSettings(prev => ({ ...prev, targetCostRate: rate }));
+  };
+  const g = fmtQty(marginGoodLine(cur)), lo = fmtQty(Math.min(50, marginGoodLine(cur)));
+  return (
+    <div data-targetrate="1" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", ...T.fs.caption, color: T.body }}>
+      <span>{zh ? "目标原料成本率" : "目標原価率"}</span>
+      <input type="text" inputMode="decimal" value={draft === null ? shown : draft}
+        onChange={e => setDraft(e.target.value)} onBlur={commit}
+        onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur(); if (e.key === "Escape") { setDraft(null); setErr(""); } }}
+        aria-label={zh ? "目标原料成本率(%)" : "目標原価率(%)"}
+        style={{ width: 56, padding: "4px 8px", fontSize: 13, textAlign: "right", border: `1px solid ${err ? T.danger : T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, ...T.num }} />
+      <span>%</span>
+      {!compact && (
+        <span style={{ ...T.fs.label, color: T.subtle }}>
+          {zh ? `原料毛利率 绿 ≥ ${g}% · 黄 ${lo}% 到 ${g}% · 红 < ${lo}%;算不全的不给绿` : `原材料粗利率 緑 ≥ ${g}% · 黄 ${lo}% から ${g}% · 赤 < ${lo}%(原価不完全は緑にしない)`}
+        </span>
+      )}
+      {err && <span role="alert" style={{ ...T.fs.label, color: T.danger }}>{err}</span>}
+    </div>
+  );
+}
+
+// ─── 第 4 批 B4-1:毛利一览(配方一览的第 4 个模式)───────────────────────────────
+// 两段:配方与组合产品(每 個 / 组合产品每份,和售价同口径)| 商品(每件,另有包装费)。数字全走 marginOverviewRows → marginInfo,
+// 和配方一览 / 详情页 / 商品页显示的同一个数。只读:第一版不做「一键采用建议价」。点一行走 App 的 jumpToItem 去查看页。
+const MO_TXT = {
+  zh: {
+    title: "毛利一览", hint: "只算原料,没算人工房租,所以叫「原料毛利率」。建议售价 = 单个原料成本(商品另加包装费)÷ 目标原料成本率,向上取整。",
+    segItems: "配方与组合产品", segProducts: "商品",
+    all: "全部", onSale: "在售中", hasPrice: "有售价", family: "家族", allFamilies: "全部家族", noFamily: "未归属", problems: "只看有问题的",
+    sort: "排序", sortMargin: "原料毛利率 低→高", sortMarginDesc: "原料毛利率 高→低", sortCostRate: "原料成本率 高→低", sortPrice: "售价 高→低", sortName: "名称",
+    name: "名称", cost: "单个原料成本", price: "售价", costRate: "原料成本率", margin: "原料毛利率", suggested: "建议售价", gap: "差额", issues: "问题",
+    pack: "包装费", costWithPack: "含包装成本", afterPack: "包装后毛利率",
+    per: (u) => `每 ${u}`, perPortion: "每份", perItem: "每件", combo: "组合", jpyTag: "円", jpyTitle: "售价没写币种,按东京时期的日元折算(≈)",
+    unpricedCell: "未定价", atLeast: "至少 ", atLeastTitle: "有原料没价,实际成本更高,建议价只会更高",
+    empty: "没有符合条件的", emptyFirst: "还没有配方 / 组合产品", emptyProducts: "还没有商品",
+    prodHint: "商品按组成项算成本(组合产品按整个);没写币种的售价按日元折算(≈)。包装费在商品编辑页填。合并导入不会把已有商品的售价 / 包装费带到另一台设备。",
+    wholeNote: (p) => `按整个(${p} 份)算`,
+    iss: { noPrice: (n) => `${n} 项没价`, noYield: "缺出品数", noCost: "缺成本", noUsed: (n) => `${n} 个部分没填用量`, ambiguous: (n) => `${n} 个用量读不准`,
+      unpriced: "未定价", jpyPrice: "日元售价", belowTarget: "低于目标", noItems: "没挂配方", missingLink: "挂的已删" },
+    shown: (a, b) => `${a} / ${b} 条`,
+  },
+  ja: {
+    title: "粗利一覧", hint: "原材料だけで計算(人件費・家賃は含まない)。推奨売価 = 1 個あたり原価(商品は包装費込み)÷ 目標原価率、切り上げ。",
+    segItems: "レシピと組立製品", segProducts: "商品",
+    all: "すべて", onSale: "販売中", hasPrice: "売価あり", family: "ファミリー", allFamilies: "全ファミリー", noFamily: "未所属", problems: "問題ありのみ",
+    sort: "並び順", sortMargin: "粗利率 低→高", sortMarginDesc: "粗利率 高→低", sortCostRate: "原価率 高→低", sortPrice: "売価 高→低", sortName: "名前",
+    name: "名前", cost: "1 個原価", price: "売価", costRate: "原価率", margin: "原材料粗利率", suggested: "推奨売価", gap: "差額", issues: "問題",
+    pack: "包装費", costWithPack: "包装込み原価", afterPack: "包装後粗利率",
+    per: (u) => `1 ${u}あたり`, perPortion: "1 カット", perItem: "1 個", combo: "組立", jpyTag: "円", jpyTitle: "売価の通貨が未設定のため円として換算(≈)",
+    unpricedCell: "未設定", atLeast: "最低 ", atLeastTitle: "単価のない材料があり、実際の原価はもっと高い",
+    empty: "該当なし", emptyFirst: "レシピ / 組立製品がありません", emptyProducts: "商品がありません",
+    prodHint: "商品の原価は構成から計算(組立製品は 1 台)。通貨未設定の売価は円として換算(≈)。包装費は商品編集で入力。マージインポートでは既存商品の売価・包装費は同期されません。",
+    wholeNote: (p) => `1 台(${p} カット)で計算`,
+    iss: { noPrice: (n) => `単価なし ${n}`, noYield: "出来数なし", noCost: "原価なし", noUsed: (n) => `使用量未入力 ${n}`, ambiguous: (n) => `使用量要確認 ${n}`,
+      unpriced: "売価未設定", jpyPrice: "円の売価", belowTarget: "目標未達", noItems: "構成なし", missingLink: "関連先削除済み" },
+    shown: (a, b) => `${a} / ${b} 件`,
+  },
+};
+const moMoney = (v) => `¥${String(Math.round(v * 100) / 100)}`;
+const moIssueText = (it, X) => {
+  const f = X.iss[it.code];
+  if (!f) return "";
+  if (it.code === "noPrice") {
+    const a = it.n ? f(it.n) : "", b = it.noUsed ? X.iss.noUsed(it.noUsed) : "";
+    return [a, b].filter(Boolean).join(" · ") || X.iss.noCost;
+  }
+  return typeof f === "function" ? f(it.n) : f;
+};
+function MarginOverview({ recipes = [], creations = [], products = [], components = [], materials = [], brands = [], shopMaterials = [], productFamilies = [],
+  appSettings = {}, setAppSettings, lang, onOpen }) {
+  const zh = lang !== "ja";
+  const X = MO_TXT[zh ? "zh" : "ja"];
+  const [seg, setSeg] = useState("items");         // "items" | "products"
+  const [scope, setScope] = useState("all");       // 配方段:"all" | "onSale";商品段:"all" | "hasPrice"
+  const [fam, setFam] = useState("");              // "" 全部 | 家族 id | "__none" 未归属
+  const [problemsOnly, setProblemsOnly] = useState(false);
+  const [sortBy, setSortBy] = useState("margin");
+  // 纯函数算行;本店价 / 组件库 / 汇率 / 目标率变了都要重算(那几样是渲染期注入的全局,所以把它们的来源也列进依赖)
+  const rows = useMemo(() => marginOverviewRows({ recipes, creations, products, components, materials, brands, productFamilies }),
+    [recipes, creations, products, components, materials, brands, productFamilies, shopMaterials, appSettings.targetCostRate, appSettings.fxJpyToCny]);
+  const nameOf = (x) => pickLang(x, "name", lang) || x.nameFr || "";
+  const famOf = (id) => productFamilies.find(f => f && f.id === id);
+  const list = seg === "items" ? rows.items : rows.products;
+  const filtered = list.filter(r => {
+    if (seg === "items") {
+      if (scope === "onSale" && !r.onSale) return false;
+      if (fam === "__none" ? !!r.familyId : fam && r.familyId !== fam) return false;
+    } else if (scope === "hasPrice" && !r.hasPrice) return false;
+    if (problemsOnly && !r.issues.length) return false;
+    return true;
+  });
+  const cmpNum = (a, b, desc) => {   // null 永远排最后
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return desc ? b - a : a - b;
+  };
+  const sorted = filtered.map((r, i) => ({ r, i })).sort((A, B) => {
+    const a = A.r, b = B.r;
+    let d = 0;
+    if (sortBy === "margin") d = cmpNum(a.mi.pct, b.mi.pct, false);
+    else if (sortBy === "marginDesc") d = cmpNum(a.mi.pct, b.mi.pct, true);
+    else if (sortBy === "costRate") d = cmpNum(a.mi.costRate, b.mi.costRate, true);
+    else if (sortBy === "price") d = cmpNum(a.mi.priceCNY > 0 ? a.mi.priceCNY : null, b.mi.priceCNY > 0 ? b.mi.priceCNY : null, true);
+    else if (sortBy === "name") d = nameOf(a.x).localeCompare(nameOf(b.x), zh ? "zh" : "ja");
+    if (!d) d = (b.onSale ? 1 : 0) - (a.onSale ? 1 : 0);   // 同值:在售的在前
+    return d || A.i - B.i;
+  }).map(o => o.r);
+  const open = (r) => onOpen && onOpen(r.kind === "recipe" ? "recipeView" : r.kind === "creation" ? "creationView" : "productView", r.id);
+  const unitText = (r) => r.kind === "product" ? X.perItem : r.unitKind === "portion" ? X.perPortion
+    : X.per(r.kind === "creation" ? creationWords(r.structure, lang).unit : (r.x.unit || "個"));
+  const priceCell = (r) => r.mi.priceCNY > 0
+    ? <span>{fmtSellPrice(r.kind === "product" ? r.x.sellPrice : r.x.price, r.x)}{r.mi.approx && <span data-jpytag="1" title={X.jpyTitle} style={{ ...T.fs.micro, color: T.warning, border: `1px solid ${T.warning}`, padding: "0 4px", marginLeft: 4, textTransform: "none", letterSpacing: 0 }}>{X.jpyTag}</span>}</span>
+    : <span style={{ color: T.muted }}>{X.unpricedCell}</span>;
+  const marginCell = (r) => <span style={{ color: r.mi.pct === null ? T.muted : r.mi.color }}>{r.mi.text}</span>;
+  const suggestCell = (r) => r.mi.suggested === null ? <span style={{ color: T.muted }}>—</span>
+    : <span data-suggest="1" title={r.mi.suggestedAtLeast ? X.atLeastTitle : undefined} style={{ color: r.mi.suggestedAtLeast ? T.warning : T.ink }}>{r.mi.suggestedAtLeast ? X.atLeast : ""}{moMoney(r.mi.suggested)}</span>;
+  const gapCell = (r) => r.mi.gap === null ? <span style={{ color: T.muted }}>—</span>
+    : <span style={{ color: r.mi.gap < -1e-9 ? T.warning : T.body }}>{r.mi.gap > 1e-9 ? "+" : r.mi.gap < -1e-9 ? "−" : ""}{moMoney(Math.abs(r.mi.gap))}</span>;
+  const issuesText = (r) => r.issues.map(it => moIssueText(it, X)).filter(Boolean).join(" · ");
+  const nameCell = (r) => {
+    const fm = r.familyId ? famOf(r.familyId) : null;
+    return (
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
+        {r.onSale && <span title={X.onSale} style={{ color: T.success, fontSize: 11 }}>●</span>}
+        <span style={{ color: T.ink, fontWeight: 500, overflowWrap: "anywhere" }}>{nameOf(r.x)}</span>
+        {r.kind === "creation" && <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "0 5px", textTransform: "none", letterSpacing: 0 }}>{X.combo}</span>}
+        {fm && <span style={{ ...T.fs.micro, color: FAMILY_COLORS[fm.colorIdx || 0].color, textTransform: "none", letterSpacing: 0 }}>{pickLang(fm, "name", lang) || fm.nameZh}</span>}
+      </div>
+    );
+  };
+  const segBtn = (id, label, n) => (
+    <button key={id} type="button" className="k-tab" onClick={() => { setSeg(id); setScope("all"); setFam(""); }}
+      style={{ padding: "0 0 6px", ...T.fs.caption, border: "none", background: "transparent", cursor: "pointer", fontFamily: T.fontSans,
+        borderBottom: seg === id ? `1px solid ${T.ink}` : "1px solid transparent", color: seg === id ? T.ink : T.secondary, fontWeight: seg === id ? 500 : 400 }}>
+      {label} <span style={{ ...T.num, color: T.muted }}>{n}</span>
+    </button>
+  );
+  const pill = (on, label, onClick) => (
+    <button type="button" className="k-btn" onClick={onClick}
+      style={{ ...T.fs.label, padding: "4px 10px", borderRadius: T.radiusPill, cursor: "pointer", fontFamily: T.fontSans, letterSpacing: 0,
+        background: on ? T.ink : "transparent", color: on ? T.paper : T.body, border: `1px solid ${on ? T.ink : T.border}` }}>{label}</button>
+  );
+  const selStyle = { ...T.fs.label, padding: "4px 8px", border: `1px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.body, fontFamily: T.fontSans, maxWidth: "100%" };
+  const chips = [
+    ...(scope !== "all" ? [{ label: scope === "onSale" ? X.onSale : X.hasPrice, onRemove: () => setScope("all") }] : []),
+    ...(seg === "items" && fam ? [{ label: fam === "__none" ? X.noFamily : ((famOf(fam) && (pickLang(famOf(fam), "name", lang) || famOf(fam).nameZh)) || fam), onRemove: () => setFam("") }] : []),
+    ...(problemsOnly ? [{ label: X.problems, onRemove: () => setProblemsOnly(false) }] : []),
+  ];
+  const isProd = seg === "products";
+  const th = (label, right = true) => <th style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, textAlign: right ? "right" : "left", padding: "8px 8px", whiteSpace: "nowrap", borderBottom: `1px solid ${T.ink}` }}>{label}</th>;
+  const td = (children, right = true, extra = {}) => <td style={{ ...T.fs.caption, textAlign: right ? "right" : "left", padding: "10px 8px", borderBottom: `1px solid ${T.lineFaint}`, verticalAlign: "top", ...T.num, ...extra }}>{children}</td>;
+  return (
+    <div data-margin-overview="1">
+      <div style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, marginBottom: T.sp.m }}>{X.hint}</div>
+      <TargetCostRateInput appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
+      <div style={{ display: "flex", gap: T.sp.xl, marginTop: T.sp.l, alignItems: "center", flexWrap: "wrap" }}>
+        {segBtn("items", X.segItems, rows.items.length)}
+        {segBtn("products", X.segProducts, rows.products.length)}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: T.sp.m, alignItems: "center", flexWrap: "wrap" }}>
+        {pill(scope === "all", X.all, () => setScope("all"))}
+        {!isProd ? pill(scope === "onSale", X.onSale, () => setScope("onSale")) : pill(scope === "hasPrice", X.hasPrice, () => setScope("hasPrice"))}
+        {!isProd && (
+          <select value={fam} onChange={e => setFam(e.target.value)} aria-label={X.family} style={selStyle}>
+            <option value="">{X.allFamilies}</option>
+            {productFamilies.filter(Boolean).map(f => <option key={f.id} value={f.id}>{pickLang(f, "name", lang) || f.nameZh || f.id}</option>)}
+            <option value="__none">{X.noFamily}</option>
+          </select>
+        )}
+        <label style={{ ...T.fs.label, color: T.body, display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <input type="checkbox" checked={problemsOnly} onChange={e => setProblemsOnly(e.target.checked)} />{X.problems}
+        </label>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label={X.sort} style={selStyle}>
+          {[["margin", X.sortMargin], ["marginDesc", X.sortMarginDesc], ["costRate", X.sortCostRate], ["price", X.sortPrice], ["name", X.sortName]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <span style={{ ...T.fs.label, color: T.muted, marginLeft: "auto" }}>{X.shown(sorted.length, list.length)}</span>
+      </div>
+      {isProd && <div style={{ ...T.fs.label, color: T.subtle, lineHeight: 1.6, marginTop: T.sp.s }}>{X.prodHint}</div>}
+
+      {list.length === 0 ? (
+        <EmptyState variant="first" lang={lang} title={isProd ? X.emptyProducts : X.emptyFirst} />
+      ) : sorted.length === 0 ? (
+        <EmptyState variant="filter" lang={lang} title={X.empty} chips={chips}
+          onClearAll={() => { setScope("all"); setFam(""); setProblemsOnly(false); }} />
+      ) : (
+        <>
+          {/* 电脑 / 平板:表格(太宽时只在表格里横滚,页面不横滚) */}
+          <div className="k-desktop-only" style={{ overflowX: "auto", marginTop: T.sp.l }}>
+            <table data-mo-table="1" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  {th(X.name, false)}{th(X.cost)}{th(X.price)}
+                  {isProd && <>{th(X.pack)}{th(X.costWithPack)}</>}
+                  {th(X.costRate)}{th(X.margin)}{isProd && th(X.afterPack)}{th(X.suggested)}{th(X.gap)}{th(X.issues, false)}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(r => (
+                  <tr key={r.kind + ":" + r.id} data-mo-row={r.kind + ":" + r.id} className="k-row" onClick={() => open(r)} style={{ cursor: "pointer" }}>
+                    {td(<>{nameCell(r)}<div style={{ ...T.fs.label, color: T.muted, marginTop: 2 }}>{unitText(r)}{r.kind === "product" && r.wholeCreation.length > 0 ? ` · ${X.wholeNote(fmtQty(r.wholeCreation[0].portions))}` : ""}</div></>, false, { minWidth: 160 })}
+                    {td(r.cost > 0 ? fmtCost(r.cost) : <span style={{ color: T.muted }}>—</span>)}
+                    {td(priceCell(r))}
+                    {isProd && td(r.packaging > 0 ? fmtCost(r.packaging) : <span style={{ color: T.muted }}>—</span>)}
+                    {isProd && td(r.costWithPack > 0 ? fmtCost(r.costWithPack) : <span style={{ color: T.muted }}>—</span>)}
+                    {td(r.mi.costRate === null ? <span style={{ color: T.muted }}>—</span> : `${(r.mi.costRate * 100).toFixed(1)}%`)}
+                    {td(marginCell(r))}
+                    {isProd && td(r.mi.afterPackPct === null ? <span style={{ color: T.muted }}>—</span> : <span style={{ color: r.mi.afterPackColor }}>{r.mi.afterPackPct.toFixed(1)}%</span>)}
+                    {td(suggestCell(r))}
+                    {td(gapCell(r))}
+                    {td(<span style={{ color: r.issues.length ? T.warning : T.muted }}>{issuesText(r) || "—"}</span>, false, { ...T.fs.label, minWidth: 100 })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* 手机:卡片,一行名字 + 一行三个数(成本 / 售价 / 毛利率) */}
+          <div className="k-mobile-only" style={{ marginTop: T.sp.m }}>
+            {sorted.map(r => (
+              <div key={r.kind + ":" + r.id} data-mo-card={r.kind + ":" + r.id} className="k-row" onClick={() => open(r)}
+                style={{ padding: "12px 0", borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer" }}>
+                {nameCell(r)}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 6, ...T.fs.caption, ...T.num }}>
+                  <div><div style={{ ...T.fs.label, color: T.subtle }}>{X.cost}</div>{r.cost > 0 ? fmtCost(r.cost) : "—"}</div>
+                  <div><div style={{ ...T.fs.label, color: T.subtle }}>{X.price}</div>{priceCell(r)}</div>
+                  <div><div style={{ ...T.fs.label, color: T.subtle }}>{X.margin}</div>{marginCell(r)}</div>
+                </div>
+                <div style={{ ...T.fs.label, color: T.body, marginTop: 4, overflowWrap: "anywhere" }}>
+                  {unitText(r)} · {X.suggested} {suggestCell(r)}
+                  {isProd && r.packaging > 0 && <> · {X.pack} {fmtCost(r.packaging)} · {X.afterPack} <span style={{ color: r.mi.afterPackColor }}>{r.mi.afterPackPct === null ? "—" : `${r.mi.afterPackPct.toFixed(1)}%`}</span></>}
+                </div>
+                {r.issues.length > 0 && <div style={{ ...T.fs.label, color: T.warning, marginTop: 2, overflowWrap: "anywhere" }}>{issuesText(r)}</div>}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 // 商品详情:成本算不全 / 没填产出量时说清是哪几项
 function ProductCostNote({ uc, lang }) {
   if (!uc || uc.noItems || (!uc.incomplete && !uc.noYield.length && !(uc.wholeCreation || []).length)) return null;
@@ -17899,7 +18366,7 @@ function ProductCostNote({ uc, lang }) {
     : `「${nm(m.target)}」` + [m.noUsed ? (zh ? `${m.noUsed} 个部分没填用量` : `使用量未入力 ${m.noUsed}`) : "", m.noPrice ? (zh ? `${m.noPrice} 项原料没价` : `単価なし ${m.noPrice}`) : ""].filter(Boolean).join(zh ? "、" : "・"));
   return (
     <div data-costnote="1" style={{ fontSize: 12, color: T.warning, marginTop: 10, lineHeight: 1.6 }}>
-      {uc.incomplete && <div>⚠ {zh ? "成本不全·利润率虚高:" : "原価不完全・利益率は過大:"}{reasons.join(zh ? ";" : "、")}</div>}
+      {uc.incomplete && <div>⚠ {zh ? "成本不全·毛利率虚高:" : "原価不完全・粗利率は過大:"}{reasons.join(zh ? ";" : "、")}</div>}
       {uc.noYield.length > 0 && <div>⚠ {uc.noYield.map(o => `「${nm(o)}」`).join("")}{zh ? "没填产出量,按一批 = 1 个算,成本可能偏高" : "出来数が未入力(1 バッチ = 1 個で計算、原価は過大の可能性)"}</div>}
       {(uc.wholeCreation || []).map((w, i) => <div key={"wc" + i} data-costwhole="1">⚠ {zh
         ? `「${nm(w.target)}」按整个(${fmtQty(w.portions)} 份)算成本;按块卖请把个数填成 ${+(1 / w.portions).toPrecision(3)}(= 1/${fmtQty(w.portions)}),或另建一个按整个卖的商品`
@@ -17910,7 +18377,7 @@ function ProductCostNote({ uc, lang }) {
 // 日结底部的钱(只给老板视图):营收 = 售价(折人民币)× 卖出,原料成本 = 单件成本 × 卖出,报损金额按成本算
 // rows = [{ productId, sold, waste }](当天的总数)
 const dailyCloseMoney = (products, rows, ctx) => {
-  let revenue = 0, cost = 0, wasteCost = 0, approx = false, costGap = false, soldAny = false;
+  let revenue = 0, cost = 0, wasteCost = 0, approx = false, costGap = false, soldAny = false, packaging = 0;
   const noPrice = [], incomplete = [], noCost = [];
   (rows || []).forEach(r => {
     const p = (products || []).find(x => x && x.id === r.productId);
@@ -17925,6 +18392,8 @@ const dailyCloseMoney = (products, rows, ctx) => {
       // 复核:「成本不全·毛利率虚高」只看算进营收的(有售价的)—— 没售价的不进营收,不会让毛利率虚高
       if (price > 0) { revenue += price * sold; if (priceCurOf(p) === "JPY") approx = true; if (uc.incomplete || !(uc.cost > 0)) costGap = true; } else noPrice.push(p);
       cost += uc.cost * sold;
+      // 第 4 批 B4-2:包装费只算卖出的(报损按原料成本,不算包装)
+      packaging += productPackagingCNY(p) * sold;
     }
     wasteCost += uc.cost * w;
     if (uc.incomplete) incomplete.push(p);
@@ -17933,8 +18402,15 @@ const dailyCloseMoney = (products, rows, ctx) => {
   // 审查 r5:卖出的全都算不出成本(成本 0)时不给毛利率(2a 第 6 条:成本 0 显示「—」,不显示绿色 100%)
   // 复核:卖出的全是没售价又算不出成本的(营收也是 0)时,原料成本同样显示「—」,不写「¥0」
   const allNoCost = soldAny && !(cost > 0);
-  return { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost, costGap, allNoCost,
+  const out = { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost, costGap, allNoCost,
     margin: revenue > 0 && !allNoCost ? ((revenue - cost) / revenue) * 100 : null };
+  // 第 4 批 B4-2(critic M7):卖出的商品带包装费时才多三个字段,没有包装费时返回的对象和以前逐字节一样
+  if (packaging > 0) {
+    out.packaging = packaging;
+    out.profitAfterPack = revenue - cost - packaging;
+    out.marginAfterPack = out.margin !== null ? ((revenue - cost - packaging) / revenue) * 100 : null;
+  }
+  return out;
 };
 
 // 汇总原料(PurchaseView 原来的 compute 前半段)。
@@ -18629,7 +19105,8 @@ const DC_TXT = {
     badTitle: "有几格不是数字,没法保存", badDetail: (list) => `${list}。填 0 或正数,没有就留空。`,
     discard: "换日期会丢掉还没保存的日结。", discardTitle: "还没保存", discardOk: "不保存,换日期", discardCancel: "留在这里",
     money: "这一天的钱", moneyHint: "售价折人民币 × 卖出;原料成本 = 商品页的单件成本 × 卖出;报损按成本算。",
-    revenue: "营收", cost: "原料成本", profit: "毛利", waste: "报损(按成本)", marginHigh: "成本不全·毛利率虚高",
+    revenue: "营收", cost: "原料成本", profit: "原料毛利", waste: "报损(按成本)", marginHigh: "成本不全·毛利率虚高",
+    pack: "包装费", profitAfterPack: "包装后毛利", packHint: "包装费 = 商品页填的每件包装费 × 卖出(报损不算包装)。",
     noPrice: (names) => `${names} 没定售价,营收没算进来`,
     incomplete: (names) => `${names} 成本不全,原料成本偏低、毛利虚高`,
     noCost: (names) => `${names} 算不出成本(没挂配方或配料没价),按 0 算`,
@@ -18648,7 +19125,8 @@ const DC_TXT = {
     badTitle: "数字でない欄があります", badDetail: (list) => `${list}。0 以上の数を入力、なければ空欄。`,
     discard: "日付を変えると未保存の締めが失われます。", discardTitle: "未保存", discardOk: "保存せず変更", discardCancel: "戻る",
     money: "この日の金額", moneyHint: "売価(人民元換算)× 販売;原価 = 商品ページの 1 個原価 × 販売;ロスは原価で計算。",
-    revenue: "売上", cost: "原材料費", profit: "粗利", waste: "ロス(原価)", marginHigh: "原価不完全・粗利率は過大",
+    revenue: "売上", cost: "原材料費", profit: "原材料粗利", waste: "ロス(原価)", marginHigh: "原価不完全・粗利率は過大",
+    pack: "包装費", profitAfterPack: "包装後粗利", packHint: "包装費 = 商品ページの 1 個あたり包装費 × 販売(ロスには含めません)。",
     noPrice: (names) => `${names} は売価未設定(売上に含まれていません)`,
     incomplete: (names) => `${names} は原価不完全(粗利は過大)`,
     noCost: (names) => `${names} は原価を計算できません(0 で計算)`,
@@ -18808,7 +19286,12 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
             {[["revenue", X.revenue, (money.approx ? "≈" : "") + fmtDcMoney(money.revenue), T.ink],
               ["cost", X.cost, money.allNoCost ? "—" : fmtDcMoney(money.cost), T.ink],
               ["profit", X.profit, money.allNoCost ? "—" : (money.approx ? "≈" : "") + fmtDcMoney(money.profit) + (money.margin !== null ? ` · ${money.margin.toFixed(1)}%` + (money.costGap ? ` · ${X.marginHigh}` : "") : ""),
-                money.allNoCost ? T.subtle : money.profit < 0 ? T.danger : money.costGap ? T.warning : T.success],
+                // 第 4 批 B4-1:有毛利率时颜色走 marginInfo(跟目标原料成本率,算不全不绿);没有毛利率时照旧(亏了红)
+                money.allNoCost ? T.subtle : money.profit < 0 ? T.danger : money.margin !== null ? marginColor(money.margin, money.costGap) : money.costGap ? T.warning : T.success],
+              // 卖出的商品带包装费时才多两格(没有包装费的日子和以前一样)
+              ...(money.packaging > 0 ? [["pack", X.pack, fmtDcMoney(money.packaging), T.ink],
+                ["profitAfterPack", X.profitAfterPack, money.allNoCost ? "—" : (money.approx ? "≈" : "") + fmtDcMoney(money.profitAfterPack) + (money.marginAfterPack !== null ? ` · ${money.marginAfterPack.toFixed(1)}%` : ""),
+                  money.allNoCost ? T.subtle : money.profitAfterPack < 0 ? T.danger : money.marginAfterPack !== null ? marginColor(money.marginAfterPack, money.costGap) : T.ink]] : []),
               ["waste", X.waste, fmtDcMoney(money.wasteCost), money.wasteCost > 0 ? T.warning : T.ink]].map(([k, label, v, color]) => (
               <div key={k} data-dcmoneycell={k} style={{ background: T.bgMuted, padding: "10px 12px" }}>
                 <div style={{ ...T.fs.label, color: T.subtle }}>{label}</div>
@@ -18820,6 +19303,7 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
           {money.noCost.length > 0 && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.noCost(names(money.noCost))}</div>}
           {money.noPrice.length > 0 && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {X.noPrice(names(money.noPrice))}</div>}
           {money.approx && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 4 }}>{X.approx}</div>}
+          {money.packaging > 0 && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 4 }}>{X.packHint}</div>}
         </div>
       )}
     </div>
@@ -19802,6 +20286,8 @@ function App() {
   }));
   setFxForLookup(appSettings.fxJpyToCny);
   setDisplayCurForLookup(appSettings.displayCurrency);
+  // 第 4 批 B4-1:目标原料成本率(毛利颜色 / 建议售价),同上渲染期注入。没有这个键 = 0.30,state 初值里不加默认值(不给所有人的存档写新键)
+  setTargetCostRateForLookup(appSettings.targetCostRate);
   // 🏷 产品家族（Product Family）
   // v1 内测: 默认种子 = SEED_FAMILIES (family_buttercream_cake + family_pate_a_cake), 老 family_basque 已隐藏
   const [productFamilies, setProductFamilies] = useState(() => mergeWithDefaults(stored?.productFamilies, SEED_FAMILIES, dismissedSeeds, "productFamilies"));
@@ -19826,7 +20312,7 @@ function App() {
       return { ...prev, dismissedSeedIds: absent };
     });
   }, [recipes, components, creations, knowledge, productFamilies]);
-  const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale"
+  const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale" | "margin"(第 4 批 B4-1 毛利一览)
   // v17: 「在售中」标记。季节食材决定当季卖哪几款,标了的排到最前 + 单独一页。
   // 只是配方上的一个布尔,跟 products(可售单元 / 库存)是两回事,不联动。
   const toggleOnSale = (id) => setRecipes(prev => prev.map(r =>
@@ -21871,6 +22357,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               ["flat", lang === "zh" ? "全部配方" : "全レシピ"],
               ["onsale", (() => { const k = recipes.filter(r => r.onSale).length + creations.filter(c => c.onSale).length; return `${lang === "zh" ? "在售中" : "販売中"}${k ? " " + k : ""}`; })()],
               ["family", lang === "zh" ? "家族模式" : "ファミリー表示"],
+              ["margin", lang === "zh" ? "毛利一览" : "粗利一覧"],   // 第 4 批 B4-1
             ].map(([m, label]) => (
               <button
                 key={m} className="k-tab" onClick={() => setFamilyViewMode(m)}
@@ -21933,6 +22420,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   const cPer = cTotal / (parseFloat(c.serves) || 1) / (parseFloat(c.portions) || 1);
                   const cPrice = toCNY(c.price, priceCurOf(c));
                   const cMargin = cPrice > 0 && cPer > 0 ? ((cPrice - cPer) / cPrice) * 100 : 0;
+                  // 第 4 批 B4-1:以前这里按 50 / 30 上色、完全不看算不全(组合产品页是 65 / 50,同一款两处颜色不同)。
+                  // 现在和组合产品详情同一个判定(creationMarginView → marginInfo):跟目标原料成本率,算不全 / 用量读不准不给绿色并标出来
+                  const cMv = cPrice > 0 && cPer > 0 ? creationMarginView({ batch: creationBatch(c, null, components, materials, brands), priceNum: cPrice, costPerPortion: cPer, marginPercent: cMargin, lang }) : null;
                   const openCreation = () => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); };
                   return (
                     <div
@@ -21984,8 +22474,15 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                           {[c.size || c.mold, c.serves ? `${c.serves} ${Wc.unit}` : null, (c.layers || []).length ? Wc.partCount(c.layers.length) : null, c.shelfLife].filter(Boolean).join("  ·  ")}
                         </div>
                       </div>
-                      <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: cMargin >= 50 ? T.success : cMargin >= 30 ? T.warning : T.danger }}>
+                      <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: cMv ? cMv.color : T.danger }}>
                         {cPrice > 0 && cPer > 0 ? `${cMargin.toFixed(1)}%` : ""}
+                        {cMv && cMv.unsure && (
+                          <div data-rowincomplete="1" style={{ ...T.fs.label, color: T.muted }} title={cMv.note}>
+                            {cMv.incomplete
+                              ? (lang === "zh" ? <>成本不全<br />毛利率虚高</> : <>原価不完全<br />粗利率過大</>)
+                              : cMv.badge}
+                          </div>
+                        )}
                       </div>
                       <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
                         {cPrice > 0
@@ -22009,6 +22506,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 // 2026-09-29 体检第 2 批:有售价但成本算不出来(配料都没价 / 没填出品数)时,以前显示红色「0.0%」像是亏本 → 改显示灰色「缺成本」;
                 // 有几行没单价时成本偏低、利润率虚高,在下面标「N 项没价·利润率虚高」(和详情页「成本算不全」同一口径;09-29 她选的叫法,原来「偏高」看不懂是什么偏高)
                 const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length : 0;
+                // 第 4 批 B4-1:颜色走 marginInfo(跟目标原料成本率;有原料没价 = 算不全,数字不给绿色 —— 以前「咖啡巴斯克 v2.0」缺 3 项价照样绿色 68.2%)
+                const rowColor = marginColor(priceN > 0 && unitCost > 0 ? margin : null, noPriceN > 0);
                 return (
                   <div
                     key={r.id}
@@ -22061,14 +22560,14 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       </div>
                     </div>
 
-                    {/* 利润率 */}
-                    <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: margin >= 50 ? T.success : margin >= 30 ? T.warning : T.danger }}>
+                    {/* 原料毛利率 */}
+                    <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: priceN > 0 && unitCost > 0 ? rowColor : T.danger }}>
                       {priceN > 0 && unitCost > 0 ? `${margin.toFixed(1)}%` : ""}
                       {priceN > 0 && !(unitCost > 0) && <span style={{ color: T.muted }}>{liveCost > 0 && !(yieldN > 0) ? (lang === "zh" ? "缺出品数" : "出来数なし") : (lang === "zh" ? "缺成本" : "原価なし")}</span>}
                       {noPriceN > 0 && (
-                        <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,显示的利润率比实际高" : "単価のない材料があり、利益率は実際より高く出ています"}>
+                        <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,显示的毛利率比实际高" : "単価のない材料があり、粗利率は実際より高く出ています"}>
                           {/* 分两行:一行放不下时会把左边的名字挤成两行(手机宽度下可丽露实测) */}
-                          {lang === "zh" ? <>{noPriceN} 项没价<br />利润率虚高</> : <>単価なし {noPriceN}<br />利益率過大</>}
+                          {lang === "zh" ? <>{noPriceN} 项没价<br />毛利率虚高</> : <>単価なし {noPriceN}<br />粗利率過大</>}
                         </div>
                       )}
                     </div>
@@ -22196,6 +22695,17 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 );
               })()}
             </div>
+          )}
+
+          {/* 💹 毛利一览(第 4 批 B4-1):配方一览的第 4 个模式。在 {!staffMode && …} 里面,员工模式看不到 */}
+          {familyViewMode === "margin" && (
+            <MarginOverview recipes={recipes} creations={creations} products={products} components={components} materials={materials} brands={brands}
+              productFamilies={productFamilies} shopMaterials={shopMaterials} appSettings={appSettings} setAppSettings={setAppSettings} lang={lang}
+              onOpen={(kind, id) => {
+                jumpToItem({ kind, id });
+                // 从这里点进组合产品,详情页返回键回配方一览(和平铺模式点进去一样);jumpToItem 先清了 returnTo,同一批更新里这句在后面生效
+                if (kind === "creationView") setCreationReturnTo("list");
+              }} />
           )}
         </div>
       )}
