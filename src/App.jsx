@@ -18812,7 +18812,7 @@ const moIssueText = (it, X) => {
   return typeof f === "function" ? f(it.n) : f;
 };
 function MarginOverview({ recipes = [], creations = [], products = [], components = [], materials = [], brands = [], shopMaterials = [], productFamilies = [],
-  appSettings = {}, setAppSettings, lang, onOpen }) {
+  appSettings = {}, setAppSettings, lang, onOpen, emptyActions = [] }) {
   const zh = lang !== "ja";
   const X = MO_TXT[zh ? "zh" : "ja"];
   const [seg, setSeg] = useState("items");         // "items" | "products"
@@ -18928,7 +18928,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
       {isProd && <div style={{ ...T.fs.label, color: T.subtle, lineHeight: 1.6, marginTop: T.sp.s }}>{X.prodHint}</div>}
 
       {list.length === 0 ? (
-        <EmptyState variant="first" lang={lang} title={isProd ? X.emptyProducts : X.emptyFirst} />
+        <EmptyState variant="first" lang={lang} title={isProd ? X.emptyProducts : X.emptyFirst} actions={isProd ? [] : emptyActions} />
       ) : sorted.length === 0 ? (
         <EmptyState variant="filter" lang={lang} title={X.empty} chips={chips}
           onClearAll={() => { setScope("all"); setFam(""); setProblemsOnly(false); }} />
@@ -23086,7 +23086,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             )}
           </div>
 
-          {recipes.length === 0 && creations.length === 0 && (
+          {/* 审查 b4r3:毛利一览由 MarginOverview 自己出空状态(带同样两个动作),这里不再叠一块;只有商品时商品段上面也不挂「还没有配方」 */}
+          {recipes.length === 0 && creations.length === 0 && familyViewMode !== "margin" && (
             <EmptyState
               variant="first" lang={lang}
               title={lang === "zh" ? "还没有配方" : "まだレシピがありません"}
@@ -23413,6 +23414,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {familyViewMode === "margin" && (
             <MarginOverview recipes={recipes} creations={creations} products={products} components={components} materials={materials} brands={brands}
               productFamilies={productFamilies} shopMaterials={shopMaterials} appSettings={appSettings} setAppSettings={setAppSettings} lang={lang}
+              emptyActions={[
+                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => { setEditTarget(null); setTab("edit"); } },
+                { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
+              ]}
               onOpen={(kind, id) => {
                 jumpToItem({ kind, id });
                 // 从这里点进组合产品,详情页返回键回配方一览(和平铺模式点进去一样);jumpToItem 先清了 returnTo,同一批更新里这句在后面生效
