@@ -702,7 +702,9 @@ const _phCloserAsCNY = (v, p) => v > 0 && p > 0 && Math.abs(Math.log(v / p)) < M
 // 审查 b4s1:「标对币种」(_phRelabelAsCNY)只认按人民币读和对方相差不到一倍(0.5 到 2 倍)的。只看「哪边更近」时,东京 2.08円 → 国内 0.5 元
 // (真涨约 5.6 倍)会被当成标币种:旧价记成 2.08 元、显示「↓76%」,同一时期的东京日元记录也被永久标成人民币
 const _phNearAsCNY = (v, p) => _phCloserAsCNY(v, p) && Math.abs(Math.log(v / p)) <= Math.LN2 + 1e-9;
-function currencyFixedHistory(obj, cur, near = _phCloserAsCNY) {
+// 审查 b4s2:数据体检 H1「是人民币」也用这个门槛(以前缺省是只看「哪边更近」:东京 2.08円 → 编辑页改成 0.5 没标币种、再点「是人民币」,
+// 旧价被永久标成 2.08 元、显示「↓76%」;走编辑页直接存成人民币却是「≈↑459%」—— 同一件事两条路两个结果,合并导入还会传到另一台电脑)
+function currencyFixedHistory(obj, cur, near = _phNearAsCNY) {
   if (!obj || !Array.isArray(obj.priceHistory)) return null;
   const now = { pricePerG: obj.pricePerG };   // 两边都没币种 → 同按日元比,只比数值
   let changed = false;
