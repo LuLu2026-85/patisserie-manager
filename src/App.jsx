@@ -6816,8 +6816,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           components={components}
           creations={creations}
           onNavigateToKnowledge={onNavigateToKnowledge}
-          onEdit={() => { setEditTarget(comp); setViewId(null); }}
-          onBack={() => setViewId(null)}
+          onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(comp); setViewId(null); })}
+          onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setViewId(null))}
           onPrint={onPrintComponent ? (scaled) => onPrintComponent(scaled || comp) : null}
           materials={materials}
           brands={brands}
@@ -26944,7 +26944,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => { setEditTarget(viewingRecipe); setTab("edit"); }} onBack={() => setTab("list")} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setTab("list"))} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); }} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
             prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog} />
         </div>
       )}
