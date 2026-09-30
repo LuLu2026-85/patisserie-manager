@@ -694,7 +694,10 @@ const withMergedPriceHistory = (local, file, merged, kind, now) => {
 
 // 数据体检 H1(本店原料标币种)用:记录里没写币种、数值又和现价相同的项补上币种;别的不动。没有要改的 → null
 const _phCloserAsCNY = (v, p) => v > 0 && p > 0 && Math.abs(Math.log(v / p)) < Math.abs(Math.log(toCNY(v, "JPY") / p));
-function currencyFixedHistory(obj, cur) {
+// 审查 b4s1:「标对币种」(_phRelabelAsCNY)只认按人民币读和对方相差不到一倍(0.5 到 2 倍)的。只看「哪边更近」时,东京 2.08円 → 国内 0.5 元
+// (真涨约 5.6 倍)会被当成标币种:旧价记成 2.08 元、显示「↓76%」,同一时期的东京日元记录也被永久标成人民币
+const _phNearAsCNY = (v, p) => _phCloserAsCNY(v, p) && Math.abs(Math.log(v / p)) <= Math.LN2 + 1e-9;
+function currencyFixedHistory(obj, cur, near = _phCloserAsCNY) {
   if (!obj || !Array.isArray(obj.priceHistory)) return null;
   const now = { pricePerG: obj.pricePerG };   // 两边都没币种 → 同按日元比,只比数值
   let changed = false;
@@ -702,7 +705,7 @@ function currencyFixedHistory(obj, cur) {
     if (!e || typeof e !== "object" || e.currency || !(parseFloat(e.pricePerG) > 0)) return e;
     // 审查 b4r1:标人民币时,没写币种的旧价当人民币读比当日元读离现价更近(同一时期、币种一样没定的,如改价前那条 0.04 → 0.05)也补上;
     // 当日元读更近的(东京时期的 2.5円)不动。标日元不用猜:没写币种本来就按日元算
-    if (!samePrice(e, now) && !(cur === "CNY" && _phCloserAsCNY(parseFloat(e.pricePerG), parseFloat(obj.pricePerG)))) return e;
+    if (!samePrice(e, now) && !(cur === "CNY" && near(parseFloat(e.pricePerG), parseFloat(obj.pricePerG)))) return e;
     changed = true;
     return { ...e, currency: cur };
   });
@@ -711,11 +714,11 @@ function currencyFixedHistory(obj, cur) {
 // 审查 b4r2:旧的一边(prevSnap)没写币种、新的一边明确是人民币,且旧的数当人民币读比当日元读离新价更近 → 当成「标对币种」。
 // 只管本店原料(kind = "shop",数据体检 H1 管的那一类);材料百科没写币种的是东京时期的日元价,照旧当改价记。
 // 返回 { snap: 旧价按人民币, fixed: currencyFixedHistory 补好币种的记录(没有要补的 → null) },不是这种情况 → null。
-// 当日元读更近的(东京时期 2.5円 → 国内 0.13 元、切币种按同一笔钱折的 0.114円 → 0.0055 元)照旧当改价记
+// 当日元读更近的(东京时期 2.5円 → 国内 0.13 元、切币种按同一笔钱折的 0.114円 → 0.0055 元)、按人民币读差一倍以上的(2.08円 → 0.5 元)照旧当改价记
 function _phRelabelAsCNY(prevObj, prevSnap, nextSnap, kind) {
   if (kind !== "shop" || !prevSnap || !nextSnap || prevSnap.currency || nextSnap.currency !== "CNY") return null;
-  if (!_phCloserAsCNY(parseFloat(prevSnap.pricePerG), parseFloat(nextSnap.pricePerG))) return null;
-  return { snap: { ...prevSnap, currency: "CNY" }, fixed: currencyFixedHistory({ pricePerG: prevSnap.pricePerG, priceHistory: prevObj && prevObj.priceHistory }, "CNY") };
+  if (!_phNearAsCNY(parseFloat(prevSnap.pricePerG), parseFloat(nextSnap.pricePerG))) return null;
+  return { snap: { ...prevSnap, currency: "CNY" }, fixed: currencyFixedHistory({ pricePerG: prevSnap.pricePerG, priceHistory: prevObj && prevObj.priceHistory }, "CNY", _phNearAsCNY) };
 }
 
 // 显示用:对象现在的价 vs 上一个不同的价。没有记录 / 没价 / 变化不到 0.5% 且没有 newerElsewhere → null。
