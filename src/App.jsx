@@ -19809,11 +19809,12 @@ const _prepOne = (items, op, now, today) => {
       const lot = { id: lotId, madeAt: dateOk(op.madeAt) ? op.madeAt : today, made: q, left: q, at: now };
       if (op.via) lot.via = op.via;
       if (op.uid) lot.uid = op.uid;
-      // 补扣(默认值 7):今天取出时扣不够、还没被补扣也没加回过的 take,差的数从这一批里扣掉
+      // 补扣(默认值 7):今天取出时扣不够、还没被补扣也没加回过的 take,差的数从这一批里扣掉。
+      // 这条 take 之后盘点过的不补(审查 ps1:盘点已经把账对成实物,差的那几个早就算进去了;改单位的盘点之后还会拿旧单位的数去扣)
       let s = 0;
       const settles = [];
-      w.moves.forEach(m => {
-        if (!_prepIsObj(m) || m.type !== "take" || m.date !== today || !(_prepPos(m.short) > 0) || m.settledBy || m.restoredBy) return;
+      w.moves.forEach((m, i) => {
+        if (!_prepIsObj(m) || m.type !== "take" || m.date !== today || !(_prepPos(m.short) > 0) || m.settledBy || m.restoredBy || _prepLaterCount(w, i)) return;
         const n = _prepClean(Math.min(_prepPos(m.short), q - s));
         if (!(n > 0)) return;
         s = _prepClean(s + n);
@@ -21153,7 +21154,9 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
       const pending = pend(logged);
       const moves = item ? (item.moves || []) : [];
       const todayMade = _r3(moves.filter(m => m && m.type === "make" && m.date === today).reduce((a, m) => a + _prepNum(m.qty), 0));
-      const shortToday = _r3(takesToday(cfg.key).filter(m => _prepNum(m.short) > 0 && !m.settledBy && !m.restoredBy).reduce((a, m) => a + _prepNum(m.short), 0));
+      // 同 prepApply 的补扣:这条 take 之后盘点过的不算(审查 ps1)
+      const shortToday = _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.settledBy && !m.restoredBy
+        && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + _prepNum(m.short), 0));
       const mk = prepMakeOf(l, obj);
       return { mode: "make", sub: null, key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
         todayMade, shortToday, make: mk ? { ...mk, qty: pending } : null, flow: flowOf(pending), readOnly,
