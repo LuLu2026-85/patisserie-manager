@@ -21570,8 +21570,11 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   const txtLink = (label, onClick) => <button type="button" onClick={onClick}
     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...T.fs.caption, color: T.ink, textDecoration: "underline", fontFamily: T.fontSans }}>{label}</button>;
   const panelNum = panel ? parseFloat(String(panel.val).normalize("NFKC").trim()) : NaN;
-  const panelOk = panel && /^\s*\d*\.?\d+\s*$/.test(String(panel.val).normalize("NFKC")) && panelNum > 0;
-  const submitPanel = () => { if (!panelOk) return; setPanel(null); onLog(panelNum); };
+  const panelRawOk = panel && /^\s*\d*\.?\d+\s*$/.test(String(panel.val).normalize("NFKC")) && panelNum > 0;
+  // 审查 ps2:按账本的规整先算好(按个计:做一批四舍五入、取出向上取整),预告 / 记入 / toast 用的都是存下的数;按个计填 0.4 做一批 → 0,不让提交
+  const panelQ = panelRawOk ? _prepQ(panelNum, pUnit, pBake ? "take" : "add") : 0;
+  const panelOk = panelRawOk && panelQ > 0;
+  const submitPanel = () => { if (!panelOk) return; setPanel(null); onLog(panelQ); };
   // 商品行 / 组合产品行:这一行还没记的部分会从哪几样已开始记的备货扣(卡片灰字「会从冷冻扣」)
   const trackedTakes = prep && prep.flow ? prep.flow.takes.filter(t => t.tracked && prepView && prepView.get(t.key)) : [];
   const willTake = trackedTakes.length > 0 && prep.pending > 0 && prep.mode === "product" && !prep.blocked ? (() => {
@@ -21632,9 +21635,10 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       {pMake && <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.todayDate(pCfg.store)}</span>}
       <Btn size="sm" variant="primary" disabled={!panelOk} onClick={submitPanel}>{PX.submit}</Btn>
       <Btn size="sm" variant="ghost" onClick={() => setPanel(null)}>{PX.logCancel}</Btn>
+      {panelRawOk && !panelOk && <span data-prep-panelerr="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.errQtyWhole(pUnit)}</span>}
       {pMake && prep.shortToday > 0 && panelOk && (
         <span data-prep-settle="1" style={{ ...T.fs.caption, color: T.body, width: "100%", ...T.num }}>
-          {PX.settle(fmtQty(prep.shortToday), pUnit, pStore, fmtQty(Math.max(0, _r3(panelNum - Math.min(prep.shortToday, panelNum)))))}
+          {PX.settle(fmtQty(prep.shortToday), pUnit, pStore, fmtQty(Math.max(0, _r3(panelQ - Math.min(prep.shortToday, panelQ)))))}
         </span>
       )}
     </div>
@@ -25099,9 +25103,10 @@ function App() {
         if (info.blocked) return true;   // 按钮是灰的(没填产出量 / 单位对不上 / 账本只读)
         const add = info.pending;
         const a = parseFloat(actualQty);
-        const qty = actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add;
-        if (!(add > 0) || !(qty > 0)) return true;
         const cfg = info.cfg;
+        // 审查 ps2:按账本的规整(按个计四舍五入)先算好,toast / 配料缩放用的就是存下的数(以前 12.6 → toast 写 12.6、账上 13;0.4 → 说记了、账上什么都没有)
+        const qty = _prepQ(actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add, cfg.unit, "add");
+        if (!(add > 0) || !(qty > 0)) return true;
         // 审查 ps1:这一批的配料里「来自组件」的备货组件(单子上写「从库存取」、提醒也按它算)同一次从账本扣,同一个 opId(撤销一起撤)。
         // 按实际做的数算(实际 390、计划 400 → 按 390 / 400 缩);不扣 take 封顶(那只看取出行 / 用到备货的行自己的 uid)
         const used = info.flow.takes.filter(t => t.tracked).map(t => ({ ...t, qty: _r3(t.qty * qty / add) })).filter(t => t.qty > 0);
@@ -25119,7 +25124,7 @@ function App() {
         if (info.sub === "bake") {
           // 取出烤:「实际取了 N」(员工也能记;数量 0 的行 add = 0,只记实际取的,不改 logged)
           const a = parseFloat(actualQty);
-          const qty = actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add;
+          const qty = _prepQ(actualQty !== undefined && actualQty !== null && actualQty !== "" ? (a > 0 ? a : 0) : add, info.cfg.unit, "take");   // 审查 ps2:同上,按个计向上取整
           if (!(qty > 0)) return true;
           const parts = takeParts([{ key: info.cfg.key, kind: info.cfg.kind, id: info.cfg.id, qty }]);
           if (!parts.length || !writePrep(takeOps(parts, add), setLogged(add), { uid })) return true;
