@@ -17067,7 +17067,7 @@ function ProductCostNote({ uc, lang }) {
 // 日结底部的钱(只给老板视图):营收 = 售价(折人民币)× 卖出,原料成本 = 单件成本 × 卖出,报损金额按成本算
 // rows = [{ productId, sold, waste }](当天的总数)
 const dailyCloseMoney = (products, rows, ctx) => {
-  let revenue = 0, cost = 0, wasteCost = 0, approx = false;
+  let revenue = 0, cost = 0, wasteCost = 0, approx = false, costGap = false;
   const noPrice = [], incomplete = [], noCost = [];
   (rows || []).forEach(r => {
     const p = (products || []).find(x => x && x.id === r.productId);
@@ -17080,13 +17080,16 @@ const dailyCloseMoney = (products, rows, ctx) => {
       const price = toCNY(p.sellPrice, priceCurOf(p));
       if (price > 0) { revenue += price * sold; if (priceCurOf(p) === "JPY") approx = true; } else noPrice.push(p);
       cost += uc.cost * sold;
+      if (uc.incomplete || !(uc.cost > 0)) costGap = true;   // 审查 r5:卖出的里有成本不全 / 算不出成本的 → 毛利率虚高
     }
     wasteCost += uc.cost * w;
     if (uc.incomplete) incomplete.push(p);
     if (!(uc.cost > 0)) noCost.push(p);
   });
-  return { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost,
-    margin: revenue > 0 ? ((revenue - cost) / revenue) * 100 : null };
+  // 审查 r5:卖出的全都算不出成本(成本 0)时不给毛利率(2a 第 6 条:成本 0 显示「—」,不显示绿色 100%)
+  const allNoCost = revenue > 0 && !(cost > 0);
+  return { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost, costGap, allNoCost,
+    margin: revenue > 0 && !allNoCost ? ((revenue - cost) / revenue) * 100 : null };
 };
 
 // 汇总原料(PurchaseView 原来的 compute 前半段)。
@@ -17776,7 +17779,7 @@ const DC_TXT = {
     badTitle: "有几格不是数字,没法保存", badDetail: (list) => `${list}。填 0 或正数,没有就留空。`,
     discard: "换日期会丢掉还没保存的日结。", discardTitle: "还没保存", discardOk: "不保存,换日期", discardCancel: "留在这里",
     money: "这一天的钱", moneyHint: "售价折人民币 × 卖出;原料成本 = 商品页的单件成本 × 卖出;报损按成本算。",
-    revenue: "营收", cost: "原料成本", profit: "毛利", waste: "报损(按成本)",
+    revenue: "营收", cost: "原料成本", profit: "毛利", waste: "报损(按成本)", marginHigh: "成本不全·毛利率虚高",
     noPrice: (names) => `${names} 没定售价,营收没算进来`,
     incomplete: (names) => `${names} 成本不全,原料成本偏低、毛利虚高`,
     noCost: (names) => `${names} 算不出成本(没挂配方或配料没价),按 0 算`,
@@ -17795,7 +17798,7 @@ const DC_TXT = {
     badTitle: "数字でない欄があります", badDetail: (list) => `${list}。0 以上の数を入力、なければ空欄。`,
     discard: "日付を変えると未保存の締めが失われます。", discardTitle: "未保存", discardOk: "保存せず変更", discardCancel: "戻る",
     money: "この日の金額", moneyHint: "売価(人民元換算)× 販売;原価 = 商品ページの 1 個原価 × 販売;ロスは原価で計算。",
-    revenue: "売上", cost: "原材料費", profit: "粗利", waste: "ロス(原価)",
+    revenue: "売上", cost: "原材料費", profit: "粗利", waste: "ロス(原価)", marginHigh: "原価不完全・粗利率は過大",
     noPrice: (names) => `${names} は売価未設定(売上に含まれていません)`,
     incomplete: (names) => `${names} は原価不完全(粗利は過大)`,
     noCost: (names) => `${names} は原価を計算できません(0 で計算)`,
@@ -17953,8 +17956,9 @@ function DailyCloseView({ products = [], salesLog = [], productionLog = [], reci
           <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{X.moneyHint}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 10 }}>
             {[["revenue", X.revenue, (money.approx ? "≈" : "") + fmtDcMoney(money.revenue), T.ink],
-              ["cost", X.cost, fmtDcMoney(money.cost), T.ink],
-              ["profit", X.profit, (money.approx ? "≈" : "") + fmtDcMoney(money.profit) + (money.margin !== null ? ` · ${money.margin.toFixed(1)}%` : ""), money.profit < 0 ? T.danger : T.success],
+              ["cost", X.cost, money.allNoCost ? "—" : fmtDcMoney(money.cost), T.ink],
+              ["profit", X.profit, money.allNoCost ? "—" : (money.approx ? "≈" : "") + fmtDcMoney(money.profit) + (money.margin !== null ? ` · ${money.margin.toFixed(1)}%` + (money.costGap ? ` · ${X.marginHigh}` : "") : ""),
+                money.allNoCost ? T.subtle : money.profit < 0 ? T.danger : money.costGap ? T.warning : T.success],
               ["waste", X.waste, fmtDcMoney(money.wasteCost), money.wasteCost > 0 ? T.warning : T.ink]].map(([k, label, v, color]) => (
               <div key={k} data-dcmoneycell={k} style={{ background: T.bgMuted, padding: "10px 12px" }}>
                 <div style={{ ...T.fs.label, color: T.subtle }}>{label}</div>
