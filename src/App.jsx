@@ -19632,7 +19632,12 @@ const _prepBack = (w, idx, lotId, amt, acc, today, rev) => {
   const lot = _prepLot(w, lotId);
   if (!lot) { _prepSkip(acc, "gone", null, lotId); return [0, 0]; }
   if (lot.voided) { _prepSkip(acc, "voided", lot); return [0, 0]; }
-  if (w.moves.some((x, j) => j > idx && _prepIsObj(x) && x.type === "discard" && Array.isArray(x.deltas) && x.deltas.some(d => Array.isArray(d) && d[0] === lotId))) { _prepSkip(acc, "discard", lot); return [0, 0]; }
+  if (w.moves.some((x, j) => j > idx && _prepIsObj(x) && x.type === "discard" && Array.isArray(x.deltas) && x.deltas.some(d => Array.isArray(d) && d[0] === lotId))) {
+    // 审查 ps2:要减掉的(撤盘点加上的 / 撤删记录的加回)记成这批欠着的,之后撤那次报废时先还掉 ——
+    // 以前直接跳过:先撤盘点(+3)再撤报废,报废记下的 8 原样加回,盘点加的 3 个两次撤销之后还留在账上(换个顺序就没有)
+    if (amt < 0 && lot.left === 0) lot.owe = _prepClean(_prepPos(lot.owe) - amt);
+    _prepSkip(acc, "discard", lot); return [0, 0];
+  }
   let a = amt, pay = 0;
   if (a > 0 && _prepPos(lot.owe) > 0) {                 // 先还欠着的
     pay = _prepClean(Math.min(lot.owe, a));
