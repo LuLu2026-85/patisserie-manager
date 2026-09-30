@@ -4944,7 +4944,8 @@ const _dhPrepChecks = (d, A) => {
         if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
         if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 这天之后盘点过:账已经对成实物(商品页补录这种日子也不扣,审查 ps1)
         // 审查 ps4:同一天、记录之后(按记录最后改的时间)盘点过的也不报 —— H21 叫她去盘点,盘完这条就该消失(商品页当天照扣的规则不变)
-        if (mv.some(m => m.type === "count" && m.date === r.date && String(m.at || "") >= String(r.updatedAt || r.createdAt || ""))) return;
+        // 审查 pt1:按记录建的时间比(以前按最后改的时间:盘点后当天又记 +5,记录的修改时间跳到盘点之后,盘点前那 30 又被算成「没扣」)
+        if (mv.some(m => m.type === "count" && m.date === r.date && String(m.at || "") >= String(r.createdAt || r.updatedAt || ""))) return;
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
         const t = takes.find(x => x.key === k);
         const want = t ? _r3(t.qty) : 0;
