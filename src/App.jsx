@@ -21896,7 +21896,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <p style={{ fontSize: 12, color: T.body, marginBottom: 10 }}>清除所有数据，不可撤销。请先导出备份。</p>
             {/* 2026-09-29 体检第 2 批:清除前先存一份「固定」备份(不参与自动轮换),以前清完只能靠很快就被挤掉的自动备份 */}
             <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
-              const doClear = () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]); showToast("已清除"); };
+              const doClear = () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
+                // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
+                setAppSettings(prev => { if (!prev || !prev.prodPlan) return prev; const { prodPlan, ...rest } = prev; return rest; });
+                showToast("已清除"); };
               if (await pinBackupNow("clear")) doClear();
               else confirmDialog("清除前的固定备份没存上(浏览器的数据库用不了)。仍然清除吗?建议先点上面的「导出完整备份」存一份文件。", doClear, { title: "备份没存上", confirmText: "仍然清除" });
             })}>清除全部数据</Btn>
