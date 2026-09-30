@@ -19870,6 +19870,30 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 装烤好的 ${n} ${u}(不扣备货)`,
     printMakeHint: (store, n, u, date) => `做好后记入:${store} +${n} ${u} · 今天做的${date ? `,放到 ${date}` : ""}`,
     // ── D 线:厨房视图 / 员工外壳 ──
+    kitModeTake: "取出烤", kitModeMake: "做一批",
+    kitTag: (s) => (s === "freeze" ? "冷冻→烤" : s === "fridge" ? "冷藏→烤" : "取出→烤"),
+    kitTagMake: "做一批存着",
+    kitBakeN: "烤几个",
+    kitTakeFrom: (s) => (s === "freeze" ? "从冷冻取" : s === "fridge" ? "从冷藏取" : s === "room" ? "取出" : "从库存取"),
+    kitThaw: "取出后",
+    kitWhole: "整份做法(做面团时用)",
+    kitHave: (store, n, u) => `${store}现有 ${n} ${u}`,
+    kitFirst: (d, m, u, k) => `先用 ${d} 那批(${m} ${u}${k === null || k === undefined ? "" : `,还能放 ${k} 天`})`,
+    kitNotTracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
+    kitShort: (have, short, u) => `⚠ 只有 ${have} ${u},差 ${short} ${u}`,
+    kitExpired: (k, n, u) => `⚠ 有 ${k} 批过期了(共 ${n} ${u}),别用,去「备货」报废`,
+    kitQtyHint: "填今天要烤几个",
+    kitBakedBtn: (n, u) => `烤好了,记下 −${n} ${u}`,
+    kitOnlyStore: (store) => `这样只扣${store};柜台库存请在生产单上记商品行`,
+    kitLineDone: "✓ 这一行已记入",
+    kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
+    kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
+    kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
+    kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
+    kitToastShort: (store, name, got, short) => `;${store}「${name}」账上只有 ${got},差 ${short} 没扣(去「备货」盘点)`,
+    kitDone: (n, u) => `✓ 记下了 −${n} ${u}`,
+    kitAgain: "再记一次",
+    kitNamesJoin: "、",
     // ── E 线:备货页 / 编辑页 / 详情卡 / 角标 ──
     // ── F 线:商品页 / 采购页 / 数据体检 ──
     // ── G 线:导入 / 清除 / 删除 / 数据页 ──
@@ -19961,6 +19985,30 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 焼成済みを詰める ${n}${u}(作り置きから引かない)`,
     printMakeHint: (store, n, u, date) => `仕込み後に記録:${store} +${n}${u} · 本日仕込み${date ? `、${date} まで` : ""}`,
     // ── D 線:キッチン表示 / スタッフ ──
+    kitModeTake: "出して焼く", kitModeMake: "仕込み",
+    kitTag: (s) => (s === "freeze" ? "冷凍→焼成" : s === "fridge" ? "冷蔵→焼成" : "出して焼成"),
+    kitTagMake: "仕込み(保存用)",
+    kitBakeN: "焼く数",
+    kitTakeFrom: (s) => (s === "freeze" ? "冷凍から出す" : s === "fridge" ? "冷蔵から出す" : s === "room" ? "出す" : "ストックから"),
+    kitThaw: "取り出し後",
+    kitWhole: "全工程(仕込み用)",
+    kitHave: (store, n, u) => `${store}在庫 ${n}${u}`,
+    kitFirst: (d, m, u, k) => `${d} 仕込み分から(${m}${u}${k === null || k === undefined ? "" : `、あと ${k} 日`})`,
+    kitNotTracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
+    kitShort: (have, short, u) => `⚠ 在庫 ${have}${u}、${short}${u} 不足`,
+    kitExpired: (k, n, u) => `⚠ 期限切れ ${k} ロット(計 ${n}${u})。使わずに「作り置き」で廃棄`,
+    kitQtyHint: "焼く数を入力してください",
+    kitBakedBtn: (n, u) => `焼成完了、−${n}${u} を記録`,
+    kitOnlyStore: (store) => `${store}だけ引きます。店頭在庫は製造リストの商品行で記録`,
+    kitLineDone: "✓ この行は記録済み",
+    kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
+    kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
+    kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
+    kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
+    kitToastShort: (store, name, got, short) => `・${store}「${name}」は在庫 ${got} のみ、${short} 未控除(「作り置き」で棚卸し)`,
+    kitDone: (n, u) => `✓ −${n}${u} を記録しました`,
+    kitAgain: "もう一度記録",
+    kitNamesJoin: "・",
     // ── E 線:作り置き / 編集画面 / 詳細カード / バッジ ──
     // ── F 線:商品 / 仕入 / データ診断 ──
     // ── G 線:インポート / 削除 / データ ──
@@ -21892,7 +21940,7 @@ const staffExitOk = (input, pin) => {
 const STAFF_TXT = {
   zh: {
     enterBtn: "员工模式", badge: "员工模式", exitBtn: "退出员工模式",
-    pages: { sheet: "生产单", kitchen: "厨房视图", close: "日结" },
+    pages: { sheet: "生产单", kitchen: "厨房视图", close: "日结", prep: "备货" },   // 备货 D 线:prep 是第四页(只在 prepOn 时有)
     entered: "已进入员工模式", exited: "已退出员工模式",
     setupTitle: "设一个员工模式 PIN", setupKicker: "员工模式",
     setupHint: "4 位数字。退出员工模式时要输;忘了可以用 app 的进入密码退出。",
@@ -21907,7 +21955,7 @@ const STAFF_TXT = {
   },
   ja: {
     enterBtn: "スタッフモード", badge: "スタッフモード", exitBtn: "スタッフモード終了",
-    pages: { sheet: "製造リスト", kitchen: "キッチン", close: "日次締め" },
+    pages: { sheet: "製造リスト", kitchen: "キッチン", close: "日次締め", prep: "作り置き" },
     entered: "スタッフモードに切り替えました", exited: "スタッフモードを終了しました",
     setupTitle: "スタッフモードの PIN を設定", setupKicker: "スタッフモード",
     setupHint: "4 桁の数字。終了するときに入力します。忘れたときはアプリのパスワードでも終了できます。",
@@ -22268,36 +22316,74 @@ function KitchenAllergens({ kind, entity, lang, ctx }) {
 }
 
 // 一样东西的厨房视图。kind: recipe | creation | component;target = 那个对象;initialQty = 从生产单 / 详情页带过来的数量(可空)
-// 备货第 0 步:新可选 props stage("take" | "make" | undefined)/ uid(从生产单取出配方行进来)/ fromLine({ kind, name },从商品行 / 组合产品行的块进来)/
-// onPrepOp(ops, meta)/ onLogLine(uid, actualQty)先不用,D 线接上
+// 备货 D 线(plan.md 页面 §4):
+//   标了备货的配方顶上一个两段切换「取出烤 | 做一批」,初始 = stage prop(没传 = 做一批:配方详情进来看的是整份做法);勾选 key 带当前模式(kitchenStateKey 第 4 个参数)。
+//   取出模式:烤几个(± 1)、「从冷冻取」一行可打勾、取出后说明、炉温 / 时间 / 模具、整份做法(收起)、过敏原;底下「烤好了,记下 −N」(已开始记、单位对得上、账本不只读才有):
+//     uid(从生产单取出配方行进来)→ onLogLine(uid, N),那一行记完了写「✓ 这一行已记入」;fromLine(商品行 / 组合产品行的块)→ 不给按钮;
+//     都没有(在售中 / 厨房列表 / 配方详情)→ onPrepOp([take, via: "kitchen"], { toast, staff }),撤销由 onPrepOp 给。
+//   做一批模式 = 原来的配方视图,± 一步 = 一批;顶上一行说做好以后去哪记。标了备货的组件同样有这一行。组合产品的备货部分后面加「现有 Y g」(已开始记才有)。
+//   ctx 多带(只用来显示 / 判断,都可选):prepStock(prepStockRead 的结果)、planLines(今天生产单的 lines)、productionLog、staff(员工外壳传 true)。
+//   没标备货的东西:和以前一模一样(勾选 key 不带 stage)。
+const _kitOpId = () => "op_k" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backLabel, showToast, stage, uid, fromLine, onPrepOp, onLogLine }) {
   const X = kitchenTxt(lang);
+  const PX = prepTxt(lang);
   const zh = lang !== "ja";
   const wake = useWakeLock(!!target);
+  const c = ctx || {};
+  const stock = useMemo(() => prepStockRead(c.prepStock), [c.prepStock]);
+  const pcfg = target && (kind === "recipe" || kind === "component") ? prepCfgOf(kind, target) : null;
+  const prepRecipe = !!pcfg && kind === "recipe";
+  const pitem = pcfg ? (stock.items[pcfg.key] || null) : null;
+  const [mode, setMode] = useState(() => (prepRecipe && stage === "take" ? "take" : "make"));
+  const isTake = prepRecipe && mode === "take";
   const def = target ? defaultProdQty(kind, target) : 1;
-  const [nText, setNText] = useState(() => _kitchenQtyStr(parseFloat(initialQty) > 0 ? initialQty : def));
-  const key = kitchenStateKey(today, kind, target ? target.id : "");
+  const [nText, setNText] = useState(() => _kitchenQtyStr(parseFloat(initialQty) > 0 && !(prepRecipe && stage === "take") ? initialQty : def));
+  // 取出模式的个数:从取出块带进来的数;从数量 0 的取出行进来空着;其余 = 近 14 天日均(prepDefaultBakeQty),没记录 1
+  const [tText, setTText] = useState(() => {
+    if (!prepRecipe) return "";
+    const iq = parseFloat(initialQty);
+    if (stage === "take" && iq > 0) return _kitchenQtyStr(iq);
+    if (stage === "take" && (uid || fromLine) && initialQty !== undefined && initialQty !== null) return "";
+    const d = prepDefaultBakeQty(pitem, today);
+    return _kitchenQtyStr(d > 0 ? d : 1);
+  });
+  const key = kitchenStateKey(today, kind, target ? target.id : "", prepRecipe ? mode : undefined);
+  const keyRef = useRef(key);
+  keyRef.current = key;
   const [st, setSt] = useState(() => readKitchenState(key));
-  const need = parseFloat(_pinNorm(nText));
+  const [wholeOpen, setWholeOpen] = useState(false);
+  const [opId, setOpId] = useState(_kitOpId);   // 「烤好了,记下」这一次的 op;记下成功就换新的(同一个 op 点两次 prepApply 只算一次)
+  const [recorded, setRecorded] = useState(null);   // 刚记下的数:按钮换成「✓ 记下了」+「再记一次」(连点第二下落不到记入按钮上)
+  const qText = isTake ? tText : nText;
+  const need = parseFloat(_pinNorm(qText));
   const valid = need > 0 && isFinite(need);
-  const block = target && valid ? prodBlockOf(kind, target, need, ctx) : null;
+  const block = target && valid && !isTake ? prodBlockOf(kind, target, need, ctx) : null;
+  const takeBlock = isTake ? prodBlockOf(kind, target, valid ? need : 1, ctx, "take") : null;
   const yieldNum = target ? (parseFloat(target.yield) || 0) : 0;
-  const stepSize = kind === "component" && yieldNum > 0 ? yieldNum : 1;
-  const unit = !target ? "" : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit
+  const stepSize = isTake ? 1 : ((kind === "component" || prepRecipe) && yieldNum > 0 ? yieldNum : 1);
+  const unit = !target ? "" : isTake ? pcfg.unit : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit
     : _prodNoYield(kind, target) ? X.batchUnit : (_normTxt(target.unit) || (kind === "component" ? "g" : ""));
+  const setQ = (v) => { setRecorded(null); if (isTake) setTText(v); else setNText(v); };
   const update = (fn) => { const next = fn(st); writeKitchenState(key, next); setSt(next); };
   const toggleIng = (k) => update(s => ({ ...s, ings: s.ings[k] ? Object.fromEntries(Object.entries(s.ings).filter(([x]) => x !== k)) : { ...s.ings, [k]: true } }));
   const pickStep = (k) => update(s => ({ ...s, step: k }));
   const nChecked = Object.keys(st.ings).length;
   const reset = () => {
-    const before = st;
+    const before = st, k0 = key;
     update(() => ({ ings: {}, step: null }));
-    if (showToast && (nChecked > 0 || before.step)) showToast(X.resetDone(nChecked), { undo: () => { writeKitchenState(key, before); setSt(before); } });
+    if (showToast && (nChecked > 0 || before.step)) showToast(X.resetDone(nChecked), { undo: () => { writeKitchenState(k0, before); if (keyRef.current === k0) setSt(before); } });
   };
   const bump = (d) => {
     const cur = valid ? need : 0;
     const next = cur + d * stepSize;
-    if (next > 0) setNText(_kitchenQtyStr(next));
+    if (next > 0) setQ(_kitchenQtyStr(next));
+  };
+  const switchMode = (m) => {
+    if (m === mode || !target) return;
+    setMode(m);
+    setSt(readKitchenState(kitchenStateKey(today, kind, target.id, m)));
+    setRecorded(null);
   };
   if (!target) {
     return (
@@ -22311,9 +22397,55 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const other = rawLang(target, "name", lang);
   const big = { width: 64, height: 64, fontSize: 32, lineHeight: 1, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 };
   const secTitle = { fontSize: 20, fontFamily: T.fontSerif, fontWeight: 500, marginTop: 24, paddingBottom: 6, borderBottom: `1px solid ${T.ink}` };
-  const metaItems = block ? [["mold", zh ? "模具" : "型"], ["temp", zh ? "炉温" : "温度"], ["time", zh ? "时间" : "時間"]]
-    .filter(([k]) => block[k] && block[k].v).map(([k, label]) => ({ label, v: block[k].v, fam: block[k].fam })) : [];
+  const metaSrc = block || takeBlock;
+  const metaItems = metaSrc ? [["mold", zh ? "模具" : "型"], ["temp", zh ? "炉温" : "温度"], ["time", zh ? "时间" : "時間"]]
+    .filter(([k]) => metaSrc[k] && metaSrc[k].v).map(([k, label]) => ({ label, v: metaSrc[k].v, fam: metaSrc[k].fam })) : [];
   if (block && block.size) metaItems.push({ label: zh ? "尺寸" : "サイズ", v: block.size, fam: false });
+  // ── 备货 ──
+  const storeNm = pcfg ? PX.storeName(pcfg.store) : "";
+  const oh = pcfg ? prepOnHand(pitem, pcfg, today) : null;
+  const canRecord = !!pitem && !oh.unitMismatch && !stock.readOnly;
+  const planLines = Array.isArray(c.planLines) ? c.planLines : null;
+  const planLine = uid && planLines ? (planLines.find(l => l && l.uid === uid) || null) : null;
+  const viaLine = !!uid && (!planLines || !!planLine);   // 那一行还在单子上(不知道单子时照 uid 走)
+  let lineDone = false;
+  if (isTake && planLine && canRecord) {
+    const s = buildProdSheet([planLine], c)[0];
+    const info = prepLineInfo(s, c, stock, today, c.productionLog || []);
+    lineDone = !!info && (info.qty > 0 ? info.pending <= 0 : info.actual > 0);
+  }
+  const makeHint = (!isTake && pcfg && (prepRecipe || kind === "component")) ? (() => {
+    const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")));
+    return onSheet && pcfg.batch !== null && valid ? PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit) : PX.kitMakeToPrep;
+  })() : "";
+  const recordLine = () => { if (valid && onLogLine) onLogLine(uid, need); };
+  const recordDirect = () => {
+    if (!valid || !onPrepOp || !canRecord) return;
+    const plan = prepTakePlan(pitem, pcfg, need, today);
+    const q = _r3(plan.got + plan.short);
+    let msg = PX.kitToastTake(name, storeNm, fmtQty(q), pcfg.unit, fmtQty(Math.max(0, _r3(oh.usable - plan.got))));
+    if (plan.short > 0) msg += PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));
+    const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: need, via: "kitchen" };
+    if (c.staff) op.staff = true;
+    if (onPrepOp([op], { toast: msg, staff: !!c.staff }) === false) return;
+    setRecorded(fmtQty(q));
+    setOpId(_kitOpId());
+  };
+  const onProducts = isTake ? (c.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(target.id))) : [];
+  const note = (color, attr, txt) => <div data-kitchen-prep={attr} style={{ fontSize: 16, color, marginTop: 8, lineHeight: 1.6, overflowWrap: "anywhere", ...T.num }}>{txt}</div>;
+  const thaw = pcfg ? prodNote(zh ? (pcfg.thawZh || pcfg.thawJa) : (pcfg.thawJa || pcfg.thawZh)) : "";
+  const takeSub = isTake && pitem && !oh.unitMismatch
+    ? [oh.first ? PX.kitFirst(PX.md(oh.first.madeAt), fmtQty(oh.first.left), pcfg.unit, oh.first.status === "nodate" ? null : oh.first.daysLeft) : "", PX.kitHave(storeNm, fmtQty(oh.usable), pcfg.unit)].filter(Boolean).join(" · ")
+    : "";
+  // 组合产品的备货部分:「现有 Y g」(组件已开始记、单位对得上才有)
+  const partHave = (l) => {
+    if (!l || l.sourceComponentId === undefined || l.sourceComponentId === null || l.sourceComponentId === "") return "";
+    const comp = _prodFind(c.components, l.sourceComponentId);
+    const ccfg = comp ? prepCfgOf("component", comp) : null;
+    const it = ccfg ? stock.items[ccfg.key] : null;
+    if (!it || !prepSameUnit(it, ccfg)) return "";
+    return PX.kitHave(PX.storeName(ccfg.store), fmtQty(prepOnHand(it, ccfg, today).usable), ccfg.unit);
+  };
   return (
     <div data-kitchen={`${kind}:${target.id}`}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -22327,31 +22459,89 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
         <div data-wake="fallback" style={{ border: `1px solid ${T.warning}`, color: T.body, padding: "10px 12px", marginTop: 12, fontSize: 15, lineHeight: 1.6 }}>⚠ {X.wakeNo}</div>
       )}
       <div style={{ marginTop: 16 }}>
-        <div style={{ fontSize: 13, color: T.subtle, letterSpacing: "0.12em" }}>{X.kinds[kind]}</div>
+        <div style={{ fontSize: 13, color: T.subtle, letterSpacing: "0.12em" }}>{prepRecipe ? `${X.kinds[kind]} · ${isTake ? PX.kitTag(pcfg.store) : PX.kitTagMake}` : X.kinds[kind]}</div>
         <div style={{ fontSize: 30, lineHeight: 1.25, fontWeight: 500, marginTop: 4, overflowWrap: "anywhere" }}>{name}</div>
         {other && other !== name && <div style={{ fontSize: 16, color: T.subtle, marginTop: 2, overflowWrap: "anywhere" }}>{other}</div>}
       </div>
-      {/* 做几个 */}
+      {prepRecipe && (
+        <div role="group" data-kitchen-mode={mode} style={{ display: "inline-flex", flexWrap: "wrap", marginTop: 12, border: `1px solid ${T.ink}`, borderRadius: T.radius, overflow: "hidden", maxWidth: "100%" }}>
+          {["take", "make"].map(m => (
+            <button key={m} type="button" aria-pressed={mode === m} data-kitchen-modebtn={m} onClick={() => switchMode(m)} className="k-kitchen-row"
+              style={{ minHeight: 48, padding: "0 20px", fontSize: 17, border: "none", cursor: "pointer", fontFamily: T.fontSans,
+                background: mode === m ? T.ink : T.paper, color: mode === m ? T.paper : T.ink, fontWeight: mode === m ? 500 : 400 }}>
+              {m === "take" ? PX.kitModeTake : PX.kitModeMake}
+            </button>
+          ))}
+        </div>
+      )}
+      {makeHint && note(T.body, "makehint", makeHint)}
+      {/* 做几个 / 烤几个 */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 16, padding: "12px 0", borderTop: `1px solid ${T.ink}`, borderBottom: `1px solid ${T.lineFaint}` }}>
-        <span style={{ fontSize: 18 }}>{X.make}</span>
+        <span style={{ fontSize: 18 }}>{isTake ? PX.kitBakeN : X.make}</span>
         <button type="button" data-kitchen-qty="-" onClick={() => bump(-1)} style={big} aria-label="-">−</button>
-        <input type="text" inputMode="decimal" data-kitchen-qty="input" value={nText} onChange={e => setNText(e.target.value)}
+        <input type="text" inputMode="decimal" data-kitchen-qty="input" value={qText} onChange={e => setQ(e.target.value)}
           style={{ width: 110, height: 64, boxSizing: "border-box", textAlign: "center", fontSize: 30, border: `1px solid ${valid ? T.ink : T.danger}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
         <button type="button" data-kitchen-qty="+" onClick={() => bump(1)} style={big} aria-label="+">+</button>
         <span style={{ fontSize: 18 }}>{unit}</span>
         {stepSize !== 1 && <span style={{ fontSize: 13, color: T.subtle }}>± {X.stepBatch}({fmtQty(stepSize)} {unit})</span>}
       </div>
-      {!valid && <div style={{ fontSize: 15, color: T.danger, marginTop: 8 }}>{X.qtyHint}</div>}
+      {!valid && <div style={{ fontSize: 15, color: T.danger, marginTop: 8 }}>{isTake ? PX.kitQtyHint : X.qtyHint}</div>}
       {block && kind !== "creation" && (block.noYield
         ? <div data-kitchen-noyield="1" style={{ fontSize: 15, color: T.warning, marginTop: 8, ...T.num }}>{X.noYield(fmtQty(block.scale))}</div>
         : <div style={{ fontSize: 15, color: T.body, marginTop: 8, ...T.num }}>{X.batchOf(fmtQty(block.scale), fmtQty(Math.max(1, block.yieldNum || 1)), block.unit ? " " + block.unit : "")}</div>)}
+      {isTake && (
+        <div data-kitchen-take="1" style={{ marginTop: 8 }}>
+          <KitchenIngRow k="take" name={PX.kitTakeFrom(pcfg.store)} sub={takeSub} note="" qty={valid ? fmtQty(need) : "—"} unit={valid ? pcfg.unit : ""} warn={!valid}
+            checked={!!st.ings.take} onToggle={() => toggleIng("take")} bar="" />
+          {!pitem && note(T.subtle, "untracked", PX.kitNotTracked(storeNm))}
+          {pitem && stock.readOnly && note(T.warning, "readonly", PX.readOnly)}
+          {pitem && oh.unitMismatch && note(T.warning, "unit", PX.unitMismatch(pitem.unit, pcfg.unit))}
+          {pitem && !oh.unitMismatch && valid && _r3(need - oh.usable) > 0 && note(T.danger, "short", PX.kitShort(fmtQty(oh.usable), fmtQty(_r3(need - oh.usable)), pcfg.unit))}
+          {pitem && !oh.unitMismatch && oh.expiredLots.length > 0 && note(T.danger, "expired", PX.kitExpired(oh.expiredLots.length, fmtQty(oh.expired), pcfg.unit))}
+          {thaw && (
+            <div data-kitchen-thaw="1" style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginTop: 14 }}>
+              <span style={{ fontSize: 15, color: T.subtle }}>{PX.kitThaw}</span>
+              <span style={{ fontSize: 21, lineHeight: 1.5, flex: "1 1 200px", minWidth: 0, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{thaw}</span>
+            </div>
+          )}
+        </div>
+      )}
       {metaItems.length > 0 && (
         <div style={{ display: "flex", gap: "6px 18px", flexWrap: "wrap", fontSize: 17, marginTop: 8 }}>
           {metaItems.map((it, i) => <span key={i}><span style={{ color: T.subtle }}>{it.label}</span> {it.v}{it.fam && <span style={{ color: T.subtle, fontSize: 13 }}>({zh ? "家族通用" : "ファミリー共通"})</span>}</span>)}
         </div>
       )}
+      {isTake && canRecord && (
+        <div data-kitchen-record={fromLine && !uid ? "fromline" : viaLine ? (lineDone ? "done" : "line") : "direct"} style={{ marginTop: 16 }}>
+          {fromLine && !uid ? note(T.body, "fromline", PX.kitFromLine((fromLine && fromLine.name) || ""))
+            : viaLine ? (lineDone ? note(T.success, "linedone", PX.kitLineDone)
+              : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(need) : "", pcfg.unit)}</Btn>)
+            : (
+              <>
+                {onProducts.length > 0 && note(T.subtle, "onlystore", PX.kitOnlyStore(storeNm))}
+                {recorded !== null ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+                    <span data-kitchen-recorded="1" style={{ fontSize: 18, color: T.success, ...T.num }}>{PX.kitDone(recorded, pcfg.unit)}</span>
+                    <Btn size="sm" variant="ghost" onClick={() => setRecorded(null)}>{PX.kitAgain}</Btn>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 8 }}><Btn size="lg" variant="primary" disabled={!valid} onClick={recordDirect}>{PX.kitBakedBtn(valid ? fmtQty(need) : "", pcfg.unit)}</Btn></div>
+                )}
+              </>
+            )}
+        </div>
+      )}
       <div style={{ fontSize: 13, color: T.subtle, marginTop: 10, lineHeight: 1.6 }}>{X.tapHint}</div>
 
+      {isTake && (
+        <div style={{ marginTop: 20 }}>
+          <button type="button" data-kitchen-whole="1" aria-expanded={wholeOpen} onClick={() => setWholeOpen(o => !o)} className="k-kitchen-row"
+            style={{ display: "block", width: "100%", textAlign: "left", minHeight: 48, padding: "10px 4px", border: "none", borderBottom: `1px solid ${T.ink}`, background: "transparent", color: T.ink, cursor: "pointer", fontFamily: T.fontSerif, fontSize: 19 }}>
+            {wholeOpen ? "▼" : "▶"} {PX.kitWhole}
+          </button>
+          {wholeOpen && <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />}
+        </div>
+      )}
       {block && kind !== "creation" && (
         <>
           <div style={secTitle}>{X.ings}</div>
@@ -22376,7 +22566,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
                 {p.noUsed && <div style={{ fontSize: 15, color: T.danger, marginTop: 6 }}>⚠ {X.noUsed}</div>}
                 {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: 15, color: T.warning, marginTop: 6 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
                 {p.stock ? (
-                  <KitchenIngRow k={`${pk}stock`} name={X.fromStock} sub={title} note="" qty={p.needed !== null ? fmtQty(p.needed) : "—"} unit={p.needed !== null ? u : ""} warn={p.needed === null}
+                  <KitchenIngRow k={`${pk}stock`} name={X.fromStock} sub={title} note={partHave(l)} qty={p.needed !== null ? fmtQty(p.needed) : "—"} unit={p.needed !== null ? u : ""} warn={p.needed === null}
                     checked={!!st.ings[`${pk}stock`]} onToggle={() => toggleIng(`${pk}stock`)} bar="" />
                 ) : (
                   <>
@@ -22402,8 +22592,12 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
 }
 
 // 员工的厨房视图列表:今天生产单上的 / 在售中的配方和组合产品 / 组件(在用的排前),可搜索
+// 备货 D 线:「今天生产单上的」按 种类 + id + 块的 prep 合并(取出 60 和做一批 400 分两行;装烤好的块不列 —— 没什么要做,点进去还会被当成取出);
+// 行前小字加签(「配方 · 冷冻→烤」);在售中里标了备货的配方点开是取出模式;onOpen(kind, id, qty, stage, uid, fromLine):
+// 取出行只来自一行「取出烤」配方行 → 带那一行的 uid(「烤好了,记下」走那一行的记入);里面有商品行 / 组合产品行的块 → 带 fromLine(不给记,免得扣两遍)
 function KitchenListView({ lang, recipes = [], creations = [], components = [], sheet = [], onOpen }) {
   const X = kitchenTxt(lang);
+  const PX = prepTxt(lang);
   const [q, setQ] = useState("");
   const nq = String(q).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
   const hit = (o) => !nq || [o.nameZh, o.nameJa, o.nameFr].some(n => String(n || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "").includes(nq));
@@ -22412,15 +22606,26 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
   const todayItems = [];
   (sheet || []).forEach(s => (s.blocks || []).forEach(b => {
     if (!b || b.missing || !b.target || !KITCHEN_KINDS.includes(b.type)) return;
-    const k = prodLineKey({ kind: b.type, id: b.target.id, stage: b.prep });   // 备货第 0 步:没有 prep 时和以前的 type + id 一样;D 线定取出 / 做一批分两行
+    if (b.prep === "packed") return;
+    const k = prodLineKey({ kind: b.type, id: b.target.id }) + (b.prep ? "\u0000" + b.prep : "");   // 没有 prep 时和以前的 type + id 一样
+    const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "" } : null;
     const ex = seen.get(k);
-    if (ex) { ex.qty = Math.round(((ex.qty || 0) + (b.need || 0)) * 1000) / 1000; return; }
-    const it = { kind: b.type, obj: b.target, qty: b.need };
+    if (ex) { ex.qty = Math.round(((ex.qty || 0) + (b.need || 0)) * 1000) / 1000; if (src) ex.srcs.push(src); return; }
+    const it = { kind: b.type, obj: b.target, qty: b.need, prep: b.prep, srcs: src ? [src] : [] };
     seen.set(k, it);
     todayItems.push(it);
   }));
+  const openArgs = (it) => {
+    if (it.prep !== "take") return [it.kind, it.obj.id, it.qty, it.prep];
+    const one = it.srcs.length === 1 && it.srcs[0].kind === "recipe" ? it.srcs[0] : null;
+    if (one) return [it.kind, it.obj.id, it.qty, "take", one.uid];
+    const names = [...new Set(it.srcs.filter(x => x.kind !== "recipe").map(x => x.name).filter(Boolean))];
+    const first = it.srcs.find(x => x.kind !== "recipe") || it.srcs[0];
+    return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin) } : undefined];
+  };
+  const prepCfg = (it) => (it.kind === "recipe" ? prepCfgOf("recipe", it.obj) : null);
   const onSale = [
-    ...(recipes || []).filter(r => r && r.onSale).map(r => ({ kind: "recipe", obj: r })),
+    ...(recipes || []).filter(r => r && r.onSale).map(r => (isPrepMarked(r) ? { kind: "recipe", obj: r, prep: "take", onSaleTake: true } : { kind: "recipe", obj: r })),
     ...(creations || []).filter(c => c && c.onSale).map(c => ({ kind: "creation", obj: c })),
   ];
   const comps = (components || []).filter(Boolean).map((c, i) => ({ kind: "component", obj: c, i })).sort((a, b) => (b.obj.inUse ? 1 : 0) - (a.obj.inUse ? 1 : 0) || a.i - b.i);
@@ -22433,14 +22638,18 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
   const row = (it) => {
     const n = prodName(it.obj, lang);
     const other = rawLang(it.obj, "name", lang);
+    const pc = it.prep ? prepCfg(it) : null;
     const u = it.kind === "creation" ? creationWords(creationStructureOf(it.obj), lang).unit
+      : (pc && it.prep === "take") ? pc.unit
       : _prodNoYield(it.kind, it.obj) ? X.batchUnit : (_normTxt(it.obj.unit) || (it.kind === "component" ? "g" : ""));
+    const tag = pc ? ` · ${it.prep === "take" ? PX.kitTag(pc.store) : PX.kitTagMake}` : "";
+    const click = () => (it.onSaleTake ? onOpen(it.kind, it.obj.id, undefined, "take") : it.prep ? onOpen(...openArgs(it)) : onOpen(it.kind, it.obj.id, it.qty));
     return (
-      <button key={it.kind + ":" + it.obj.id} type="button" data-kitchen-open={`${it.kind}:${it.obj.id}`} onClick={() => onOpen(it.kind, it.obj.id, it.qty)} className="k-kitchen-row"
+      <button key={it.kind + ":" + it.obj.id + (it.prep ? ":" + it.prep : "")} type="button" data-kitchen-open={`${it.kind}:${it.obj.id}`} data-kitchen-stage={it.prep || undefined} onClick={click} className="k-kitchen-row"
         style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center", width: "100%", minHeight: 56, textAlign: "left", cursor: "pointer",
           padding: "10px 4px", border: "none", borderBottom: `1px solid ${T.lineFaint}`, background: "transparent", color: T.ink, fontFamily: T.fontSans }}>
         <span style={{ minWidth: 0 }}>
-          <span style={{ fontSize: 12, color: T.subtle, marginRight: 8 }}>{X.kinds[it.kind]}{it.kind === "component" && it.obj.inUse ? ` · ${X.inUse}` : ""}</span>
+          <span style={{ fontSize: 12, color: T.subtle, marginRight: 8 }}>{tag ? X.kinds[it.kind] + tag : X.kinds[it.kind]}{it.kind === "component" && it.obj.inUse ? ` · ${X.inUse}` : ""}</span>
           <span style={{ fontSize: 19, fontWeight: 500, overflowWrap: "anywhere" }}>{n || other}</span>
           {other && other !== n && <span style={{ display: "block", fontSize: 13, color: T.subtle, overflowWrap: "anywhere" }}>{other}</span>}
         </span>
@@ -22470,23 +22679,37 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
 
 // 员工外壳:自己的顶栏 + 三个 tab(所有宽度都显示,不借手机底栏 —— .k-bottomnav 在 iPad 宽度是藏着的)
 const STAFF_PAGES = ["sheet", "kitchen", "close"];
+// 备货 D 线:有东西标了备货或账本不空(App 的 prepOn)时员工外壳是四页;当前停在「备货」而 prepOn 变 false(最后一样被清掉)时这一页留着,切走才变回三页
+const STAFF_PAGES_PREP = ["sheet", "kitchen", "prep", "close"];
+// 4 格在手机宽度每格约 86px,15px 的「製造リスト」会折行 → ≤ 599px 用 14px(3 格不变)。
+// ⚠ 这一条按约定该放 GLOBAL_CSS;但 GLOBAL_CSS 的文字进每一页的 <style>,改一个字第 4 批 / 备货第 0 步的整页严格快照(step0_tests、prep_step0_tests)全变,
+//   所以先只在 4 格时由 StaffShell 自己渲染这一小段(3 格时 DOM 和以前一样)。以后有意更新那两套快照的基线时,把它挪进 GLOBAL_CSS 的 599px 段、删掉这里的 <style>
+const STAFF_NAV4_CSS = "@media (max-width: 599px) { .k-staffnav.k-staffnav4 button { font-size: 14px !important; } }";   // 不写「>」:服务端渲染会把 <style> 里的它转义成 &gt;
 function StaffShell({ lang, setLang, today, products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [],
   salesLog = [], productionLog = [], rawPlan, updatePlan, onLogProduction, onPrint, onDailyClose, confirmDialog, showToast, onExit, saveSlot = null,
   prepStock = null, prepOn = false, onPrepOp, onLogLine }) {
-  // 备货第 0 步:prepStock / prepOn / onPrepOp / onLogLine(uid, actualQty)从 App 接进来,先只透传给生产单和厨房视图;D 线接「备货」页(STAFF_PAGES_PREP)
+  // 备货(D 线):prepStock / prepOn / onPrepOp / onLogLine(uid, actualQty)从 App 接进来。prepOn 时多第四页「备货」(E 线的 PrepStockView staff),
+  // tab 上的红色小数 = 已开始记的备货里有过期批或低于提醒线的样数(同一样只算 1,口径同顶栏「今日」角标);生产单提醒的「去处理」跳到这一页
   const X = staffTxt(lang);
   const [page, setPage] = useState("sheet");
   const [kitchenItem, setKitchenItem] = useState(null);   // { kind, id, qty, stage?, uid?, fromLine? }
+  const [prepFocus, setPrepFocus] = useState(null);   // 备货页要展开的那一样(生产单提醒「去处理」带过来)
   const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
-  const go = (id) => {
-    if (id === page && !(id === "kitchen" && kitchenItem)) return;
-    // 日结有没保存的格子时先问(子页一换,日结页就卸载了)
-    confirmLeaveEditor(confirmDialog, lang, () => { setPage(id); setKitchenItem(null); });
+  const pages = (prepOn || page === "prep") ? STAFF_PAGES_PREP : STAFF_PAGES;
+  const prepBadge = useMemo(() => (pages.length === 4 && prepStock
+    ? prepAlertsOf({ recipes, components, stock: prepStock, today }).filter(r => r.flags.expired || r.flags.low).length : 0), [pages.length, recipes, components, prepStock, today]);
+  const go = (id, focus) => {
+    if (id === page && !(id === "kitchen" && kitchenItem)) { if (id === "prep" && focus !== undefined) setPrepFocus(focus || null); return; }
+    // 日结有没保存的格子时先问(子页一换,日结页就卸载了);备货页的登记 / 盘点面板同样
+    confirmLeaveEditor(confirmDialog, lang, () => { setPage(id); setKitchenItem(null); setPrepFocus(id === "prep" ? (focus || null) : null); });
   };
+  const openPrepStaff = (key) => go("prep", key || null);
   const openKitchen = (kind, id, qty, stage, uid, fromLine) => { setKitchenItem({ kind, id, qty, stage, uid, fromLine }); setPage("kitchen"); if (typeof window !== "undefined" && window.scrollTo) { try { window.scrollTo(0, 0); } catch (e) {} } };
   const kitchenTarget = kitchenItem ? _prodFind(kitchenItem.kind === "creation" ? creations : kitchenItem.kind === "component" ? components : recipes, kitchenItem.id) : null;
   const plan = prodPlanForToday(rawPlan, today);
   const sheet = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  // 厨房视图另外要的(只用来显示 / 判断「这一行记完没有」):账本、今天单子的行、生产记录、员工标记
+  const kctx = { ...ctx, prepStock, planLines: plan.lines, productionLog, staff: true };
   return (
     <div data-staffshell="1">
       <div className="k-staffbar">
@@ -22501,12 +22724,17 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
             <Btn size="sm" onClick={onExit}>{X.exitBtn}</Btn>
           </div>
         </div>
-        <div className="rc-container k-staffnav" role="tablist">
-          {STAFF_PAGES.map(id => (
+        {pages.length === 4 && <style data-staffnav4-css="1">{STAFF_NAV4_CSS}</style>}
+        <div className={pages.length === 4 ? "rc-container k-staffnav k-staffnav4" : "rc-container k-staffnav"} role="tablist">
+          {pages.map(id => (
             <button key={id} type="button" role="tab" aria-selected={page === id} data-staffpage={id} onClick={() => go(id)} className="k-tab"
               style={{ flex: "1 1 0", minHeight: 50, padding: "0 6px", background: "transparent", border: "none", cursor: "pointer", fontFamily: T.fontSans, fontSize: 16,
-                borderBottom: page === id ? `3px solid ${T.ink}` : "3px solid transparent", color: page === id ? T.ink : T.subtle, fontWeight: page === id ? 500 : 400, marginBottom: -1 }}>
+                borderBottom: page === id ? `3px solid ${T.ink}` : "3px solid transparent", color: page === id ? T.ink : T.subtle, fontWeight: page === id ? 500 : 400, marginBottom: -1,
+                ...(pages.length === 4 ? { position: "relative", minWidth: 0 } : {}) }}>
               {X.pages[id]}
+              {id === "prep" && prepBadge > 0 && (
+                <span data-staffbadge="prep" style={{ position: "absolute", top: 8, marginLeft: 2, fontFamily: T.fontSerif, fontSize: 10, lineHeight: 1, color: T.danger, fontWeight: 500, ...T.num }}>{prepBadge}</span>
+              )}
             </button>
           ))}
         </div>
@@ -22516,13 +22744,19 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
           <ProductionSheetView staff lang={lang} today={today} products={products} recipes={recipes} creations={creations} components={components}
             materials={materials} brands={brands} productFamilies={productFamilies} salesLog={salesLog} productionLog={productionLog}
             rawPlan={rawPlan} updatePlan={updatePlan} onLogProduction={onLogProduction} onPrint={onPrint} showToast={showToast} onOpenKitchen={openKitchen}
-            prepStock={prepStock} onPrepOp={onPrepOp} prepOn={prepOn} />
+            prepStock={prepStock} onPrepOp={onPrepOp} prepOn={prepOn} onOpenPrep={openPrepStaff} />
         )}
         {page === "kitchen" && (kitchenItem
           ? <KitchenView key={`${kitchenItem.kind}:${kitchenItem.id}${kitchenItem.stage ? ":" + kitchenItem.stage : ""}`} kind={kitchenItem.kind} target={kitchenTarget} initialQty={kitchenItem.qty} lang={lang} today={today}
-              ctx={ctx} onBack={() => setKitchenItem(null)} showToast={showToast}
+              ctx={kctx} onBack={() => setKitchenItem(null)} showToast={showToast}
               stage={kitchenItem.stage} uid={kitchenItem.uid} fromLine={kitchenItem.fromLine} onPrepOp={onPrepOp} onLogLine={onLogLine} />
           : <KitchenListView lang={lang} recipes={recipes} creations={creations} components={components} sheet={sheet} onOpen={openKitchen} />)}
+        {page === "prep" && (
+          <div data-staffprep="1">
+            <PrepStockView staff lang={lang} today={today} recipes={recipes} components={components} products={products} prepStock={prepStock} productionLog={productionLog}
+              onPrepOp={onPrepOp} focusKey={prepFocus} confirmDialog={confirmDialog} showToast={showToast} />
+          </div>
+        )}
         {page === "close" && (
           <DailyCloseView lang={lang} today={today} minDate={plusDaysStr(today, -1)} showMoney={false} products={products} salesLog={salesLog} productionLog={productionLog}
             recipes={recipes} creations={creations} components={components} materials={materials} brands={brands} onSave={onDailyClose} confirmDialog={confirmDialog} />
@@ -24804,7 +25038,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div data-owner-kitchen="1" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: T.paper, zIndex: T.z.drawer, overflow: "auto", paddingTop: 16, paddingBottom: 96 }}>
             <div className="rc-container">
               <KitchenView key={`${kitchenTarget.kind}:${kitchenTarget.id}${kitchenTarget.stage ? ":" + kitchenTarget.stage : ""}`} kind={kitchenTarget.kind} target={target} initialQty={kitchenTarget.qty} lang={lang} today={today}
-                ctx={{ products, recipes, creations, components, materials, brands, productFamilies, lang }}
+                ctx={{ products, recipes, creations, components, materials, brands, productFamilies, lang,
+                  // 备货 D 线:厨房视图只用来显示 / 判断「这一行记完没有」(取出模式的「烤好了,记下」)
+                  prepStock, planLines: prodPlanForToday(appSettings.prodPlan, today).lines, productionLog }}
                 onBack={() => setKitchenTarget(null)} backLabel={kitchenTxt(lang).close} showToast={showToast}
                 stage={kitchenTarget.stage} uid={kitchenTarget.uid} fromLine={kitchenTarget.fromLine} onPrepOp={onPrepOp} onLogLine={logProdFromSheet} />
             </div>
