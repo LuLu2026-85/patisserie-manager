@@ -21268,9 +21268,11 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     }
     // 取出烤(标了备货的配方行,没写 stage):还没开始记 → mode null(没有按钮,块上写「还没登记」)
     const cap = _prepTakeCap(st, l.uid, today);
-    const logged = Math.min(lg, cap);
-    const pending = pend(logged);
     const tk = takesToday(cfg.key);
+    // 审查 pt1:数量 0 时先在这一行记过「实际取了」(planQty 0,不进封顶),后来填了数量 —— 那些已经取了,算进已记入(最多到数量),不再按整行数让她再扣一遍。撤销了的不算
+    const own0 = qty > 0 ? _r3(tk.filter(m => m.uid === l.uid && !m.restoredBy && parseFloat(m.planQty) === 0).reduce((a, m) => a + _prepNum(m.qty), 0)) : 0;
+    const logged = own0 > 0 ? Math.min(qty, _r3(Math.min(lg, cap) + own0)) : Math.min(lg, cap);
+    const pending = pend(logged);
     const actual = _r3(tk.filter(m => m.uid === l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
     const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
     // 这个配方挂在哪些商品上(卡片灰字「要同时加商品库存,请用『从商品加』」;linkedType 缺省也算 recipe,同 13a 的判定)
