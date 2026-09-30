@@ -20125,7 +20125,8 @@ const stripPrivatePrepFields = (o) => {
   return rest;
 };
 // 商品记入生产扣不扣备货(09-30 LuLu 追加拍板):true = 不扣(装的是已经烤好的)。
-// p.prepSkip === true / false 显式说了算;没有这个键 → 组成只有一项、每件含 1 个 = 扣(false),其余(礼盒、几样组合、N 个装)= 不扣(true)。B 线
+// p.prepSkip === true / false 显式说了算;没有这个键 → 组成只有一项,且这一项是组件(数量不限,比如一罐 200 g 焦糖酱)或每件含 1 个 = 扣(false),
+// 其余(礼盒、几样组合、N 个装的配方 / 组合产品)= 不扣(true)。B 线(组件那条是 09-30 lead 9b87eaf 加的)
 // (没有组成的商品也算「不扣」:本来就没东西可扣。商品编辑页显示的生效值就是它;和缺省一样时不写键)
 const productPrepSkips = (p) => {
   if (!p) return false;
