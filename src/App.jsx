@@ -23527,6 +23527,13 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const [tText, setTText] = useState(() => {
     if (!prepRecipe) return "";
     const iq = parseFloat(initialQty);
+    // 审查 ps2:从单子上的取出行进来、那一行已经记过一部分 → 填还没记的(同卡片「实际取了」面板);以前填整行的数,点「记下」把记过的再扣一遍
+    if (stage === "take" && uid && Array.isArray(c.planLines)) {
+      const pl = c.planLines.find(l => l && l.uid === uid);
+      const s0 = pl ? buildProdSheet([pl], c)[0] : null;
+      const info = s0 ? prepLineInfo(s0, c, stock, today, c.productionLog || []) : null;
+      if (info && info.sub === "bake" && info.logged > 0) return info.pending > 0 ? _kitchenQtyStr(info.pending) : "";
+    }
     if (stage === "take" && iq > 0) return _kitchenQtyStr(iq);
     if (stage === "take" && (uid || fromLine) && initialQty !== undefined && initialQty !== null) return "";
     const d = prepDefaultBakeQty(pitem, today);
