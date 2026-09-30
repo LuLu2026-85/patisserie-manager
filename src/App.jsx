@@ -18046,7 +18046,12 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   // 备货 F 线:组成里有标了备货的配方 / 组件时,组成下面多一个勾选「装的是已经烤好的,不扣备货」。显示生效值(productPrepSkips);
   // 勾成和缺省一样时表单里直接删键(敲了又改回不算改过)
   const prepMarkedInItems = (form.items || []).some(it => {
-    if (!it || it.linkedType === "creation") return false;
+    if (!it) return false;
+    // 审查 ps1:组合产品里跟组件库走的部分来自备货组件,同样会从账本扣(或按「装烤好的」不扣)—— 以前不给勾选,「泡芙两个装」这种缺省不扣的改不过来
+    if (it.linkedType === "creation") {
+      const c = (creations || []).find(x => x && String(x.id) === String(it.linkedId));
+      return !!c && (c.layers || []).some(l => l && l.follow && !l.localVariant && l.sourceComponentId && (components || []).some(o => o && o.id === l.sourceComponentId && isPrepMarked(o)));
+    }
     const list = it.linkedType === "component" ? components : recipes;
     return (list || []).some(o => o && String(o.id) === String(it.linkedId) && isPrepMarked(o));
   });
