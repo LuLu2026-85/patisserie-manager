@@ -17068,7 +17068,7 @@ function ProductCostNote({ uc, lang }) {
 // 日结底部的钱(只给老板视图):营收 = 售价(折人民币)× 卖出,原料成本 = 单件成本 × 卖出,报损金额按成本算
 // rows = [{ productId, sold, waste }](当天的总数)
 const dailyCloseMoney = (products, rows, ctx) => {
-  let revenue = 0, cost = 0, wasteCost = 0, approx = false, costGap = false;
+  let revenue = 0, cost = 0, wasteCost = 0, approx = false, costGap = false, soldAny = false;
   const noPrice = [], incomplete = [], noCost = [];
   (rows || []).forEach(r => {
     const p = (products || []).find(x => x && x.id === r.productId);
@@ -17079,16 +17079,18 @@ const dailyCloseMoney = (products, rows, ctx) => {
     const uc = productUnitCost(p, ctx);
     if (sold > 0) {
       const price = toCNY(p.sellPrice, priceCurOf(p));
-      if (price > 0) { revenue += price * sold; if (priceCurOf(p) === "JPY") approx = true; } else noPrice.push(p);
+      soldAny = true;
+      // 复核:「成本不全·毛利率虚高」只看算进营收的(有售价的)—— 没售价的不进营收,不会让毛利率虚高
+      if (price > 0) { revenue += price * sold; if (priceCurOf(p) === "JPY") approx = true; if (uc.incomplete || !(uc.cost > 0)) costGap = true; } else noPrice.push(p);
       cost += uc.cost * sold;
-      if (uc.incomplete || !(uc.cost > 0)) costGap = true;   // 审查 r5:卖出的里有成本不全 / 算不出成本的 → 毛利率虚高
     }
     wasteCost += uc.cost * w;
     if (uc.incomplete) incomplete.push(p);
     if (!(uc.cost > 0)) noCost.push(p);
   });
   // 审查 r5:卖出的全都算不出成本(成本 0)时不给毛利率(2a 第 6 条:成本 0 显示「—」,不显示绿色 100%)
-  const allNoCost = revenue > 0 && !(cost > 0);
+  // 复核:卖出的全是没售价又算不出成本的(营收也是 0)时,原料成本同样显示「—」,不写「¥0」
+  const allNoCost = soldAny && !(cost > 0);
   return { revenue, cost, profit: revenue - cost, wasteCost, approx, noPrice, incomplete, noCost, costGap, allNoCost,
     margin: revenue > 0 && !allNoCost ? ((revenue - cost) / revenue) * 100 : null };
 };
@@ -17163,9 +17165,14 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
         if (prodMode && p.stock) {
           const nm = p.layer.customName || mLabel(p.layer) || `#${p.idx + 1}`, unit = p.layer.unit || "g";
           const k = (p.layer.sourceComponentId || _prodNameKey(nm)) + "\u0000" + _prodUnitOf(unit);
-          if (!fromStock.has(k)) fromStock.set(k, { name: nm, unit, qty: 0, srcs: new Set(), noUsed: false });
+          // 复核:名字不同的几个部分合成一行时改叫组件本身的名字(以前用第一个部分的名字,「第 1 层 奶油霜 1,840 g」其实是四层的总量);
+          // 没填用量的部分单独数(以前有一个没填,整行就不显示数量),已知的照常加总,名字后面标「另有 N 个部分没填用量」
+          const comp = p.layer.sourceComponentId ? (components || []).find(c => c && c.id === p.layer.sourceComponentId) : null;
+          if (!fromStock.has(k)) fromStock.set(k, { name: nm, compName: mLabel(comp) || mLabel(p.layer) || nm, parts: new Set(), unit, qty: null, missing: 0, srcs: new Set(), noUsed: false });
           const f = fromStock.get(k);
-          if (p.needed === null || f.qty === null) f.qty = null; else f.qty += p.needed;
+          f.parts.add(nm);
+          if (f.parts.size > 1) f.name = f.compName;
+          if (p.needed === null) f.missing += 1; else f.qty = (f.qty || 0) + p.needed;
           if (p.noUsed) f.noUsed = true;
           if (src) f.srcs.add(src);
           return;
@@ -17220,7 +17227,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     const all = [...weigh.values()].map(w => ({ ...w, srcs: [...w.srcs] })).sort((a, b) => b.qty - a.qty);
     out.weigh = all.filter(w => w.gram);
     out.nonGram = all.filter(w => !w.gram);
-    out.fromStock = [...fromStock.values()].map(f => ({ ...f, srcs: [...f.srcs] }));
+    out.fromStock = [...fromStock.values()].map(({ parts, compName, ...f }) => ({ ...f, srcs: [...f.srcs] }));
   }
   return out;
 };
@@ -17345,7 +17352,7 @@ const PROD_TXT = {
     partNeed: "需要", fromStock: "从库存取", noUsed: "这一部分没填用量,下面是组件的整批配方,没按个数算", ambiguous: (n, u) => `用量只认开头的数字,按 ${n} ${u} 一批算`,
     whole: (f) => `整批 × ${f}`, collapse: "收起", expand: "展开配料",
     totals: "今天总共要称多少", totalsHint: "关联了材料百科的按材料合并,没关联的按名字 + 单位合并。组件标了「备货」的部分不展开,只写从库存取多少。",
-    nonGram: "按个 / 本 这类单位的(不能和克加在一起)", stockTitle: "从库存取(备货的部分)", skippedTitle: (n) => `这些没算进来(${n} 项)`,
+    nonGram: "按个 / 本 这类单位的(不能和克加在一起)", stockTitle: "从库存取(备货的部分)", stockMissing: (n) => `(另有 ${n} 个部分没填用量)`, skippedTitle: (n) => `这些没算进来(${n} 项)`,
     reasons: { noItems: "商品没挂任何配方 / 组合产品 / 组件", missing: "商品挂的配方 / 组合产品 / 组件已删除", missingDirect: "这一行的东西已删除", noUsed: "这几个部分没填「用量」,整部分没算", badQty: "用量没填或不是数字", unlinked: "没关联材料百科" },
     close: "收起", pickProducts: "从商品加", lowAll: (n) => `＋ 低库存的全加(${n} 个)`, stockOf: (s, t) => `库存 ${s} · 补货线 ${t}`, avg: (a, n = 30) => `近 ${n} 天日均 ${a}`,
     addRestock: (n) => `＋ ${n}(补库存)`, addAvg: (n) => `＋ ${n}(按日均)`, addOne: "＋ 加入", onSheet: "已在单子上",
@@ -17372,7 +17379,7 @@ const PROD_TXT = {
     partNeed: "必要量", fromStock: "ストックから", noUsed: "使用量未入力のため全量レシピ", ambiguous: (n, u) => `先頭の数字 ${n} ${u} で計算`,
     whole: (f) => `全量 × ${f}`, collapse: "閉じる", expand: "材料を表示",
     totals: "本日の計量合計", totalsHint: "材料事典に関連付けた材料は材料ごと、未関連は名前 + 単位ごとに合計。作り置きのパーツは展開せず、ストックから取る量のみ。",
-    nonGram: "個 / 本 などの単位(g と合算不可)", stockTitle: "ストックから(作り置き)", skippedTitle: (n) => `計算に含まれていないもの(${n} 件)`,
+    nonGram: "個 / 本 などの単位(g と合算不可)", stockTitle: "ストックから(作り置き)", stockMissing: (n) => `(使用量未入力 ${n} 件)`, skippedTitle: (n) => `計算に含まれていないもの(${n} 件)`,
     reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連" },
     close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a, n = 30) => `${n} 日平均 ${a}/日`,
     addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
@@ -17572,7 +17579,7 @@ function ProdTotals({ totals, lang, noYieldNames = [] }) {
       {totals.fromStock.length > 0 && (
         <div style={box}>
           <div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>{X.stockTitle}</div>
-          {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
+          {totals.fromStock.map((f, i) => row({ key: "st" + i, name: f.missing ? f.name + X.stockMissing(f.missing) : f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}
         </div>
       )}
       {totals.skipped.length > 0 && (
@@ -18131,7 +18138,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       </>)}
       {totals.fromStock.length > 0 && (<>
         <div className="p-row" style={{ marginTop: "10px", fontSize: "11pt", fontWeight: 700 }}>{X.stockTitle}</div>
-        <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.name, srcs: f.srcs, qty: f.qty, unit: f.unit }, i))}</tbody></table>
+        <table><tbody>{totals.fromStock.map((f, i) => totalRow({ name: f.missing ? f.name + X.stockMissing(f.missing) : f.name, srcs: f.srcs, qty: f.qty, unit: f.qty !== null ? f.unit : "" }, i))}</tbody></table>
       </>)}
       {totals.skipped.length > 0 && (
         <div style={{ marginTop: "10px", fontSize: "9.5pt" }}>
