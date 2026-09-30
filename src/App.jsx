@@ -1758,7 +1758,8 @@ const _ingContentKey = (ing, matIds) => {
   const cid = _normTxt(ing.componentId);
   if (cid) k.push("c:" + cid);
   if (ing.noCost) k.push("nc");
-  if (!mid && !cid && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
+  // 审查 b4r1:组件已删的行(同「指向已删材料」)价就是快照本身,要算内容 —— 不比的话组件里刷新的快照 / 手改的价到不了跟组件库走的部分,组件一删两边成本悄悄不一样
+  if (!mid && !(cid && _componentsById.has(ing.componentId)) && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
   return k;
 };
 const layerContentKey = (x, matIds) => JSON.stringify(x ? [
