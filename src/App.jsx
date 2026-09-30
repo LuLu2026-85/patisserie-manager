@@ -20258,6 +20258,8 @@ const PREP_TXT = {
     kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
     kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
     kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
+    kitMakeUsesStock: (names) => `这批要用库存里的${names}:在生产单上加一行「做一批」,做好后在那里点记入(会一起扣掉);在「备货」点「＋ 登记一批」不会扣它`,
+    kitMakeUsesStockStaff: (names) => `这批要用库存里的${names}:请店长在生产单上加一行「做一批」,做好后在那里记入(会一起扣掉);在「备货」登记一批不会扣它`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
     kitToastShort: (store, name, got, short) => `;${store}「${name}」账上只有 ${got},差 ${short} 没扣(去「备货」盘点)`,
     kitDone: (n, u) => `✓ 记下了 −${n} ${u}`,
@@ -20510,6 +20512,8 @@ const PREP_TXT = {
     kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
     kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
     kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
+    kitMakeUsesStock: (names) => `この仕込みは在庫の${names}を使います:製造リストに「仕込み」行を追加し、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」の「＋ ロット登録」では引かれません`,
+    kitMakeUsesStockStaff: (names) => `この仕込みは在庫の${names}を使います:店長に製造リストへ「仕込み」行を追加してもらい、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」のロット登録では引かれません`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
     kitToastShort: (store, name, got, short) => `・${store}「${name}」は在庫 ${got} のみ、${short} 未控除(「作り置き」で棚卸し)`,
     kitDone: (n, u) => `✓ −${n}${u} を記録しました`,
@@ -23623,7 +23627,14 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   }
   const makeHint = (!isTake && pcfg && (prepRecipe || kind === "component")) ? (() => {
     const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")));
-    return onSheet && pcfg.batch !== null && valid ? PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit) : PX.kitMakeToPrep;
+    if (onSheet && pcfg.batch !== null && valid) return PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit);
+    // 审查 ps2:配料里「来自组件」用到已开始记的备货组件 → 「＋ 登记一批」不会扣那个组件(那是补登用的),叫她走生产单的「做一批」(那里一起扣)
+    const used = prepFlowOfSheetRow({ kind, id: target.id, obj: target, ...(kind === "recipe" ? { stage: "make" } : {}) }, 1, c).takes.filter(t => stock.items[t.key]);
+    if (used.length) {
+      const names = used.map(t => `「${prodName(_prodFind(t.kind === "component" ? c.components : c.recipes, t.id) || { nameZh: String(t.id) }, lang)}」`).join("");
+      return (c.staff ? PX.kitMakeUsesStockStaff : PX.kitMakeUsesStock)(names);
+    }
+    return PX.kitMakeToPrep;
   })() : "";
   const recordLine = () => { if (valid && onLogLine) onLogLine(uid, need); };
   const recordDirect = () => {
