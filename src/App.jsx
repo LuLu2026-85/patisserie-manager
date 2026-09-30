@@ -25795,7 +25795,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               const pItem = prepStock.items[prepKeyOf("component", updated.id)];
               if (orig && pItem && !prepStock.readOnly) {
                 const pCfg = prepCfgOf("component", { ...orig, ...updated, prepMode: "stock" });
-                if (!prepSameUnit(pItem, pCfg)) refs.push(prepTxt(lang).syncUnitRef(pItem.unit || "", fmtQty(prepOnHand(pItem, null, today).onHand) || "0", pCfg.unit));
+                if (!prepSameUnit(pItem, pCfg)) refs.push(prepTxt(lang).syncUnitRef(pItem.unit || "", fmtQty(_r3(prepLotsView(pItem, null, today).reduce((x, l) => x + l.left, 0))) || "0", pCfg.unit));
               }
             }
             confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
