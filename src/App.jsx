@@ -3966,15 +3966,30 @@ function mergeByNewer(existing, inc, lockedKeys = [], groups = []) {
 function mergeMaterialEntry(loc, inc, nowIso) {
   // 单价 / 参考价 / 币种三样永远同一边;过敏原三项整组取一边(见 mergeByNewer)
   const merged = mergeByNewer(loc, inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
+  // 第 4 批 B4-4:「待换国产」标记(domesticStatus / domesticNote / domesticAt)不写 updatedAt,自带时间 domesticAt,
+  // 这里按它整组取较新的一边(不看 updatedAt,也不碰价格那组)
+  const withDomestic = pickGroupByStamp(merged, loc, inc, DOMESTIC_KEYS, "domesticAt");
   // 第 4 批 B4-3:价格历史取两边并集(不进 lockedKeys,那样另一台电脑的改价记录会整组丢掉);本机的生效价被这次导入改了就补 before + import
-  return withMergedPriceHistory(loc, inc, merged, "material", nowIso);
+  return withMergedPriceHistory(loc, inc, withDomestic, "material", nowIso);
+}
+// 第 4 批 B4-4:一组自带时间戳的字段(stampKey 记这组是什么时候改的)在合并导入时按这个时间整组取较新的一边,
+// 那一边没有的键删掉(清除标记写的是 "",带着空串的新一边照样赢)。两边时间一样(包括都没写)→ 原样用 mergeByNewer 的结果
+function pickGroupByStamp(merged, local, file, keys, stampKey) {
+  const tl = Date.parse((local && local[stampKey]) || "") || 0, tf = Date.parse((file && file[stampKey]) || "") || 0;
+  if (tl === tf) return merged;
+  const src = tf > tl ? file : local, next = { ...merged };
+  keys.forEach(k => { if (Object.prototype.hasOwnProperty.call(src, k)) next[k] = src[k]; else delete next[k]; });
+  return next;
 }
 // 第 4 批第 0 步:IP 分发包里每条材料要剥掉的本店私有字段只在这里写(exportPublicIP 调它)。
 // 现在原样返回;以后价格历史 priceHistory、待换国产标记 domestic* 在这里剥(aliases 保留)
 function stripPrivateMaterialFields(m) {
-  // 第 4 批 B4-3:价格历史里是她按进价改的百科价,等于带着采购价,和「不导出本店原料」同一个目的。没有这个键的原样返回同一个对象
-  if (!m || typeof m !== "object" || !Object.prototype.hasOwnProperty.call(m, "priceHistory")) return m;
-  const { priceHistory, ...rest } = m;
+  // 第 4 批 B4-3:价格历史里是她按进价改的百科价,等于带着采购价,和「不导出本店原料」同一个目的。
+  // 第 4 批 B4-4:「待换国产」的状态 / 备注 / 时间也剥掉(备注里会写货源、托谁代购)。一个都没有的原样返回同一个对象
+  const has = (k) => Object.prototype.hasOwnProperty.call(m, k);
+  if (!m || typeof m !== "object" || !["priceHistory", ...DOMESTIC_KEYS].some(has)) return m;
+  const rest = { ...m };
+  ["priceHistory", ...DOMESTIC_KEYS].forEach(k => { delete rest[k]; });
   return rest;
 }
 
@@ -13124,6 +13139,13 @@ const domesticStatusOf = (m) => {
   const s = m && m.domesticStatus;
   return s === "searching" || s === "keepImport" ? s : "";   // 认不出的值一律当空(给以后加新状态留余地)
 };
+// 三档手标的叫法("" = 待换)。看板按钮、材料详情、toast 共用
+const domesticStatusLabel = (s, lang) => {
+  const zh = lang !== "ja";
+  if (s === "searching") return zh ? "在找" : "探し中";
+  if (s === "keepImport") return zh ? "继续进口" : "輸入継続";
+  return zh ? "待换" : "切替待ち";
+};
 // data = { recipes, components, creations, products, materials };价格走 getMaterialRawPrice(读渲染期注入的本店原料,本店价优先),不另写一套。
 // 在用 = 配料行关联了还在的材料(遍历规则同 getUsageScenes:跟组件库走的部分不重复算)。按名字回退的行不算(拿不准是哪一条、哪种钱)。
 // 「不计价」(noCost)的行不算在用,也不算没关联;「来自组件」(componentId 指向还在的组件)的行不算没关联(它的原料在组件那边已经算了)。
@@ -13248,7 +13270,45 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
   // v17.3 厂家管理:由外层 MaterialsView 提供(状态 + 删/合并的唯一写出口)
   // 第 4 批:材料详情「你的使用情况」每一行点了去那一条的查看页(App 的 jumpToItem)
   onOpenUsage = null,
+  // 第 4 批 B4-4「待换国产」看板:开关在 App(跳去配方再切回来看板还在),products 用来判断「在卖」,onOpenDataHealth 给「本店原料没写币种」的提示
+  products = [], domesticBoardOpen = false, setDomesticBoardOpen = () => {}, onOpenDataHealth = null,
   brandManageOpen = false, setBrandManageOpen = () => {}, requestDelete = () => {}, requestMerge = () => {} }) {
+
+  // 「待换国产」标记的唯一写出口(看板的三档按钮 + 备注框都走这里;材料编辑页不改这组字段)。
+  // ⚠️ 故意不写 updatedAt:合并导入(mergeByNewer)按 updatedAt 把单价 / 参考价 / 币种整组取较新的一边,
+  // 在这台电脑上点一下「在找」要是也刷新了 updatedAt,合并另一台电脑的数据时就会拿这边的旧价盖掉那边刚改的新价。
+  // 这组标记自带时间 domesticAt,合并时由 pickGroupByStamp 单独按它取较新的一边(见 mergeMaterialEntry)。清除写 "",不删键。
+  // 改状态:先做 + 撤销 toast(2a §09);改备注不弹 toast。撤销只在这组字段之后没再改过时才还原
+  const setMaterialDomestic = (id, patch, toastMsg) => {
+    const cur = materials.find(x => x && x.id === id);
+    if (!cur) return;
+    const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+    const before = {};
+    DOMESTIC_KEYS.forEach(k => { if (has(cur, k)) before[k] = cur[k]; });
+    const wrote = { ...patch, domesticAt: new Date().toISOString() };
+    setMaterials(prev => prev.map(x => x && x.id === id ? { ...x, ...wrote } : x));
+    if (!toastMsg) return;
+    showToast(toastMsg, {
+      undo: () => setMaterials(prev => prev.map(x => {
+        if (!x || x.id !== id || Object.keys(wrote).some(k => x[k] !== wrote[k])) return x;
+        const r = { ...x };
+        DOMESTIC_KEYS.forEach(k => { if (has(before, k)) r[k] = before[k]; else delete r[k]; });
+        return r;
+      })),
+    });
+  };
+  const domesticName = (id) => { const x = materials.find(y => y && y.id === id); return x ? ((lang === "zh" ? (x.nameZh || x.nameJa) : (x.nameJa || x.nameZh)) || x.nameFr || "") : ""; };
+  const setDomesticStatus = (id, status) => {
+    const cur = materials.find(x => x && x.id === id);
+    const zh = lang === "zh", nm = domesticName(id);
+    const msg = status
+      ? (zh ? `「${nm}」标为「${domesticStatusLabel(status, lang)}」` : `「${nm}」を「${domesticStatusLabel(status, lang)}」に`)
+      : (cur && getMaterialRawPrice(cur).currency === "CNY"
+        ? (zh ? `已清掉「${nm}」的标记` : `「${nm}」のマークを解除`)
+        : (zh ? `「${nm}」改回「待换」` : `「${nm}」を「切替待ち」に戻しました`));
+    setMaterialDomestic(id, { domesticStatus: status }, msg);
+  };
+  const domesticData = () => domesticBoardRows({ recipes, components, creations, products, materials });
 
   // 编辑厂家
   if (brandEditTarget !== null) {
@@ -13395,6 +13455,21 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
     />;
   }
 
+  // 「待换国产」看板(第 4 批 B4-4):材料详情在它前面,所以从看板点进材料、再点「返回」回到看板(同厂家管理页)
+  if (domesticBoardOpen) {
+    return <DomesticBoardView
+      board={domesticData()}
+      brands={brands}
+      lang={lang}
+      onBack={() => setDomesticBoardOpen(false)}
+      onViewMaterial={(id) => setMaterialViewId(id)}
+      onOpenUsage={onOpenUsage}
+      onSetStatus={setDomesticStatus}
+      onSetNote={(id, text) => setMaterialDomestic(id, { domesticNote: text }, null)}
+      onOpenDataHealth={onOpenDataHealth}
+    />;
+  }
+
   // 厂家列表(某分类下)
   if (categoryFilter) {
     return <CategoryDetailView
@@ -13428,11 +13503,14 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
     setBrandViewId={setBrandViewId}
     setMaterialViewId={setMaterialViewId}
     onManageBrands={() => setBrandManageOpen(true)}
+    domesticCounts={domesticData().counts}
+    onOpenDomesticBoard={() => setDomesticBoardOpen(true)}
   />;
 }
 
 // ═══ 材料百科首页(含全局搜索)═══
-function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBrandViewId, setMaterialViewId, onManageBrands }) {
+// 第 4 批 B4-4:domesticCounts / onOpenDomesticBoard 给「待换国产」入口卡(两个都传了、而且有在用的材料才画)
+function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBrandViewId, setMaterialViewId, onManageBrands, domesticCounts = null, onOpenDomesticBoard = null }) {
   const [searchQ, setSearchQ] = useState("");
   const q = searchQ.trim().toLowerCase();
   // 2026-09-29 体检第 2 批:原来只取前 20 家 / 30 个,标题却写「匹配 30 产品」(黄油实际 37 个)。
@@ -13503,6 +13581,26 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
           {onManageBrands && <Btn size="sm" onClick={onManageBrands}>{lang === "zh" ? "管理厂家" : "メーカー管理"}</Btn>}
         </div>
       </div>
+
+      {/* 第 4 批 B4-4:「待换国产」看板入口卡 */}
+      {onOpenDomesticBoard && domesticCounts && domesticCounts.inUse > 0 && (
+        <button type="button" onClick={onOpenDomesticBoard} className="k-row"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, textAlign: "left", cursor: "pointer",
+            padding: "12px 14px", marginBottom: "1rem", background: T.bgCard, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${domesticCounts.open > 0 ? "#92400E" : T.success}`,
+            borderRadius: T.radius, fontFamily: T.fontSans, color: T.textPrimary, boxSizing: "border-box" }}>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{lang === "zh" ? "待换国产" : "国産切替ボード"}</span>
+            <span style={{ display: "block", ...T.fs.caption, color: T.textSecondary, marginTop: 2, ...T.num }}>
+              {domesticCounts.open > 0
+                ? (lang === "zh"
+                  ? `在用的 ${domesticCounts.inUse} 种材料里,${domesticCounts.open} 种还是日元价${domesticCounts.searching > 0 ? `(在找 ${domesticCounts.searching})` : ""}${domesticCounts.sellingOpen > 0 ? ` · ${domesticCounts.sellingOpen} 种用在在卖的东西上` : ""}`
+                  : `使用中 ${domesticCounts.inUse} 種のうち ${domesticCounts.open} 種が円価格`)
+                : (lang === "zh" ? `在用的 ${domesticCounts.inUse} 种材料都已是人民币价或继续进口 ✓` : `使用中 ${domesticCounts.inUse} 種はすべて対応済み ✓`)}
+            </span>
+          </span>
+          <span style={{ color: T.textTertiary, fontSize: 16, flexShrink: 0 }}>›</span>
+        </button>
+      )}
 
       {/* 🔍 全局搜索框 */}
       <div style={{ marginBottom: "1.25rem", position: "relative" }}>
@@ -14082,6 +14180,201 @@ function BrandManageView({ brands, setBrands, materials, lang, onBack, onViewBra
               <Btn size="sm" onClick={() => setLimit(l => l + 120)}>{zh ? `再显示 ${Math.min(120, list.length - shown.length)} 家(还有 ${list.length - shown.length})` : `さらに ${Math.min(120, list.length - shown.length)} 社(残り ${list.length - shown.length})`}</Btn>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══「待换国产」看板(第 4 批 B4-4 第 2 段)═══ 材料百科首页的入口卡进来。数据由 domesticBoardRows 算好传进来(board),
+// 这里只画 + 调回写:onSetStatus(id, "searching" | "keepImport" | "") / onSetNote(id, 文字) 都走 MaterialsViewBody 的 setMaterialDomestic
+// (唯一写出口,不写 updatedAt,见那里)。点材料名进材料详情(返回回到这里),点「用在哪」的条目去那一条的查看页
+// 备注框:本地草稿,失焦(或回车)才写回 —— 逐字写回会每敲一个字就触发一次自动保存
+function DomesticNoteInput({ value, onCommit, lang, style }) {
+  const [draft, setDraft] = useState(value || "");
+  const [focused, setFocused] = useState(false);
+  // 撤销 / 合并导入从外面改了备注:没在打字时跟上
+  useEffect(() => { if (!focused) setDraft(value || ""); }, [value]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => { const t = draft.trim(); if (t !== String(value || "").trim()) onCommit(t); };
+  return (
+    <input type="text" value={draft} className="k-input"
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      placeholder={lang === "zh" ? "备注:货源、托谁买、在比哪几款…" : "メモ:仕入先・候補など"}
+      style={style} />
+  );
+}
+
+function DomesticBoardView({ board, brands = [], lang, onBack, onViewMaterial, onOpenUsage, onSetStatus, onSetNote, onOpenDataHealth = null }) {
+  const zh = lang === "zh";
+  const [filter, setFilter] = useState("open");        // open(待换 + 在找)| keep | done | all
+  const [sellingOnly, setSellingOnly] = useState(false);
+  const [openUses, setOpenUses] = useState(() => new Set());   // 展开了「用在哪」的材料 id
+  const { counts } = board;
+  const brandName = (id) => { const b = (brands || []).find(x => x && x.id === id); return b ? ((zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "") : ""; };
+  const mName = (m) => (zh ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) || m.nameFr || "(无名)";
+  const inFilter = (it) => (filter === "open" ? (it.state === "todo" || it.state === "searching")
+    : filter === "keep" ? it.state === "keep" : filter === "done" ? it.state === "done" : true) && (!sellingOnly || it.selling);
+  const groups = board.groups.map(g => ({ ...g, shown: g.items.filter(inFilter) })).filter(g => g.shown.length > 0);
+  const shownN = groups.reduce((a, g) => a + g.shown.length, 0);
+  const filterLabel = { open: zh ? "待换 + 在找" : "切替待ち+探し中", keep: zh ? "继续进口" : "輸入継続", done: zh ? "已是人民币" : "人民元済み", all: zh ? "全部在用" : "使用中すべて" };
+  const filterN = { open: counts.open, keep: counts.keep, done: counts.done, all: counts.inUse };
+  const toggleUses = (id) => setOpenUses(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const typeIcon = { recipe: "📖", component: "🧩", creation: "🎂" };
+  const pill = (key, on, label, onClick, title) => (
+    <button key={key} type="button" onClick={onClick} className="k-btn" title={title}
+      style={{ padding: "4px 10px", fontSize: 12, borderRadius: T.radius, border: `0.5px solid ${on ? T.ink : T.border}`, background: on ? T.ink : T.bgCard,
+        color: on ? T.paper : T.textSecondary, cursor: on ? "default" : "pointer", fontFamily: T.fontSans, whiteSpace: "nowrap" }}>
+      {label}
+    </button>
+  );
+  const inpStyle = { padding: "6px 10px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radius, background: T.bgCard, fontFamily: T.fontSans, color: T.textPrimary, boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 2 }}>{zh ? "材料百科" : "材料事典"}</div>
+          <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.brand, letterSpacing: "-0.3px" }}>{zh ? "待换国产" : "国産切替ボード"}</div>
+        </div>
+        <Btn onClick={onBack}>{zh ? "← 返回" : "← 戻る"}</Btn>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: "1rem", lineHeight: 1.7, padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${T.accentSoft}` }}>
+        {zh
+          ? "这里列的是配方 / 组件 / 组合产品里「关联了百科」的配料用到的材料。实际算成本用的那个价(本店价优先)已经是人民币的算换好了;还是日元价的留在「待换」,可以标「在找」或「继续进口」,再写一句备注。"
+          : "レシピ・パーツ・組み合わせで事典に紐づいた材料の一覧。原価に使う価格(仕入れ価格優先)が人民元なら切替済み、円のままなら「切替待ち」。"}
+      </div>
+
+      <div style={{ fontSize: 13, color: T.textPrimary, marginBottom: 12, lineHeight: 1.7, ...T.num }}>
+        {zh
+          ? <>在用 <b>{counts.inUse}</b> 种 · 已是人民币 {counts.done} · 待换 <b>{counts.open}</b>{counts.searching > 0 ? `(其中在找 ${counts.searching})` : ""}{counts.keep > 0 ? ` · 继续进口 ${counts.keep}` : ""}{counts.sellingOpen > 0 ? ` · 待换里 ${counts.sellingOpen} 种用在在卖的东西上` : ""}</>
+          : <>使用中 <b>{counts.inUse}</b> · 人民元済み {counts.done} · 切替待ち <b>{counts.open}</b>{counts.searching > 0 ? `(探し中 ${counts.searching})` : ""}{counts.keep > 0 ? ` · 輸入継続 ${counts.keep}` : ""}{counts.sellingOpen > 0 ? ` · 販売中に使用 ${counts.sellingOpen}` : ""}</>}
+      </div>
+
+      {counts.inUse === 0 ? (
+        <EmptyState variant="first" lang={lang}
+          title={zh ? "还没有关联了百科的配料" : "事典に紐づいた材料がまだありません"}
+          hint={zh ? "在配方 / 组件的配料表里点 🔗 把配料关联到材料百科,用到的材料就会出现在这里。" : "配合表の 🔗 で材料を紐づけると、ここに表示されます。"}
+          actions={[{ label: zh ? "← 回材料百科" : "← 材料事典へ", onClick: onBack }]} />
+      ) : (<>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          {["open", "keep", "done", "all"].map(k => (
+            <button key={k} type="button" onClick={() => setFilter(k)} className="k-btn"
+              style={{ padding: "6px 12px", fontSize: 12, borderRadius: T.radius, border: `0.5px solid ${filter === k ? T.accent : T.border}`, background: filter === k ? T.bgSoft : T.bgCard,
+                color: filter === k ? T.accent : T.textSecondary, cursor: "pointer", fontFamily: T.fontSans, fontWeight: filter === k ? 500 : 400 }}>
+              {filterLabel[k]} ({filterN[k]})
+            </button>
+          ))}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: T.textSecondary, cursor: "pointer", marginLeft: 4 }}>
+            <input type="checkbox" checked={sellingOnly} onChange={(e) => setSellingOnly(e.target.checked)} style={{ margin: 0 }} />
+            {zh ? "只看在卖的" : "販売中のみ"}
+          </label>
+        </div>
+
+        {shownN === 0 ? (
+          <EmptyState variant="filter" lang={lang}
+            title={zh ? "没有符合条件的材料" : "該当する材料がありません"}
+            hint={filter === "open" && !sellingOnly ? (zh ? "在用的材料都已经是人民币价,或者标了「继续进口」。" : "すべて人民元価格か、輸入継続です。") : null}
+            chips={[
+              ...(filter !== "all" ? [{ label: filterLabel[filter], onRemove: () => setFilter("all") }] : []),
+              ...(sellingOnly ? [{ label: zh ? "只看在卖的" : "販売中のみ", onRemove: () => setSellingOnly(false) }] : []),
+            ]}
+            onClearAll={() => { setFilter("all"); setSellingOnly(false); }} />
+        ) : groups.map(g => (
+          <div key={g.id} style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 2px", borderBottom: `1px solid ${T.line}`, marginBottom: 4 }}>
+              <span style={{ background: g.cat.bg, color: g.cat.color, padding: "2px 10px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>{g.cat.icon} {zh ? g.cat.zh : g.cat.ja}</span>
+              <span style={{ ...T.fs.caption, color: T.textTertiary, ...T.num }}>{g.shown.length}</span>
+            </div>
+            {g.shown.map(it => {
+              const m = it.material;
+              const bn = brandName(m.brandId);
+              const priceTxt = it.price.price > 0 ? fmtUnitPrice(it.price.price, it.price.currency) : "";
+              const isJpy = it.price.currency !== "CNY";
+              const tag = it.price.source === "none" ? (zh ? "没价" : "価格なし")
+                : isJpy ? (it.price.source === "shop" ? (zh ? "本店价 · 日元" : "仕入れ · 円") : (zh ? "百科价 · 日元" : "事典 · 円"))
+                : (it.price.source === "shop" ? (zh ? "本店价 · 人民币" : "仕入れ · 元") : (zh ? "百科价 · 人民币" : "事典 · 元"));
+              const nUse = it.uses.length;
+              const usesOpen = openUses.has(m.id);
+              return (
+                <div key={m.id} className="k-row" data-domestic-row={m.id}
+                  style={{ padding: "10px 8px", borderBottom: `1px solid ${T.lineFaint}`, display: "flex", flexWrap: "wrap", gap: "6px 12px", alignItems: "center" }}>
+                  <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+                    <button type="button" onClick={() => onViewMaterial(m.id)} className="k-btn" title={zh ? "看这个材料" : "材料を見る"}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: T.fontSans, fontSize: 13, color: T.ink, textAlign: "left", overflowWrap: "anywhere", textDecoration: "underline", textUnderlineOffset: 3, textDecorationColor: T.accentSoft }}>
+                      {mName(m)}
+                    </button>
+                    {it.selling && <span style={{ marginLeft: 6, fontSize: 10, color: T.success, border: `1px solid ${T.success}`, borderRadius: T.radius, padding: "0 4px", whiteSpace: "nowrap" }}>{zh ? "在卖" : "販売中"}</span>}
+                    <div style={{ ...T.fs.caption, color: T.textTertiary, overflowWrap: "anywhere" }}>
+                      {bn && <span>{bn} · </span>}
+                      {priceTxt && <span style={{ ...T.num, color: T.textSecondary }}>{priceTxt} </span>}
+                      <span style={{ fontSize: 10, padding: "0 4px", borderRadius: T.radius, whiteSpace: "nowrap",
+                        background: isJpy || it.price.source === "none" ? "#FEF3C7" : "transparent", color: isJpy || it.price.source === "none" ? "#92400E" : T.success,
+                        border: isJpy || it.price.source === "none" ? "none" : `1px solid ${T.success}` }}>{tag}</span>
+                    </div>
+                    <button type="button" onClick={() => toggleUses(m.id)} className="k-btn"
+                      style={{ background: "none", border: "none", padding: "2px 0", cursor: "pointer", fontFamily: T.fontSans, ...T.fs.caption, color: T.info }}>
+                      {zh ? `用在 ${nUse} 个配方 / 组件 / 组合产品 · ${it.rows} 行 ${usesOpen ? "▴" : "▾"}` : `${nUse} 件 · ${it.rows} 行 ${usesOpen ? "▴" : "▾"}`}
+                    </button>
+                    {it.shopNoCurrency && (
+                      <div style={{ ...T.fs.caption, color: T.warning, marginTop: 2 }}>
+                        {zh ? "本店原料没写币种,按日元算了(数据体检「本店原料标币种」能一次改)" : "仕入れ原料の通貨が未設定のため円扱い(データ診断で修正)"}
+                        {onOpenDataHealth && (
+                          <button type="button" onClick={onOpenDataHealth} className="k-btn"
+                            style={{ marginLeft: 6, background: "none", border: "none", padding: 0, cursor: "pointer", color: T.info, textDecoration: "underline", fontFamily: T.fontSans, fontSize: 12 }}>
+                            {zh ? "打开数据体检" : "データ診断を開く"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {usesOpen && (
+                      <div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+                        {it.uses.map(u => (
+                          <button key={u.type + ":" + u.id} type="button" className="k-row" title={zh ? "打开这一条" : "開く"}
+                            onClick={() => onOpenUsage && onOpenUsage({ kind: u.type + "View", id: u.id })}
+                            style={{ background: T.bgCard, border: `0.5px solid ${T.borderSoft}`, borderRadius: T.radiusSm, padding: "5px 10px", fontSize: 12, textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: T.textPrimary, overflowWrap: "anywhere" }}>
+                            {typeIcon[u.type]} {u.name}{u.layerNames.length > 0 && <span style={{ color: T.textTertiary }}>({u.layerNames.join("、")})</span>} ›
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ flex: "1 1 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                    {it.state === "done" ? (
+                      <div style={{ ...T.fs.caption, color: T.success }}>
+                        {zh ? "✓ 已经是人民币价" : "✓ 人民元価格"}
+                        {it.staleStatus && (<>
+                          <span style={{ color: T.textTertiary }}>{zh ? `,「${domesticStatusLabel(it.status, lang)}」标记可以清掉` : `・「${domesticStatusLabel(it.status, lang)}」は不要`}</span>
+                          <button type="button" onClick={() => onSetStatus(m.id, "")} className="k-btn"
+                            style={{ marginLeft: 6, background: "none", border: "none", padding: 0, cursor: "pointer", color: T.info, textDecoration: "underline", fontFamily: T.fontSans, fontSize: 12 }}>
+                            {zh ? "清掉" : "解除"}
+                          </button>
+                        </>)}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {["", "searching", "keepImport"].map(s => pill(s || "todo", it.status === s, domesticStatusLabel(s, lang), () => { if (it.status !== s) onSetStatus(m.id, s); }))}
+                      </div>
+                    )}
+                    <DomesticNoteInput key={m.id} value={m.domesticNote || ""} lang={lang} onCommit={(t) => onSetNote(m.id, t)}
+                      style={{ ...inpStyle, width: "100%" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </>)}
+
+      {(board.unlinkedRows > 0 || board.danglingRows > 0) && (
+        <div style={{ ...T.fs.caption, color: T.textTertiary, marginTop: 12, lineHeight: 1.7 }}>
+          {board.unlinkedRows > 0 && (zh
+            ? `另有 ${board.unlinkedRows} 行配料没关联百科(${board.unlinkedNames} 种名字),看板判断不了是哪种货、哪种钱;在配料表里点 🔗 关联后就会出现在这里。`
+            : `事典に未リンクの配合行 ${board.unlinkedRows} 行(${board.unlinkedNames} 種)は判定できません。`)}
+          {board.danglingRows > 0 && (zh ? ` ${board.danglingRows} 行指向已删掉的材料。` : ` 削除済み材料を指す行 ${board.danglingRows} 行。`)}
         </div>
       )}
     </div>
@@ -15225,6 +15518,15 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               </span>
             )}
           </div>
+          {/* 第 4 批第 2 段:「待换国产」看板上标的状态 / 备注(只读;在看板上改)。没标过就什么都不画 */}
+          {(domesticStatusOf(material) || String(material.domesticNote || "").trim()) && (
+            <div style={{ marginTop: 10, fontSize: 12, color: T.textSecondary, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+              <span style={{ color: T.textTertiary }}>{lang === "zh" ? "待换国产 · " : "国産切替 · "}</span>
+              {domesticStatusOf(material) && <span style={{ color: T.textPrimary, fontWeight: 500 }}>{domesticStatusLabel(domesticStatusOf(material), lang)}</span>}
+              {domesticStatusOf(material) && String(material.domesticNote || "").trim() && " · "}
+              {String(material.domesticNote || "").trim()}
+            </div>
+          )}
         </div>
       </div>
 
@@ -19775,6 +20077,8 @@ function App() {
   // v11: 百科详情跳转源头,回退时用 { tab, viewId? / compViewId? } 还原
   const [materialReturnTo, setMaterialReturnTo] = useState(null);
   const [materialEditTarget, setMaterialEditTarget] = useState(null);
+  // 第 4 批 B4-4:「待换国产」看板开着没有。放 App 不放 MaterialsView 外壳:从看板跳去配方 / 组件再切回材料百科,看板还在(外壳一切 tab 就卸载了)
+  const [domesticBoardOpen, setDomesticBoardOpen] = useState(false);
   // 🖨 打印设置（可用户自定义LOGO）
   const [printSettings, setPrintSettings] = useState(() => {
     const ps = stored?.printSettings || { logoUrl: "", brandName: "kororā", brandSubtitle: "Boulangerie • Pâtisserie • Café" };
@@ -20291,10 +20595,11 @@ function App() {
     else if (kind === "component") { setCompEditTarget(target); setTab("components"); }
     else if (kind === "creation") { setCreationEditTarget(target); setTab("creations"); }
     // 材料百科的查看状态(看过的材料 / 厂家详情、从配方点进来的返回键)在 App 里,切 tab 不清;跳进编辑页前清掉,保存 / 返回后才不冒出以前看过的另一条
-    else if (kind === "material") { setBrandEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setMaterialEditTarget(target); setTab("materialsPedia"); }
+    // 第 4 批 B4-4:「待换国产」看板也关掉(同上:返回时别落到看板上)
+    else if (kind === "material") { setBrandEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setDomesticBoardOpen(false); setMaterialEditTarget(target); setTab("materialsPedia"); }
     // 厂家详情(brandViewId)也清掉:以前看过的厂家留着,从这里跳过去再点「返回」会落到那家不相关的厂家页(复查发现)
-    else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setBrandViewId(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
-    else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setBrandEditTarget(target); setTab("materialsPedia"); }
+    else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setBrandViewId(null); setDomesticBoardOpen(false); setMaterialViewId(target.id); setTab("materialsPedia"); }
+    else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setDomesticBoardOpen(false); setBrandEditTarget(target); setTab("materialsPedia"); }
     else if (kind === "knowledge") { setKnowledgeEditTarget(target); setTab("knowledge"); }
     // 查看页:同一次操作里先清掉那个 tab 的编辑对象再设查看 id(组件 / 组合产品 / 商品的编辑页开着会盖住详情)
     else if (kind === "recipeView") { setViewId(target.id); setTab("view"); }
@@ -22469,6 +22774,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setTab={setTab}
           setViewId={setViewId}
           onOpenUsage={jumpToItem}
+          products={products}
+          domesticBoardOpen={domesticBoardOpen}
+          setDomesticBoardOpen={setDomesticBoardOpen}
+          onOpenDataHealth={() => setShowDataHealth(true)}
         />
       )}
 
