@@ -17343,7 +17343,7 @@ const PROD_TXT = {
     totals: "今天总共要称多少", totalsHint: "关联了材料百科的按材料合并,没关联的按名字 + 单位合并。组件标了「备货」的部分不展开,只写从库存取多少。",
     nonGram: "按个 / 本 这类单位的(不能和克加在一起)", stockTitle: "从库存取(备货的部分)", skippedTitle: (n) => `这些没算进来(${n} 项)`,
     reasons: { noItems: "商品没挂任何配方 / 组合产品 / 组件", missing: "商品挂的配方 / 组合产品 / 组件已删除", missingDirect: "这一行的东西已删除", noUsed: "这几个部分没填「用量」,整部分没算", badQty: "用量没填或不是数字", unlinked: "没关联材料百科" },
-    close: "收起", pickProducts: "从商品加", lowAll: (n) => `＋ 低库存的全加(${n} 个)`, stockOf: (s, t) => `库存 ${s} · 补货线 ${t}`, avg: (a) => `近 30 天日均 ${a}`,
+    close: "收起", pickProducts: "从商品加", lowAll: (n) => `＋ 低库存的全加(${n} 个)`, stockOf: (s, t) => `库存 ${s} · 补货线 ${t}`, avg: (a, n = 30) => `近 ${n} 天日均 ${a}`,
     addRestock: (n) => `＋ ${n}(补库存)`, addAvg: (n) => `＋ ${n}(按日均)`, addOne: "＋ 加入", onSheet: "已在单子上",
     noProducts: "还没有商品(去「商品」页新建)", onSaleTitle: "在售中的配方 / 组合产品", noOnSale: "还没有标「在售中」的(在配方一览里点行首的圆点)",
     sources: "来源", unitPiece: "件",
@@ -17370,7 +17370,7 @@ const PROD_TXT = {
     totals: "本日の計量合計", totalsHint: "材料事典に関連付けた材料は材料ごと、未関連は名前 + 単位ごとに合計。作り置きのパーツは展開せず、ストックから取る量のみ。",
     nonGram: "個 / 本 などの単位(g と合算不可)", stockTitle: "ストックから(作り置き)", skippedTitle: (n) => `計算に含まれていないもの(${n} 件)`,
     reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連" },
-    close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a) => `30 日平均 ${a}/日`,
+    close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a, n = 30) => `${n} 日平均 ${a}/日`,
     addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
     noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組立製品", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
     sources: "使用先", unitPiece: "個",
@@ -17602,6 +17602,7 @@ function ProdAddProducts({ products, salesLog, lines, today, lang, onAdd, onClos
       {(products || []).length === 0 && <div style={{ ...T.fs.caption, color: T.subtle }}>{X.noProducts}</div>}
       {(products || []).map(p => {
         const avg = avgDailySales(salesLog, p.id, today);
+        const avgSpan = salesSpanOf(salesLog, p.id, today).span;   // 审查 r5:开业头几周分母不是 30 天(同采购页「按最近 N 天」)
         const avgSug = Math.ceil(avg * 1.2);
         const isLow = isLowStock(p);
         const already = on.has(String(p.id));
@@ -17609,7 +17610,7 @@ function ProdAddProducts({ products, salesLog, lines, today, lang, onAdd, onClos
           <div key={p.id} data-addproduct={p.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
             <div style={{ flex: "1 1 150px", minWidth: 0 }}>
               <div style={{ ...T.fs.small, fontWeight: 500, overflowWrap: "anywhere" }}>{prodName(p, lang)}{p.leadTimeDays > 0 && <span style={{ ...T.fs.label, color: T.warning, marginLeft: 6 }}>{X.lead(fmtQty(p.leadTimeDays))}</span>}</div>
-              <div style={{ ...T.fs.label, color: isLow ? T.danger : T.subtle, letterSpacing: 0, ...T.num }}>{X.stockOf(p.currentStock || 0, p.threshold || 0)}{avg > 0 ? " · " + X.avg(fmtQty(avg)) : ""}</div>
+              <div style={{ ...T.fs.label, color: isLow ? T.danger : T.subtle, letterSpacing: 0, ...T.num }}>{X.stockOf(p.currentStock || 0, p.threshold || 0)}{avg > 0 ? " · " + X.avg(fmtQty(avg), avgSpan) : ""}</div>
             </div>
             {already ? <span style={{ ...T.fs.caption, color: T.success }}>{X.onSheet}</span> : (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
