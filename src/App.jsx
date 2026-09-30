@@ -6457,6 +6457,22 @@ const componentIngredientUses = (compId, { recipes = [], components = [], creati
   }));
   return out;
 };
+// 备货 G 线:删配方 / 组件时,账本里这一样的情况(给确认框 refs 那一行和撤销 toast 用)。
+// 账本只读 / 账上没有这一样 → null(文字和以前一样,也不动账本);有这一样但手上是 0 → qty 0(照样一起删,文字不提)。
+// 返回 { key, qty(手上一共,含过期), unit(账上的单位), lots(还有剩的批数), first(最早那批的做的日期) }
+const prepDropSummary = (stock, kind, obj, today) => {
+  if (!stock || stock.readOnly || !obj || !stock.items) return null;
+  const key = prepKeyOf(kind, obj.id);
+  if (!Object.prototype.hasOwnProperty.call(stock.items, key)) return null;
+  const item = stock.items[key];
+  const cfg = prepCfgOf(kind, obj);
+  const oh = prepOnHand(item, cfg, today || localDateStr());
+  const unit = _normTxt(item && item.unit) || (cfg ? cfg.unit : (kind === "component" ? "g" : "个"));
+  return { key, qty: oh.onHand, unit, lots: oh.lots.length, first: oh.lots.length ? oh.lots[0].madeAt : null };
+};
+// 同上,确认框 refs 那一行 / toast 文字(手上是 0 → null,照旧的文字)
+const prepDropRef = (s, lang) => (s && s.qty > 0 ? prepTxt(lang).delRef(fmtQty(s.qty), s.unit, s.lots, prepTxt(lang).md(s.first)) : null);
+
 function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [], setRecipes = null, setCreations = null,
   prepStock = null, onPrepOp, onOpenPrep, today, onPrepDrop }) {   // 备货第 0 步:新 prop 只透传给详情 / 编辑页;onPrepDrop(key) / 删除时的库存由 G 线接
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
@@ -6506,6 +6522,10 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
               : u.type === "component" ? `${lang === "zh" ? "组件" : "パーツ"}：${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""}${ingTag}`
               : `${lang === "zh" ? "组合产品" : "組立製品"}：${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""} · ${u.layer.customName || pickLang(u.layer, "name", lang) || ""}${ingTag}`),
           ];
+          // 备货 G 线:账上这一样有数时,原本就要弹确认框(有引用方)才在 refs 末尾多一行;没引用方照旧直接删 + 撤销(库存一起删、一起撤)
+          const prepSum = prepDropSummary(prepStock, "component", snap, today);
+          const prepRef = prepDropRef(prepSum, lang);
+          if (refs.length > 0 && prepRef) refs.push(prepRef);
           const ingNote = asIng.length === 0 ? "" : (lang === "zh"
             ? "\n\n标「当原料」的是配料表里「来自组件」的行:删除后这些行按删除前的成本快照算,不再跟着组件价变;撤销删除就恢复。"
             : "\n\n「材料として」はパーツから原価を取る配合行です。削除後は削除前のスナップショット原価で計算されます(元に戻すと復帰)。");
@@ -6539,8 +6559,10 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 0, 1));
             if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 0, 1));
             setEditTarget(null);
-            showToast(lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
+            const undoPrep = prepSum && onPrepDrop ? onPrepDrop(prepSum.key) : null;   // 账上这一样一起删(dropItem);返回撤销(putItem)
+            showToast(undoPrep && prepSum.qty > 0 ? prepTxt(lang).delToast(cName, fmtQty(prepSum.qty), prepSum.unit) : lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
               undo: () => {
+                if (typeof undoPrep === "function") undoPrep();
                 setComponents(prev => {
                   if (prev.find(x => x.id === snap.id)) return prev;
                   const next = [...prev];
@@ -19809,6 +19831,14 @@ const PREP_TXT = {
     // ── E 线:备货页 / 编辑页 / 详情卡 / 角标 ──
     // ── F 线:商品页 / 采购页 / 数据体检 ──
     // ── G 线:导入 / 清除 / 删除 / 数据页 ──
+    dataLabel: "备货库存",                                    // 数据页「当前数据」:备货库存：N 样(M 批)
+    dataUnit: (m) => `样(${m} 批)`,
+    importLine: (a, b) => (b === null ? `备货库存：现有 ${a} 样 → 清空(文件里没有)` : `备货库存：现有 ${a} 样 → 文件里 ${b} 样`),
+    mergeNotMerged: "⚠ 备货库存(冷冻面团等)没有跟着合并,每台设备各记各的;要以这份文件为准,请用覆盖导入。",
+    mergeLogsTail: "。备货库存也一样,请到「今日 → 备货」盘点。",   // 接在「商品的当前库存没有跟着这些记录改…」后面
+    mergeCfgDiff: (n) => `⚠ ${n} 个配方 / 组件的备货设置和本机不一样,合并导入不改已有的 —— 请在这台设备的编辑页改(库存也记在这台)`,
+    delRef: (n, u, k, d) => `备货库存：还有 ${n} ${u}(${k} 批${d ? `,最早 ${d} 做的` : ""})`,
+    delToast: (name, n, u) => `已删除「${name}」(备货库存 ${n} ${u} 也一起删了,可以撤销)`,
   },
   ja: {
     // ── 第 0 步(App の writePrep)──
@@ -19836,6 +19866,14 @@ const PREP_TXT = {
     // ── E 線:作り置き / 編集画面 / 詳細カード / バッジ ──
     // ── F 線:商品 / 仕入 / データ診断 ──
     // ── G 線:インポート / 削除 / データ ──
+    dataLabel: "作り置き在庫",
+    dataUnit: (m) => `品(${m} ロット)`,
+    importLine: (a, b) => (b === null ? `作り置き在庫：現在 ${a} 品 → 空になります(ファイルになし)` : `作り置き在庫：現在 ${a} 品 → ファイル ${b} 品`),
+    mergeNotMerged: "⚠ 作り置き在庫は統合されません(端末ごとに記録)。このファイルに合わせるなら上書きインポートを。",
+    mergeLogsTail: "。作り置き在庫も同様です。「本日 → 作り置き」で棚卸ししてください。",
+    mergeCfgDiff: (n) => `⚠ ${n} 件のレシピ・パーツの作り置き設定が本機と異なります。マージでは既存分を変更しません。この端末の編集画面で変更してください(在庫もこの端末に記録)`,
+    delRef: (n, u, k, d) => `作り置き在庫：${n}${u}(${k} ロット${d ? `、最古 ${d}` : ""})`,
+    delToast: (name, n, u) => `「${name}」を削除(作り置き在庫 ${n}${u} も削除、元に戻せます)`,
   },
 };
 const prepTxt = (lang) => PREP_TXT[lang === "ja" ? "ja" : "zh"];
@@ -22798,13 +22836,21 @@ function App() {
       ...usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa}`),
       ...(famSiblings.length > 0 ? [`${lang === "zh" ? "家族" : "ファミリー"}：${fam.nameZh || fam.nameJa}（${lang === "zh" ? `还有 ${famSiblings.length} 个变体` : `他に ${famSiblings.length} 件`}）`] : []),
     ];
+    // 备货 G 线:账上这一样有数时,原本就要弹确认框(有引用方)才在 refs 末尾多一行;没引用方照旧直接删 + 撤销(库存一起删、一起撤)
+    const prepSum = prepDropSummary(prepStock, "recipe", editTarget, today);
+    const prepRef = prepDropRef(prepSum, lang);
+    if (refs.length > 0 && prepRef) refs.push(prepRef);
     const doDelete = () => {
       const snapshot = editTarget;
       setRecipes(prev => prev.filter(x => x.id !== snapshot.id));
       setTab("list");
+      const undoPrep = prepSum ? onPrepDrop(prepSum.key) : null;   // 账上这一样一起删(dropItem);返回撤销(putItem)
       // 破坏性操作「先做 + 给撤销」
-      showToast(lang === "zh" ? `已删除「${rName}」` : `「${rName}」を削除しました`, {
-        undo: () => setRecipes(prev => prev.find(x => x.id === snapshot.id) ? prev : [...prev, snapshot]),
+      showToast(undoPrep && prepSum.qty > 0 ? prepTxt(lang).delToast(rName, fmtQty(prepSum.qty), prepSum.unit) : lang === "zh" ? `已删除「${rName}」` : `「${rName}」を削除しました`, {
+        undo: () => {
+          setRecipes(prev => prev.find(x => x.id === snapshot.id) ? prev : [...prev, snapshot]);
+          if (typeof undoPrep === "function") undoPrep();
+        },
       });
     };
     if (refs.length > 0) {
@@ -22895,8 +22941,15 @@ function App() {
   const prepRestorePreviewOf = (logId) => prepRestorePreview(prepStock, logId);
   // F 线:商品页删完一条生产记录后调(log = 删掉的那条),App 写 restoreRecord。第 0 步什么都不做
   const onProdLogDeleted = (log) => {};
-  // G 线:删配方 / 组件时把账本里这一样一起删(dropItem),撤销时放回(putItem)。第 0 步什么都不做
-  const onPrepDrop = (key) => {};
+  // G 线:删配方 / 组件时把账本里这一样一起删(dropItem),撤销时放回(putItem)。
+  // 返回撤销函数(放回删之前那一样的原样,账上已经又有这一样了就不放);账本只读 / 账上没有这一样 → null,什么都不写。
+  // 撤销闭包只拿删的那一刻的原样(appSettings 里的,不是 prepStockRead 筛过的视图),不读 dataRef
+  const onPrepDrop = (key) => {
+    if (prepStock.readOnly || !Object.prototype.hasOwnProperty.call(prepStock.items, key)) return null;
+    const raw = appSettings.prepStock && appSettings.prepStock.items ? appSettings.prepStock.items[key] : undefined;
+    if (!writePrep([{ type: "dropItem", key }])) return null;
+    return () => writePrep([{ type: "putItem", key, item: raw }], null, { isUndo: true });
+  };
   // 采购页「按手上的备货算」用(F 线);第 0 步 prepOnHandMap 返回空 Map = 采购页和以前一样
   const prepOnHand = useMemo(() => prepOnHandMap(recipes, components, prepStock, today), [recipes, components, prepStock, today]);
 
@@ -23092,7 +23145,9 @@ function App() {
   // 用于打包卖给买家,买家导入后自己录 shopMaterials
   const exportPublicIP = () => {
     const payload = {
-      recipes, components, creations, knowledge,
+      // 备货 G 线:配方 / 组件上的 prepMinStock(店里想常备多少)不进分发包;prepMode / prepStore / prepShelfDays / prepThaw* 算做法,留着。
+      // 没有这个键的对象原样返回,老数据导出逐字节不变。库存账在 appSettings 里,本来就不进包
+      recipes: recipes.map(stripPrivatePrepFields), components: components.map(stripPrivatePrepFields), creations, knowledge,
       brands,
       // v15: 剥离 source='crawl' 来源（版权外溢防护）;第 4 批:每条材料的本店私有字段在 stripPrivateMaterialFields 里剥
       materials: (ms => Array.isArray(ms) ? ms.map(stripPrivateMaterialFields) : ms)(stripCrawlImages(materials)),
@@ -23164,6 +23219,15 @@ function App() {
           }
         });
         const partial = emptied.length > 0;
+        // 备货 G 线:库存账在 appSettings.prepStock,覆盖导入照 prodPlan 的规矩(文件里没有就删本机的)。
+        // 本机或文件任一边账上有东西时,refs 末尾多一行说清楚(两边都是 0 样不写,同上面各类的规矩);
+        // 不算进上面的「清空」(不改标题和提示,那是给录入包误点准备的)
+        const fileHasPrep = !!(d.appSettings && d.appSettings.prepStock);
+        const curPrepN = Object.keys(prepStock.items).length;
+        const filePrepN = fileHasPrep ? Object.keys(prepStockRead(d.appSettings.prepStock).items).length : 0;
+        const prepLine = fileHasPrep ? (curPrepN > 0 || filePrepN > 0 ? prepTxt(lang).importLine(curPrepN, filePrepN) : null)
+          : curPrepN > 0 ? prepTxt(lang).importLine(curPrepN, null) : null;
+        const prepLines = prepLine ? [prepLine] : [];
         const msg = lang === "zh"
           ? (partial
               ? `这个文件里没有下面标「清空」的几类数据,覆盖导入会把你现有的这些全部清空。\n\n如果这是录入包(只含几条新配方 / 组件 / 知识),请点「取消」,改用下面的「合并导入」。\n\n覆盖前会自动存一份「固定」备份,出错可以在「恢复备份」里找回。`
@@ -23188,11 +23252,12 @@ function App() {
           setSuppliers(Array.isArray(d.suppliers) ? d.suppliers : []);
           if (d.printSettings) setPrintSettings(d.printSettings);
           // 审查 r3:今天的生产单(prodPlan)跟着生产记录一起换 —— 文件里没有就清掉,以前留着「✓ 已记入 30」,生产记录却被文件换掉了,单子上记不回去
-          setAppSettings(prev => { const n = { ...prev, ...(d.appSettings || {}) }; if (!(d.appSettings && d.appSettings.prodPlan)) delete n.prodPlan; return n; });
+          // 备货 G 线:库存账同 prodPlan —— 文件里没有就删本机的(整份跟着文件走,和商品库存一样)
+          setAppSettings(prev => { const n = { ...prev, ...(d.appSettings || {}) }; if (!(d.appSettings && d.appSettings.prodPlan)) delete n.prodPlan; if (!(d.appSettings && d.appSettings.prepStock)) delete n.prepStock; return n; });
           if (d.customCompCats) setCustomCompCats(d.customCompCats);
           if (d.productFamilies) setProductFamilies(d.productFamilies);
           showToast(lang === "zh" ? "✓ 数据导入成功" : "✓ インポート完了", { ms: 5000 });
-          setImportReport({ kind: "overwrite", fileName: f.name, at: new Date(), lines: [...emptied, ...replaced], skipped: [] });
+          setImportReport({ kind: "overwrite", fileName: f.name, at: new Date(), lines: [...emptied, ...replaced, ...prepLines], skipped: [] });
         };
         confirmDialog(msg, async () => {
           if (await pinBackupNow("import")) applyOverwrite();
@@ -23204,7 +23269,7 @@ function App() {
         }, {
           title: lang === "zh" ? (partial ? "覆盖导入会清空数据" : "覆盖导入") : (partial ? "上書きでデータが消えます" : "上書きインポート"),
           kicker: lang === "zh" ? "导入数据(覆盖)" : "上書きインポート",
-          refs: [...emptied, ...replaced],
+          refs: [...emptied, ...replaced, ...prepLines],
           confirmText: lang === "zh" ? (partial ? "仍然覆盖" : "覆盖导入") : "上書きする",
         });
       } catch (err) {
@@ -23320,9 +23385,18 @@ function App() {
               refStat.rows += r.rows; refStat.layers += r.layers; refStat.unfollowed += r.unfollowed;
               return r.list;
             };
+            // 备货 G 线:被跳过的已有配方 / 组件,文件里那条的备货设置(prep*)和本机不一样 → 报告里说一句(只提示,不改;
+            // 设置和库存都在店里那台设备的编辑页管)。缺省和空当同一个;文件里自己重复的那条不算(dup 不是本机的)
+            const PREP_CFG_KEYS = ["prepMode", "prepStore", "prepShelfDays", "prepMinStock", "prepThawZh", "prepThawJa"];
+            const prepSig = (o) => PREP_CFG_KEYS.map(k => { const v = o ? o[k] : undefined; return k === "prepMode" ? (v === "stock" ? "stock" : "") : (v === undefined || v === null ? "" : String(v).trim()); }).join("\u0001");
+            const prepCfgDiff = new Set();
+            const notePrepDiff = (kind, base) => (inc, dup) => {
+              if (dup && (base || []).includes(dup) && prepSig(inc) !== prepSig(dup)) prepCfgDiff.add(prepKeyOf(kind, dup.id));
+            };
             if (Array.isArray(d.components)) {
+              const onDupComp = notePrepDiff("component", cur.components);
               const add0 = pickNew(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ",
-                (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); });
+                (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); onDupComp(inc, dup); });
               compAdd = add0;
               const add = remap(add0);
               compAdd = add;
@@ -23330,7 +23404,7 @@ function App() {
               if (add.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + add.length);
             }
             if (Array.isArray(d.recipes)) {
-              const add = remap(pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ"));
+              const add = remap(pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ", notePrepDiff("recipe", cur.recipes)));
               appendTo(setRecipes, add);
               if (add.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + add.length);
             }
@@ -23479,7 +23553,7 @@ function App() {
                 return changed ? next : prev;
               });
             };
-            let logsReplaced = 0;
+            let logsReplaced = 0, prodLogsReplaced = 0;
             if (Array.isArray(d.salesLog)) {
               const r = mergeLogs(cur.salesLog, d.salesLog, "sl_");
               applyLogs(setSalesLog, r);
@@ -23490,9 +23564,12 @@ function App() {
               const r = mergeLogs(cur.productionLog, d.productionLog, "pl_");
               applyLogs(setProductionLog, r);
               if (r.add.length) lines.push((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
-              if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
+              if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; prodLogsReplaced += r.replace.size; }
             }
-            if (logsReplaced) lines.push(zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください");
+            // 备货 G 线:生产记录被换了、本机账上有备货时,那句后面加「备货库存也一样,去盘点」(账本不跟着生产记录合并)
+            const curPrepN = Object.keys(prepStock.items).length;
+            if (logsReplaced) lines.push((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
+              + (prodLogsReplaced && curPrepN > 0 ? prepTxt(lang).mergeLogsTail : ""));
 
             // 10. 合并 suppliers(供应商,按 id/nameZh/nameJa 去重)
             if (Array.isArray(d.suppliers)) {
@@ -23537,7 +23614,12 @@ function App() {
                 ? (zh ? "✓ 合并完成(没有新增条目;已有的条目按修改时间比过,取了新的一边)" : "✓ マージ完了(新規なし)")
                 : (zh ? "没有新内容:文件里的条目这里都已经有了" : "新しい内容はありません(すべて既存)");
             showToast(msg + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : ""), { ms: 8000 });
-            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines, skipped });
+            // 备货 G 线:合并导入一个字都不碰 appSettings(库存账)和已有配方 / 组件的备货设置,只在数据页的结果里说清楚
+            // (放在提示条的判断之后:只有这两行时,提示条仍说「没有新内容」)
+            const prepNotes = [];
+            if (d.appSettings && Object.keys(prepStockRead(d.appSettings.prepStock).items).length > 0) prepNotes.push(prepTxt(lang).mergeNotMerged);
+            if (prepCfgDiff.size) prepNotes.push(prepTxt(lang).mergeCfgDiff(prepCfgDiff.size));
+            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines: prepNotes.length ? [...lines, ...prepNotes] : lines, skipped });
           }
         );
       } catch (err) {
@@ -25271,6 +25353,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               {lang === "zh" ? "产品家族" : "ファミリー"}：<strong>{productFamilies.length}</strong> {lang === "zh" ? "个" : "件"}<br />
               {lang === "zh" ? "销售记录" : "売上記録"}：<strong>{salesLog.length}</strong> {lang === "zh" ? "条" : "件"}<br />
               {lang === "zh" ? "生产记录" : "生産記録"}：<strong>{productionLog.length}</strong> {lang === "zh" ? "条" : "件"}
+              {/* 备货 G 线:库存账不在生产记录里;账上有东西时多一行「N 样(M 批)」(批 = 还有剩的) */}
+              {Object.keys(prepStock.items).length > 0 && <><br />{prepTxt(lang).dataLabel}：<strong>{Object.keys(prepStock.items).length}</strong> {prepTxt(lang).dataUnit(Object.values(prepStock.items).reduce((a, it) => a + prepLotsView(it, null, today).length, 0))}</>}
               {(cats || []).length > 0 && <><br />{lang === "zh" ? "老价格表（已废弃）" : "旧価格表（廃止）"}：<strong>{cats.length}</strong> {lang === "zh" ? "种" : "件"}</>}
             </div>
           </div>
@@ -25281,7 +25365,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
               const doClear = () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
                 // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
-                setAppSettings(prev => { if (!prev || !prev.prodPlan) return prev; const { prodPlan, ...rest } = prev; return rest; });
+                // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
+                setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
                 showToast("已清除"); };
               if (await pinBackupNow("clear")) doClear();
               else confirmDialog("清除前的固定备份没存上(浏览器的数据库用不了)。仍然清除吗?建议先点上面的「导出完整备份」存一份文件。", doClear, { title: "备份没存上", confirmText: "仍然清除" });
