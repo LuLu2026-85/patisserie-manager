@@ -23762,6 +23762,16 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           saved={saved}
           confirmDialog={confirmDialog}
           onUpdateComponent={(updated, onDone) => {
+            // 审查 b4r3:防循环(同 🔗 选组件弹窗 PickerComponentList 的规则)。部分里「来自组件 X」的行,X 已经(直接或间接)用到这个组件 → 不同步,
+            // 组件库不动;这一部分照样可以存成本产品专用。以前同步过去就成了 A 用 B、B 用 A,用到它们的配方这一行整行「没价」
+            const loopRows = (updated.ingredients || []).filter(i => i && i.componentId !== undefined && i.componentId !== null && i.componentId !== ""
+              && (i.componentId === updated.id || componentReaches(components, i.componentId, updated.id)));
+            if (loopRows.length) {
+              const nm = (i) => { const c = components.find(x => x && x.id === i.componentId); return (c && (pickLang(c, "name", lang) || c.nameFr)) || pickLang(i, "name", lang) || ""; };
+              const names = [...new Set(loopRows.map(nm))].map(n => `「${n}」`).join("、");
+              showToast(lang === "zh" ? `没有同步:${names} 已经用到了这个组件,同步回去会互相引用。可以先存成本产品专用` : `同期していません:${names} がすでにこのコンポーネントを使っているため、相互参照になります`);
+              return;
+            }
             // v17.8: 组件一改,「跟组件库走」的组合产品跟着变 —— 按 2a §09 把受影响的产品列出来
             const matIds = new Set((materials || []).map(m => m && m.id));
             const followers = creations.filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === updated.id && layerLinkState(l, components, matIds) === "follow"));
