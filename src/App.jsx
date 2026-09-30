@@ -20186,6 +20186,7 @@ const PREP_TXT = {
     makeHint: (store, n, u, date) => `做好点「记入」= ${store} +${n} ${u}(今天做的${date ? `,放到 ${date}` : ""})`,
     zeroTake: "填今天要烤几个",
     zeroTakeStaff: "店长没填数量 —— 烤了几个在这里记",
+    zeroTakePrint: (u) => `店长没填数量 · 实际取了 ____ ${u}`,
     takeLogBtn: (n, u) => `记入 ${n} ${u}`, takeBtnZero: "记入",
     actualTaken: "实际取了", actualMade: "实际做了", todayDate: (s) => `${PREP_TXT.zh.madeDate(s)}:今天`,
     submit: "记入", logCancel: "取消",
@@ -20440,6 +20441,7 @@ const PREP_TXT = {
     makeHint: (store, n, u, date) => `仕込み後「記録」で ${store} +${n}${u}(本日仕込み${date ? `、${date} まで` : ""})`,
     zeroTake: "焼く数を入力してください",
     zeroTakeStaff: "数量未入力です。焼いた数をここに記録してください",
+    zeroTakePrint: (u) => `数量未入力 · 実際に出した数 ____ ${u}`,
     takeLogBtn: (n, u) => `記録 ${n}${u}`, takeBtnZero: "記録",
     actualTaken: "実際に出した数", actualMade: "実際の出来数", todayDate: (s) => `${PREP_TXT.ja.madeDate(s)}:本日`,
     submit: "記録", logCancel: "取消",
@@ -23075,7 +23077,10 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
             <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{fmtQty(s.qty)} {lineUnit(s)}</div>
           </div>
           {s.missing && <div style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.missing}</div>}
-          {!s.missing && s.zero && <div style={{ fontSize: "10pt" }}>{X.zero}</div>}
+          {/* 审查 ps2:数量 0 的取出烤行(同屏幕卡片):不印「数量是 0,不做」,印「店长没填数量 · 实际取了 ____」 */}
+          {!s.missing && s.zero && (s.line.kind === "recipe" && s.obj && isPrepMarked(s.obj) && s.line.stage !== "make"
+            ? <div style={{ fontSize: "10pt" }}>{prepTxt(L).zeroTakePrint(prepCfgOf("recipe", s.obj).unit)}</div>
+            : <div style={{ fontSize: "10pt" }}>{X.zero}</div>)}
           {!s.missing && !s.zero && s.noItems && <div style={{ fontSize: "10pt" }}>{X.noItems}</div>}
           {s.blocks.map((b, j) => block(b, s.line.kind === "product", j))}
         </div>
