@@ -19643,6 +19643,20 @@ const _prepBack = (w, idx, lotId, amt, acc, today, rev) => {
   acc.qty = _prepClean(acc.qty + Math.abs(got));
   return [got, _prepClean(pay + got + Math.min(0, want))];
 };
+// 补扣过这条 take 的每条 make 和补扣的数:[[make move, n]](一条 take 可以被先后几批分着补,审查 ps1;每批补多少记在 make 的 settles 上,
+// take 上的 settledQty 是合计、settledBy 是最后补的那批)
+const _prepSettlersOf = (w, takeId) => {
+  const out = [];
+  w.moves.forEach(x => { if (_prepIsObj(x) && x.type === "make" && Array.isArray(x.settles)) x.settles.forEach(s => { if (Array.isArray(s) && s[0] === takeId && _prepPos(s[1]) > 0) out.push([x, _prepPos(s[1])]); }); });
+  return out;
+};
+// 把补扣过的数各自加回补扣它的那一批(撤销 take / 删生产记录加回共用);补扣它的 make 已经不在的部分记跳过
+const _prepBackSettled = (m, settlers, back, acc) => {
+  if (!(_prepPos(m.settledQty) > 0)) return;
+  let got = 0;
+  settlers.forEach(([mk, n]) => { if (Array.isArray(mk.newLots) && mk.newLots.length) { back(mk.newLots[0], n); got = _prepClean(got + n); } });
+  if (got < _prepClean(_prepPos(m.settledQty))) _prepSkip(acc, "gone");
+};
 // 规则 2:这一样在第 idx 条之后盘点过 → 整样不加回(盘点之后账已经等于实物)
 const _prepLaterCount = (w, idx) => w.moves.some((x, j) => j > idx && _prepIsObj(x) && x.type === "count");
 // 撤销第 i 条(加回 / 盘点)让批次回到 0 时,还原它把这批从 0 救回来之前的 usedUpAt(不然撤完「用完那天」变成今天,用完批的 30 天保留跟着挪)。
@@ -19676,18 +19690,15 @@ const _prepUndoMove = (w, i, acc, today) => {
   const laterCount = _prepLaterCount(w, i);
   const deltas = Array.isArray(m.deltas) ? m.deltas.filter(d => Array.isArray(d) && typeof d[1] === "number") : [];
   if (m.type === "take") {
-    const mk = m.settledBy ? w.moves.find(x => _prepIsObj(x) && x.type === "make" && x.op === m.settledBy) : null;
-    if (mk && Array.isArray(mk.settles)) {   // 这条 take 没了,补扣它的那条 make 不再挂着它
+    const settlers = _prepSettlersOf(w, m.id);
+    settlers.forEach(([mk]) => {   // 这条 take 没了,补扣它的那几条 make 不再挂着它
       const s = mk.settles.filter(x => !(Array.isArray(x) && x[0] === m.id));
       if (s.length !== mk.settles.length) { if (s.length) mk.settles = s; else delete mk.settles; }
-    }
+    });
     if (m.restoredBy) return;                                   // 规则 4:已经因为删生产记录加回过,只删这条
     if (laterCount) { _prepSkip(acc, "count"); return; }        // 规则 2
     deltas.forEach(([id, d]) => { if (d < 0) _prepBack(w, i, id, -d, acc, today); });
-    if (m.settledBy && _prepPos(m.settledQty) > 0) {            // 被后来做的那批补扣过的数,加回那一批
-      if (mk && Array.isArray(mk.newLots) && mk.newLots.length) _prepBack(w, i, mk.newLots[0], _prepPos(m.settledQty), acc, today);
-      else _prepSkip(acc, "gone");
-    }
+    _prepBackSettled(m, settlers, (id, n) => _prepBack(w, i, id, n, acc, today), acc);   // 被后来做的那几批补扣过的数,各自加回那一批
   } else if (m.type === "discard") {
     if (laterCount) { _prepSkip(acc, "count"); return; }
     deltas.forEach(([id, d]) => { if (d < 0) _prepBack(w, i, id, -d, acc, today); });
@@ -19700,9 +19711,13 @@ const _prepUndoMove = (w, i, acc, today) => {
     _prepRestoreUsedUp(w, m, i);
   } else if (m.type === "make") {
     if (laterCount) { _prepSkip(acc, "count"); return; }
-    (Array.isArray(m.settles) ? m.settles : []).forEach(s => {
-      const tk = Array.isArray(s) ? w.moves.find(x => _prepIsObj(x) && x.id === s[0]) : null;
-      if (tk && tk.settledBy === m.op) { delete tk.settledBy; delete tk.settledQty; }
+    (Array.isArray(m.settles) ? m.settles : []).forEach(s => {   // 这批补扣的数从 take 的合计里减掉;还有别的批补过,settledBy 交给最后那批
+      const tk = Array.isArray(s) ? w.moves.find(x => _prepIsObj(x) && x.type === "take" && x.id === s[0]) : null;
+      if (!tk) return;
+      const rest = _prepClean(_prepPos(tk.settledQty) - _prepPos(s[1]));
+      const other = _prepSettlersOf(w, tk.id).filter(([x]) => x !== m).pop();
+      if (rest > 0) { tk.settledQty = rest; if (other) tk.settledBy = other[0].op; }
+      else { delete tk.settledBy; delete tk.settledQty; }
     });
     const before = _prepSum(w);
     (Array.isArray(m.newLots) ? m.newLots : []).forEach(id => _prepUnmakeLot(w, i, id, today));
@@ -19773,11 +19788,7 @@ const _prepRestoreItem = (key, it, op, now, today) => {
     if (_prepLaterCount(w, i)) _prepSkip(acc, "count");
     else {
       (Array.isArray(m.deltas) ? m.deltas : []).forEach(d => { if (Array.isArray(d) && d[1] < 0) back(i, d[0], -d[1]); });
-      if (m.settledBy && _prepPos(m.settledQty) > 0) {
-        const mk = w.moves.find(x => _prepIsObj(x) && x.type === "make" && x.op === m.settledBy);
-        if (mk && Array.isArray(mk.newLots) && mk.newLots.length) back(i, mk.newLots[0], _prepPos(m.settledQty));
-        else _prepSkip(acc, "gone");
-      }
+      _prepBackSettled(m, _prepSettlersOf(w, m.id), (id, n) => back(i, id, n), acc);
     }
     m.restoredBy = op.opId;
   });
@@ -19809,17 +19820,19 @@ const _prepOne = (items, op, now, today) => {
       const lot = { id: lotId, madeAt: dateOk(op.madeAt) ? op.madeAt : today, made: q, left: q, at: now };
       if (op.via) lot.via = op.via;
       if (op.uid) lot.uid = op.uid;
-      // 补扣(默认值 7):今天取出时扣不够、还没被补扣也没加回过的 take,差的数从这一批里扣掉。
+      // 补扣(默认值 7):今天取出时扣不够、还没补完也没加回过的 take,还差的数从这一批里扣掉(前一批没补完的这一批接着补,审查 ps1)。
       // 这条 take 之后盘点过的不补(审查 ps1:盘点已经把账对成实物,差的那几个早就算进去了;改单位的盘点之后还会拿旧单位的数去扣)
       let s = 0;
       const settles = [];
       w.moves.forEach((m, i) => {
-        if (!_prepIsObj(m) || m.type !== "take" || m.date !== today || !(_prepPos(m.short) > 0) || m.settledBy || m.restoredBy || _prepLaterCount(w, i)) return;
-        const n = _prepClean(Math.min(_prepPos(m.short), q - s));
+        if (!_prepIsObj(m) || m.type !== "take" || m.date !== today || !(_prepPos(m.short) > 0) || m.restoredBy || _prepLaterCount(w, i)) return;
+        const rem = _prepClean(_prepPos(m.short) - _prepPos(m.settledQty));
+        if (!(rem > 0)) return;
+        const n = _prepClean(Math.min(rem, q - s));
         if (!(n > 0)) return;
         s = _prepClean(s + n);
         settles.push([m.id, n]);
-        m.settledBy = op.opId; m.settledQty = n;
+        m.settledBy = op.opId; m.settledQty = _prepClean(_prepPos(m.settledQty) + n);
       });
       if (s > 0) _prepSetLeft(lot, q - s, today);
       w.lots.push(lot);
@@ -21154,9 +21167,9 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
       const pending = pend(logged);
       const moves = item ? (item.moves || []) : [];
       const todayMade = _r3(moves.filter(m => m && m.type === "make" && m.date === today).reduce((a, m) => a + _prepNum(m.qty), 0));
-      // 同 prepApply 的补扣:这条 take 之后盘点过的不算(审查 ps1)
-      const shortToday = _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.settledBy && !m.restoredBy
-        && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + _prepNum(m.short), 0));
+      // 同 prepApply 的补扣:这条 take 之后盘点过的不算;前面的批补了一部分的,算还差的(审查 ps1)
+      const shortToday = _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.restoredBy
+        && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + Math.max(0, _prepNum(m.short) - Math.max(0, _prepNum(m.settledQty))), 0));
       const mk = prepMakeOf(l, obj);
       return { mode: "make", sub: null, key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
         todayMade, shortToday, make: mk ? { ...mk, qty: pending } : null, flow: flowOf(pending), readOnly,
