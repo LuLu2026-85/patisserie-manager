@@ -6313,7 +6313,21 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
   // ── 列表视图的数据:搜索 × 分类 / 在用 筛选;「全部」和「在用中」时按分类分段 ──
   const compQuery = compSearch.trim().toLowerCase();
-  const matchQuery = (c) => !compQuery || [c.nameZh, c.nameJa, c.nameFr, c.flavorName].some(s => (s || "").toLowerCase().includes(compQuery));
+  // 第 4 批 B4-5:名字 / 风味名不中时,再看原料 —— 配料行的中 / 日 / 法名、品牌,或它关联的材料(名字 / 别名 / 厂家名)。
+  // 只靠原料中的,记下中的那几行,卡片上写「含「…」」
+  const compQk = normSearch(compQuery);
+  const compMatById = compQk ? materialMapOf(materials) : null;
+  const compBrandKeys = compQk ? brandKeyMapOf(brands) : null;
+  const ingHitOf = new Map();
+  const matchQuery = (c) => {
+    if (!compQuery) return true;
+    if ([c.nameZh, c.nameJa, c.nameFr, c.flavorName].some(s => (s || "").toLowerCase().includes(compQuery) || (compQk && normSearch(s).includes(compQk)))) return true;
+    if (!compQk) return false;
+    const hits = (c.ingredients || []).filter(ing => ingredientQueryHit(ing, compQk, compMatById, compBrandKeys));
+    if (hits.length === 0) return false;
+    ingHitOf.set(c.id, hits);
+    return true;
+  };
   const inUseCount = components.filter(c => c.inUse).length;
   const baseList = filterCat === "all" ? components
     : filterCat === "inuse" ? components.filter(c => c.inUse)
@@ -6352,6 +6366,12 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合产品`)
         : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
     const liveCost = getIngsLiveCost(c.ingredients, materials, brands);  // 不读 c.totalCost,见 getIngsLiveCost
+    // 第 4 批:只靠原料搜到的,写出是哪一行原料
+    const ingHits = ingHitOf.get(c.id) || [];
+    const ingHitName = ingHits.length ? (pickLang(ingHits[0], "name", lang) || ingHits[0].nameFr || "") : "";
+    const ingHitText = !ingHits.length ? null
+      : lang === "zh" ? `含「${ingHitName}」${ingHits.length > 1 ? `等 ${ingHits.length} 行` : ""}`
+      : `「${ingHitName}」を使用${ingHits.length > 1 ? `(計 ${ingHits.length} 行)` : ""}`;
     return (
       <div
         key={c.id}
@@ -6432,6 +6452,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
               (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
               liveCost > 0 ? `¥${liveCost.toFixed(0)}` : null,
               usageText,
+              ingHitText,
             ].filter(Boolean).map((t, i, arr) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span>{t}</span>
@@ -6670,7 +6691,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         className="k-input"
         value={compSearch}
         onChange={e => setCompSearch(e.target.value)}
-        placeholder={lang === "zh" ? "搜索组件名(中文 / 日文 / 法文都行)" : "コンポーネント名で検索(中・日・仏)"}
+        placeholder={lang === "zh" ? "搜组件名或原料(中 / 日 / 法 / 品牌 / 别名)" : "コンポーネント名・材料で検索(中・日・仏・ブランド)"}
         style={{ width: "100%", maxWidth: 360, padding: "8px 12px", marginBottom: 10, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box" }}
       />
 
@@ -7180,25 +7201,92 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
 // 只按中 / 日 / 法文名找(同选材料弹窗),NFKC + 不分大小写 + 不管空格
 const normIngSuggest = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 const _ingSuggestNames = new WeakMap();   // 材料对象 → 归一化后的名字(材料一改就是新对象,缓存自然作废)
-function suggestMaterialsForIng(text, materials, limit = 8) {
+// 第 4 批 B4-5:名字里多认 materials[].aliases(别名 / 俗称);传了 brands 时再认厂家名 ——
+// 只中厂家的排在所有名字命中之后(排序第一键),否则「本店优先」会让只中厂家的本店材料挤到精确名字命中前面。不传 brands = 和以前一样
+function suggestMaterialsForIng(text, materials, limit = 8, brands = null) {
   const k = normIngSuggest(text);
   if (!k || !Array.isArray(materials)) return [];
   const shopIds = new Set(_shopMaterials.map(s => s && s.materialId).filter(Boolean));
+  const bq = normSearch(text);
+  const brandKeys = (Array.isArray(brands) && bq.length >= 2) ? brandKeyMapOf(brands) : null;
   const hits = [];
   for (const m of materials) {
     if (!m || !m.id) continue;
     let names = _ingSuggestNames.get(m);
-    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
+    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr, ...materialAliasesOf(m)].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
     // 0 = 名字完全一样,1 = 开头就是,2 = 名字里有
     let rank = 3;
     for (const n of names) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 3; if (r < rank) rank = r; }
-    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0 });
+    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0, brandOnly: 0 });
+    else if (brandKeys && materialBrandHit(m, bq, brandKeys)) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0, brandOnly: 1 });
   }
   const nm = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
-  hits.sort((a, b) => (b.shop - a.shop) || (a.rank - b.rank)
+  hits.sort((a, b) => (a.brandOnly - b.brandOnly) || (b.shop - a.shop) || (a.rank - b.rank)
     || ((b.m.isBest ? 1 : 0) - (a.m.isBest ? 1 : 0)) || ((b.m.rating || 0) - (a.m.rating || 0))
     || (nm(a.m).length - nm(b.m).length) || nm(a.m).localeCompare(nm(b.m)));
   return hits.slice(0, limit).map(x => x.m);
+}
+
+// ─── 材料搜索共用(第 4 批 B4-5)────────────────────────────────────────
+// 材料百科首页 / 分类页 / 选材料弹窗 / 组件仓库按原料搜共用。只是文本搜索,**不进 smartMatchMaterial 的打分**(那套改之前先跑 match_probe)。
+// normSearch:NFKC → 小写 → 去法文重音(é→e,日文浊点不受影响,同 linkKeys)→ 去空白
+const normSearch = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase()
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC").replace(/\s+/g, "");
+// materials[].aliases:别名 / 俗称(字符串数组;没有这个键 = 没有别名)
+const materialAliasesOf = (m) => (m && Array.isArray(m.aliases)) ? m.aliases.filter(a => typeof a === "string" && a.trim()) : [];
+const _matSearchKeys = new WeakMap();     // 材料对象 → 中 / 日 / 法名 + 别名的归一化结果(材料一改就是新对象,缓存自然作废)
+function materialSearchKeys(m) {
+  if (!m || typeof m !== "object") return [];
+  let keys = _matSearchKeys.get(m);
+  if (!keys) { keys = [m.nameZh, m.nameJa, m.nameFr, ...materialAliasesOf(m)].map(normSearch).filter(Boolean); _matSearchKeys.set(m, keys); }
+  return keys;
+}
+const _brandKeyMaps = new WeakMap();      // brands 数组 → Map(厂家 id → 中 / 日 / 法名归一化)
+function brandKeyMapOf(brands) {
+  if (!Array.isArray(brands)) return new Map();
+  let map = _brandKeyMaps.get(brands);
+  if (!map) {
+    map = new Map();
+    brands.forEach(b => { if (b && b.id != null && !map.has(b.id)) map.set(b.id, [b.nameZh, b.nameJa, b.nameFr].map(normSearch).filter(Boolean)); });
+    _brandKeyMaps.set(brands, map);
+  }
+  return map;
+}
+const _materialMaps = new WeakMap();      // materials 数组 → Map(id → 材料),同 materials.find 取第一条
+function materialMapOf(materials) {
+  if (!Array.isArray(materials)) return new Map();
+  let map = _materialMaps.get(materials);
+  if (!map) {
+    map = new Map();
+    materials.forEach(m => { if (m && m.id != null && !map.has(m.id)) map.set(m.id, m); });
+    _materialMaps.set(materials, map);
+  }
+  return map;
+}
+// 只有厂家名中:查询词(已归一化)至少 2 个字,单字厂家名 / 单字查询不乱中
+const materialBrandHit = (m, k, brandKeys) => {
+  if (!m || !brandKeys || !k || k.length < 2 || m.brandId == null) return false;
+  const bks = brandKeys.get(m.brandId);
+  return !!bks && bks.some(b => b.includes(k));
+};
+// k 是 normSearch 过的查询词。0 = 名字 / 别名完全一样,1 = 开头就是,2 = 名字里有,3 = 只有厂家名中,9 = 不中
+function materialQueryRank(m, k, brandKeys) {
+  if (!m || !k) return 9;
+  let rank = 9;
+  for (const n of materialSearchKeys(m)) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 9; if (r < rank) rank = r; }
+  if (rank < 9) return rank;
+  return materialBrandHit(m, k, brandKeys) ? 3 : 9;
+}
+// 配料行中不中:行里的中 / 日 / 法名(品牌字段要 2 个字以上),或者它关联的那条材料按上面的规则中
+function ingredientQueryHit(ing, k, matById, brandKeys) {
+  if (!ing || typeof ing !== "object" || !k) return false;
+  if ([ing.nameZh, ing.nameJa, ing.nameFr].some(s => normSearch(s).includes(k))) return true;
+  if (k.length >= 2 && normSearch(ing.brand).includes(k)) return true;
+  if (ing.materialId != null && matById) {
+    const m = matById.get(ing.materialId);
+    if (m && materialQueryRank(m, k, brandKeys) < 9) return true;
+  }
+  return false;
 }
 
 // 中文名 / 日文名输入框 + 联想下拉(三个编辑页共用,IngredientTable 里用)。
@@ -7216,7 +7304,7 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
   const touchingBox = useRef(false);   // 手指正按在下拉里(见 onBlur)
   const zh = lang === "zh";
   const text = value == null ? "" : String(value);
-  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials) : [], [open, composing, text, materials]);
+  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials, 8, brands) : [], [open, composing, text, materials, brands]);
   const place = () => {
     const el = inputRef.current;
     if (!el || !el.getBoundingClientRect) return;
@@ -12989,32 +13077,161 @@ function getUsageScenes(material, recipes, components, creations) {
     return true;
   };
   // 如果 ing 有 materialId,用它精确匹配;否则用名字
+  // 第 4 批(critic C7):「来自组件」的行(componentId)价格和原料都跟那个组件走,不再按名字算成这个材料的一次使用
   const isMatch = (ing) => {
     if (ing.materialId) return ing.materialId === mid;
+    if (ing.componentId) return false;
     return matchName(ing);
   };
 
-  recipes.forEach(r => {
-    (r.ingredients || []).forEach(ing => {
-      if (isMatch(ing)) results.push({ type: "recipe", id: r.id, name: r.nameZh || r.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-    });
-  });
-  components.forEach(c => {
-    (c.ingredients || []).forEach(ing => {
-      if (isMatch(ing)) results.push({ type: "component", id: c.id, name: c.nameZh || c.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-    });
-  });
-  // 2026-09-29 体检第 2 批:「跟组件库走」的部分是组件的副本,组件那一行已经列过,原来又按整批量再列一遍(重复计数)。
-  const _followCompIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
-  creations.forEach(cr => {
-    (cr.layers || []).forEach(l => {
-      if (l && l.sourceComponentId && l.follow && !l.localVariant && _followCompIds.has(l.sourceComponentId)) return;
-      (l.ingredients || []).forEach(ing => {
-        if (isMatch(ing)) results.push({ type: "creation", id: cr.id, name: cr.nameZh || cr.nameJa, layerName: l.nameZh || l.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-      });
-    });
+  walkIngredientUses(recipes, components, creations, (ing, { type, owner, layer }) => {
+    if (!isMatch(ing)) return;
+    if (type === "creation") results.push({ type, id: owner.id, name: owner.nameZh || owner.nameJa, layerName: layer.nameZh || layer.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
+    else results.push({ type, id: owner.id, name: owner.nameZh || owner.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
   });
   return results;
+}
+
+// ─── 遍历所有配料行(第 4 批 B4-4 从 getUsageScenes 抽出来,规则只留这一处)─────────────
+// 顺序:配方 → 组件 → 组合产品的各部分。cb(ing, { type: "recipe" | "component" | "creation", owner, layer })
+// 2026-09-29 体检第 2 批:「跟组件库走」的部分是组件的副本,组件那一行已经列过,原来又按整批量再列一遍(重复计数)—— 这里跳过;
+// 本产品专用(localVariant)/ 手搭的 / 组件已删的部分照常算。空对象 / 空行跳过(以前遇到会抛错)。
+function walkIngredientUses(recipes, components, creations, cb) {
+  (recipes || []).forEach(r => {
+    if (!r) return;
+    (r.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "recipe", owner: r, layer: null }); });
+  });
+  (components || []).forEach(c => {
+    if (!c) return;
+    (c.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "component", owner: c, layer: null }); });
+  });
+  const followCompIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
+  (creations || []).forEach(cr => {
+    if (!cr) return;
+    (cr.layers || []).forEach(l => {
+      if (!l) return;
+      if (l.sourceComponentId && l.follow && !l.localVariant && followCompIds.has(l.sourceComponentId)) return;
+      (l.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "creation", owner: cr, layer: l }); });
+    });
+  });
+}
+
+// ─── 「待换国产」看板的计算(第 4 批 B4-4 / B4-5 第 1 段:只有纯函数,界面第 2 段挂)─────────────
+// 标记放在材料对象里:domesticStatus("searching" 在找 / "keepImport" 继续进口 / "" 待换)、domesticNote 备注、domesticAt 改标记的时间。
+// **改这组标记不写 updatedAt**(合并导入按 updatedAt 整组取价格那一边,标一下状态就会把另一台电脑的价格盖掉),靠 domesticAt 自己比先后。
+const DOMESTIC_KEYS = ["domesticStatus", "domesticNote", "domesticAt"];
+const domesticStatusOf = (m) => {
+  const s = m && m.domesticStatus;
+  return s === "searching" || s === "keepImport" ? s : "";   // 认不出的值一律当空(给以后加新状态留余地)
+};
+// data = { recipes, components, creations, products, materials };价格走 getMaterialRawPrice(读渲染期注入的本店原料,本店价优先),不另写一套。
+// 在用 = 配料行关联了还在的材料(遍历规则同 getUsageScenes:跟组件库走的部分不重复算)。按名字回退的行不算(拿不准是哪一条、哪种钱)。
+// 「不计价」(noCost)的行不算在用,也不算没关联;「来自组件」(componentId 指向还在的组件)的行不算没关联(它的原料在组件那边已经算了)。
+// 在卖(只打标记):配方 / 组合产品 onSale,或被商品挂着;在卖的组合产品顺着跟组件库走的部分(sourceComponentId)、
+// 在卖的配方 / 组件 / 组合产品顺着配料行的 componentId,把用到的组件也算在卖(一直传下去,防循环)。
+// 状态:实际取用的那条价是人民币 → done(没价但材料写了人民币也算);否则按手标 keepImport → keep / searching → searching / 空 → todo。
+function domesticBoardRows(data) {
+  const { recipes = [], components = [], creations = [], products = [], materials = [] } = data || {};
+  const matById = materialMapOf(materials);
+  const compIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
+  const compById = new Map();
+  (components || []).forEach(c => { if (c && c.id != null && !compById.has(String(c.id))) compById.set(String(c.id), c); });
+  const key = (type, id) => type + ":" + String(id);
+
+  // ── 在卖:先收起点,再顺着组件传下去
+  const selling = new Set();
+  const queue = [];
+  const mark = (type, id) => { if (id == null) return; const k = key(type, id); if (selling.has(k)) return; selling.add(k); queue.push([type, id]); };
+  (recipes || []).forEach(r => { if (r && r.onSale) mark("recipe", r.id); });
+  (creations || []).forEach(cr => { if (cr && cr.onSale) mark("creation", cr.id); });
+  (products || []).forEach(p => (p && Array.isArray(p.items) ? p.items : []).forEach(it => {
+    if (!it || it.linkedId == null || it.linkedId === "") return;
+    const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
+    // 商品里的 linkedId 数字 / 字符串都有:按 String 比,记下数据里那一条的真 id
+    const arr = type === "creation" ? creations : type === "component" ? components : recipes;
+    const hit = (arr || []).find(x => x && String(x.id) === String(it.linkedId));
+    if (hit) mark(type, hit.id);
+  }));
+  const recById = new Map(), crById = new Map();
+  (recipes || []).forEach(r => { if (r && r.id != null && !recById.has(String(r.id))) recById.set(String(r.id), r); });
+  (creations || []).forEach(cr => { if (cr && cr.id != null && !crById.has(String(cr.id))) crById.set(String(cr.id), cr); });
+  const markRowComps = (ings) => (ings || []).forEach(ing => {
+    if (!ing || ing.componentId == null || ing.componentId === "") return;
+    const c = compById.get(String(ing.componentId));
+    if (c) mark("component", c.id);
+  });
+  while (queue.length) {
+    const [type, id] = queue.shift();
+    if (type === "recipe") { const r = recById.get(String(id)); if (r) markRowComps(r.ingredients); }
+    else if (type === "component") { const c = compById.get(String(id)); if (c) markRowComps(c.ingredients); }
+    else if (type === "creation") {
+      const cr = crById.get(String(id));
+      if (!cr) continue;
+      (cr.layers || []).forEach(l => {
+        if (!l) return;
+        if (l.sourceComponentId && l.follow && !l.localVariant && compIds.has(l.sourceComponentId)) mark("component", l.sourceComponentId);
+        else markRowComps(l.ingredients);
+      });
+    }
+  }
+
+  // ── 在用:逐行归类
+  const byMat = new Map();   // 材料 id → { material, rows, uses: Map }
+  let unlinkedRows = 0, danglingRows = 0, noCostRows = 0, fromComponentRows = 0;
+  const unlinkedNameSet = new Set();
+  walkIngredientUses(recipes, components, creations, (ing, { type, owner, layer }) => {
+    if (ing.noCost) { noCostRows++; return; }
+    const m = ing.materialId != null && ing.materialId !== "" ? matById.get(ing.materialId) : null;
+    if (!m) {
+      const fromComp = ing.componentId != null && ing.componentId !== "" && compById.has(String(ing.componentId));
+      if (fromComp) { fromComponentRows++; return; }
+      if (ing.materialId != null && ing.materialId !== "") { danglingRows++; return; }
+      const nm = normSearch(ing.nameZh || ing.nameJa || ing.nameFr || "");
+      if (!nm) return;
+      unlinkedRows++; unlinkedNameSet.add(nm);
+      return;
+    }
+    let e = byMat.get(m.id);
+    if (!e) { e = { material: m, rows: 0, uses: new Map() }; byMat.set(m.id, e); }
+    e.rows++;
+    const uk = key(type, owner.id);
+    let u = e.uses.get(uk);
+    if (!u) { u = { type, id: owner.id, name: owner.nameZh || owner.nameJa || owner.nameFr || "", layerNames: [] }; e.uses.set(uk, u); }
+    if (layer) { const ln = layer.nameZh || layer.nameJa || layer.nameFr || ""; if (ln && !u.layerNames.includes(ln)) u.layerNames.push(ln); }
+  });
+
+  const items = [...byMat.values()].map(e => {
+    const m = e.material;
+    const price = getMaterialRawPrice(m);
+    const status = domesticStatusOf(m);
+    const state = price.currency === "CNY" ? "done" : status === "keepImport" ? "keep" : status === "searching" ? "searching" : "todo";
+    let shopNoCurrency = false;
+    if (price.source === "shop") {
+      const sm = _shopMaterials.find(s => s && s.materialId === m.id);   // 同 getMaterialRawPrice 取的那一条
+      shopNoCurrency = !!sm && sm.currency !== "CNY" && sm.currency !== "JPY";
+    }
+    const uses = [...e.uses.values()];
+    return {
+      material: m, rows: e.rows, uses,
+      selling: uses.some(u => selling.has(key(u.type, u.id))),
+      price, state, status, shopNoCurrency,
+      staleStatus: state === "done" && status !== "",
+    };
+  });
+  const nameOf = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
+  const cmpItem = (a, b) => (b.uses.length - a.uses.length) || (b.rows - a.rows)
+    || (nameOf(a.material) < nameOf(b.material) ? -1 : nameOf(a.material) > nameOf(b.material) ? 1 : 0);
+  const groups = MATERIAL_CATEGORIES
+    .map(cat => ({ cat, id: cat.id, items: items.filter(it => getMaterialCat(it.material.categoryId).id === cat.id).sort(cmpItem) }))
+    .filter(g => g.items.length > 0);
+  const sorted = groups.flatMap(g => g.items);
+  const cnt = (st) => sorted.filter(it => it.state === st).length;
+  const counts = {
+    inUse: sorted.length, done: cnt("done"), todo: cnt("todo"), searching: cnt("searching"), keep: cnt("keep"),
+    open: cnt("todo") + cnt("searching"),
+    sellingOpen: sorted.filter(it => it.selling && (it.state === "todo" || it.state === "searching")).length,
+  };
+  return { items: sorted, groups, counts, unlinkedRows, unlinkedNames: unlinkedNameSet.size, danglingRows, noCostRows, fromComponentRows };
 }
 
 // ─── 材料百科主视图 ─────────────
@@ -13029,6 +13246,8 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
   materialReturnTo, setMaterialReturnTo,
   setTab, setViewId,
   // v17.3 厂家管理:由外层 MaterialsView 提供(状态 + 删/合并的唯一写出口)
+  // 第 4 批:材料详情「你的使用情况」每一行点了去那一条的查看页(App 的 jumpToItem)
+  onOpenUsage = null,
   brandManageOpen = false, setBrandManageOpen = () => {}, requestDelete = () => {}, requestMerge = () => {} }) {
 
   // 编辑厂家
@@ -13142,6 +13361,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
       setShopMaterials={setShopMaterials}
       showToast={showToast}
       returnLabel={materialReturnTo && materialReturnTo.tab === "view" ? (lang === "zh" ? "← 返回配方" : "← レシピへ戻る") : null}
+      onOpenUsage={onOpenUsage}
     />;
   }
 
@@ -13227,10 +13447,14 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
       const hay = `${b.nameZh || ""} ${b.nameJa || ""} ${b.nameFr || ""} ${b.origin || ""}`.toLowerCase();
       return hay.includes(q);
     });
-    const allMaterials = materials.filter(m => {
-      const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-      return hay.includes(q);
-    });
+    // 第 4 批 B4-5:产品按名字 + 别名 + 厂家名找(1111 / 1838 条的名字里不带厂家名);
+    // 按 materialQueryRank 稳定排序:名字完全一样 → 开头就是 → 名字里有 → 只有厂家名中
+    const k = normSearch(q);
+    const bkm = brandKeyMapOf(brands);
+    const ranked = [];
+    materials.forEach((m, i) => { const r = materialQueryRank(m, k, bkm); if (r < 9) ranked.push([r, i, m]); });
+    ranked.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+    const allMaterials = ranked.map(x => x[2]);
     return {
       brands: showAll ? allBrands : allBrands.slice(0, 20),
       materials: showAll ? allMaterials : allMaterials.slice(0, 30),
@@ -13955,22 +14179,28 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
     // 2026-09-29 体检第 2 批:原来严格相等,misc / 旧编号的材料按分类筛不出来;认不出的归「其他」
     if (catFilter) list = list.filter(m => m.categoryId && getMaterialCat(m.categoryId).id === catFilter);
     if (brandFilter) list = list.filter(m => m.brandId === brandFilter);
+    // 第 4 批 B4-5:名字 + 别名 + 厂家名(同材料百科首页);只中厂家名的排在名字命中的后面
+    const brandOnlyIds = new Set();
     if (q) {
+      const qk = normSearch(q), bkm = brandKeyMapOf(brands);
       list = list.filter(m => {
-        const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-        return hay.includes(q);
+        const r = materialQueryRank(m, qk, bkm);
+        if (r === 3) brandOnlyIds.add(m.id);
+        return r < 9;
       });
     }
-    // 排序: 本店原料已有 (v17.4) > isBest > rating > 名字。_shopMaterials 是渲染期注入的,弹窗每次打开都是新的,不进依赖
+    // 排序: 本店原料已有 (v17.4) > 名字命中先于只中厂家名(第 4 批)> isBest > rating > 名字。_shopMaterials 是渲染期注入的,弹窗每次打开都是新的,不进依赖
     const shopIds = new Set(_shopMaterials.map(x => x && x.materialId).filter(Boolean));
     return [...list].sort((a, b) => {
       const sa = shopIds.has(a.id) ? 1 : 0, sb = shopIds.has(b.id) ? 1 : 0;
       if (sa !== sb) return sb - sa;
+      const ba = brandOnlyIds.has(a.id) ? 1 : 0, bb = brandOnlyIds.has(b.id) ? 1 : 0;
+      if (ba !== bb) return ba - bb;
       if ((b.isBest ? 1 : 0) !== (a.isBest ? 1 : 0)) return (b.isBest ? 1 : 0) - (a.isBest ? 1 : 0);
       if ((b.rating || 0) !== (a.rating || 0)) return (b.rating || 0) - (a.rating || 0);
       return (a.nameZh || a.nameJa || "").localeCompare(b.nameZh || b.nameJa || "");
     }).slice(0, 100); // 最多 100 条结果
-  }, [materials, q, catFilter, brandFilter]);
+  }, [materials, brands, q, catFilter, brandFilter]);
 
   // 动态取可选厂家 (根据当前 catFilter)
   const availableBrands = useMemo(() => {
@@ -14381,10 +14611,15 @@ function CategoryDetailView({
   if (brandFilter) {
     filteredProducts = filteredProducts.filter(m => m.brandId === brandFilter);
   }
+  // 第 4 批 B4-5:名字 + 别名 + 厂家名(同首页);只中厂家名的排在名字命中的后面(下面排序第一键)
+  const qk = normSearch(q);
+  const brandOnlyIds = new Set();
   if (q) {
+    const bkm = brandKeyMapOf(brands);
     filteredProducts = filteredProducts.filter(m => {
-      const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-      return hay.includes(q);
+      const r = materialQueryRank(m, qk, bkm);
+      if (r === 3) brandOnlyIds.add(m.id);
+      return r < 9;
     });
   }
 
@@ -14397,6 +14632,8 @@ function CategoryDetailView({
 
   // 排序
   productWithUsage.sort((a, b) => {
+    const ba = brandOnlyIds.has(a.id) ? 1 : 0, bb = brandOnlyIds.has(b.id) ? 1 : 0;
+    if (ba !== bb) return ba - bb;
     if (b._usage !== a._usage) return b._usage - a._usage;
     if ((b.isBest ? 1 : 0) !== (a.isBest ? 1 : 0)) return (b.isBest ? 1 : 0) - (a.isBest ? 1 : 0);
     if ((b.rating || 0) !== (a.rating || 0)) return (b.rating || 0) - (a.rating || 0);
@@ -14905,7 +15142,9 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
 }
 
 // ─── 产品详情 ─────────────
-function MaterialDetail({ material, brand, allMaterials, recipes, components, creations, lang, onEdit, onBack, onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, returnLabel }) {
+function MaterialDetail({ material, brand, allMaterials, recipes, components, creations, lang, onEdit, onBack, onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, returnLabel, onOpenUsage = null }) {
+  // 第 4 批:「你的使用情况」超过 10 条时点「显示全部」;记的是哪条材料点的,换一条材料自动收起
+  const [usageAllFor, setUsageAllFor] = useState(null);
   const cat = getMaterialCat(material.categoryId);
   const name = pickLang(material, "name", lang);
   const features = lang === "zh" ? (material.featuresZh || material.featuresJa) : (material.featuresJa || material.featuresZh);
@@ -15004,22 +15243,34 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               {lang === "zh" ? "在你的配方库中使用" : "配方ライブラリで使用"} <span style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.accent }}>{usage.length}</span> {lang === "zh" ? "次" : "回"}
             </div>
             <div style={{ display: "grid", gap: 5 }}>
-              {usage.slice(0, 10).map((u, i) => (
-                <div key={i} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "7px 12px", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", border: `0.5px solid ${T.borderSoft}` }}>
-                  <span style={{ color: T.textPrimary }}>
+              {/* 第 4 批 B4-5:每一行点了去那个配方 / 组件 / 组合产品的查看页;按名字对上的(没关联百科)标一句,和关联了的分得开 */}
+              {(usageAllFor === material.id ? usage : usage.slice(0, 10)).map((u, i) => {
+                const rowStyle = { background: T.bgCard, borderRadius: T.radiusSm, padding: "7px 12px", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, border: `0.5px solid ${T.borderSoft}` };
+                const inner = (<>
+                  <span style={{ color: T.textPrimary, minWidth: 0, overflowWrap: "anywhere" }}>
                     {u.type === "recipe" && "📖 "}
                     {u.type === "component" && "🧩 "}
                     {u.type === "creation" && "🎂 "}
                     {u.name}
                     {u.layerName && <span style={{ color: T.textTertiary, marginLeft: 4 }}>({u.layerName})</span>}
+                    {!u.linked && <span style={{ color: T.textTertiary, marginLeft: 6, fontSize: 11 }}>{lang === "zh" ? "按名字匹配" : "名前で一致"}</span>}
                   </span>
-                  <span style={{ color: T.textTertiary, fontFamily: T.fontSerif, fontWeight: 500 }}>{u.qty}{u.unit}</span>
-                </div>
-              ))}
-              {usage.length > 10 && (
-                <div style={{ fontSize: 11, color: T.textTertiary, textAlign: "center", fontStyle: "italic" }}>
-                  {lang === "zh" ? `…还有 ${usage.length - 10} 条` : `…他に ${usage.length - 10} 件`}
-                </div>
+                  <span style={{ color: T.textTertiary, fontFamily: T.fontSerif, fontWeight: 500, whiteSpace: "nowrap" }}>{u.qty}{u.unit}{onOpenUsage ? " ›" : ""}</span>
+                </>);
+                return onOpenUsage ? (
+                  <button key={i} type="button" className="k-row"
+                    title={lang === "zh" ? "打开这一条" : "開く"}
+                    onClick={() => onOpenUsage({ kind: u.type + "View", id: u.id })}
+                    style={{ ...rowStyle, width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: "inherit" }}>
+                    {inner}
+                  </button>
+                ) : <div key={i} style={rowStyle}>{inner}</div>;
+              })}
+              {usage.length > 10 && usageAllFor !== material.id && (
+                <button type="button" onClick={() => setUsageAllFor(material.id)}
+                  style={{ fontSize: 11, color: T.accent, textAlign: "center", background: "transparent", border: "none", cursor: "pointer", padding: "4px 0", fontFamily: "inherit" }}>
+                  {lang === "zh" ? `…还有 ${usage.length - 10} 条 · 显示全部` : `…他に ${usage.length - 10} 件 · すべて表示`}
+                </button>
               )}
             </div>
           </>
@@ -22217,6 +22468,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setMaterialReturnTo={setMaterialReturnTo}
           setTab={setTab}
           setViewId={setViewId}
+          onOpenUsage={jumpToItem}
         />
       )}
 
