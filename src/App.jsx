@@ -19453,7 +19453,9 @@ function App() {
   // 和「内容质量扫描」跳材料是同一个做法)。从数据 tab 出发,没有编辑页开着,不用走 goTab 的未保存提醒
   const jumpToItem = ({ kind, id } = {}) => {
     const byId = (arr) => (arr || []).find(x => x && x.id === id);
-    const target = kind === "recipe" ? byId(recipes) : kind === "component" ? byId(components) : kind === "creation" ? byId(creations)
+    // 第 4 批第 0 步:加了四种「打开查看页」(recipeView / componentView / creationView / productView),给毛利一览 / 材料使用情况 / 待换国产看板用
+    const target = (kind === "recipe" || kind === "recipeView") ? byId(recipes) : (kind === "component" || kind === "componentView") ? byId(components)
+      : (kind === "creation" || kind === "creationView") ? byId(creations) : kind === "productView" ? byId(products)
       : (kind === "material" || kind === "materialView") ? byId(materials) : kind === "brand" ? byId(brands) : kind === "knowledge" ? byId(knowledge) : null;
     if (!target) { showToast(lang === "zh" ? "找不到这一条了,可能已经删掉" : "見つかりません(削除済みかもしれません)"); return; }
     setShowDataHealth(false);
@@ -19466,6 +19468,11 @@ function App() {
     else if (kind === "materialView") { setBrandEditTarget(null); setMaterialEditTarget(null); setMaterialReturnTo(null); setBrandViewId(null); setMaterialViewId(target.id); setTab("materialsPedia"); }
     else if (kind === "brand") { setMaterialEditTarget(null); setMaterialReturnTo(null); setMaterialViewId(null); setBrandViewId(null); setBrandEditTarget(target); setTab("materialsPedia"); }
     else if (kind === "knowledge") { setKnowledgeEditTarget(target); setTab("knowledge"); }
+    // 查看页:同一次操作里先清掉那个 tab 的编辑对象再设查看 id(组件 / 组合产品 / 商品的编辑页开着会盖住详情)
+    else if (kind === "recipeView") { setViewId(target.id); setTab("view"); }
+    else if (kind === "componentView") { setCompEditTarget(null); setCompViewId(target.id); setTab("components"); }
+    else if (kind === "creationView") { setCreationEditTarget(null); setCreationReturnTo(null); setCreationViewId(target.id); setTab("creations"); }
+    else if (kind === "productView") { setProductEditTarget(null); setProductViewId(target.id); setTab("products"); }
   };
   // 一键改:先改 + 撤销(2a §09)。按对象身份换:改的是面板上看到的那一个对象;撤销时换回原对象,
   // 这几秒里被别处又改过(身份变了)就不还原,提示一句。本店原料 / 材料 / 厂家写 updatedAt(合并导入按它取新的一边)
