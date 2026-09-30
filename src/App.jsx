@@ -20391,6 +20391,7 @@ const PREP_TXT = {
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     fBeforeBooks: (names) => `;${names}那天还没开始记账或之后盘点过,没扣`,
+    fElsewhere: (nm, n, u) => `;⚠「${nm}」这天已经从取出行 / 备货页 / 厨房取出过 ${fmtQty(n)}${u ? " " + u : ""},这次又扣了一遍,重复了就点撤销`,
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
@@ -20643,6 +20644,7 @@ const PREP_TXT = {
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     fBeforeBooks: (names) => `・${names}はその日まだ記録開始前か、後で棚卸し済みのため未控除`,
+    fElsewhere: (nm, n, u) => `・⚠「${nm}」はこの日すでに取り出し行・作り置き・キッチン画面から ${fmtQty(n)}${u || ""} 使用済み、今回さらに控除しました。重複なら取り消しを`,
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
@@ -25050,10 +25052,17 @@ function App() {
     if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product" })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
     makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, q, d, { id: logId });
     // toast:按记入这一刻的账本算扣了多少 / 差多少(prepApply 用同一个 prepTakePlan)
-    const bits = [], shorts = [];
+    const bits = [], shorts = [], elsewhere = [];
+    // 审查 pt1:这个商品直接装的那几样,这天已经在取出行 / 厨房 / 备货卡取过(同一批面团)—— 只在 toast 里提醒,账本行为不变(筛法同生产单商品行 _prepLineCalc 的 takenElsewhere)
+    const direct = new Set((Array.isArray(p.items) ? p.items : []).filter(it => it).map(it => prepKeyOf(it.linkedType || "recipe", it.linkedId)));
     acts.forEach(a => {
       const nm = String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim();
       const store = X.storeName(a.cfg.store);
+      if (direct.has(a.t.key) && !elsewhere.some(e => e.key === a.t.key)) {
+        const n = _r3((a.it.moves || []).filter(m => m && m.type === "take" && m.date === d && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || a.t.key.startsWith("recipe:")))
+          .reduce((s, m) => s + (parseFloat(m.qty) || 0), 0));
+        if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, a.it.unit) });
+      }
       const td = d <= localDateStr() ? d : localDateStr();
       const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td, td < localDateStr() ? td : "");   // 同 prepApply 的 take:按那一天判过期(审查 ps3)、那天之后做的批不扣(审查 pt1)
       bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
@@ -25065,7 +25074,7 @@ function App() {
     flow.takes.forEach(t => { if (!acts0.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
     const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("")
       + (before.length ? X.fBeforeBooks(before.map(a => `${X.storeName(a.cfg.store)}「${String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim()}」`).join(lang === "ja" ? "・" : "、")) : "");
-    showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.join(lang === "ja" ? "・" : "、")) + shorts.join("") + untaken, { undo: () => {
+    showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.join(lang === "ja" ? "・" : "、")) + shorts.join("") + untaken + elsewhere.map(e => e.txt).join(""), { undo: () => {
       // 撤销:按记下的生产记录 id 找;找不到(商品页已经删了)→ 生产记录和商品库存都不动,只撤备货
       const cur = ((dataRef.current && dataRef.current.productionLog) || []).find(x => x && x.id === logId);
       const pv = prepRevertPreview(prepStockLatestRef.current, opId);
