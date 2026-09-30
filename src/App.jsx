@@ -18783,8 +18783,9 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   const marginCell = (r) => <span style={{ color: r.mi.pct === null ? T.muted : r.mi.color }}>{r.mi.text}</span>;
   const suggestCell = (r) => r.mi.suggested === null ? <span style={{ color: T.muted }}>—</span>
     : <span data-suggest="1" title={r.mi.suggestedAtLeast ? X.atLeastTitle : undefined} style={{ color: r.mi.suggestedAtLeast ? T.warning : T.ink }}>{r.mi.suggestedAtLeast ? X.atLeast : ""}{moMoney(r.mi.suggested)}</span>;
-  const gapCell = (r) => r.mi.gap === null ? <span style={{ color: T.muted }}>—</span>
-    : <span style={{ color: r.mi.gap < -1e-9 ? T.warning : T.body }}>{r.mi.gap > 1e-9 ? "+" : r.mi.gap < -1e-9 ? "−" : ""}{moMoney(Math.abs(r.mi.gap))}</span>;
+  // 审查 b4r1:成本算不全时建议价只是下限,差额只是上限 → 不为负时写「≤」、标黄;日元售价折算的差额前面加「≈」(同售价格)
+  const gapCell = (r) => { if (r.mi.gap === null) return <span style={{ color: T.muted }}>—</span>; const upTo = r.mi.suggestedAtLeast && r.mi.gap >= -1e-9;
+    return <span data-gap="1" title={upTo ? X.atLeastTitle : undefined} style={{ color: (r.mi.gap < -1e-9 || upTo) ? T.warning : T.body }}>{r.mi.approx ? "≈" : ""}{upTo ? "≤ " : ""}{r.mi.gap > 1e-9 ? "+" : r.mi.gap < -1e-9 ? "−" : ""}{moMoney(Math.abs(r.mi.gap))}</span>; };
   const issuesText = (r) => r.issues.map(it => moIssueText(it, X)).filter(Boolean).join(" · ");
   const nameCell = (r) => {
     const fm = r.familyId ? famOf(r.familyId) : null;
