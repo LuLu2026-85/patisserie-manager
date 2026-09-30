@@ -20990,7 +20990,9 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       const deficit = _r3(need + min - usable);
       const batches = deficit > 0 ? Math.max(1, Math.ceil(deficit / batch - 1e-9)) : 0;
       const name = mLabel(n.target) || n.target.nameFr || e.name || "";
-      if (batches > 0) addTarget(n.kind, n.target, batches * batch, name, "plan");
+      // 审查 pt1:产出量不到 1(焦糖酱一批 0.8 kg)时直接按整批展开 —— addTarget 按「数量 ÷ max(1, 产出量)」会把 3 批算成 2.4 批,打勾反而比不打勾买得少。产出量 ≥ 1 的照旧
+      if (batches > 0 && batch < 1) collect(n.target, batches, name, n.kind === "component" && _hasCompId({ componentId: n.target.id }) ? new Set([n.target.id]) : new Set());
+      else if (batches > 0) addTarget(n.kind, n.target, batches * batch, name, "plan");
       prepPlan.push({ key: n.key, kind: n.kind, id: n.id, name, unit: e.unit, need, usable, min, batches, qty: _r3(batches * batch), srcs: [...n.srcs] });
     });
   }
