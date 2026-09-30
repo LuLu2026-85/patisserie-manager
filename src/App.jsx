@@ -4945,8 +4945,10 @@ const _dhPrepChecks = (d, A) => {
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
         const t = takes.find(x => x.key === k);
         const want = t ? _r3(t.qty) : 0;
-        const got = _r3(mv.filter(m => m.type === "take" && m.prodLogId === r.id).reduce((a, m) => a + (parseFloat(m.qty) || 0), 0));
-        if (!(want > got + 0.0005)) return;
+        const tks = mv.filter(m => m.type === "take" && m.prodLogId === r.id);
+        const got = _r3(tks.reduce((a, m) => a + (parseFloat(m.qty) || 0), 0));
+        // 审查 ps2:每条 take 各自存成三位小数,同一天分两次记(33.333 + 33.333 对 66.667)会差 0.001 —— 每条允许 0.0005 的舍入
+        if (!(want > got + 0.0005 * (tks.length + 1))) return;
         const { kind, id } = where(k, it);
         const o = objOf(kind, id), u = _normTxt(it.unit);
         h22.push({ key: `H22:${r.id}:${k}`, kind: "prep", id: k, prepKey: k, jump: { kind: "prep", id: k },
