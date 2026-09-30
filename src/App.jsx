@@ -7841,6 +7841,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   const bi = parseInt(idx);
                   const brand = linkedCat && linkedCat.brands[bi];
                   if (!brand) return i;
+                  if (i.noCost) return { ...i, brandIdx: bi, brand: getBrandName(brand, lang) };   // 审查 b4r1:不计价的行只记品牌,不写价
                   const price = parseFloat(brand.price) || 0;
                   const q = parseFloat(i.qty) || 0;
                   return {
@@ -8297,7 +8298,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
   const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
-  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
+  const totalCost = ings.reduce((s, i) => s + (i.noCost ? 0 : toCNY(i.cost, curOf(i))), 0);  // v17: 各按各的币种折成人民币再相加;审查 b4r1:不计价的行不算(残留的 cost 以前会算进来)
 
   // 未关联材料对话框 state
   const [unlinkedDialog, setUnlinkedDialog] = useState(null); // null | { items: [...] }
@@ -8310,7 +8311,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
-    const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+    const total = refreshedIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     onSave({
       ...form,
@@ -12525,7 +12526,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
-  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
+  const totalCost = ings.reduce((s, i) => s + (i.noCost ? 0 : toCNY(i.cost, curOf(i))), 0);  // v17: 各按各的币种折成人民币再相加;审查 b4r1:不计价的行不算(残留的 cost 以前会算进来)
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
   // 未关联材料对话框
@@ -12541,7 +12542,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       // 审查第 2 轮:部分保存时本店原料就写进去了,不等组合产品保存;提示写明,免得她以为「不保存离开」能撤回
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料(立即生效,组合产品不保存也会保留)` : `✓ ${n} 件を仕入れ原料に保存(すぐ反映・組み合わせを保存しなくても残ります)`, { undo });
     }
-    const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+    const total = refreshedIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     onSave({
       ...form,
       ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
@@ -12561,7 +12562,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       return;
     }
     const validIngs = ings.filter(ingHasName);
-    const total = validIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+    const total = validIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     // 只带这一页能看到、能改的字段,App 那边按字段合并到原组件上。
     // 组件自己的法文名 / 整体备注这一页没有输入框,层里存的只是加层时的旧副本,推回去会盖掉组件后来的修改,所以不带
     // (配料行的备注 / 法文名在配料表里能改,随 ingredients 一起带)
@@ -16687,7 +16688,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
   const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
 
-  const totalCost = ings.reduce((s, i) => s + toCNY(i.cost, curOf(i)), 0);  // v17: 各按各的币种折成人民币再相加
+  const totalCost = ings.reduce((s, i) => s + (i.noCost ? 0 : toCNY(i.cost, curOf(i))), 0);  // v17: 各按各的币种折成人民币再相加;审查 b4r1:不计价的行不算(残留的 cost 以前会算进来)
   const qty = parseFloat(form.yield) || 0;
   const price = toCNY(form.price, priceCurOf(form));   // v17: 同上,折算后再比
   const unitCost = qty > 0 ? totalCost / qty : 0;
@@ -16711,7 +16712,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
-    const total = refreshedIngs.reduce((s, i) => s + (parseFloat(i.cost) || 0), 0);
+    const total = refreshedIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
     const uc = q > 0 ? total / q : 0, mg = p > 0 ? ((p - uc) / p) * 100 : 0;
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
