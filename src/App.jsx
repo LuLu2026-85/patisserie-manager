@@ -22906,7 +22906,7 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
   useEffect(() => { if (focusKey && filter !== "all" && !rows.some(r => r.key === focusKey && passes(r, filter))) setFilter("all"); }, [focusKey]);   // eslint-disable-line
   function passes(r, f) {
     if (f === "all") return true;
-    if (f === "todo") return r.rank < 5;
+    if (f === "todo") return r.rank < 5 || !!(r.flags && r.flags.unit);   // 审查 pt1:单位对不上(自动加减停了,要去盘点)也算要处理的
     return !!r.cfg && r.cfg.store === f;
   }
   const head = (
