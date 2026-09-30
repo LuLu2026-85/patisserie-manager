@@ -17024,7 +17024,8 @@ const productUnitCost = (p, ctx) => {
       const b = creationBatch(target, q, components, materials, brands);
       cost += b.cost;
       // 审查 r1:个数按「整个」算(和采购页 / 生产单一样);配方一览和组合产品详情按一份(÷ 每个分几份)显示,商品页把这点说清楚
-      if (parseFloat(target.portions) > 1) wholeCreation.push({ target, portions: parseFloat(target.portions), qty: q });
+      // 审查 r5:个数已经填成小数(按 1/N 个 = 一块卖)就不再说「按整个算、请填 1/N」
+      if (parseFloat(target.portions) > 1 && q >= 1 - 1e-9) wholeCreation.push({ target, portions: parseFloat(target.portions), qty: q });
       if (b.incomplete) missing.push({ reason: "creation", type, target,
         noUsed: b.parts.filter(x => x.noUsed).length,
         noPrice: new Set(b.parts.flatMap(x => x.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size });
