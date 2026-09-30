@@ -21279,6 +21279,11 @@ const prepPendingOf = (sheet, ctx, stock, productionLog, today) => {
 //   取出行另有 key / cfg / actual(挂这一行 uid 的 take qty 合计)/ takenElsewhere(今天别处取的)/ onProducts([{ id, name }] 挂着这个配方的商品)/ unitMismatch / noYield;
 //   dupes: [{ key, kind, id, name, uids }] 只在 ctx.sheet(整张单子 buildProdSheet 的结果)给了时算:今天单子上还没记完的别的行也会扣的、已开始记的东西 }
 // 标了备货但还没开始记的取出行 / 组合产品行:mode null(没有按钮)
+// 两行是不是「同一批东西」:同一样(同种类同 id),或者一行是商品、组成里直接挂着另一行那一样(商品行 + 取出行、礼盒 + 单个、商品 + 它挂的组合产品)。
+// 只有这种才提示「同一批只记入一行」;两行各自用到同一个备货组件(来自组件 / 组合产品的部分 / 做一批的配料)是两份用量,各记各的(审查 ps2)
+const _prepLineHas = (p, x) => p.line.kind === "product" && !!p.obj && Array.isArray(p.obj.items)
+  && p.obj.items.some(it => it && (it.linkedType || "recipe") === x.line.kind && String(it.linkedId) === String(x.line.id));
+const _prepLinesOverlap = (a, b) => (a.line.kind === b.line.kind && String(a.line.id) === String(b.line.id)) || _prepLineHas(a, b) || _prepLineHas(b, a);
 const prepLineInfo = (s, ctx, stock, today, productionLog) => {
   const base = _prepLineBase(s, ctx, stock, today, productionLog);
   if (!base || !ctx || !Array.isArray(ctx.sheet)) return base;
@@ -21289,6 +21294,7 @@ const prepLineInfo = (s, ctx, stock, today, productionLog) => {
     const uids = [];
     ctx.sheet.forEach(r => {
       if (!r || r === s || !r.line || r.line.uid === s.line.uid) return;
+      if (!_prepLinesOverlap(s, r)) return;   // 审查 ps2:两行各用各的(两个配方都「来自组件」用脆顶)不算,那是两份真的用量
       const rb = _prepLineBase(r, ctx, stock, today, productionLog);
       if (rb && rb.flow.takes.some(x => x.tracked && x.key === t.key)) uids.push(r.line.uid);
     });
