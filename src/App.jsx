@@ -5986,7 +5986,21 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
   // ── 列表视图的数据:搜索 × 分类 / 在用 筛选;「全部」和「在用中」时按分类分段 ──
   const compQuery = compSearch.trim().toLowerCase();
-  const matchQuery = (c) => !compQuery || [c.nameZh, c.nameJa, c.nameFr, c.flavorName].some(s => (s || "").toLowerCase().includes(compQuery));
+  // 第 4 批 B4-5:名字 / 风味名不中时,再看原料 —— 配料行的中 / 日 / 法名、品牌,或它关联的材料(名字 / 别名 / 厂家名)。
+  // 只靠原料中的,记下中的那几行,卡片上写「含「…」」
+  const compQk = normSearch(compQuery);
+  const compMatById = compQk ? materialMapOf(materials) : null;
+  const compBrandKeys = compQk ? brandKeyMapOf(brands) : null;
+  const ingHitOf = new Map();
+  const matchQuery = (c) => {
+    if (!compQuery) return true;
+    if ([c.nameZh, c.nameJa, c.nameFr, c.flavorName].some(s => (s || "").toLowerCase().includes(compQuery) || (compQk && normSearch(s).includes(compQk)))) return true;
+    if (!compQk) return false;
+    const hits = (c.ingredients || []).filter(ing => ingredientQueryHit(ing, compQk, compMatById, compBrandKeys));
+    if (hits.length === 0) return false;
+    ingHitOf.set(c.id, hits);
+    return true;
+  };
   const inUseCount = components.filter(c => c.inUse).length;
   const baseList = filterCat === "all" ? components
     : filterCat === "inuse" ? components.filter(c => c.inUse)
@@ -6025,6 +6039,12 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         ? (uses.length === 1 ? `用在「${uses[0]}」` : `用在「${uses[0]}」等 ${uses.length} 个组合产品`)
         : (uses.length === 1 ? `「${uses[0]}」で使用` : `「${uses[0]}」ほか ${uses.length} 件で使用`);
     const liveCost = getIngsLiveCost(c.ingredients, materials, brands);  // 不读 c.totalCost,见 getIngsLiveCost
+    // 第 4 批:只靠原料搜到的,写出是哪一行原料
+    const ingHits = ingHitOf.get(c.id) || [];
+    const ingHitName = ingHits.length ? (pickLang(ingHits[0], "name", lang) || ingHits[0].nameFr || "") : "";
+    const ingHitText = !ingHits.length ? null
+      : lang === "zh" ? `含「${ingHitName}」${ingHits.length > 1 ? `等 ${ingHits.length} 行` : ""}`
+      : `「${ingHitName}」を使用${ingHits.length > 1 ? `(計 ${ingHits.length} 行)` : ""}`;
     return (
       <div
         key={c.id}
@@ -6105,6 +6125,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
               (c.ingredients?.length > 0) ? `${c.ingredients.length} ${lang === "zh" ? "种原料" : "種材料"}` : null,
               liveCost > 0 ? `¥${liveCost.toFixed(0)}` : null,
               usageText,
+              ingHitText,
             ].filter(Boolean).map((t, i, arr) => (
               <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span>{t}</span>
@@ -6343,7 +6364,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         className="k-input"
         value={compSearch}
         onChange={e => setCompSearch(e.target.value)}
-        placeholder={lang === "zh" ? "搜索组件名(中文 / 日文 / 法文都行)" : "コンポーネント名で検索(中・日・仏)"}
+        placeholder={lang === "zh" ? "搜组件名或原料(中 / 日 / 法 / 品牌 / 别名)" : "コンポーネント名・材料で検索(中・日・仏・ブランド)"}
         style={{ width: "100%", maxWidth: 360, padding: "8px 12px", marginBottom: 10, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box" }}
       />
 
