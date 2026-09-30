@@ -8100,9 +8100,16 @@ function applyComponentPick(i, comp, materials) {
 }
 // 第 4 批 B4-6:「这一行不计价」开关。打开:单价 / 成本清空(关联的材料 / 组件留着,过敏原要用);
 // 关掉:删掉 noCost 键(别存成 false,键留着会被当成「改过」),关联了材料 / 组件的按它们现在的价写回来
+// 审查 b4s2:打开时把单价 / 币种 / 成本 / ↺ 原价记在临时字段 _preNoCost(保存时和 _originalPrice 一起去掉),关掉时先放回去(这期间改了用量就按用量重算成本),
+// 再按关联的材料 / 组件现在的价盖上 —— 以前手写价、组件已删行的快照价改回计价就没了,这一行变「没价」(组件已删的价再也找不回)
 function applyNoCost(i, on, materials, brands, lang) {
-  const { _priceModified, noCost: _nc, ...rest } = i;
-  if (on) return { ...rest, noCost: true, unitPrice: "", cost: "", _originalPrice: "" };
+  const { _priceModified, noCost: _nc, _preNoCost: pre, ...rest } = i;
+  if (on) return { ...rest, noCost: true, unitPrice: "", cost: "", _originalPrice: "", _preNoCost: pre || { unitPrice: i.unitPrice, currency: i.currency, cost: i.cost, _originalPrice: i._originalPrice, qty: i.qty } };
+  if (pre) {
+    ["unitPrice", "currency", "cost", "_originalPrice"].forEach(k => { if (pre[k] === undefined) delete rest[k]; else rest[k] = pre[k]; });
+    const q = parseFloat(rest.qty), p = parseFloat(rest.unitPrice);
+    if (p > 0 && String(rest.qty == null ? "" : rest.qty) !== String(pre.qty == null ? "" : pre.qty)) rest.cost = isFinite(q) ? (q * p).toFixed(1) : "";
+  }
   const mat = rest.materialId && Array.isArray(materials) ? materials.find(x => x && x.id === rest.materialId) : null;
   if (mat) return linkMaterialToIng(rest, mat, brands || [], lang);
   if (ingLiveComp(rest, materials)) return applyComponentPick(rest, _componentsById.get(rest.componentId), materials);
@@ -8361,7 +8368,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       ...form,
       id: (component && component.id) ? component.id : "comp_" + Date.now(),
       yield: parseFloat(form.yield) || 0,
-      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, _preNoCost, ...rest }) => rest),
       stepsZh,
       stepsJa,
       steps: undefined,
@@ -12589,7 +12596,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     const total = refreshedIngs.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     onSave({
       ...form,
-      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
+      ingredients: refreshedIngs.map(({ _id, _priceModified, _originalPrice, _preNoCost, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
     }, opts);
@@ -12615,7 +12622,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       nameZh: form.nameZh, nameJa: form.nameJa,
       componentCategory: form.componentCategory,
       yield: form.yield, unit: form.unit,
-      ingredients: validIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest),
+      ingredients: validIngs.map(({ _id, _priceModified, _originalPrice, _preNoCost, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
       updatedAt: new Date().toISOString(),
@@ -16770,7 +16777,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
     const uc = q > 0 ? total / q : 0, mg = p > 0 ? ((p - uc) / p) * 100 : 0;
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     // 清理临时字段 _priceModified / _originalPrice
-    const cleanIngs = refreshedIngs.map(({ _id, _priceModified, _originalPrice, ...rest }) => rest);
+    const cleanIngs = refreshedIngs.map(({ _id, _priceModified, _originalPrice, _preNoCost, ...rest }) => rest);
     onSave({
       ...form,
       id: recipe ? recipe.id : Date.now(),
