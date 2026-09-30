@@ -21141,9 +21141,20 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
   const lineObj = { ...l, obj };
   const lg = _prepNum(l.logged);
   const isTracked = (key) => !!st.items[key];
+  // 审查 ps1:能扣 = 已开始记,而且账上的单位和现在对得上(对不上时 prepApply 的 take 什么都不做,同商品页 logProdWithPrep 的筛法)。
+  // 对不上的 tracked 记 false,另放进 untaken(reason "unit",每个部分一条),记入的 toast 说它没扣
+  const cfgOfTake = (t) => prepCfgOf(t.kind, _prodFind(t.kind === "component" ? ctx.components : ctx.recipes, t.id));
+  const canTake = (t) => { const it = st.items[t.key]; if (!it) return false; const c = cfgOfTake(t); return !!c && prepSameUnit(it, c); };
   const flowOf = (add) => {
     const f = prepFlowOfSheetRow(lineObj, add, ctx);
-    return { takes: f.takes.map(t => ({ ...t, tracked: isTracked(t.key) })), untaken: f.untaken };
+    const bad = [];
+    f.takes.forEach(t => {
+      if (!isTracked(t.key) || canTake(t)) return;
+      const c = cfgOfTake(t), nm = c && c.obj ? prodName(c.obj, ctx.lang) : String(t.id);
+      const srcs = t.srcs && t.srcs.length ? t.srcs : [nm];
+      srcs.forEach(src => bad.push({ key: t.key, name: nm, reason: "unit", src }));
+    });
+    return { takes: f.takes.map(t => ({ ...t, tracked: canTake(t) })), untaken: bad.length ? [...f.untaken, ...bad] : f.untaken };
   };
   const readOnly = !!st.readOnly;
   const pend = (logged) => Math.max(0, _r3(qty - logged));
@@ -21156,7 +21167,7 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     const logged = Math.min(lg, todayLogged);
     const pending = pend(logged);
     const flow = flowOf(pending);
-    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(t => isTracked(t.key)), flow, readOnly, blocked: readOnly ? "readOnly" : null };
+    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), flow, readOnly, blocked: readOnly ? "readOnly" : null };
   }
   const cfg = (kind === "recipe" || kind === "component") ? prepCfgOf(kind, obj) : null;
   if (cfg) {
@@ -21197,8 +21208,11 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
   const cap = _prepTakeCap(st, l.uid, today);
   const logged = Math.min(lg, cap);
   const pending = pend(logged);
-  const tracked = full.takes.some(t => isTracked(t.key));
-  return { mode: tracked ? "take" : null, sub: "use", qty, logged, pending, tracked, flow: flowOf(pending), readOnly, blocked: tracked && readOnly ? "readOnly" : null };
+  const tracked = full.takes.some(canTake);
+  // 已开始记的都单位对不上(审查 ps1):按钮灰掉写「单位对不上,先去盘点」(同做一批 / 取出烤行),不再点了说扣了、账本其实没动
+  const badKey = tracked ? null : (full.takes.find(t => isTracked(t.key)) || {}).key || null;
+  return { mode: tracked || badKey ? "take" : null, sub: "use", ...(badKey ? { key: badKey } : {}), qty, logged, pending, tracked, flow: flowOf(pending), readOnly,
+    blocked: (tracked || badKey) && readOnly ? "readOnly" : badKey ? "unit" : null };
 };
 // 整张单子每行还没记入的那部分要取 / 会做多少:Map key → { cfg, need, incoming, srcs }(标了备货的都列,开始记没有由 prepAlertsOf 自己筛)。
 // 商品行按 qty − min(logged, 今天生产记录),其他行按 qty − 封顶后的 logged(同 prepLineInfo);做一批行没填产出量 / 单位对不上的不算 incoming
