@@ -654,8 +654,14 @@ function mergePriceHistory(local, file, merged, kind, now) {
   const changed = !!cur && !(locSnap && samePrice(locSnap, cur));
   if (!a.length && !b.length && !changed) return undefined;
   const key = (e) => `${phTime(e.at)}|${parseFloat(e.pricePerG)}|${curOf(e)}`;
+  // 审查 b4r1:数据体检 H1 只给没写币种的记录补币种(同一时间、同一个数)。一边补了一边没补时是同一条 —— 留写了币种的那条,
+  // 不然两条都留下,会出「另一台电脑改过」或者假的 ↑2000%。同一时间同一个数写了两种不同币种的,照旧都留
+  const tv = (e) => `${phTime(e.at)}|${parseFloat(e.pricePerG)}`;
+  const explicit = new Map();
+  [...a, ...b].forEach(e => { if (e.currency) { const s = explicit.get(tv(e)) || new Set(); s.add(curOf(e)); explicit.set(tv(e), s); } });
+  const absorbed = (e) => { if (e.currency) return false; const s = explicit.get(tv(e)); return !!s && s.size === 1 && !s.has(curOf(e)); };
   const byKey = new Map();
-  [...a, ...b].forEach(e => {
+  [...a, ...b].filter(e => !absorbed(e)).forEach(e => {
     const k = key(e), had = byKey.get(k);
     if (!had || JSON.stringify(e) < JSON.stringify(had)) byKey.set(k, e);   // 同一条两边写法不同(来源不同)时固定取一边,和导入方向无关
   });
