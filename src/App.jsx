@@ -16259,8 +16259,8 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
         <TargetCostRateInput appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
         <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.7 }}>
           {zh
-            ? "毛利的颜色和「毛利一览」的建议售价按这个算:建议售价 = 单个原料成本 ÷ 目标原料成本率。只存在这台设备上。"
-            : "粗利の色分けと「粗利一覧」の推奨売価に使います(推奨売価 = 1 個原価 ÷ 目標原価率)。この端末だけに保存されます。"}
+            ? "毛利的颜色和「毛利一览」的建议售价按这个算:建议售价 = 单个原料成本 ÷ 目标原料成本率。存在本机数据里:完整备份 + 覆盖导入会带到别的设备,合并导入不带。"
+            : "粗利の色分けと「粗利一覧」の推奨売価に使います(推奨売価 = 1 個原価 ÷ 目標原価率)。端末のデータに保存されます(完全バックアップ・上書きインポートには含まれ、マージインポートでは移りません)。"}
         </div>
       </div>
     </div>
