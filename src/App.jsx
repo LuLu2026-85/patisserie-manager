@@ -12782,6 +12782,8 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
   materialReturnTo, setMaterialReturnTo,
   setTab, setViewId,
   // v17.3 厂家管理:由外层 MaterialsView 提供(状态 + 删/合并的唯一写出口)
+  // 第 4 批:材料详情「你的使用情况」每一行点了去那一条的查看页(App 的 jumpToItem)
+  onOpenUsage = null,
   brandManageOpen = false, setBrandManageOpen = () => {}, requestDelete = () => {}, requestMerge = () => {} }) {
 
   // 编辑厂家
@@ -12895,6 +12897,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
       setShopMaterials={setShopMaterials}
       showToast={showToast}
       returnLabel={materialReturnTo && materialReturnTo.tab === "view" ? (lang === "zh" ? "← 返回配方" : "← レシピへ戻る") : null}
+      onOpenUsage={onOpenUsage}
     />;
   }
 
@@ -14566,7 +14569,9 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
 }
 
 // ─── 产品详情 ─────────────
-function MaterialDetail({ material, brand, allMaterials, recipes, components, creations, lang, onEdit, onBack, onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, returnLabel }) {
+function MaterialDetail({ material, brand, allMaterials, recipes, components, creations, lang, onEdit, onBack, onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, returnLabel, onOpenUsage = null }) {
+  // 第 4 批:「你的使用情况」超过 10 条时点「显示全部」;记的是哪条材料点的,换一条材料自动收起
+  const [usageAllFor, setUsageAllFor] = useState(null);
   const cat = getMaterialCat(material.categoryId);
   const name = pickLang(material, "name", lang);
   const features = lang === "zh" ? (material.featuresZh || material.featuresJa) : (material.featuresJa || material.featuresZh);
@@ -14665,22 +14670,34 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               {lang === "zh" ? "在你的配方库中使用" : "配方ライブラリで使用"} <span style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.accent }}>{usage.length}</span> {lang === "zh" ? "次" : "回"}
             </div>
             <div style={{ display: "grid", gap: 5 }}>
-              {usage.slice(0, 10).map((u, i) => (
-                <div key={i} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "7px 12px", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", border: `0.5px solid ${T.borderSoft}` }}>
-                  <span style={{ color: T.textPrimary }}>
+              {/* 第 4 批 B4-5:每一行点了去那个配方 / 组件 / 组合产品的查看页;按名字对上的(没关联百科)标一句,和关联了的分得开 */}
+              {(usageAllFor === material.id ? usage : usage.slice(0, 10)).map((u, i) => {
+                const rowStyle = { background: T.bgCard, borderRadius: T.radiusSm, padding: "7px 12px", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, border: `0.5px solid ${T.borderSoft}` };
+                const inner = (<>
+                  <span style={{ color: T.textPrimary, minWidth: 0, overflowWrap: "anywhere" }}>
                     {u.type === "recipe" && "📖 "}
                     {u.type === "component" && "🧩 "}
                     {u.type === "creation" && "🎂 "}
                     {u.name}
                     {u.layerName && <span style={{ color: T.textTertiary, marginLeft: 4 }}>({u.layerName})</span>}
+                    {!u.linked && <span style={{ color: T.textTertiary, marginLeft: 6, fontSize: 11 }}>{lang === "zh" ? "按名字匹配" : "名前で一致"}</span>}
                   </span>
-                  <span style={{ color: T.textTertiary, fontFamily: T.fontSerif, fontWeight: 500 }}>{u.qty}{u.unit}</span>
-                </div>
-              ))}
-              {usage.length > 10 && (
-                <div style={{ fontSize: 11, color: T.textTertiary, textAlign: "center", fontStyle: "italic" }}>
-                  {lang === "zh" ? `…还有 ${usage.length - 10} 条` : `…他に ${usage.length - 10} 件`}
-                </div>
+                  <span style={{ color: T.textTertiary, fontFamily: T.fontSerif, fontWeight: 500, whiteSpace: "nowrap" }}>{u.qty}{u.unit}{onOpenUsage ? " ›" : ""}</span>
+                </>);
+                return onOpenUsage ? (
+                  <button key={i} type="button" className="k-row"
+                    title={lang === "zh" ? "打开这一条" : "開く"}
+                    onClick={() => onOpenUsage({ kind: u.type + "View", id: u.id })}
+                    style={{ ...rowStyle, width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: "inherit" }}>
+                    {inner}
+                  </button>
+                ) : <div key={i} style={rowStyle}>{inner}</div>;
+              })}
+              {usage.length > 10 && usageAllFor !== material.id && (
+                <button type="button" onClick={() => setUsageAllFor(material.id)}
+                  style={{ fontSize: 11, color: T.accent, textAlign: "center", background: "transparent", border: "none", cursor: "pointer", padding: "4px 0", fontFamily: "inherit" }}>
+                  {lang === "zh" ? `…还有 ${usage.length - 10} 条 · 显示全部` : `…他に ${usage.length - 10} 件 · すべて表示`}
+                </button>
               )}
             </div>
           </>
@@ -21848,6 +21865,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setMaterialReturnTo={setMaterialReturnTo}
           setTab={setTab}
           setViewId={setViewId}
+          onOpenUsage={jumpToItem}
         />
       )}
 
