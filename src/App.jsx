@@ -18830,14 +18830,21 @@ const moIssueText = (it, X) => {
   return typeof f === "function" ? f(it.n) : f;
 };
 function MarginOverview({ recipes = [], creations = [], products = [], components = [], materials = [], brands = [], shopMaterials = [], productFamilies = [],
-  appSettings = {}, setAppSettings, lang, onOpen, emptyActions = [] }) {
+  appSettings = {}, setAppSettings, lang, onOpen, emptyActions = [], ui = null, setUi = null }) {
   const zh = lang !== "ja";
   const X = MO_TXT[zh ? "zh" : "ja"];
-  const [seg, setSeg] = useState("items");         // "items" | "products"
-  const [scope, setScope] = useState("all");       // 配方段:"all" | "onSale";商品段:"all" | "hasPrice"
-  const [fam, setFam] = useState("");              // "" 全部 | 家族 id | "__none" 未归属
-  const [problemsOnly, setProblemsOnly] = useState(false);
-  const [sortBy, setSortBy] = useState("margin");
+  // 审查 b4s2:分段 / 筛选 / 排序存在 App(ui / setUi,同「待换国产」看板),点一行进详情再返回还在(以前一跳走就卸载、全回默认,逐条修「有问题的」每次都要重勾);
+  // 没传(单独渲染)就存在自己这里。不写进数据
+  const [localUi, setLocalUi] = useState(null);
+  const U = (setUi ? ui : localUi) || {};
+  const patchUi = (o) => (setUi || setLocalUi)(prev => ({ ...(prev || {}), ...o }));
+  const seg = U.seg || "items";                    // "items" | "products"
+  const scope = U.scope || "all";                  // 配方段:"all" | "onSale";商品段:"all" | "hasPrice"
+  const fam = U.fam || "";                         // "" 全部 | 家族 id | "__none" 未归属
+  const problemsOnly = !!U.problemsOnly;
+  const sortBy = U.sortBy || "margin";
+  const setSeg = (v) => patchUi({ seg: v }), setScope = (v) => patchUi({ scope: v }), setFam = (v) => patchUi({ fam: v });
+  const setProblemsOnly = (v) => patchUi({ problemsOnly: !!v }), setSortBy = (v) => patchUi({ sortBy: v });
   // 纯函数算行;本店价 / 组件库 / 汇率 / 目标率变了都要重算(那几样是渲染期注入的全局,所以把它们的来源也列进依赖)
   const rows = useMemo(() => marginOverviewRows({ recipes, creations, products, components, materials, brands, productFamilies }),
     [recipes, creations, products, components, materials, brands, productFamilies, shopMaterials, appSettings.targetCostRate, appSettings.fxJpyToCny]);
@@ -21019,6 +21026,9 @@ function App() {
     });
   }, [recipes, components, creations, knowledge, productFamilies]);
   const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale" | "margin"(第 4 批 B4-1 毛利一览)
+  // 审查 b4s2:毛利一览的分段 / 筛选 / 排序放这里(点一行进详情再返回还在,同 domesticBoardUi);切出毛利一览模式就清
+  const [marginUi, setMarginUi] = useState(null);
+  useEffect(() => { if (familyViewMode !== "margin") setMarginUi(null); }, [familyViewMode]);
   // v17: 「在售中」标记。季节食材决定当季卖哪几款,标了的排到最前 + 单独一页。
   // 只是配方上的一个布尔,跟 products(可售单元 / 库存)是两回事,不联动。
   const toggleOnSale = (id) => setRecipes(prev => prev.map(r =>
@@ -23432,6 +23442,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {familyViewMode === "margin" && (
             <MarginOverview recipes={recipes} creations={creations} products={products} components={components} materials={materials} brands={brands}
               productFamilies={productFamilies} shopMaterials={shopMaterials} appSettings={appSettings} setAppSettings={setAppSettings} lang={lang}
+              ui={marginUi} setUi={setMarginUi}
               emptyActions={[
                 { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => { setEditTarget(null); setTab("edit"); } },
                 { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
