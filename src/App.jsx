@@ -5047,7 +5047,8 @@ function computeDataHealth(data) {
       const m = has(ing.materialId) ? matById.get(ing.materialId) : null;
       const probs = [];   // [zh, ja]
       if (ing.noCost && m && matHasPrice(m)) probs.push([`标了「不计价」,但关联的材料「${zhN(m)}」有价 → 这一行成本按 0 算`, `「原価に含めない」だが連動材料「${jaN(m)}」に価格あり → 原価 0 で計算`]);
-      if (cid !== null) {
+      // 审查 b4s1:不计价的行成本永远是 0(成本链第一档),「按材料算」「按删除前的快照算」「算不出价」都不对,不列(过敏原卡片照旧会标未确认)
+      if (cid !== null && !ing.noCost) {
         const comp = compById.get(cid);
         if (m) probs.push([`同时关联了材料「${zhN(m)}」和组件${comp ? `「${zhN(comp)}」` : ""} → 现在按材料算`, `材料「${jaN(m)}」とパーツ${comp ? `「${jaN(comp)}」` : ""}の両方に連動 → 材料で計算`]);
         else if (!comp) probs.push(["引用的组件已删除 → 成本按删除前的快照算,不会再更新", "参照先のパーツが削除済み → 削除前のスナップショットで計算"]);
