@@ -7523,8 +7523,9 @@ function saveIngPricesToShop(rows, setShopMaterials) {
         if (!addedIds.has(old.id) && !(old.id in prevById)) prevById[old.id] = old;   // 同一材料两行时只记最早的原样
         next[idx] = { ...old, pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: now };   // v17: 币种跟手写价走;修改时间给合并导入用
         // 第 4 批 B4-3:生效价变了才记一条(同价只刷修改时间,不记);撤销整条换回 prevById 里的原对象,这条记录跟着没了
-        const ph = withPriceHistory(old, next[idx], "shop", "page", now);
-        if (ph !== old.priceHistory) next[idx].priceHistory = ph;
+        // 同一材料两行时拿这次保存之前的原样比(这一批新建的算新建),只记最后写进去的价
+        const ph = withPriceHistory(addedIds.has(old.id) ? null : prevById[old.id], next[idx], "shop", "page", now);
+        if (ph === undefined) delete next[idx].priceHistory; else next[idx].priceHistory = ph;
         written[old.id] = next[idx];
       } else {
         const sm = {
