@@ -19867,7 +19867,9 @@ const _prepOne = (items, op, now, today) => {
       const q = _prepQ(op.qty, it0.unit, "take");
       if (!(q > 0)) return items;
       const w = _prepWork(it0);
-      const plan = prepTakePlan(w, op.cfg, q, today);
+      // 审查 ps3:补录往天的,按那一天判过期(以前按今天判:那天还能用、之后才过期的批被跳过,扣到新批上,留下一批假的「过期」)
+      const td = _prepDateRe.test(String(op.date || "")) && op.date <= today ? op.date : today;
+      const plan = prepTakePlan(w, op.cfg, q, td);
       plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
       // 一个都没扣到也写 move(short = qty):「已记入」封顶和体检 H22 靠它
       w.moves.push(_prepMove(op, key, "take", now, _prepDateRe.test(String(op.date || "")) ? op.date : today, { qty: q, deltas: plan.deltas, short: plan.short }));
@@ -24975,7 +24977,7 @@ function App() {
     acts.forEach(a => {
       const nm = String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim();
       const store = X.storeName(a.cfg.store);
-      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, localDateStr());
+      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, d <= localDateStr() ? d : localDateStr());   // 同 prepApply 的 take:按那一天判过期(审查 ps3)
       bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
       if (tp.short > 0) shorts.push(X.fShort(store, nm, tp.got, tp.short, a.it.unit));
     });
