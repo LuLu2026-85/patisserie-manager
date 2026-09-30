@@ -22742,7 +22742,8 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
       {!readOnly && cfg && kind === "recipe" && obj && onProducts.length === 0 && (
         <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.m, overflowWrap: "anywhere" }}>
           {X.notOnProduct}
-          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => confirmLeaveEditor(confirmDialog, lang, () => goTab("products"))}
+          {/* 审查 ps1:App 的 goTab 自己会问「还没保存」,这里再包一层 confirmLeaveEditor 会问两次 */}
+          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => goTab("products")}
             style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
         </div>
       )}
