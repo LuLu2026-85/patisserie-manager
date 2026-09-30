@@ -1378,6 +1378,9 @@ const calcLayerLiveCost = (l, materials, brands) => {
   if (componentYield === 0) return componentCost;
   return componentCost * (usedAmount / componentYield);
 };
+// 第 4 批第 0 步(2026-09-30):「这一行没价」的唯一判定出口。配方详情红框 / 「N 项没价」、商品单件成本、配方一览都走它。
+// 现在内部就是旧判定(getIngPriceSource === "none"),行为零变化;以后「不计价」「来自组件」只改这里
+const ingNoPrice = (ing, materials) => getIngPriceSource(ing, materials) === "none";
 
 // BEGIN creation-follow helpers ──────────────────────────────────────────────
 // v17.8 (2026-09-28)「组合产品的部分默认跟组件库走」+「整体配方」。
@@ -5469,7 +5472,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
   const mc = liveMargin >= 50 ? "green" : liveMargin >= 30 ? "amber" : "red";
   // 2026-09-29 体检第 2 批:以前有原料没价时利润率照常显示、看着像准确值;成本为 0 时显示红色 0.0% 像亏本。
   // 和下面「成本算不全」红框同一个判定(getIngPriceSource === "none")
-  const _missingPriceCount = (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length;
+  const _missingPriceCount = (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length;
   // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的是原配方的量。缩放过就把按倍数算好的副本交给打印(只给打印用,不写回数据)
   const handlePrint = () => {
     if (!onPrint) return;
@@ -5635,7 +5638,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 
         {/* 局部错误：成本算不出来时，就地说清「哪几项」和「怎么修」，不弹全局提示 */}
         {(() => {
-          const missing = (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none");
+          const missing = (r.ingredients || []).filter(ing => ingNoPrice(ing, materials));
           if (missing.length === 0 || (r.ingredients || []).length === 0) return null;
           const names = missing.map(ing => pickLang(ing, "name", lang)).join(" · ");
           return (
@@ -17033,7 +17036,7 @@ const productUnitCost = (p, ctx) => {
     }
     const y = parseFloat(target.yield) || 0;
     cost += getIngsLiveCost(target.ingredients, materials, brands) * q / Math.max(1, y || 1);
-    const noPrice = (target.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length;
+    const noPrice = (target.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length;
     if (noPrice) missing.push({ reason: "noPrice", type, target, noPrice });
     if (!(y > 0)) noYield.push(target);
   });
@@ -21150,7 +21153,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 const margin = priceN > 0 && unitCost > 0 ? ((priceN - unitCost) / priceN) * 100 : 0;
                 // 2026-09-29 体检第 2 批:有售价但成本算不出来(配料都没价 / 没填出品数)时,以前显示红色「0.0%」像是亏本 → 改显示灰色「缺成本」;
                 // 有几行没单价时成本偏低、利润率虚高,在下面标「N 项没价·利润率虚高」(和详情页「成本算不全」同一口径;09-29 她选的叫法,原来「偏高」看不懂是什么偏高)
-                const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => getIngPriceSource(ing, materials) === "none").length : 0;
+                const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length : 0;
                 return (
                   <div
                     key={r.id}
