@@ -7249,6 +7249,18 @@ const normSearch = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCa
   .normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC").replace(/\s+/g, "");
 // materials[].aliases:别名 / 俗称(字符串数组;没有这个键 = 没有别名)
 const materialAliasesOf = (m) => (m && Array.isArray(m.aliases)) ? m.aliases.filter(a => typeof a === "string" && a.trim()) : [];
+// 第 4 批第 2 段:材料编辑页「别名 / 俗称」输入框 → 数组。按 顿号 / 逗号 / 分号 / 换行 切开、去首尾空白;
+// 归一化后重复的、和这条材料自己的中 / 日 / 法名一样的去掉(那些本来就搜得到)
+function splitAliases(text, m) {
+  const own = new Set([m && m.nameZh, m && m.nameJa, m && m.nameFr].map(normSearch).filter(Boolean));
+  const seen = new Set(), out = [];
+  String(text == null ? "" : text).split(/[,，、;；\n]/).forEach(s => {
+    const t = s.trim(), k = normSearch(t);
+    if (!t || !k || own.has(k) || seen.has(k)) return;
+    seen.add(k); out.push(t);
+  });
+  return out;
+}
 const _matSearchKeys = new WeakMap();     // 材料对象 → 中 / 日 / 法名 + 别名的归一化结果(材料一改就是新对象,缓存自然作废)
 function materialSearchKeys(m) {
   if (!m || typeof m !== "object") return [];
@@ -15508,6 +15520,12 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               {lang === "zh" ? "厂家" : "メーカー"} · {lang === "zh" ? (brand.nameZh || brand.nameJa) : (brand.nameJa || brand.nameZh)}
             </div>
           )}
+          {/* 第 4 批第 2 段:别名 / 俗称(材料编辑页填的,搜索也认)。没有就什么都不画 */}
+          {materialAliasesOf(material).length > 0 && (
+            <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 4, overflowWrap: "anywhere" }}>
+              {lang === "zh" ? "也叫:" : "別名:"}{materialAliasesOf(material).join(" · ")}
+            </div>
+          )}
           <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span style={{ background: cat.bg, color: cat.color, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
               {cat.icon} {lang === "zh" ? cat.zh : cat.ja}
@@ -16104,7 +16122,10 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
     imageUrls: []
   };
   const [form, setForm] = useState(material ? { ...material, parameters: material.parameters || {} } : empty);
-  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 返回时先问一句
+  // 第 4 批第 2 段:别名 / 俗称(materials[].aliases)按一行文字编辑,保存时才切成数组;记住打开时的文字,没动过就不碰这个键
+  const [aliasInit] = useState(() => materialAliasesOf(material).join("、"));
+  const [aliasText, setAliasText] = useState(aliasInit);
+  const dirtyBind = useDirtyGuard(() => ({ form, aliasText }));   // 没保存就切页 / 返回时先问一句
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   // 当前大分类下已有材料的厂家 → 给 BrandPicker 排前并标「本类」(厂家的主分类只是提示,真正的归属看材料)
   const inCatBrandIds = useMemo(() => new Set(materials.filter(m => m.categoryId === form.categoryId && m.brandId).map(m => m.brandId)), [materials, form.categoryId]);
@@ -16160,6 +16181,14 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
     // 第 4 批 B4-3:生效价(priceRange.mid || pricePerG)变了才记,和 updatedAt 同一个时间;没变 = 原样(没有记录的也不多出这个键)
     const ph = withPriceHistory(material, saved, "material", "edit", nowIso);
     if (ph !== (material ? material.priceHistory : undefined)) saved.priceHistory = ph;
+    // 别名:没动过输入框 → 原样(打开不改就保存不多出键)。动过 → 切成数组;
+    // 原来有这个键、现在删光了必须写 [] 不能删键(合并导入 mergeByNewer 会从另一边把「缺的字段」补回来,删光的别名又回来了);
+    // 原来没有、现在也是空的 → 不写这个键
+    if (aliasText !== aliasInit) {
+      const list = splitAliases(aliasText, saved);
+      if (list.length > 0 || (material && Object.prototype.hasOwnProperty.call(material, "aliases"))) saved.aliases = list;
+      else delete saved.aliases;
+    }
     onSave(saved);
   };
 
@@ -16219,6 +16248,14 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
               {getSubcategoriesFor(form.categoryId).map(s => <option key={s.id} value={s.id}>{s.icon} {lang === "zh" ? s.zh : s.ja}</option>)}
             </select>
           </div>
+        </div>
+        {/* 第 4 批第 2 段:别名 / 俗称 —— 材料百科首页、选材料弹窗、配料名联想、组件仓库按原料搜都认(自动关联的打分不认) */}
+        <div style={{ marginTop: 12 }}>
+          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>
+            {lang === "zh" ? "别名 / 俗称(用顿号或逗号隔开,搜索时也认这些名字)" : "別名・通称(「、」やカンマで区切る。検索でも使われます)"}
+          </label>
+          <input value={aliasText} onChange={(e) => setAliasText(e.target.value)}
+            placeholder={lang === "zh" ? "比如:细砂糖、グラニュー糖" : "例:グラニュー糖、細砂糖"} style={inpStyle} />
         </div>
 
         {/* 巧克力专用:couverture 标签 */}
