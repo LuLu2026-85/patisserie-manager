@@ -657,8 +657,14 @@ function withPriceHistory(prev, next, kind, source, now) {
 // · 本机为准时不补:并集最后一条可能是另一台电脑后来改的价,priceTrendOf 的 newerElsewhere 会把它显示出来。
 // · 同一个文件导两次,结果一样(第二次价格已经一样,不再补)。
 function mergePriceHistory(local, file, merged, kind, now) {
-  const a = phOf(local), b = phOf(file);
-  const cur = priceSnapOf(merged, kind), locSnap = priceSnapOf(local, kind);
+  let a = phOf(local);
+  const b = phOf(file);
+  const cur = priceSnapOf(merged, kind);
+  let locSnap = priceSnapOf(local, kind);
+  // 审查 b4r2:另一台电脑在数据体检 H1 把没写币种的这条标成了人民币(数没变),导进来时本机那条还没币种 —— 是更正标签不是改价:
+  // 本机的现价和同一时期没写币种的旧价按人民币读(同 H1 在那台电脑上做的),不补 before / import(以前出假的「较上次 ≈↑2000%」)
+  const relabel = _phRelabelAsCNY(local, locSnap, cur, kind);
+  if (relabel) { locSnap = relabel.snap; if (relabel.fixed) a = phOf({ priceHistory: relabel.fixed }); }
   const changed = !!cur && !(locSnap && samePrice(locSnap, cur));
   if (!a.length && !b.length && !changed) return undefined;
   const key = (e) => `${phTime(e.at)}|${parseFloat(e.pricePerG)}|${curOf(e)}`;
