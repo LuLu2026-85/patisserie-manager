@@ -492,6 +492,14 @@ let _shopMaterials = [];
 const setShopMaterialsForLookup = (sm) => {
   _shopMaterials = Array.isArray(sm) ? sm : [];
 };
+// 第 4 批 B4-6(2026-09-30):组件库注入,给配料行「来自组件」(ing.componentId)算价用。和上面本店原料同一个办法:
+// App 函数体里渲染期直接调(不放 useEffect),成本链 18 处以上调用点都不用多带 components 参数。幂等:同一个数组不重建
+let _componentsLookup = [], _componentsById = new Map();
+const setComponentsForLookup = (cs) => {
+  if (cs === _componentsLookup) return;
+  _componentsLookup = Array.isArray(cs) ? cs : [];
+  _componentsById = new Map(_componentsLookup.filter(c => c && c.id !== undefined && c.id !== null && c.id !== "").map(c => [c.id, c]));
+};
 // v17.4: 「本店原料已有」判定,给关联候选排序 / 打「本店」标签用。不走 props,和上面的价格 helper 一样读注入值。
 const isShopMaterialId = (id) => !!id && _shopMaterials.some(s => s && s.materialId === id);
 
@@ -533,8 +541,11 @@ const getMaterialRawPrice = (m) => {
 
 // v11: 从 ingredient 维度返回价格来源,给配方视图渲染标签用
 // "shop" 本店价 / "ref" 百科参考价 / "manual" 手写 / "none" 无价
+// 第 4 批 B4-6:"nocost" 这一行不计价 / "component" 来自组件、算得出单价(算不出 → "none")。
+// 优先级和 getIngUnitPrice 一样:不计价 → 关联的材料(材料还在)→ 来自组件(组件还在)→ 手写价;组件已删的照旧看手写价(快照)
 const getIngPriceSource = (ing, materials) => {
   if (!ing) return "none";
+  if (ing.noCost) return "nocost";
   if (ing.materialId && Array.isArray(materials)) {
     const m = materials.find(x => x.id === ing.materialId);
     if (m) {
@@ -542,6 +553,7 @@ const getIngPriceSource = (ing, materials) => {
       if (src !== "none") return src;
     }
   }
+  if (ingLiveComp(ing, materials)) return componentRowPrice(ing, materials).perUnit > 0 ? "component" : "none";
   const up = parseFloat(ing && ing.unitPrice);
   if (!isNaN(up) && up > 0) return "manual";
   return "none";
@@ -1341,8 +1353,11 @@ const sortShopFirst = (cands) => {
 //   ① ing.materialId 关联材料 → 走 getMaterialEffectivePrice (本店→参考)
 //   ② ing.unitPrice 手写文字
 // (老 cats 价格表已在 UI 隐藏,不再参与 fallback;参数保留做向后兼容)
+// 第 4 批 B4-6(2026-09-30)在最前面加 ⓪ 不计价(ing.noCost)→ 0;① 之后加 ①' 来自组件(ing.componentId,组件还在)→
+// 组件实时成本 ÷ 产出量(按行单位换算,见 componentRowPrice)。优先级:不计价 → 材料(材料还在)→ 组件(组件还在)→ 手写价 / 快照
 const getIngUnitPrice = (ing, materials, brands, cats) => {
   if (!ing) return 0;
+  if (ing.noCost) return 0;
   // ① 材料百科 + 本店原料
   if (ing.materialId) {
     const m = Array.isArray(materials) ? materials.find(x => x.id === ing.materialId) : null;
@@ -1351,17 +1366,22 @@ const getIngUnitPrice = (ing, materials, brands, cats) => {
       if (p > 0) return p;
     }
   }
+  // ①' 来自组件(材料还在的行不走这里 —— 两个关联同时有时材料说了算)
+  if (ingLiveComp(ing, materials)) return componentRowPrice(ing, materials).perUnit;
   // ② 手写 unitPrice(v17: 按 ing.currency 折成人民币,无字段 = 老数据 = 日元)
   return toCNY(ing.unitPrice, curOf(ing));
 };
 
 // v11: 只读视图用的实时成本 — qty × live unit price。
 // 算不出(无关联/无价)时退回 ing.cost 存储快照,保证老数据不空白。
+// 第 4 批 B4-6:不计价 → 0(残留的 cost 快照也不算);来自组件且组件还在 → 算不出就是 0,不退回快照(不然会把旧价当现价)
 const getIngLiveCost = (ing, materials, brands, cats) => {
   if (!ing) return 0;
+  if (ing.noCost) return 0;
   const q = parseFloat(ing.qty) || 0;
   const up = getIngUnitPrice(ing, materials, brands, cats);
   if (q > 0 && up > 0) return q * up;
+  if (ingLiveComp(ing, materials)) return 0;
   // 存储快照也是原币种(老数据日元),同样折成人民币,免得一张表里两种钱
   return toCNY(ing.cost, curOf(ing));
 };
@@ -1378,9 +1398,113 @@ const calcLayerLiveCost = (l, materials, brands) => {
   if (componentYield === 0) return componentCost;
   return componentCost * (usedAmount / componentYield);
 };
-// 第 4 批第 0 步(2026-09-30):「这一行没价」的唯一判定出口。配方详情红框 / 「N 项没价」、商品单件成本、配方一览都走它。
-// 现在内部就是旧判定(getIngPriceSource === "none"),行为零变化;以后「不计价」「来自组件」只改这里
-const ingNoPrice = (ing, materials) => getIngPriceSource(ing, materials) === "none";
+// 配料行的重量:克 / 毫升 / 空(配料表默认克)按 1,kg / 千克 / 公斤 / L / 升 按 1000;其他单位(本 / 個 / 片)返回 0 = 不能按重量算
+// (第 4 批 B4-6 从过敏原那段挪到这里:「来自组件」算单价要用,creation_follow_probe 只截这一段)
+const ingWeightFactor = (unit) => {
+  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
+  if (/^(?:g|ml|克|毫升)?$/i.test(u)) return 1;
+  if (/^(?:kg|千克|公斤|l|升)$/i.test(u)) return 1000;
+  return 0;
+};
+
+// ─── 第 4 批 B4-6 第一段(2026-09-30):配料行「不计价」和「来自组件」──────────────────────
+//   ing.noCost: true      这一行成本按 0 算,永远不算「没价」(只管钱:过敏原照查、生产单照称)。关掉 = 删掉这个键
+//   ing.componentId: id   这一行来自组件库里的一个组件:单价 = 组件实时成本 ÷ 组件产出量(按行单位换算)。
+//                         行里仍写一份人民币快照(unitPrice / currency: "CNY" / cost),给老版本 App 和编辑页合计用,新版成本链不读它
+// 算价优先级:不计价 → 关联的材料(材料还在)→ 来自组件(组件还在)→ 手写价 / 快照。新版界面里 materialId 和 componentId 互斥,
+// 两个都有(旧设备上给来自组件的行关联了材料)时材料说了算。组件已删 → 照旧按手写价 / 快照算。
+// 防循环:A 用 B、B 又用 A —— 同一个组件第二次进来就当循环(这一行算没价),嵌套超过 8 层也停。
+const _normCountUnit = (u) => { const s = String(u === undefined || u === null ? "" : u).normalize("NFKC").trim().toLowerCase(); return s === "個" ? "个" : s; };
+// 行里的 componentId 指向的组件还在、而且这一行没有「还在的材料」关联 → 返回组件,否则 null
+const ingLiveComp = (ing, materials) => {
+  if (!ing || ing.componentId === undefined || ing.componentId === null || ing.componentId === "") return null;
+  const c = _componentsById.get(ing.componentId);
+  if (!c) return null;
+  if (ing.materialId && Array.isArray(materials) && materials.some(x => x && x.id === ing.materialId)) return null;
+  return c;
+};
+// comp 顺着「计价的来自组件行」(不计价的、材料说了算的不算)能不能绕回它自己
+const _compOnCycle = (comp, materials) => {
+  const seen = new Set(), stack = [comp];
+  while (stack.length) {
+    const c = stack.pop();
+    for (const i of (Array.isArray(c.ingredients) ? c.ingredients : [])) {
+      if (!i || i.noCost) continue;
+      const n = ingLiveComp(i, materials);
+      if (!n) continue;
+      if (n === comp || n.id === comp.id) return true;
+      if (!seen.has(n.id)) { seen.add(n.id); stack.push(n); }
+    }
+  }
+  return false;
+};
+const _compCostVisiting = new Set();
+// 组件的实时总成本(人民币)+ 有没有算不全的行(有名字、用量 > 0、没价)+ 是不是撞上了循环
+const componentCostInfo = (comp, materials) => {
+  if (!comp) return { total: 0, incomplete: true, cycle: false };
+  if (_compCostVisiting.has(comp.id) || _compCostVisiting.size >= 8) return { total: 0, incomplete: true, cycle: true };
+  _compCostVisiting.add(comp.id);
+  try {
+    const ings = Array.isArray(comp.ingredients) ? comp.ingredients : [];
+    const total = getIngsLiveCost(ings, materials);
+    const incomplete = ings.some(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa)) && (parseFloat(i.qty) || 0) > 0 && ingNoPrice(i, materials));
+    return { total, incomplete, cycle: false };
+  } finally {
+    _compCostVisiting.delete(comp.id);
+  }
+};
+// 「来自组件」这一行的单价(人民币 / 行单位)。reason:"" 算得出 / orphan 组件已删 / noYield 组件没填产出量 /
+// unit 行单位和组件单位对不上(一边按重量、一边按个;或两边都按个但不是同一种)/ cycle 循环引用 / noPrice 组件里一样有价的都没有。
+// 这里换算单位(kg 行用 g 组件),和「手写价不换算单位」不矛盾:这个价是算出来的
+const componentRowPrice = (ing, materials) => {
+  const comp = (ing && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "") ? (_componentsById.get(ing.componentId) || null) : null;
+  if (!comp) return { comp: null, perUnit: 0, reason: "orphan", incomplete: false, total: 0 };
+  // 组件自己在一个圈里(顺着计价的「来自组件」行能绕回自己)→ 这一行一律算不出。先判这个,结果就不取决于从圈上哪一点开始算
+  if (_compOnCycle(comp, materials)) return { comp, perUnit: 0, reason: "cycle", incomplete: true, total: 0 };
+  const info = componentCostInfo(comp, materials);
+  if (info.cycle) return { comp, perUnit: 0, reason: "cycle", incomplete: true, total: 0 };
+  const y = parseFloat(comp.yield);
+  if (!(y > 0)) return { comp, perUnit: 0, reason: "noYield", incomplete: info.incomplete, total: info.total };
+  const fr = ingWeightFactor(ing.unit), fc = ingWeightFactor(comp.unit);
+  let perUnit;
+  if (fr > 0 && fc > 0) perUnit = info.total / (y * fc) * fr;
+  else if (fr === 0 && fc === 0 && _normCountUnit(ing.unit) === _normCountUnit(comp.unit)) perUnit = info.total / y;
+  else return { comp, perUnit: 0, reason: "unit", incomplete: info.incomplete, total: info.total };
+  if (!(perUnit > 0) || !isFinite(perUnit)) return { comp, perUnit: 0, reason: "noPrice", incomplete: info.incomplete, total: info.total };
+  return { comp, perUnit, reason: "", incomplete: info.incomplete, total: info.total };
+};
+// 第 4 批第 0 步(2026-09-30):「这一行没价」的唯一判定出口。配方详情红框 / 「N 项没价」、商品单件成本、配方一览、整体配方都走它。
+// B4-6:不计价 → 永远不算没价;来自组件(组件还在)→ 算不出单价,或组件自己有算不全的行(利润率要诚实)都算没价;
+// 其余(含组件已删的行)= 旧判定 getIngPriceSource === "none"。老数据两个标记都没有,结果和以前逐行一样
+const ingNoPrice = (ing, materials) => {
+  if (ing && ing.noCost) return false;
+  if (ingLiveComp(ing, materials)) { const r = componentRowPrice(ing, materials); return !(r.perUnit > 0) || r.incomplete; }
+  return getIngPriceSource(ing, materials) === "none";
+};
+// 给「来自组件」的配料行写快照:人民币单价(按行单位)+ 成本。算不出时单价 / 成本写空(老版本 App 显示「无价」,不按旧价算)
+const componentRowSnapshot = (ing, materials) => {
+  const r = componentRowPrice(ing, materials);
+  if (!(r.perUnit > 0)) return { unitPrice: "", currency: "CNY", cost: "" };
+  const q = parseFloat(ing.qty) || 0;
+  return { unitPrice: String(Number(r.perUnit.toPrecision(12))), currency: "CNY", cost: q > 0 ? (q * r.perUnit).toFixed(1) : "" };
+};
+// fromId 顺着配料行的 componentId 能不能走到 toId(from === to 也算)。纯函数,给选组件弹窗排除会造成循环的组件用
+const componentReaches = (components, fromId, toId) => {
+  const has = (v) => v !== undefined && v !== null && v !== "";
+  if (!has(fromId) || !has(toId)) return false;
+  const byId = new Map((components || []).filter(c => c && has(c.id)).map(c => [c.id, c]));
+  const seen = new Set(), stack = [fromId];
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === toId) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const c = byId.get(id);
+    if (!c) continue;
+    (Array.isArray(c.ingredients) ? c.ingredients : []).forEach(i => { if (i && has(i.componentId)) stack.push(i.componentId); });
+  }
+  return false;
+};
 
 // BEGIN creation-follow helpers ──────────────────────────────────────────────
 // v17.8 (2026-09-28)「组合产品的部分默认跟组件库走」+「整体配方」。
@@ -1438,7 +1562,12 @@ const _ingContentKey = (ing, matIds) => {
   const mid = (ing.materialId && (!matIds || matIds.has(ing.materialId))) ? String(ing.materialId) : "";
   // 备注 / 法文名也算内容(2b C1 / C2 起组件和部分编辑页都能改,不比的话组件里改的到不了部分、部分里改的会被下次同步悄悄盖掉;审查第 1 轮)
   const k = [_normTxt(ing.nameZh), _normTxt(ing.nameJa), _normNum(ing.qty), _normTxt(ing.unit) || "g", _normTxt(ing.group) || "none", mid, _normTxt(ing.brand), _normTxt(ing.note), _normTxt(ing.nameFr)];
-  if (!mid) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
+  // 第 4 批 B4-6:指向哪个组件、是不是不计价都算内容(部分里切换 → 本产品专用;组件里切换 → 同步到部分)。
+  // 「来自组件」行的单价 / 成本是打开编辑页时刷新的快照,不算内容(同关联了百科的行);不计价的行没有价。老行两个标记都没有,key 一个字节不变
+  const cid = _normTxt(ing.componentId);
+  if (cid) k.push("c:" + cid);
+  if (ing.noCost) k.push("nc");
+  if (!mid && !cid && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
   return k;
 };
 const layerContentKey = (x, matIds) => JSON.stringify(x ? [
@@ -1526,7 +1655,8 @@ const creationBatch = (c, n, components, materials, brands) => {
       return { ing: i, qty: (scale !== null && isFinite(q)) ? q * scale : null };
     });
     const cost = calcLayerLiveCost(l, materials, brands) * factor;
-    const missingIngs = ings.filter(({ ing }) => (parseFloat(ing.qty) || 0) > 0 && !(getIngLiveCost(ing, materials, brands, []) > 0)).map(x => x.ing);
+    // 第 4 批 B4-6:不计价的行不算缺价;来自组件的行(组件还在)按 ingNoPrice(子组件算不全也算缺);其余照旧(会退回 cost 快照)
+    const missingIngs = ings.filter(({ ing }) => !ing.noCost && (parseFloat(ing.qty) || 0) > 0 && (ingLiveComp(ing, materials) ? ingNoPrice(ing, materials) : !(getIngLiveCost(ing, materials, brands, []) > 0))).map(x => x.ing);
     return { layer: l, idx, comp, used, usedRaw: _normTxt(l.usedAmount), yieldNum, noUsed, scale, needed, stock, ings, cost, missingIngs, missingPrice: missingIngs.length > 0 };
   });
   const cost = parts.reduce((s, p) => s + p.cost, 0);
@@ -1589,13 +1719,7 @@ const allergenCodesOf = (arr) => Array.isArray(arr) ? arr.filter(c => ALLERGEN_C
 const sortAllergenCodes = (codes) => ALLERGEN_CODES.filter(c => codes.has ? codes.has(c) : codes.includes(c));
 const allergenShort = (code, lang) => { const a = allergenByCode(code); return a ? (lang === "ja" ? a.jaShort : a.short) : String(code); };
 const allergenChecked = (m) => !!(m && _normTxt(m.allergenChecked));
-// 配料行的重量:克 / 毫升 / 空(配料表默认克)按 1,kg / 千克 / 公斤 / L / 升 按 1000;其他单位(本 / 個 / 片)返回 0 = 不能按重量算
-const ingWeightFactor = (unit) => {
-  const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
-  if (/^(?:g|ml|克|毫升)?$/i.test(u)) return 1;
-  if (/^(?:kg|千克|公斤|l|升)$/i.test(u)) return 1000;
-  return 0;
-};
+// ingWeightFactor(配料行的重量换算)第 4 批挪到成本链那段(ingNoPrice 上面),「来自组件」算单价也要用
 const ingGramsOf = (ing) => {
   const f = ingWeightFactor(ing && ing.unit);
   const q = parseFloat(ing && ing.qty);
@@ -7273,7 +7397,17 @@ function linkMaterialToIng(i, mat, brands, lang) {
   const q = parseFloat(i.qty) || 0;
   const ok = !isNaN(pp) && pp > 0;
   // C6:换了材料 = 价格重新从百科来,之前的改价标记作废,↺ 的原价也换成这次写进去的价(以前配方页选完材料一直是黄的)
-  const { _priceModified, ...rest } = i;
+  // 第 4 批 B4-6:关联材料 = 不再「来自组件」(两个关联互斥,componentId 删键);
+  // 不计价的行只挂上关联(过敏原要用),单价 / 成本不写回去(critic M4:写了旧版 App 会按刷回来的价算钱)
+  const { _priceModified, componentId: _cid, ...rest } = i;
+  if (i.noCost) return {
+    ...rest,
+    materialId: mat.id,
+    nameZh: i.nameZh || mat.nameZh || "",
+    nameJa: i.nameJa || mat.nameJa || "",
+    nameFr: i.nameFr || mat.nameFr || "",
+    brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
+  };
   return {
     ...rest,
     materialId: mat.id,
@@ -7291,9 +7425,36 @@ function linkMaterialToIng(i, mat, brands, lang) {
 }
 
 // 🔗 选材料弹窗的 onSelect 和名字联想下拉(C9)共用的写法:mat = null 是取消关联(改价标记跟着作废),否则 linkMaterialToIng
+// 第 4 批 B4-6:取消关联时「来自组件」也一起取消(componentId 删键),行里留着的人民币快照变成手写价
 function applyMaterialPick(i, mat, brands, lang) {
-  if (mat === null) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
+  if (mat === null) { const { _priceModified, componentId: _cid, ...rest } = i; return { ...rest, materialId: null }; }
   return linkMaterialToIng(i, mat, brands, lang);
+}
+// 第 4 批 B4-6:🔗 弹窗「组件」页选了一个组件 → 这一行「来自组件」。和关联材料互斥(清 materialId、改价标记);
+// 名字空着的补上组件名;写一份人民币快照(给老版本 App 和编辑页合计用)。不计价的行只挂上关联,不写价
+function applyComponentPick(i, comp, materials) {
+  const { _priceModified, ...rest } = i;
+  const next = {
+    ...rest,
+    componentId: comp.id,
+    materialId: null,
+    nameZh: i.nameZh || comp.nameZh || "",
+    nameJa: i.nameJa || comp.nameJa || "",
+    nameFr: i.nameFr || comp.nameFr || "",
+  };
+  if (i.noCost) return next;
+  const snap = componentRowSnapshot(next, materials);
+  return { ...next, ...snap, _originalPrice: snap.unitPrice };
+}
+// 第 4 批 B4-6:「这一行不计价」开关。打开:单价 / 成本清空(关联的材料 / 组件留着,过敏原要用);
+// 关掉:删掉 noCost 键(别存成 false,键留着会被当成「改过」),关联了材料 / 组件的按它们现在的价写回来
+function applyNoCost(i, on, materials, brands, lang) {
+  const { _priceModified, noCost: _nc, ...rest } = i;
+  if (on) return { ...rest, noCost: true, unitPrice: "", cost: "", _originalPrice: "" };
+  const mat = rest.materialId && Array.isArray(materials) ? materials.find(x => x && x.id === rest.materialId) : null;
+  if (mat) return linkMaterialToIng(rest, mat, brands || [], lang);
+  if (ingLiveComp(rest, materials)) return applyComponentPick(rest, _componentsById.get(rest.componentId), materials);
+  return rest;
 }
 const pickMaterialForRow = (setIngs, rowId, mat, brands, lang) =>
   setIngs(prev => prev.map(i => i._id !== rowId ? i : applyMaterialPick(i, mat, brands, lang)));
@@ -7348,15 +7509,25 @@ function saveIngPricesToShop(rows, setShopMaterials) {
 
 // 保存时刷新关联行的价(三个编辑页共用):材料已删 → 清掉关联;改过价的行保留她填的价(C6,以前只有配方页这样);
 // 其余按材料百科(本店价优先)的最新价刷新。pp 是人民币,必须标 CNY
+// 第 4 批 B4-6:不计价的行不刷价(critic M4,旧版 App 会按刷回来的价算钱;关联的材料删了照旧清掉关联);
+// 「来自组件」的行(组件还在、没有还在的材料)写一份人民币快照
 function refreshIngForSave(i, materials) {
-  if (!i.materialId) return i;
+  if (!i.materialId) return (!i.noCost && ingLiveComp(i, materials)) ? { ...i, ...componentRowSnapshot(i, materials) } : i;
   const m = (materials || []).find(x => x.id === i.materialId);
-  if (!m) { const { _priceModified, ...rest } = i; return { ...rest, materialId: null }; }
-  if (i._priceModified) return i;
+  if (!m) { const { _priceModified, ...rest } = i; const r = { ...rest, materialId: null }; return (!r.noCost && ingLiveComp(r, materials)) ? { ...r, ...componentRowSnapshot(r, materials) } : r; }
+  if (i._priceModified || i.noCost) return i;
   const pp = getMaterialEffectivePrice(m);
   if (isNaN(pp) || pp <= 0) return i;
   const q = parseFloat(i.qty) || 0;
   return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+}
+// 第 4 批 B4-6:三个编辑页打开时每一行先过这里 —— 不计价的行不按材料刷价(原样);来自组件的行刷一份人民币快照
+// (编辑页合计读 i.cost)。其余返回 null,照各页原来的写法按材料百科刷新。2b「打开时不整理没关联的行」的例外只有来自组件这一种,
+// 而且它的快照不算跟组件库比较的内容(_ingContentKey),打开不改就保存不会变成本产品专用
+function ingOpenOverride(linked, idx, materials) {
+  if (linked.noCost) return { ...linked, _id: idx, _originalPrice: linked.unitPrice || "" };
+  if (ingLiveComp(linked, materials)) { const snap = componentRowSnapshot(linked, materials); return { ...linked, _id: idx, ...snap, _originalPrice: snap.unitPrice }; }
+  return null;
 }
 
 // C6:改了「关联材料百科」的行的单价 → 提示条 + 「同时保存到本店原料」(默认勾上)。三个编辑页共用
@@ -7467,6 +7638,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const [ings, setIngs] = useState(component && (component.ingredients || []).length > 0
     ? component.ingredients.map((i, idx) => {
         const linked = autoLinkIng(i, cats);
+        { const ov = ingOpenOverride(linked, idx, materials); if (ov) return ov; }   // 第 4 批 B4-6:不计价 / 来自组件
         if (linked.materialId && Array.isArray(materials)) {
           const m = materials.find(x => x.id === linked.materialId);
           if (m) {
@@ -11678,6 +11850,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [ings, setIngs] = useState((layer.ingredients || []).map((i, idx) => {
     const linked = autoLinkIng(i, cats);
+    { const ov = ingOpenOverride(linked, idx, materials); if (ov) return ov; }   // 第 4 批 B4-6:不计价 / 来自组件
     // 自动用百科最新价刷新
     if (linked.materialId && Array.isArray(materials)) {
       const m = materials.find(x => x.id === linked.materialId);
@@ -13627,7 +13800,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose, where
   // 对所有未关联的 ing 进行智能匹配
   const analysis = useMemo(() => {
     return ings
-      .filter(ing => !ing.materialId && (ing.nameZh || ing.nameJa))
+      .filter(ing => !ing.materialId && !(ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "") && !ing.noCost && (ing.nameZh || ing.nameJa))   // 第 4 批 B4-6:来自组件 / 不计价的行不批量关联(critic M4)
       .map(ing => {
         const scored = smartMatchMaterial(ing, materials, brands);
         // v17.4: 本店原料已有的候选排最前;自动勾选也是够格的本店优先(规则见 shopMatchWins)
@@ -15229,6 +15402,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const [ings, setIngs] = useState(recipe && recipe.ingredients && recipe.ingredients.length > 0
     ? recipe.ingredients.map((i, idx) => {
         const linked = autoLinkIng(i, cats);
+        { const ov = ingOpenOverride(linked, idx, materials); if (ov) return ov; }   // 第 4 批 B4-6:不计价 / 来自组件
         // 🔗 如果有 materialId 关联材料百科,自动用最新价刷新
         // v11: 同时记录 _originalPrice 快照,给"改价->保存到本店"UX 判定 dirty 用
         if (linked.materialId && Array.isArray(materials)) {
@@ -18964,6 +19138,7 @@ function App() {
   // v17: 从 useEffect 挪到渲染期 —— effect 在渲染之后跑,改完本店价这一帧的成本
   // 和箱价还会用旧价算。setter 幂等、不动 React 状态,渲染期调用是安全的。
   setShopMaterialsForLookup(shopMaterials);
+  setComponentsForLookup(components);   // 第 4 批 B4-6:配料行「来自组件」算价用,同上不放 useEffect
   // v17: 全局配置(日元汇率 + 价格显示口径)。注入给成本链和显示 helper。
   // ⚠️ 故意不放 useEffect —— effect 在渲染之后跑,改完汇率/口径这一帧列表还会显示旧数字。
   // 这两个 setter 幂等、不改 React 状态,渲染期间调用是安全的。
