@@ -23649,6 +23649,8 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const qText = isTake ? tText : nText;
   const need = parseFloat(_pinNorm(qText));
   const valid = need > 0 && isFinite(need);
+  // 审查 pt1:取出模式按个计的,按账本的规整(向上取整)先算好 —— 按钮 / 取几个 / 差几个 / 记下的都是这个数(以前按钮写 −2.5 個、账上扣 3)
+  const kitQ = isTake && valid && _prepIsCount(pcfg.unit) ? _prepQ(need, pcfg.unit, "take") : need;
   const block = target && valid && !isTake ? prodBlockOf(kind, target, need, ctx) : null;
   const takeBlock = isTake ? prodBlockOf(kind, target, valid ? need : 1, ctx, "take") : null;
   const yieldNum = target ? (parseFloat(target.yield) || 0) : 0;
@@ -23716,14 +23718,14 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     }
     return PX.kitMakeToPrep;
   })() : "";
-  const recordLine = () => { if (valid && onLogLine) onLogLine(uid, need); };
+  const recordLine = () => { if (valid && onLogLine) onLogLine(uid, kitQ); };
   const recordDirect = () => {
     if (!valid || !onPrepOp || !canRecord) return;
-    const plan = prepTakePlan(pitem, pcfg, need, today);
+    const plan = prepTakePlan(pitem, pcfg, kitQ, today);
     const q = _r3(plan.got + plan.short);
     let msg = PX.kitToastTake(name, storeNm, fmtQty(q), pcfg.unit, fmtQty(Math.max(0, _r3(oh.usable - plan.got))));
     if (plan.short > 0) msg += PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));
-    const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: need, via: "kitchen" };
+    const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: kitQ, via: "kitchen" };
     if (c.staff) op.staff = true;
     if (onPrepOp([op], { toast: msg, staff: !!c.staff }) === false) return;
     setRecorded(fmtQty(q));
@@ -23789,12 +23791,12 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
         : <div style={{ fontSize: 15, color: T.body, marginTop: 8, ...T.num }}>{X.batchOf(fmtQty(block.scale), fmtQty(Math.max(1, block.yieldNum || 1)), block.unit ? " " + block.unit : "")}</div>)}
       {isTake && (
         <div data-kitchen-take="1" style={{ marginTop: 8 }}>
-          <KitchenIngRow k="take" name={PX.kitTakeFrom(pcfg.store)} sub={takeSub} note="" qty={valid ? fmtQty(need) : "—"} unit={valid ? pcfg.unit : ""} warn={!valid}
+          <KitchenIngRow k="take" name={PX.kitTakeFrom(pcfg.store)} sub={takeSub} note="" qty={valid ? fmtQty(kitQ) : "—"} unit={valid ? pcfg.unit : ""} warn={!valid}
             checked={!!st.ings.take} onToggle={() => toggleIng("take")} bar="" />
           {!pitem && note(T.subtle, "untracked", PX.kitNotTracked(storeNm))}
           {pitem && stock.readOnly && note(T.warning, "readonly", PX.readOnly)}
           {pitem && oh.unitMismatch && note(T.warning, "unit", PX.unitMismatch(pitem.unit, pcfg.unit))}
-          {pitem && !oh.unitMismatch && valid && _r3(need - oh.usable) > 0 && note(T.danger, "short", PX.kitShort(fmtQty(oh.usable), fmtQty(_r3(need - oh.usable)), pcfg.unit))}
+          {pitem && !oh.unitMismatch && valid && _r3(kitQ - oh.usable) > 0 && note(T.danger, "short", PX.kitShort(fmtQty(oh.usable), fmtQty(_r3(kitQ - oh.usable)), pcfg.unit))}
           {pitem && !oh.unitMismatch && oh.expiredLots.length > 0 && note(T.danger, "expired", PX.kitExpired(oh.expiredLots.length, fmtQty(oh.expired), pcfg.unit))}
           {thaw && (
             <div data-kitchen-thaw="1" style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap", marginTop: 14 }}>
@@ -23813,7 +23815,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
         <div data-kitchen-record={fromLine && !uid ? "fromline" : viaLine ? (lineDone ? "done" : "line") : "direct"} style={{ marginTop: 16 }}>
           {fromLine && !uid ? note(T.body, "fromline", PX.kitFromLine((fromLine && fromLine.name) || ""))
             : viaLine ? (lineDone ? note(T.success, "linedone", PX.kitLineDone)
-              : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(need) : "", pcfg.unit)}</Btn>)
+              : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(kitQ) : "", pcfg.unit)}</Btn>)
             : (
               <>
                 {onProducts.length > 0 && note(T.subtle, "onlystore", PX.kitOnlyStore(storeNm))}
@@ -23823,7 +23825,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
                     <Btn size="sm" variant="ghost" onClick={() => setRecorded(null)}>{PX.kitAgain}</Btn>
                   </div>
                 ) : (
-                  <div style={{ marginTop: 8 }}><Btn size="lg" variant="primary" disabled={!valid} onClick={recordDirect}>{PX.kitBakedBtn(valid ? fmtQty(need) : "", pcfg.unit)}</Btn></div>
+                  <div style={{ marginTop: 8 }}><Btn size="lg" variant="primary" disabled={!valid} onClick={recordDirect}>{PX.kitBakedBtn(valid ? fmtQty(kitQ) : "", pcfg.unit)}</Btn></div>
                 )}
               </>
             )}
