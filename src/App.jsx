@@ -581,6 +581,197 @@ const getMaterialPriceSource = (m) => {
   return "none";
 };
 
+// ─── 第 4 批 B4-3:价格历史(2026-09-30)──────────────────────────────────
+// 材料 / 本店原料对象里的 priceHistory: [{ at, pricePerG, currency?, source }],只在「实际生效价」变了时追加,最多留 PRICE_HISTORY_MAX 条。
+// · 生效价:材料 = priceRange.mid || pricePerG(成本链读的那个);本店原料 = pricePerG。每一项的 pricePerG 存字符串、每克价(同对象口径)。
+// · currency 照抄对象上原样的值:对象没写币种,这一项也不写(= 日元,和「没有 currency 字段 = 日元」一致),数据体检 H1 才补得上。
+// · 「变没变」按数值 + 币种比:主数据 142 条材料 0.5 / "0.5" 写法不同但数一样,PackPriceFields 的 r6 也有尾数误差。
+// · 清空价格不记;切币种(同一笔钱换算)记一条,但折成人民币后涨跌不到 0.5%,不显示涨跌。
+// · 旧版 app 改价不记,所以历史最后一条不一定是现价:涨跌永远拿对象上「现在的价」去比(priceTrendOf),
+//   下一次在新版里改价时先把改之前的价补成一条 before。
+// · 撤销一律整条换回改之前的对象,这次追加的那条跟着没了。合并导入取两边并集(mergePriceHistory),价格那组字段仍按 mergeByNewer 整组取一边。
+// · 所有写入口:材料编辑页保存、本店原料编辑页保存、编辑页「保存到本店原料」(saveIngPricesToShop)、两个「+ 本店原料」、合并导入。
+//   以后新加改价的地方要走 withPriceHistory。直接改主数据文件的脚本改不了记录,一律出合并导入包。
+const PRICE_HISTORY_MAX = 30;
+const phTime = (at) => { const t = Date.parse(at || ""); return isNaN(t) ? 0 : t; };
+// 有效的记录项(格式坏掉的:不是数组 / null / 价是 "abc" 一律跳过,不报错)
+const phOf = (o) => (o && Array.isArray(o.priceHistory)) ? o.priceHistory.filter(e => e && typeof e === "object" && parseFloat(e.pricePerG) > 0) : [];
+// 对象现在的生效价 { pricePerG, currency(原样,可能 undefined) },没价 → null
+const priceSnapOf = (o, kind) => {
+  if (!o) return null;
+  const v = kind === "material" ? ((o.priceRange && o.priceRange.mid) || o.pricePerG) : o.pricePerG;
+  return parseFloat(v) > 0 ? { pricePerG: String(v), currency: o.currency } : null;
+};
+const samePrice = (a, b) => {
+  if (!a || !b || curOf(a) !== curOf(b)) return false;
+  const x = parseFloat(a.pricePerG), y = parseFloat(b.pricePerG);
+  return Math.abs(x - y) <= 1e-9 + 1e-6 * Math.max(x, y);
+};
+const phEntry = (snap, at, source) => {
+  const e = { at: at || "", pricePerG: String(snap.pricePerG) };
+  if (snap.currency === "CNY" || snap.currency === "JPY") e.currency = snap.currency;
+  e.source = source;
+  return e;
+};
+// 连续同价的只留最早一条,再截最后 PRICE_HISTORY_MAX 条
+const phTrim = (list) => {
+  const out = [];
+  list.forEach(e => { if (!out.length || !samePrice(out[out.length - 1], e)) out.push(e); });
+  return out.slice(-PRICE_HISTORY_MAX);
+};
+// 往后追加一条时用的时间:不早于最后一条(早了就取最后一条之后 1 毫秒),合并导入按时间排序时才不会排到它前面
+const phAfter = (list, at) => {
+  if (!list.length) return at || "";
+  const last = phTime(list[list.length - 1].at);
+  return phTime(at) > last ? at : new Date(last + 1).toISOString();
+};
+const phBeforeAt = (o) => (o && (o.updatedAt || (o.priceRange && o.priceRange.asOf))) || "";
+
+// 写入口用:prev = 改之前存盘的那一条(新建传 null),next = 要写进去的那一条。返回 next 应该带的 priceHistory:
+// 价没变 / 新价为空 → 原样返回 prev.priceHistory(同一个引用,可能是 undefined —— 调用方这时别写这个键);
+// 变了 → 必要时先补 before(改之前的价,历史里还没有时),再追加这次的,时间 = now(和 updatedAt 同一个)
+function withPriceHistory(prev, next, kind, source, now) {
+  const raw = prev ? prev.priceHistory : undefined;
+  const nextSnap = priceSnapOf(next, kind);
+  if (!nextSnap) return raw;
+  const prevSnap = priceSnapOf(prev, kind);
+  if (prevSnap && samePrice(prevSnap, nextSnap)) return raw;
+  const list = phOf(prev);
+  if (prevSnap && (!list.length || !samePrice(list[list.length - 1], prevSnap))) list.push(phEntry(prevSnap, phAfter(list, phBeforeAt(prev)), "before"));
+  list.push(phEntry(nextSnap, phAfter(list, now), source));
+  return phTrim(list);
+}
+
+// 合并导入用:local 本机那条、file 文件那条、merged = mergeByNewer 的结果(价格那组已整组取了一边)。返回 merged 应该带的 priceHistory,
+// 两边都没有记录、这次也没改价 → undefined(调用方原样不动)。
+// · 两边的记录取并集:按「时间 | 数值 | 币种」去重、按时间排序(同一时间再按内容排,A 导进 B 和 B 导进 A 一样),两台电脑各自的改价都留下。
+// · 这次导入让本机的生效价变了(文件为准且价不同)而并集最后一条不是它 → 补本机原来的价(没记过的话)+ 一条 import(时间 = 文件的修改时间)。
+// · 本机为准时不补:并集最后一条可能是另一台电脑后来改的价,priceTrendOf 的 newerElsewhere 会把它显示出来。
+// · 同一个文件导两次,结果一样(第二次价格已经一样,不再补)。
+function mergePriceHistory(local, file, merged, kind, now) {
+  const a = phOf(local), b = phOf(file);
+  const cur = priceSnapOf(merged, kind), locSnap = priceSnapOf(local, kind);
+  const changed = !!cur && !(locSnap && samePrice(locSnap, cur));
+  if (!a.length && !b.length && !changed) return undefined;
+  const key = (e) => `${phTime(e.at)}|${parseFloat(e.pricePerG)}|${curOf(e)}`;
+  const byKey = new Map();
+  [...a, ...b].forEach(e => {
+    const k = key(e), had = byKey.get(k);
+    if (!had || JSON.stringify(e) < JSON.stringify(had)) byKey.set(k, e);   // 同一条两边写法不同(来源不同)时固定取一边,和导入方向无关
+  });
+  const list = phTrim([...byKey.values()].sort((x, y) => (phTime(x.at) - phTime(y.at))
+    || (key(x) < key(y) ? -1 : key(x) > key(y) ? 1 : 0) || (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1)));
+  if (changed && !(list.length && samePrice(list[list.length - 1], cur))) {
+    if (locSnap && (!list.length || !samePrice(list[list.length - 1], locSnap))) list.push(phEntry(locSnap, phAfter(list, phBeforeAt(local)), "before"));
+    list.push(phEntry(cur, phAfter(list, (file && file.updatedAt) || now), "import"));
+  }
+  return phTrim(list);
+}
+const withMergedPriceHistory = (local, file, merged, kind, now) => {
+  const ph = mergePriceHistory(local, file, merged, kind, now);
+  return ph === undefined ? merged : { ...merged, priceHistory: ph };
+};
+
+// 数据体检 H1(本店原料标币种)用:记录里没写币种、数值又和现价相同的项补上币种;别的不动。没有要改的 → null
+function currencyFixedHistory(obj, cur) {
+  if (!obj || !Array.isArray(obj.priceHistory)) return null;
+  const now = { pricePerG: obj.pricePerG };   // 两边都没币种 → 同按日元比,只比数值
+  let changed = false;
+  const out = obj.priceHistory.map(e => {
+    if (!e || typeof e !== "object" || e.currency || !(parseFloat(e.pricePerG) > 0) || !samePrice(e, now)) return e;
+    changed = true;
+    return { ...e, currency: cur };
+  });
+  return changed ? out : null;
+}
+
+// 显示用:对象现在的价 vs 上一个不同的价。没有记录 / 没价 / 变化不到 0.5% 且没有 newerElsewhere → null。
+// { pct(折成人民币比;不到 0.5% 为 null), prev(上一个价那一项), since(变成现价的时间), approx(两边币种不同,按当前汇率折的), newerElsewhere }
+// newerElsewhere:记录里在「变成现价」之后还有别的价(另一台电脑改过,合并导入时按修改时间取了另一边),显示出来让她看一眼
+function priceTrendOf(obj, kind) {
+  const cur = priceSnapOf(obj, kind), h = phOf(obj);
+  if (!cur || !h.length) return null;
+  let i = -1;
+  for (let k = h.length - 1; k >= 0; k--) if (samePrice(h[k], cur)) { i = k; break; }
+  let prev = null;
+  if (i >= 0) { for (let k = i - 1; k >= 0; k--) if (!samePrice(h[k], cur)) { prev = h[k]; break; } }
+  else prev = h[h.length - 1];   // 现价没记过(旧版 app 改的):和记录里最后一个价比
+  const newer = (i >= 0 && i < h.length - 1) ? h[h.length - 1] : null;
+  let pct = null;
+  if (prev) {
+    const x = toCNY(cur.pricePerG, curOf(cur)), y = toCNY(prev.pricePerG, curOf(prev));
+    if (x > 0 && y > 0 && Math.abs((x - y) / y) >= 0.005) pct = (x - y) / y;
+  }
+  if (pct === null && !newer) return null;
+  return { pct, prev, since: i >= 0 ? h[i].at : "", approx: !!prev && curOf(cur) !== curOf(prev), newerElsewhere: newer };
+}
+const phDateLabel = (at, lang) => {
+  const t = phTime(at);
+  if (!at || t < Date.UTC(2000, 0, 1)) return lang === "zh" ? "更早" : "以前";
+  return /^\d{4}-\d{2}$/.test(String(at)) ? String(at) : localDateStr(new Date(t));
+};
+const PH_SOURCES = {
+  edit: ["百科编辑", "事典で編集"], shop: ["本店原料编辑", "仕入れ原料で編集"], page: ["编辑页保存到本店原料", "編集画面から保存"],
+  add: ["加入本店原料", "仕入れ原料に追加"], import: ["合并导入", "マージ読込"], before: ["之前的价", "以前の価格"],
+};
+const phSourceLabel = (src, lang) => { const x = PH_SOURCES[src]; return x ? x[lang === "zh" ? 0 : 1] : (src || ""); };
+const phPct = (p) => { const v = Math.abs(p) * 100; return (v < 10 ? v.toFixed(1).replace(/\.0$/, "") : String(Math.round(v))) + "%"; };
+
+// 「较上次 ↑12%」:涨红跌绿(同本店原料列表的「↑ 参考」),两边币种不同标 ≈。没有可说的 → null(没有记录的条目渲染和以前一字不差)
+function PriceTrendChip({ obj, kind, lang }) {
+  const t = priceTrendOf(obj, kind);
+  if (!t || t.pct === null) return null;
+  const zh = lang === "zh", up = t.pct > 0;
+  const title = `${zh ? "上次" : "前回"} ${fmtUnitPrice(t.prev.pricePerG, curOf(t.prev))}(${phDateLabel(t.prev.at, lang)} · ${phSourceLabel(t.prev.source, lang)})`;
+  return (
+    <div title={title} style={{ fontSize: 10, color: up ? T.danger : T.success, marginTop: 2, whiteSpace: "nowrap", ...T.num }}>
+      {zh ? "较上次" : "前回比"} {t.approx ? "≈" : ""}{up ? "↑" : "↓"}{phPct(t.pct)}
+    </div>
+  );
+}
+
+// 价格记录:默认折叠成一行「价格记录 N 条」,点开从新到旧列出。newerElsewhere 的提示不折叠。没有记录 → null
+function PriceHistoryList({ obj, kind, lang, title }) {
+  const [open, setOpen] = useState(false);
+  const h = phOf(obj);
+  if (!h.length) return null;
+  const zh = lang === "zh";
+  const t = priceTrendOf(obj, kind);
+  const cur = priceSnapOf(obj, kind);
+  const rows = h.map((e, i) => {
+    const p = h[i - 1];
+    const x = toCNY(e.pricePerG, curOf(e)), y = p ? toCNY(p.pricePerG, curOf(p)) : 0;
+    const d = (p && x > 0 && y > 0 && Math.abs((x - y) / y) >= 0.005) ? (x - y) / y : null;
+    return { e, d, approx: !!p && curOf(e) !== curOf(p), isCur: !!cur && samePrice(e, cur) };
+  }).reverse();
+  return (
+    <div style={{ marginTop: 10 }}>
+      {t && t.newerElsewhere && cur && (
+        <div style={{ fontSize: 11, color: T.danger, marginBottom: 4, lineHeight: 1.6 }}>
+          {zh
+            ? `⚠ ${title}:记录里最新的价是 ${fmtUnitPrice(t.newerElsewhere.pricePerG, curOf(t.newerElsewhere))}(${phDateLabel(t.newerElsewhere.at, lang)}),现在用的是 ${fmtUnitPrice(cur.pricePerG, curOf(cur))}。可能是另一台电脑改过价,合并导入时按修改时间取了另一边 —— 以哪个为准,去编辑页改一下`
+            : `⚠ ${title}:履歴の最新価格は ${fmtUnitPrice(t.newerElsewhere.pricePerG, curOf(t.newerElsewhere))}(${phDateLabel(t.newerElsewhere.at, lang)})、現在は ${fmtUnitPrice(cur.pricePerG, curOf(cur))}。別の端末で変更された可能性があります`}
+        </div>
+      )}
+      <button type="button" onClick={() => setOpen(o => !o)} style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", fontSize: 11, color: T.textTertiary, fontFamily: T.fontSans }}>
+        {open ? "▾" : "▸"} {title} · {zh ? `价格记录 ${h.length} 条` : `価格履歴 ${h.length} 件`}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, display: "grid", gap: 2 }}>
+          {rows.map(({ e, d, approx, isCur }, i) => (
+            <div key={i} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline", fontSize: 11, color: isCur ? T.textPrimary : T.textSecondary, ...T.num }}>
+              <span style={{ minWidth: 76, color: T.textTertiary }}>{phDateLabel(e.at, lang)}</span>
+              <span style={{ minWidth: 90 }}>{fmtUnitPrice(e.pricePerG, curOf(e))}</span>
+              <span style={{ minWidth: 44, color: d === null ? T.textTertiary : d > 0 ? T.danger : T.success }}>{d === null ? "" : `${approx ? "≈" : ""}${d > 0 ? "↑" : "↓"}${phPct(d)}`}</span>
+              <span style={{ color: T.textTertiary }}>{phSourceLabel(e.source, lang)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const getAllCompCats = () => [...COMPONENT_CATEGORIES, ..._customCompCats];
 const getCompCat = (id) => getAllCompCats().find(c => c.id === id) || COMPONENT_CATEGORIES[COMPONENT_CATEGORIES.length - 1];
 
@@ -3774,12 +3965,17 @@ function mergeByNewer(existing, inc, lockedKeys = [], groups = []) {
 // → mergePriceHistory(价格历史,要看合并后的现价,所以放最后;前两步都不改价格)。nowIso 留给后两步用
 function mergeMaterialEntry(loc, inc, nowIso) {
   // 单价 / 参考价 / 币种三样永远同一边;过敏原三项整组取一边(见 mergeByNewer)
-  return mergeByNewer(loc, inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
+  const merged = mergeByNewer(loc, inc, ["pricePerG", "priceRange", "currency"], [["allergenCodes", "mayContainCodes", "allergenChecked"]]);
+  // 第 4 批 B4-3:价格历史取两边并集(不进 lockedKeys,那样另一台电脑的改价记录会整组丢掉);本机的生效价被这次导入改了就补 before + import
+  return withMergedPriceHistory(loc, inc, merged, "material", nowIso);
 }
 // 第 4 批第 0 步:IP 分发包里每条材料要剥掉的本店私有字段只在这里写(exportPublicIP 调它)。
 // 现在原样返回;以后价格历史 priceHistory、待换国产标记 domestic* 在这里剥(aliases 保留)
 function stripPrivateMaterialFields(m) {
-  return m;
+  // 第 4 批 B4-3:价格历史里是她按进价改的百科价,等于带着采购价,和「不导出本店原料」同一个目的。没有这个键的原样返回同一个对象
+  if (!m || typeof m !== "object" || !Object.prototype.hasOwnProperty.call(m, "priceHistory")) return m;
+  const { priceHistory, ...rest } = m;
+  return rest;
 }
 
 // ─── 编辑页「有没有没保存的改动」(2026-09-29 体检修)────────────────────────
@@ -5648,6 +5844,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             if (uniqueMissing.length === 0) return null;
             return (
               <Btn size="sm" variant="success" onClick={() => {
+                const now = new Date().toISOString();   // 第 4 批:修改时间和价格记录同一个时间,在 updater 外面定好
                 setShopMaterials(prev => {
                   const existing = new Set(prev.map(x => x && x.materialId).filter(Boolean));
                   const add = [];
@@ -5655,7 +5852,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                     if (existing.has(ing.materialId)) return;
                     const m = materials.find(x => x.id === ing.materialId);
                     const ref = (m && m.priceRange && m.priceRange.mid) || (m && m.pricePerG) || ing.unitPrice || "";
-                    add.push({
+                    const sm = {
                       id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                       materialId: ing.materialId,
                       pricePerG: String(ref),
@@ -5663,8 +5860,10 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                       packSize: (m && m.packSize) || "",
                       casePack: (m && m.casePack) || "",
                       note: "",
-                      updatedAt: new Date().toISOString(),   // 合并导入按修改时间取新的一边(mergeByNewer)
-                    });
+                      updatedAt: now,   // 合并导入按修改时间取新的一边(mergeByNewer)
+                    };
+                    const ph = withPriceHistory(null, sm, "shop", "add", now);   // 第 4 批:有价才记一条「加入本店原料」
+                    add.push(ph ? { ...sm, priceHistory: ph } : sm);
                   });
                   return [...prev, ...add];
                 });
@@ -7535,15 +7734,20 @@ function saveIngPricesToShop(rows, setShopMaterials) {
         const old = next[idx];
         if (!addedIds.has(old.id) && !(old.id in prevById)) prevById[old.id] = old;   // 同一材料两行时只记最早的原样
         next[idx] = { ...old, pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: now };   // v17: 币种跟手写价走;修改时间给合并导入用
+        // 第 4 批 B4-3:生效价变了才记一条(同价只刷修改时间,不记);撤销整条换回 prevById 里的原对象,这条记录跟着没了
+        // 同一材料两行时拿这次保存之前的原样比(这一批新建的算新建),只记最后写进去的价
+        const ph = withPriceHistory(addedIds.has(old.id) ? null : prevById[old.id], next[idx], "shop", "page", now);
+        if (ph === undefined) delete next[idx].priceHistory; else next[idx].priceHistory = ph;
         written[old.id] = next[idx];
       } else {
-        next.push({
+        const sm = {
           id: newId,
           materialId: ing.materialId,
           pricePerG: String(parseFloat(ing.unitPrice)),
           currency: curOf(ing),   // v17
           updatedAt: now,
-        });
+        };
+        next.push({ ...sm, priceHistory: withPriceHistory(null, sm, "shop", "page", now) });   // 第 4 批:新建的带一条(上面已筛过单价 > 0)
         addedIds.add(newId);
         written[newId] = next[next.length - 1];
       }
@@ -14855,6 +15059,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                   {material.priceRange && material.priceRange.asOf && (
                     <div style={{ fontSize: 9, color: T.textTertiary, marginTop: 2 }}>{material.priceRange.asOf}</div>
                   )}
+                  <PriceTrendChip obj={material} kind="material" lang={lang} />
                 </div>
               );
             })()}
@@ -14868,6 +15073,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                   {curOf(sm) === "JPY" && getDisplayCur() === "raw" && (
                     <div style={{ fontSize: 10, color: T.success, opacity: 0.75, marginTop: 2 }}>≈ {fmtOther(parseFloat(sm.pricePerG) * 100, "JPY")}/100g</div>
                   )}
+                  <PriceTrendChip obj={sm} kind="shop" lang={lang} />
                 </div>
               );
             })()}
@@ -14891,6 +15097,10 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
               </div>
             )}
           </div>
+          {/* 第 4 批 B4-3:价格记录(没有记录时不显示) */}
+          {(() => { const sm = Array.isArray(shopMaterials) ? shopMaterials.find(x => x && x.materialId === material.id) : null;
+            return sm ? <PriceHistoryList obj={sm} kind="shop" lang={lang} title={lang === "zh" ? "🏷️ 本店价" : "🏷️ 仕入価"} /> : null; })()}
+          <PriceHistoryList obj={material} kind="material" lang={lang} title={lang === "zh" ? "📖 参考价" : "📖 参考価"} />
           {/* v11: + 添加为本店原料 按钮 */}
           {typeof setShopMaterials === "function" && (() => {
             const existing = Array.isArray(shopMaterials) ? shopMaterials.find(x => x && x.materialId === material.id) : null;
@@ -14906,7 +15116,8 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
             return (
               <div style={{ marginTop: 12 }}>
                 <Btn variant="primary" size="sm" onClick={() => {
-                  setShopMaterials(prev => [...prev, {
+                  const now = new Date().toISOString();
+                  const sm = {
                     id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
                     materialId: material.id,
                     pricePerG: String(refPrice),
@@ -14914,8 +15125,10 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                     packSize: material.packSize || "",
                     casePack: material.casePack || "",
                     note: "",
-                    updatedAt: new Date().toISOString(),   // 合并导入按修改时间取新的一边(mergeByNewer)
-                  }]);
+                    updatedAt: now,   // 合并导入按修改时间取新的一边(mergeByNewer)
+                  };
+                  const ph = withPriceHistory(null, sm, "shop", "add", now);   // 第 4 批:有价才记一条「加入本店原料」
+                  setShopMaterials(prev => [...prev, ph ? { ...sm, priceHistory: ph } : sm]);
                   if (typeof showToast === "function") showToast((lang === "zh" ? "✓ 已添加到本店原料 " : "✓ 仕入れ原料に追加 ") + fmtUnitPrice(refPrice, curOf(material)));
                 }}>
                   {lang === "zh" ? "+ 添加为本店原料" : "+ 仕入れ原料に追加"}
@@ -15383,13 +15596,18 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
       : (form.priceRange && (String((material && material.pricePerG) ?? "").trim() !== "" || curOf(form) !== curOf(material || {})))
         ? { ...form.priceRange, mid: "" }
         : form.priceRange;
-    onSave({
+    const nowIso = new Date().toISOString();
+    const saved = {
       ...form,
       priceRange: _priceRange,
       id: material ? material.id : "mat_" + Date.now(),
       rating: parseInt(form.rating) || 0,
-      updatedAt: new Date().toISOString(),
-    });
+      updatedAt: nowIso,
+    };
+    // 第 4 批 B4-3:生效价(priceRange.mid || pricePerG)变了才记,和 updatedAt 同一个时间;没变 = 原样(没有记录的也不多出这个键)
+    const ph = withPriceHistory(material, saved, "material", "edit", nowIso);
+    if (ph !== (material ? material.priceHistory : undefined)) saved.priceHistory = ph;
+    onSave(saved);
   };
 
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
@@ -15909,12 +16127,18 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       showToast(lang === "zh" ? "⚠️ 本店价必须大于 0" : "⚠️ 仕入れ価格は 0 より大きく");
       return;
     }
-    const clean = { ...editing, updatedAt: new Date().toISOString() };   // 修改时间给合并导入用(mergeByNewer)
+    const now = new Date().toISOString();
+    const clean = { ...editing, updatedAt: now };   // 修改时间给合并导入用(mergeByNewer)
     delete clean._new;
     setShopMaterials(prev => {
       const idx = prev.findIndex(x => x.id === clean.id);
-      if (idx >= 0) { const next = [...prev]; next[idx] = clean; return next; }
-      return [...prev, clean];
+      // 第 4 批 B4-3:和存盘的那一条比(不是打开编辑页时的副本),价变了才记;新建的记一条「加入本店原料」
+      const old = idx >= 0 ? prev[idx] : null;
+      const ph = withPriceHistory(old, clean, "shop", old ? "shop" : "add", now);
+      const out = { ...clean };
+      if (ph === undefined) delete out.priceHistory; else out.priceHistory = ph;
+      if (idx >= 0) { const next = [...prev]; next[idx] = out; return next; }
+      return [...prev, out];
     });
     showToast(lang === "zh" ? "✓ 已保存" : "✓ 保存しました");
     setEditing(null);
@@ -15992,6 +16216,8 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
               <PackPriceFields packSize={editing.packSize} casePack={editing.casePack} pricePerG={editing.pricePerG} currency={editing.currency}
                 onChange={patch => setEditing(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inputStyle}
                 textSpec autoFocus required priceLabel={lang === "zh" ? "本店价" : "仕入れ価格"} />
+              {/* 第 4 批 B4-3:存盘那一条的价格记录(不是正在改的草稿) */}
+              {!editing._new && <PriceHistoryList obj={shopMaterials.find(x => x.id === editing.id)} kind="shop" lang={lang} title={lang === "zh" ? "🏷️ 本店价" : "🏷️ 仕入価"} />}
             </div>
             {/* v13: 供货商多选。第一个是主供货商(采购清单归属) */}
             {suppliers.length > 0 && (
@@ -16140,6 +16366,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
                       {diff > 0 ? "↑" : "↓"} {lang === "zh" ? "参考" : "参考"} {fmtUnitPrice(refPrice, curOf(mat))}
                     </div>
                   )}
+                  <PriceTrendChip obj={sm} kind="shop" lang={lang} />
                 </div>
               </div>
             );
@@ -19853,7 +20080,10 @@ function App() {
     shopCurrency: (item, cur) => {
       const zh = lang === "zh";
       const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
-      dhReplaceOne(shopMaterials, setShopMaterials, item.obj, { currency: cur === "CNY" ? "CNY" : "JPY", updatedAt: new Date().toISOString() },
+      // 第 4 批 B4-3(critic M5):价格记录里没写币种、数值又和现价相同的那几项一起补上 —— 不补的话,标成人民币后拿它和现价比会显示「↑ 2000%」。
+      // 数不同的不动(可能真是东京时期的日元价)。这是更正标签不是改价,所以不追加记录;撤销时整条换回原对象
+      const phFix = currencyFixedHistory(item.obj, cur === "CNY" ? "CNY" : "JPY");
+      dhReplaceOne(shopMaterials, setShopMaterials, item.obj, { currency: cur === "CNY" ? "CNY" : "JPY", updatedAt: new Date().toISOString(), ...(phFix ? { priceHistory: phFix } : {}) },
         zh ? `「${nm}」标成${cur === "CNY" ? "人民币" : "日元"}(数没变)` : `「${nm}」を${cur === "CNY" ? "人民元" : "円"}にしました(数値はそのまま)`);
     },
     // H2:材料 / 厂家的分类。厂家可以选 ""(全品类)
@@ -20486,6 +20716,7 @@ function App() {
               if (m) lines.push(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
               setShopMaterials(prev => {
                 const result = [...prev];
+                const nowIso = new Date().toISOString();
                 d.shopMaterials.forEach(inc => {
                   const key = inc.materialId || inc.id;
                   if (!key) return;
@@ -20494,7 +20725,8 @@ function App() {
                     result.push({ ...inc, id: inc.id || ("sm_" + Date.now() + Math.random().toString(36).slice(2,6)), supplierIds: Array.isArray(inc.supplierIds) ? inc.supplierIds : [] });
                   } else {
                     // 同材料百科:修改时间更晚的一边为准,本店价和币种同一边
-                    const merged = mergeByNewer(result[existingIdx], inc, ["pricePerG", "currency"]);
+                    // 第 4 批 B4-3:价格历史同材料百科,取两边并集(见 mergePriceHistory)
+                    const merged = withMergedPriceHistory(result[existingIdx], inc, mergeByNewer(result[existingIdx], inc, ["pricePerG", "currency"]), "shop", nowIso);
                     result[existingIdx] = { ...merged, supplierIds: Array.isArray(merged.supplierIds) ? merged.supplierIds : [] };
                   }
                 });
