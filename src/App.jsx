@@ -25001,7 +25001,8 @@ function App() {
     // 审查 ps1:补录的日子在这一样开始记之前,或者那天之后盘点过 → 那天用掉的不在账上 / 已经算进盘点,不扣(扣了就是扣两次;同数据体检 H22)。盘点当天的照扣
     // 超过 60 天的也不扣:账本只留 60 天内的记录,这条 take 一写进去就被修剪掉,撤销 / 删这条生产记录都加不回(审查 ps1)
     const tooOld = _daysBetween(d, localDateStr()) > 60;
-    const notOnBooks = (a) => tooOld || d < String(a.it.since || "") || (a.it.moves || []).some(m => m && m.type === "count" && String(m.date || "") > d);
+    // 审查 ps3:账本按 80 条剪过的日子(movesCutTo 当天和之前)也不扣:那之后的盘点可能已经被剪掉,查不到就会扣两次(同 H22)
+    const notOnBooks = (a) => tooOld || d < String(a.it.since || "") || d <= String(a.it.movesCutTo || "") || (a.it.moves || []).some(m => m && m.type === "count" && String(m.date || "") > d);
     const acts = acts0.filter(a => !notOnBooks(a)), before = acts0.filter(notOnBooks);
     if (!acts.length) return false;
     const ex = findDayLog(productionLog, p.id, d);
