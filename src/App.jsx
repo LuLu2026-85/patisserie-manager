@@ -18012,7 +18012,8 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   const [picker, setPicker] = useState(null); // { forItemIdx? null=新增 }
   // 没保存就切页 / 取消时先问一句。要写在下面「选组成项」那个提前 return 之前(hook 顺序不能变);
   // 选组成项的页面是点本页「+ 加一项」进去的,那一下已经拍过快照,所以它的根元素不用再挂
-  const dirtyBind = useDirtyGuard(() => form);
+  // 审查 ps2:离开保护把 false 当「没有这个键」,「装烤好的不扣」勾选写 prepSkip: false / 删键两个方向都看不出改过 —— 显式的布尔换成字符串比;没有这个键时快照和以前一模一样
+  const dirtyBind = useDirtyGuard(() => typeof form.prepSkip === "boolean" ? { ...form, prepSkip: form.prepSkip ? "skip" : "deduct" } : form);
   const [errorMsg, setErrorMsg] = useState("");
   const inputStyle = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans };
   const mLabel = (obj) => obj ? (lang === "zh" ? (obj.nameZh || obj.nameJa) : (obj.nameJa || obj.nameZh)) : "";
