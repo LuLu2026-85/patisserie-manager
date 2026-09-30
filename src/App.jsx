@@ -17482,7 +17482,8 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
     : l.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), lang).unit : "")
     : _prodNoYield(l.kind, s.obj) ? X.batchUnit
     : ((s.obj && s.obj.unit) || (l.kind === "component" ? "g" : ""));
-  const logged = parseFloat(l.logged) || 0;
+  // 审查 r5:商品页删掉了今天的生产记录时,logged 不能比今天实际记着的多(否则一直写「✓ 已记入 N」、记入按钮不回来)
+  const logged = isProduct ? Math.min(parseFloat(l.logged) || 0, todayLogged) : (parseFloat(l.logged) || 0);
   const pending = Math.round((s.qty - logged) * 1000) / 1000;
   const sq = { width: 36, height: 36, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, cursor: "pointer", fontSize: 18, lineHeight: 1, color: T.body, flexShrink: 0, fontFamily: T.fontSans };
   return (
@@ -19645,10 +19646,12 @@ function App() {
     if (!line || line.kind !== "product") return;
     const p = products.find(x => String(x.id) === String(line.id));
     if (!p) return;
-    const add = Math.round(((parseFloat(line.qty) || 0) - (parseFloat(line.logged) || 0)) * 1000) / 1000;
+    const tl = (productionLog || []).filter(x => x && String(x.productId) === String(p.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0);
+    const eff = Math.min(parseFloat(line.logged) || 0, tl);   // 审查 r5:商品页删掉的那部分不算「已记入」,和卡片上显示的一致
+    const add = Math.round(((parseFloat(line.qty) || 0) - eff) * 1000) / 1000;
     if (!(add > 0)) return;
     makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add);
-    updateProdPlan(lines => lines.map(l => l.uid === uid ? { ...l, logged: Math.round(((parseFloat(l.logged) || 0) + add) * 1000) / 1000 } : l));
+    updateProdPlan(lines => lines.map(l => l.uid === uid ? { ...l, logged: Math.round((eff + add) * 1000) / 1000 } : l));
     const nm = pickLang(p, "name", lang) || p.nameZh || "";
     showToast(lang === "zh" ? `✓ 已记入生产「${nm}」+${fmtQty(add)}(库存 +${fmtQty(add)})` : `✓ 製造記録「${nm}」+${fmtQty(add)}`, { undo: () => {
       // 撤销 = 从今天那条生产记录里扣回这次加的(扣到 0 就删掉这条),库存扣回
