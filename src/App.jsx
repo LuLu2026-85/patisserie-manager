@@ -19610,7 +19610,7 @@ const _prepTrimItem = (it, today) => {
   // 数据体检 H22 不查这些日子、商品页补录这些日子不扣(同「开始记之前」)。只往后挪;按 60 天剪的不记(那些日子本来就不查不扣)
   let cutTo = "";
   if (moves.length > 80) {
-    moves.slice(0, moves.length - 80).forEach(m => { if (_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && m.date > cutTo) cutTo = m.date; });
+    moves.slice(0, moves.length - 80).forEach(m => { if (_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && m.date > cutTo && m.date <= today) cutTo = m.date; });   // 审查 pt1:以后日子的旧记录不算
     moves = moves.slice(moves.length - 80);
   }
   const cutMore = !!cutTo && !(String(it.movesCutTo || "") >= cutTo);
@@ -19884,7 +19884,8 @@ const _prepOne = (items, op, now, today) => {
       const plan = prepTakePlan(w, op.cfg, q, td, td < today ? td : "");   // 审查 pt1:补录的那天之后才做的批不扣,扣不到的记 short
       plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
       // 一个都没扣到也写 move(short = qty):「已记入」封顶和体检 H22 靠它
-      w.moves.push(_prepMove(op, key, "take", now, _prepDateRe.test(String(op.date || "")) ? op.date : today, { qty: q, deltas: plan.deltas, short: plan.short }));
+      // 审查 pt1:记下的日子也用 td(以后的日子按今天记;以前原样写进去,按 80 条剪掉后 movesCutTo 跳到以后,商品页一直到那天都不扣)
+      w.moves.push(_prepMove(op, key, "take", now, td, { qty: q, deltas: plan.deltas, short: plan.short }));
       return _prepPut(items, key, _prepFinish(w, now, today));
     }
     case "discard": {
@@ -25019,6 +25020,7 @@ function App() {
     const q = _r3(parseFloat(qty) || 0);
     if (!p || !(q > 0) || productPrepSkips(p) || prepStock.readOnly) return false;
     const d = date || today;
+    if (d > localDateStr()) return false;   // 审查 pt1:日子填到以后(年份敲错)→ 走原来的代码,不扣备货
     const X = prepTxt(lang);
     const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
     const flow = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx);
