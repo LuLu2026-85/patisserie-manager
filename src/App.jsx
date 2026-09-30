@@ -4941,6 +4941,7 @@ const _dhPrepChecks = (d, A) => {
         const since = String(it.since || "");
         if (!firstAt || !minDate || r.date < minDate) return;
         if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
+        if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 这天之后盘点过:账已经对成实物(商品页补录这种日子也不扣,审查 ps1)
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
         const t = takes.find(x => x.key === k);
         const want = t ? _r3(t.qty) : 0;
@@ -20328,6 +20329,7 @@ const PREP_TXT = {
     fProdToast: (d, n, prep) => `✓ ${d} 生产 +${fmtQty(n)}(库存 +${fmtQty(n)};${prep})`,
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
+    fBeforeBooks: (names) => `;${names}那天还没开始记账或之后盘点过,没扣`,
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
@@ -20566,6 +20568,7 @@ const PREP_TXT = {
     fProdToast: (d, n, prep) => `✓ ${d} 製造 ${fmtQty(n)} 件(${prep})`,
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
+    fBeforeBooks: (names) => `・${names}はその日まだ記録開始前か、後で棚卸し済みのため未控除`,
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
@@ -24830,10 +24833,13 @@ function App() {
     const flow = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx);
     // 只扣已开始记、单位对得上的(prepApply 的 take 对别的什么都不做;全都扣不了 = 走老路,文字不变)
     const objOf = (t) => (t.kind === "component" ? components : recipes).find(o => o && String(o.id) === String(t.id));
-    const acts = flow.takes.map(t => {
+    const acts0 = flow.takes.map(t => {
       const obj = objOf(t), cfg = obj ? prepCfgOf(t.kind, obj) : null, it = prepStock.items[t.key];
       return cfg && it && prepSameUnit(it, cfg) ? { t, obj, cfg, it } : null;
     }).filter(Boolean);
+    // 审查 ps1:补录的日子在这一样开始记之前,或者那天之后盘点过 → 那天用掉的不在账上 / 已经算进盘点,不扣(扣了就是扣两次;同数据体检 H22)。盘点当天的照扣
+    const notOnBooks = (a) => d < String(a.it.since || "") || (a.it.moves || []).some(m => m && m.type === "count" && String(m.date || "") > d);
+    const acts = acts0.filter(a => !notOnBooks(a)), before = acts0.filter(notOnBooks);
     if (!acts.length) return false;
     const ex = findDayLog(productionLog, p.id, d);
     const logId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -24852,8 +24858,9 @@ function App() {
     const srcs = new Map();
     // 没扣到的只说已开始记的那几样(没开始记的本来就不算账);本产品专用的部分是有意不扣,不提
     flow.untaken.forEach(u => { if (u.reason === "local" || !prepStock.items[u.key]) return; const k = u.src || u.name || ""; srcs.set(k, (srcs.get(k) || 0) + 1); });
-    flow.takes.forEach(t => { if (!acts.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
-    const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("");
+    flow.takes.forEach(t => { if (!acts0.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
+    const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("")
+      + (before.length ? X.fBeforeBooks(before.map(a => `${X.storeName(a.cfg.store)}「${String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim()}」`).join(lang === "ja" ? "・" : "、")) : "");
     showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.join(lang === "ja" ? "・" : "、")) + shorts.join("") + untaken, { undo: () => {
       // 撤销:按记下的生产记录 id 找;找不到(商品页已经删了)→ 生产记录和商品库存都不动,只撤备货
       const cur = ((dataRef.current && dataRef.current.productionLog) || []).find(x => x && x.id === logId);
