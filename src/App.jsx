@@ -20322,6 +20322,8 @@ const PREP_TXT = {
     errCountAdd: "漏记的那一批要填大于 0 的数",
     // toast
     toastRegister: (name, n, u, d) => `✓ 登记了「${name}」${n} ${u}(${d} 做的)`,
+    toastSettled: (s, u, store, n) => `;其中 ${s} ${u}补扣今天取出时差的,${store}实际 +${n} ${u}`,
+    moveSettled: (s) => `补扣 ${s}`,
     toastCount: (name, a, b) => `✓ 盘点「${name}」${a} → ${b}`,
     toastDiscard: (name, n, u) => `已报废「${name}」${n} ${u}`,
     toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n} ${u}(还剩 ${left})`,
@@ -20567,6 +20569,8 @@ const PREP_TXT = {
     errCountFill: "単位変更時は全ロットを新しい単位で入力してください(使い切りは 0)",
     errCountAdd: "記録漏れのロットは 0 より大きい数を",
     toastRegister: (name, n, u, d) => `✓「${name}」${n}${u} を登録(${d} 仕込み)`,
+    toastSettled: (s, u, store, n) => `・うち ${s}${u} は本日の未控除分に充当、${store} 実質 +${n}${u}`,
+    moveSettled: (s) => `未控除分 ${s} 充当`,
     toastCount: (name, a, b) => `✓ 棚卸し「${name}」${a} → ${b}`,
     toastDiscard: (name, n, u) => `「${name}」${n}${u} を廃棄`,
     toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n}${u}(残り ${left})`,
@@ -21198,9 +21202,8 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
       const pending = pend(logged);
       const moves = item ? (item.moves || []) : [];
       const todayMade = _r3(moves.filter(m => m && m.type === "make" && m.date === today).reduce((a, m) => a + _prepNum(m.qty), 0));
-      // 同 prepApply 的补扣:这条 take 之后盘点过的不算;前面的批补了一部分的,算还差的(审查 ps1)
-      const shortToday = _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.restoredBy
-        && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + Math.max(0, _prepNum(m.short) - Math.max(0, _prepNum(m.settledQty))), 0));
+      // 同 prepApply 的补扣:这条 take 之后盘点过的不算;前面的批补了一部分的,算还差的(审查 ps1)。备货卡「＋ 登记一批」共用 prepShortTodayOf(审查 ps2)
+      const shortToday = prepShortTodayOf(item, today);
       const mk = prepMakeOf(l, obj);
       return { mode: "make", sub: null, key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
         todayMade, shortToday, make: mk ? { ...mk, qty: pending } : null, flow: flowOf(pending), readOnly,
@@ -22422,6 +22425,13 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
 
 // 登记一批(卡片里就地展开)。props:{ cfg, item, lang, today, onSubmit(op), onCancel, confirmDialog, opId, lotId }
 // 数量 > 0、日期不晚于今天;读不出就地 InlineError 说哪一格、怎么改。登记成功由卡片关掉面板(下一次点开拿新的 opId)
+// 今天取出时没扣到、还没补完的数(同 prepApply make 的补扣:加回过的、这条之后盘点过的不算,减掉已经补了的)。
+// 生产单「做一批」面板和备货卡「＋ 登记一批」共用(审查 ps2:卡片登记同样会补扣,以前面板和 toast 都不说,500 进账变 480)
+function prepShortTodayOf(item, today) {
+  const moves = item && Array.isArray(item.moves) ? item.moves : [];
+  return _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.restoredBy
+    && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + Math.max(0, _prepNum(m.short) - Math.max(0, _prepNum(m.settledQty))), 0));
+}
 function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDialog, opId, lotId }) {
   const X = prepTxt(lang);
   const t = today || localDateStr();
@@ -22431,6 +22441,8 @@ function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirm
   const bind = useDirtyGuard(() => ({ qty, date }));
   const sent = useRef(false);   // 提交成功过(面板马上要关):同一次渲染里的第二下点击不再提交
   const unit = (item && item.unit) || (cfg && cfg.unit) || "";
+  const shortNow = prepShortTodayOf(item, t);
+  const qNow = _prepQ(parseFloat(qty), unit, "add");
   const submit = () => {
     // 审查 ps1:按账本的规整先算好(按个计的四舍五入),toast 写的就是存下的数;按个计填 0.4 → 0,当没填(以前说登记了 0.4 個、账本什么都没写)
     const q0 = parseFloat(qty), q = _prepQ(q0, unit, "add");
@@ -22457,6 +22469,9 @@ function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirm
         </label>
       </div>
       <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.regHint}</div>
+      {/* 审查 ps2:同生产单做一批面板 —— 这一批会先补扣今天取出时差的数,面板上先写出来 */}
+      {shortNow > 0 && qNow > 0 && <div data-prep-settle="1" style={{ ...T.fs.caption, color: T.body, marginTop: T.sp.s, ...T.num, overflowWrap: "anywhere" }}>
+        {X.settle(fmtQty(shortNow), unit, X.storeName(cfg && cfg.store), fmtQty(Math.max(0, _r3(qNow - Math.min(shortNow, qNow)))))}</div>}
       {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
       <div style={{ display: "flex", gap: T.sp.s, marginTop: T.sp.m, flexWrap: "wrap" }}>
         <Btn size="sm" variant="primary" onClick={submit}>{X.regBtn}</Btn>
@@ -22606,7 +22621,9 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
   const q = (n) => fmtQty(n) || "0";
 
   const submitRegister = (op) => {
-    const r = doOp([op], X.toastRegister(name, q(op.qty), unit, X.md(op.madeAt)));
+    // 审查 ps2:账本会从这一批里补扣今天取出时差的数(同生产单做一批),toast 写出来
+    const st = tracked ? Math.min(prepShortTodayOf(item, t), op.qty) : 0;
+    const r = doOp([op], X.toastRegister(name, q(op.qty), unit, X.md(op.madeAt)) + (st > 0 ? X.toastSettled(q(st), unit, storeName, q(_r3(op.qty - st))) : ""));
     if (r) setPanel(null);
     return r;
   };
@@ -22657,6 +22674,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     else if (m.type === "take" || m.type === "discard") body = ` −${q(got)}`;
     const src = [];
     if (m.type === "discard") src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
+    if (m.type === "make" && Array.isArray(m.settles)) { const sn = _r3(m.settles.reduce((a, x) => a + (Array.isArray(x) ? _prepPos(x[1]) : 0), 0)); if (sn > 0) src.push(X.moveSettled(q(sn))); }   // 审查 ps2
     if (m.productId) { const pn = productName(m.productId); if (pn) src.push(pn); }
     if (m.via && X.via && X.via[m.via] && !(m.productId && m.via === "sheet")) src.push(X.via[m.via]);
     if (m.staff) src.push(X.staffMark);
