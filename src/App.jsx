@@ -18751,6 +18751,7 @@ const MO_TXT = {
     pack: "包装费", costWithPack: "含包装成本", afterPack: "包装后毛利率",
     per: (u) => `每 ${u}`, perPortion: "每份", perItem: "每件", combo: "组合", jpyTag: "円", jpyTitle: "售价没写币种,按东京时期的日元折算(≈)",
     unpricedCell: "未定价", atLeast: "至少 ", atLeastTitle: "有原料没价,实际成本更高,建议价只会更高",
+    roundedTitle: "建议售价向上取整过,这里是和取整后的价比;原料毛利率已达到目标,不用涨价",
     empty: "没有符合条件的", emptyFirst: "还没有配方 / 组合产品", emptyProducts: "还没有商品",
     prodHint: "商品按组成项算成本(组合产品按整个);没写币种的售价按日元折算(≈)。包装费在商品编辑页填。合并导入不会把已有商品的售价 / 包装费带到另一台设备。",
     wholeNote: (p) => `按整个(${p} 份)算`,
@@ -18767,6 +18768,7 @@ const MO_TXT = {
     pack: "包装費", costWithPack: "包装込み原価", afterPack: "包装後粗利率",
     per: (u) => `1 ${u}あたり`, perPortion: "1 カット", perItem: "1 個", combo: "組立", jpyTag: "円", jpyTitle: "売価の通貨が未設定のため円として換算(≈)",
     unpricedCell: "未設定", atLeast: "最低 ", atLeastTitle: "単価のない材料があり、実際の原価はもっと高い",
+    roundedTitle: "切り上げた推奨売価との差。粗利率は目標に達しているので値上げ不要",
     empty: "該当なし", emptyFirst: "レシピ / 組立製品がありません", emptyProducts: "商品がありません",
     prodHint: "商品の原価は構成から計算(組立製品は 1 台)。通貨未設定の売価は円として換算(≈)。包装費は商品編集で入力。マージインポートでは既存商品の売価・包装費は同期されません。",
     wholeNote: (p) => `1 台(${p} カット)で計算`,
@@ -18835,8 +18837,11 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   const suggestCell = (r) => r.mi.suggested === null ? <span style={{ color: T.muted }}>—</span>
     : <span data-suggest="1" title={r.mi.suggestedAtLeast ? X.atLeastTitle : undefined} style={{ color: r.mi.suggestedAtLeast ? T.warning : T.ink }}>{r.mi.suggestedAtLeast ? X.atLeast : ""}{moMoney(r.mi.suggested)}</span>;
   // 审查 b4r1:成本算不全时建议价只是下限,差额只是上限 → 不为负时写「≤」、标黄;日元售价折算的差额前面加「≈」(同售价格)
+  // 审查 b4r2:建议价向上取整,达标的行差额也可能是负的(成本 15.1 / 售价 50.4 → 70.0% 达标,建议 55,差 −4.6)。原料毛利率(有包装费看包装后)
+  // 已达目标、成本也算得全的,负差额不标黄,title 说明是和取整后的价比
   const gapCell = (r) => { if (r.mi.gap === null) return <span style={{ color: T.muted }}>—</span>; const upTo = r.mi.suggestedAtLeast && r.mi.gap >= -1e-9;
-    return <span data-gap="1" title={upTo ? X.atLeastTitle : undefined} style={{ color: (r.mi.gap < -1e-9 || upTo) ? T.warning : T.body }}>{r.mi.approx ? "≈" : ""}{upTo ? "≤ " : ""}{r.mi.gap > 1e-9 ? "+" : r.mi.gap < -1e-9 ? "−" : ""}{moMoney(Math.abs(r.mi.gap))}</span>; };
+    const effPct = r.mi.packaging > 0 ? r.mi.afterPackPct : r.mi.pct, meets = !r.mi.incomplete && effPct !== null && effPct >= marginGoodLine() - 1e-9, rounded = meets && r.mi.gap < -1e-9;
+    return <span data-gap="1" title={upTo ? X.atLeastTitle : rounded ? X.roundedTitle : undefined} style={{ color: ((r.mi.gap < -1e-9 && !meets) || upTo) ? T.warning : T.body }}>{r.mi.approx ? "≈" : ""}{upTo ? "≤ " : ""}{r.mi.gap > 1e-9 ? "+" : r.mi.gap < -1e-9 ? "−" : ""}{moMoney(Math.abs(r.mi.gap))}</span>; };
   const issuesText = (r) => r.issues.map(it => moIssueText(it, X)).filter(Boolean).join(" · ");
   const nameCell = (r) => {
     const fm = r.familyId ? famOf(r.familyId) : null;
