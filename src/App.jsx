@@ -21415,7 +21415,8 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
         <div style={{ ...T.fs.small, fontWeight: 500, marginTop: 2, ...T.num, overflowWrap: "anywhere" }}>{PX.takeLine(b.type, b.store, fmtQty(b.need), b.unit)}</div>
         {thaw && <div style={{ ...T.fs.caption, color: T.body, marginTop: 2, overflowWrap: "anywhere" }}><span style={{ color: T.subtle }}>{PX.thawLabel}</span> {thaw}</div>}
         <ProdMeta b={b} lang={lang} />
-        {kitchenBtn}
+        {/* 审查 ps1:组件的「从库存取」块不给厨房视图按钮 —— 厨房视图对组件只有「做」的样子(整份配料 + 「做好以后去登记一批」),照着做会多做一批再登记;取多少这一块已经写了 */}
+        {b.type === "recipe" && kitchenBtn}
         {prepView && !oh && (
           <div data-prep-untracked="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
             <span>{PX.sheetUntracked(store)}</span>
@@ -23733,6 +23734,7 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
   (sheet || []).forEach(s => (s.blocks || []).forEach(b => {
     if (!b || b.missing || !b.target || !KITCHEN_KINDS.includes(b.type)) return;
     if (b.prep === "packed") return;
+    if (b.type === "component" && b.prep === "take") return;   // 审查 ps1:组件从库存取的块同样不列(厨房视图对组件只有「做」的样子,生产单那一块已写取多少)
     const k = prodLineKey({ kind: b.type, id: b.target.id }) + (b.prep ? "\u0000" + b.prep : "");   // 没有 prep 时和以前的 type + id 一样
     const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "" } : null;
     const ex = seen.get(k);
