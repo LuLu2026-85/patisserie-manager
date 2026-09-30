@@ -634,9 +634,17 @@ function withPriceHistory(prev, next, kind, source, now) {
   const raw = prev ? prev.priceHistory : undefined;
   const nextSnap = priceSnapOf(next, kind);
   if (!nextSnap) return raw;
-  const prevSnap = priceSnapOf(prev, kind);
+  let prevSnap = priceSnapOf(prev, kind);
+  let list = phOf(prev);
+  // 审查 b4r2:改之前没写币种、这次写成人民币,而且旧的数当人民币读更近(0.114 → 0.114 元)—— 是把币种标对,不是改价(同数据体检 H1):
+  // 旧价和同一时期没写币种的记录按人民币读,数没变就不记(以前「保存到本店原料」/ 本店原料编辑页会记出假的「较上次 ≈↑2000%」)
+  const relabel = _phRelabelAsCNY(prev, prevSnap, nextSnap, kind);
+  if (relabel) {
+    prevSnap = relabel.snap;
+    if (samePrice(prevSnap, nextSnap)) return relabel.fixed || raw;
+    if (relabel.fixed) list = phOf({ priceHistory: relabel.fixed });
+  }
   if (prevSnap && samePrice(prevSnap, nextSnap)) return raw;
-  const list = phOf(prev);
   if (prevSnap && (!list.length || !samePrice(list[list.length - 1], prevSnap))) list.push(phEntry(prevSnap, phAfter(list, phBeforeAt(prev)), "before"));
   list.push(phEntry(nextSnap, phAfter(list, now), source));
   return phTrim(list);
@@ -693,6 +701,15 @@ function currencyFixedHistory(obj, cur) {
     return { ...e, currency: cur };
   });
   return changed ? out : null;
+}
+// 审查 b4r2:旧的一边(prevSnap)没写币种、新的一边明确是人民币,且旧的数当人民币读比当日元读离新价更近 → 当成「标对币种」。
+// 只管本店原料(kind = "shop",数据体检 H1 管的那一类);材料百科没写币种的是东京时期的日元价,照旧当改价记。
+// 返回 { snap: 旧价按人民币, fixed: currencyFixedHistory 补好币种的记录(没有要补的 → null) },不是这种情况 → null。
+// 当日元读更近的(东京时期 2.5円 → 国内 0.13 元、切币种按同一笔钱折的 0.114円 → 0.0055 元)照旧当改价记
+function _phRelabelAsCNY(prevObj, prevSnap, nextSnap, kind) {
+  if (kind !== "shop" || !prevSnap || !nextSnap || prevSnap.currency || nextSnap.currency !== "CNY") return null;
+  if (!_phCloserAsCNY(parseFloat(prevSnap.pricePerG), parseFloat(nextSnap.pricePerG))) return null;
+  return { snap: { ...prevSnap, currency: "CNY" }, fixed: currencyFixedHistory({ pricePerG: prevSnap.pricePerG, priceHistory: prevObj && prevObj.priceHistory }, "CNY") };
 }
 
 // 显示用:对象现在的价 vs 上一个不同的价。没有记录 / 没价 / 变化不到 0.5% 且没有 newerElsewhere → null。
