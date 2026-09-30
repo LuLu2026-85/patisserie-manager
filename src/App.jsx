@@ -20314,6 +20314,8 @@ const PREP_TXT = {
     countOver: (m, n) => `(比记着做的 ${m} 多,按 ${n} 算)`,
     countApply: "按这个改",
     countUnitMode: (o, n) => `账上按「${o}」记,现在是「${n}」:请按「${n}」重新数每一批`,
+    qtyUnit: (n, u) => `${n}${u ? " " + u : ""}`,
+    countPreviewUnit: (a, b) => `记着 ${a} → 改成 ${b}(换了单位,不算增减)`,
     errCountFill: "改单位时每一批都要按新单位重新填(用完的填 0)",
     errCountAdd: "漏记的那一批要填大于 0 的数",
     // toast
@@ -20558,6 +20560,8 @@ const PREP_TXT = {
     countOver: (m, n) => `(記録の仕込み数 ${m} より多いため ${n} とします)`,
     countApply: "この数に合わせる",
     countUnitMode: (o, n) => `記録は「${o}」、現在は「${n}」:ロットごとに「${n}」で数え直してください`,
+    qtyUnit: (n, u) => `${n}${u || ""}`,
+    countPreviewUnit: (a, b) => `記録 ${a} → ${b}(単位変更のため増減なし)`,
     errCountFill: "単位変更時は全ロットを新しい単位で入力してください(使い切りは 0)",
     errCountAdd: "記録漏れのロットは 0 より大きい数を",
     toastRegister: (name, n, u, d) => `✓「${name}」${n}${u} を登録(${d} 仕込み)`,
@@ -22557,7 +22561,9 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
       <button type="button" className="k-btn" onClick={() => setAdds(prev => [...prev, { madeAt: t, qty: "" }])}
         style={{ ...T.fs.caption, marginTop: T.sp.s, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: "4px 0" }}>{X.countAdd}</button>
       <div data-prep-countpreview="1" style={{ ...T.fs.small, ...T.num, color: T.ink, marginTop: T.sp.s }}>
-        {X.countPreview(fmtQty(before), fmtQty(after), (d > 0 ? "+" : d < 0 ? "−" : "±") + fmtQty(Math.abs(d)))}
+        {/* 审查 ps1:改单位的盘点前后是两种单位,不能相减(以前「2,000 → 2(−1,998)」像丢了货) */}
+        {unitMode ? X.countPreviewUnit(X.qtyUnit(fmtQty(before) || "0", item.unit || ""), X.qtyUnit(fmtQty(after) || "0", newUnit))
+          : X.countPreview(fmtQty(before), fmtQty(after), (d > 0 ? "+" : d < 0 ? "−" : "±") + fmtQty(Math.abs(d)))}
       </div>
       {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
       <div style={{ display: "flex", gap: T.sp.s, marginTop: T.sp.m, flexWrap: "wrap" }}>
@@ -22611,7 +22617,9 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     return r;
   };
   const submitCount = (op, before, after) => {
-    const r = doOp([op], X.toastCount(name, q(before), q(after)));
+    // 审查 ps1:改单位的盘点,前后两个数各带单位
+    const um = tracked && !!cfg && !prepSameUnit(item, cfg);
+    const r = doOp([op], um ? X.toastCount(name, X.qtyUnit(q(before), item.unit || ""), X.qtyUnit(q(after), cfg.unit)) : X.toastCount(name, q(before), q(after)));
     if (r) setPanel(null);
     return r;
   };
@@ -22637,7 +22645,12 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     const got = m.type === "take" ? _r3((parseFloat(m.qty) || 0) - (parseFloat(m.short) || 0)) : (parseFloat(m.qty) || 0);
     const head = `${X.md(m.date)} ${_prepHm(m.at)} ${(X.moveType && X.moveType[m.type]) || m.type}`;
     let body = "";
-    if (m.type === "count") body = ` ${q(m.before)} → ${q(m.after)}`;
+    if (m.type === "count" && Object.prototype.hasOwnProperty.call(m, "unitBefore")) {
+      // 审查 ps1:改单位的盘点前后各带单位;改之后的单位 = 下一次改单位盘点之前的单位,没有就是账上现在的
+      const all = item.moves || [], i = all.indexOf(m);
+      const nx = all.find((x, j) => j > i && x && x.type === "count" && Object.prototype.hasOwnProperty.call(x, "unitBefore"));
+      body = ` ${X.qtyUnit(q(m.before), m.unitBefore || "")} → ${X.qtyUnit(q(m.after), nx ? (nx.unitBefore || "") : (item.unit || ""))}`;
+    } else if (m.type === "count") body = ` ${q(m.before)} → ${q(m.after)}`;
     else if (m.type === "make" || m.type === "restore") body = ` +${q(got)}`;
     else if (m.type === "take" || m.type === "discard") body = ` −${q(got)}`;
     const src = [];
