@@ -6411,7 +6411,7 @@ const componentIngredientUses = (compId, { recipes = [], components = [], creati
   }));
   return out;
 };
-function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [] }) {
+function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [], setRecipes = null, setCreations = null }) {
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
@@ -6460,17 +6460,47 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const ingNote = asIng.length === 0 ? "" : (lang === "zh"
             ? "\n\n标「当原料」的是配料表里「来自组件」的行:删除后这些行按删除前的成本快照算,不再跟着组件价变;撤销删除就恢复。"
             : "\n\n「材料として」はパーツから原価を取る配合行です。削除後は削除前のスナップショット原価で計算されます(元に戻すと復帰)。");
+          // 审查 b4r1:删之前把引用它的「来自组件」行的快照刷成此刻的成本(组件还在注入里),删后这些行按它算 —— 以前留着上次打开编辑页时记的旧价。
+          // 先在这里算好(setState 的更新函数可能晚到组件库注入换掉之后才跑),写的时候只换没被改过的那份配料(同一个引用);撤销同样换回去
+          const reSnap = (ings) => {
+            if (!Array.isArray(ings)) return ings;
+            let ch = false;
+            const out = ings.map(i => {
+              const c = (i && !i.noCost) ? ingLiveComp(i, materials) : null;
+              if (!c || c.id !== snap.id) return i;
+              const s = componentRowSnapshot(i, materials);
+              if (s.unitPrice === i.unitPrice && s.cost === i.cost && i.currency === s.currency) return i;
+              ch = true; return { ...i, ...s };
+            });
+            return ch ? out : ings;
+          };
+          const rsR = new Map(), rsC = new Map(), rsL = new Map();
+          (recipes || []).forEach(r => { const n = r && reSnap(r.ingredients); if (r && n !== r.ingredients) rsR.set(r.id, [r.ingredients, n]); });
+          (components || []).forEach(c => { if (!c || c.id === snap.id) return; const n = reSnap(c.ingredients); if (n !== c.ingredients) rsC.set(c.id, [c.ingredients, n]); });
+          (creations || []).forEach(cr => {
+            if (!cr || !Array.isArray(cr.layers)) return;
+            let ch = false;
+            const n = cr.layers.map(l => { const ni = l ? reSnap(l.ingredients) : null; if (!l || ni === l.ingredients) return l; ch = true; return { ...l, ingredients: ni }; });
+            if (ch) rsL.set(cr.id, [cr.layers, n]);
+          });
+          const swap = (m, key, from, to) => (prev) => m.size === 0 ? prev : prev.map(x => { const e = x && m.get(x.id); return e && x[key] === e[from] ? { ...x, [key]: e[to] } : x; });
           const doDelete = () => {
             const idx = components.findIndex(x => x.id === snap.id);
-            setComponents(prev => prev.filter(x => x.id !== snap.id));
+            setComponents(prev => swap(rsC, "ingredients", 0, 1)(prev.filter(x => x.id !== snap.id)));
+            if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 0, 1));
+            if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 0, 1));
             setEditTarget(null);
             showToast(lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
-              undo: () => setComponents(prev => {
-                if (prev.find(x => x.id === snap.id)) return prev;
-                const next = [...prev];
-                next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
-                return next;
-              }),
+              undo: () => {
+                setComponents(prev => {
+                  if (prev.find(x => x.id === snap.id)) return prev;
+                  const next = [...prev];
+                  next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
+                  return swap(rsC, "ingredients", 1, 0)(next);
+                });
+                if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 1, 0));
+                if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 1, 0));
+              },
             });
           };
           if (refs.length > 0) {
@@ -23637,6 +23667,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           recipes={recipes}
           creations={creations}
           products={products}
+          setRecipes={setRecipes}
+          setCreations={setCreations}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
           onQuickAddKnowledge={(k) => {
             setKnowledge(prev => [...prev, k]);
