@@ -20187,6 +20187,7 @@ const PREP_TXT = {
     willTake: (store, list) => `会从${store}扣:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n} ${u}(现有 ${have})`,
     onProduct: (p) => `这个配方挂在商品「${p}」上;要同时加商品库存,请用「从商品加」加商品行。`,
+    onProductStaff: (p) => `这个配方挂在商品「${p}」上;商品库存由店长加。`,
     burnt: "烤坏的也算进来,晚上日结记「烤坏」",
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
@@ -20432,6 +20433,7 @@ const PREP_TXT = {
     willTake: (store, list) => `${store}から引く分:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n}${u}(在庫 ${have})`,
     onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で追加してください。`,
+    onProductStaff: (p) => `このレシピは商品「${p}」に含まれます。商品在庫は店長が追加します。`,
     burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
@@ -21582,7 +21584,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
                 !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(prep.pending) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
-          {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{PX.onProduct(prep.onProducts.map(p => p.name).join("」「"))}</span>}
+          {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{(readOnly ? PX.onProductStaff : PX.onProduct)(prep.onProducts.map(p => p.name).join("」「"))}</span>}
         </div>
       );
     }
