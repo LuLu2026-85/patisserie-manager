@@ -22889,6 +22889,8 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
   const stock = prepStock || prepStockRead(null);
   const [filter, setFilterRaw] = useState(() => { const f = prepUiRead().filter; return ["all", "todo", "freeze", "fridge", "room"].includes(f) ? f : "all"; });
   const setFilter = (f) => { setFilterRaw(f); prepUiWrite({ filter: f }); };
+  // 审查 ps4:点筛选胶囊 / 摘 chip 同切子页:登记 / 取出 / 盘点面板填了一半时先问(被筛掉的卡片一卸载,填的数就没了)。跳转来的自动回「全部」不问(跳之前已经问过)
+  const pickFilter = (f) => { if (f === filter) return; confirmLeaveEditor(confirmDialog, lang, () => setFilter(f)); };
   // 从提醒 / 详情卡 / 数据体检跳过来:那一张筛掉了就回到「全部」
   const rows = useMemo(() => prepAlertsOf({ recipes, components, stock, today: t }, { all: true }), [recipes, components, stock, t]);
   useEffect(() => { if (focusKey && filter !== "all" && !rows.some(r => r.key === focusKey && passes(r, filter))) setFilter("all"); }, [focusKey]);   // eslint-disable-line
@@ -22931,14 +22933,14 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
         {FILTERS.map(f => {
           const on = filter === f;
           return (
-            <button key={f} type="button" data-prep-filter={f} aria-pressed={on} onClick={() => setFilter(f)}
+            <button key={f} type="button" data-prep-filter={f} aria-pressed={on} onClick={() => pickFilter(f)}
               style={{ padding: "6px 12px", minHeight: 32, ...T.fs.caption, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
                 border: `1px solid ${on ? T.ink : T.border}`, background: on ? T.ink : T.surface, color: on ? T.paper : T.body }}>{X.filters[f]}</button>
           );
         })}
       </div>
       {shown.length === 0 ? (
-        <EmptyState variant="filter" lang={lang} title={X.filterEmpty} chips={[{ label: X.filters[filter], onRemove: () => setFilter("all") }]} onClearAll={() => setFilter("all")} />
+        <EmptyState variant="filter" lang={lang} title={X.filterEmpty} chips={[{ label: X.filters[filter], onRemove: () => pickFilter("all") }]} onClearAll={() => pickFilter("all")} />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(320px, 100%), 1fr))", gap: T.sp.m }}>
           {shown.map(r => (
