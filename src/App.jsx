@@ -19722,7 +19722,9 @@ const _prepUndoMove = (w, i, acc, today) => {
     (Array.isArray(m.from) ? m.from : []).forEach(f => { if (Array.isArray(f) && live.has(f[0]) && f[2] > 0) _prepBack(w, i, f[1], -f[2], acc, today); });
     _prepRestoreUsedUp(w, m, i);
   } else if (m.type === "make") {
-    if (laterCount) { _prepSkip(acc, "count"); return; }
+    // 审查 ps2:被之后的盘点挡住没撤成 → 这条 make 留着(同 count)。删了它,它上面记的补扣(settles)跟着没了,
+    // 之后撤那条取出 / 删生产记录时找不到补扣的那批,补扣的数就加不回去(报「那批不在了」,库存少了那么多)
+    if (laterCount) { _prepSkip(acc, "count"); return true; }
     (Array.isArray(m.settles) ? m.settles : []).forEach(s => {   // 这批补扣的数从 take 的合计里减掉;还有别的批补过,settledBy 交给最后那批
       const tk = Array.isArray(s) ? w.moves.find(x => _prepIsObj(x) && x.type === "take" && x.id === s[0]) : null;
       if (!tk) return;
