@@ -25150,7 +25150,8 @@ function App() {
       const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
       const untakenTxt = (untaken) => {
         const by = new Map();
-        (untaken || []).forEach(u => { const k = u.src || u.name; by.set(k, (by.get(k) || 0) + 1); });
+        // 审查 ps4:同商品页 logProdWithPrep —— 本产品专用的部分是有意不扣、还没开始记的不算「没扣到」,不提(以前都算进「没填用量或单位对不上」)
+        (untaken || []).forEach(u => { if (u.reason === "local" || !prepStock.items[u.key]) return; const k = u.src || u.name; by.set(k, (by.get(k) || 0) + 1); });
         return [...by].map(([k, n]) => X.toastUntaken(k, n)).join("");
       };
       const takeOps = (parts, add, extra) => parts.map(x => ({ type: "take", key: x.t.key, cfg: x.cfg, opId, qty: x.t.qty, date: today, uid, planQty: add, via: "sheet", ...extra, ...staffOp }));
