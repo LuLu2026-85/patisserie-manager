@@ -22966,7 +22966,9 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
     return s.line.kind === "recipe" ? PX.sufTake : "";
   };
   const lineName = (s) => s.obj ? prodName(s.obj, L) : prodLineGoneName(s.line, L);
-  const lineUnit = (s) => s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
+  // 审查 ps1:标了备货的配方行同 ProdLineCard 的单位 —— 取出烤行数的是个数(没填产出量也不是「批」、配方单位空 = 个),做一批行有产出量时同样按账上的单位
+  const lineUnit = (s) => s.line.kind === "recipe" && s.obj && isPrepMarked(s.obj) && (s.line.stage !== "make" || !_prodNoYield("recipe", s.obj)) ? prepCfgOf("recipe", s.obj).unit
+    : s.line.kind === "product" ? ((s.obj && s.obj.unit) || X.unitPiece)
     : s.line.kind === "creation" ? (s.obj ? creationWords(creationStructureOf(s.obj), L).unit : "")
     : _prodNoYield(s.line.kind, s.obj) ? X.batchUnit : ((s.obj && s.obj.unit) || (s.line.kind === "component" ? "g" : ""));
   const recCols = zh ? ["品名", "计划", "实做", "开始", "出炉", "核温", "签名"] : ["品名", "計画", "実績", "開始", "焼き上がり", "芯温", "サイン"];
