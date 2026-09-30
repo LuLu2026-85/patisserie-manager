@@ -12613,32 +12613,161 @@ function getUsageScenes(material, recipes, components, creations) {
     return true;
   };
   // 如果 ing 有 materialId,用它精确匹配;否则用名字
+  // 第 4 批(critic C7):「来自组件」的行(componentId)价格和原料都跟那个组件走,不再按名字算成这个材料的一次使用
   const isMatch = (ing) => {
     if (ing.materialId) return ing.materialId === mid;
+    if (ing.componentId) return false;
     return matchName(ing);
   };
 
-  recipes.forEach(r => {
-    (r.ingredients || []).forEach(ing => {
-      if (isMatch(ing)) results.push({ type: "recipe", id: r.id, name: r.nameZh || r.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-    });
-  });
-  components.forEach(c => {
-    (c.ingredients || []).forEach(ing => {
-      if (isMatch(ing)) results.push({ type: "component", id: c.id, name: c.nameZh || c.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-    });
-  });
-  // 2026-09-29 体检第 2 批:「跟组件库走」的部分是组件的副本,组件那一行已经列过,原来又按整批量再列一遍(重复计数)。
-  const _followCompIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
-  creations.forEach(cr => {
-    (cr.layers || []).forEach(l => {
-      if (l && l.sourceComponentId && l.follow && !l.localVariant && _followCompIds.has(l.sourceComponentId)) return;
-      (l.ingredients || []).forEach(ing => {
-        if (isMatch(ing)) results.push({ type: "creation", id: cr.id, name: cr.nameZh || cr.nameJa, layerName: l.nameZh || l.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
-      });
-    });
+  walkIngredientUses(recipes, components, creations, (ing, { type, owner, layer }) => {
+    if (!isMatch(ing)) return;
+    if (type === "creation") results.push({ type, id: owner.id, name: owner.nameZh || owner.nameJa, layerName: layer.nameZh || layer.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
+    else results.push({ type, id: owner.id, name: owner.nameZh || owner.nameJa, qty: ing.qty, unit: ing.unit, linked: !!ing.materialId });
   });
   return results;
+}
+
+// ─── 遍历所有配料行(第 4 批 B4-4 从 getUsageScenes 抽出来,规则只留这一处)─────────────
+// 顺序:配方 → 组件 → 组合产品的各部分。cb(ing, { type: "recipe" | "component" | "creation", owner, layer })
+// 2026-09-29 体检第 2 批:「跟组件库走」的部分是组件的副本,组件那一行已经列过,原来又按整批量再列一遍(重复计数)—— 这里跳过;
+// 本产品专用(localVariant)/ 手搭的 / 组件已删的部分照常算。空对象 / 空行跳过(以前遇到会抛错)。
+function walkIngredientUses(recipes, components, creations, cb) {
+  (recipes || []).forEach(r => {
+    if (!r) return;
+    (r.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "recipe", owner: r, layer: null }); });
+  });
+  (components || []).forEach(c => {
+    if (!c) return;
+    (c.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "component", owner: c, layer: null }); });
+  });
+  const followCompIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
+  (creations || []).forEach(cr => {
+    if (!cr) return;
+    (cr.layers || []).forEach(l => {
+      if (!l) return;
+      if (l.sourceComponentId && l.follow && !l.localVariant && followCompIds.has(l.sourceComponentId)) return;
+      (l.ingredients || []).forEach(ing => { if (ing) cb(ing, { type: "creation", owner: cr, layer: l }); });
+    });
+  });
+}
+
+// ─── 「待换国产」看板的计算(第 4 批 B4-4 / B4-5 第 1 段:只有纯函数,界面第 2 段挂)─────────────
+// 标记放在材料对象里:domesticStatus("searching" 在找 / "keepImport" 继续进口 / "" 待换)、domesticNote 备注、domesticAt 改标记的时间。
+// **改这组标记不写 updatedAt**(合并导入按 updatedAt 整组取价格那一边,标一下状态就会把另一台电脑的价格盖掉),靠 domesticAt 自己比先后。
+const DOMESTIC_KEYS = ["domesticStatus", "domesticNote", "domesticAt"];
+const domesticStatusOf = (m) => {
+  const s = m && m.domesticStatus;
+  return s === "searching" || s === "keepImport" ? s : "";   // 认不出的值一律当空(给以后加新状态留余地)
+};
+// data = { recipes, components, creations, products, materials };价格走 getMaterialRawPrice(读渲染期注入的本店原料,本店价优先),不另写一套。
+// 在用 = 配料行关联了还在的材料(遍历规则同 getUsageScenes:跟组件库走的部分不重复算)。按名字回退的行不算(拿不准是哪一条、哪种钱)。
+// 「不计价」(noCost)的行不算在用,也不算没关联;「来自组件」(componentId 指向还在的组件)的行不算没关联(它的原料在组件那边已经算了)。
+// 在卖(只打标记):配方 / 组合产品 onSale,或被商品挂着;在卖的组合产品顺着跟组件库走的部分(sourceComponentId)、
+// 在卖的配方 / 组件 / 组合产品顺着配料行的 componentId,把用到的组件也算在卖(一直传下去,防循环)。
+// 状态:实际取用的那条价是人民币 → done(没价但材料写了人民币也算);否则按手标 keepImport → keep / searching → searching / 空 → todo。
+function domesticBoardRows(data) {
+  const { recipes = [], components = [], creations = [], products = [], materials = [] } = data || {};
+  const matById = materialMapOf(materials);
+  const compIds = new Set((components || []).map(c => c && c.id).filter(id => id != null));
+  const compById = new Map();
+  (components || []).forEach(c => { if (c && c.id != null && !compById.has(String(c.id))) compById.set(String(c.id), c); });
+  const key = (type, id) => type + ":" + String(id);
+
+  // ── 在卖:先收起点,再顺着组件传下去
+  const selling = new Set();
+  const queue = [];
+  const mark = (type, id) => { if (id == null) return; const k = key(type, id); if (selling.has(k)) return; selling.add(k); queue.push([type, id]); };
+  (recipes || []).forEach(r => { if (r && r.onSale) mark("recipe", r.id); });
+  (creations || []).forEach(cr => { if (cr && cr.onSale) mark("creation", cr.id); });
+  (products || []).forEach(p => (p && Array.isArray(p.items) ? p.items : []).forEach(it => {
+    if (!it || it.linkedId == null || it.linkedId === "") return;
+    const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
+    // 商品里的 linkedId 数字 / 字符串都有:按 String 比,记下数据里那一条的真 id
+    const arr = type === "creation" ? creations : type === "component" ? components : recipes;
+    const hit = (arr || []).find(x => x && String(x.id) === String(it.linkedId));
+    if (hit) mark(type, hit.id);
+  }));
+  const recById = new Map(), crById = new Map();
+  (recipes || []).forEach(r => { if (r && r.id != null && !recById.has(String(r.id))) recById.set(String(r.id), r); });
+  (creations || []).forEach(cr => { if (cr && cr.id != null && !crById.has(String(cr.id))) crById.set(String(cr.id), cr); });
+  const markRowComps = (ings) => (ings || []).forEach(ing => {
+    if (!ing || ing.componentId == null || ing.componentId === "") return;
+    const c = compById.get(String(ing.componentId));
+    if (c) mark("component", c.id);
+  });
+  while (queue.length) {
+    const [type, id] = queue.shift();
+    if (type === "recipe") { const r = recById.get(String(id)); if (r) markRowComps(r.ingredients); }
+    else if (type === "component") { const c = compById.get(String(id)); if (c) markRowComps(c.ingredients); }
+    else if (type === "creation") {
+      const cr = crById.get(String(id));
+      if (!cr) continue;
+      (cr.layers || []).forEach(l => {
+        if (!l) return;
+        if (l.sourceComponentId && l.follow && !l.localVariant && compIds.has(l.sourceComponentId)) mark("component", l.sourceComponentId);
+        else markRowComps(l.ingredients);
+      });
+    }
+  }
+
+  // ── 在用:逐行归类
+  const byMat = new Map();   // 材料 id → { material, rows, uses: Map }
+  let unlinkedRows = 0, danglingRows = 0, noCostRows = 0, fromComponentRows = 0;
+  const unlinkedNameSet = new Set();
+  walkIngredientUses(recipes, components, creations, (ing, { type, owner, layer }) => {
+    if (ing.noCost) { noCostRows++; return; }
+    const m = ing.materialId != null && ing.materialId !== "" ? matById.get(ing.materialId) : null;
+    if (!m) {
+      const fromComp = ing.componentId != null && ing.componentId !== "" && compById.has(String(ing.componentId));
+      if (fromComp) { fromComponentRows++; return; }
+      if (ing.materialId != null && ing.materialId !== "") { danglingRows++; return; }
+      const nm = normSearch(ing.nameZh || ing.nameJa || ing.nameFr || "");
+      if (!nm) return;
+      unlinkedRows++; unlinkedNameSet.add(nm);
+      return;
+    }
+    let e = byMat.get(m.id);
+    if (!e) { e = { material: m, rows: 0, uses: new Map() }; byMat.set(m.id, e); }
+    e.rows++;
+    const uk = key(type, owner.id);
+    let u = e.uses.get(uk);
+    if (!u) { u = { type, id: owner.id, name: owner.nameZh || owner.nameJa || owner.nameFr || "", layerNames: [] }; e.uses.set(uk, u); }
+    if (layer) { const ln = layer.nameZh || layer.nameJa || layer.nameFr || ""; if (ln && !u.layerNames.includes(ln)) u.layerNames.push(ln); }
+  });
+
+  const items = [...byMat.values()].map(e => {
+    const m = e.material;
+    const price = getMaterialRawPrice(m);
+    const status = domesticStatusOf(m);
+    const state = price.currency === "CNY" ? "done" : status === "keepImport" ? "keep" : status === "searching" ? "searching" : "todo";
+    let shopNoCurrency = false;
+    if (price.source === "shop") {
+      const sm = _shopMaterials.find(s => s && s.materialId === m.id);   // 同 getMaterialRawPrice 取的那一条
+      shopNoCurrency = !!sm && sm.currency !== "CNY" && sm.currency !== "JPY";
+    }
+    const uses = [...e.uses.values()];
+    return {
+      material: m, rows: e.rows, uses,
+      selling: uses.some(u => selling.has(key(u.type, u.id))),
+      price, state, status, shopNoCurrency,
+      staleStatus: state === "done" && status !== "",
+    };
+  });
+  const nameOf = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
+  const cmpItem = (a, b) => (b.uses.length - a.uses.length) || (b.rows - a.rows)
+    || (nameOf(a.material) < nameOf(b.material) ? -1 : nameOf(a.material) > nameOf(b.material) ? 1 : 0);
+  const groups = MATERIAL_CATEGORIES
+    .map(cat => ({ cat, id: cat.id, items: items.filter(it => getMaterialCat(it.material.categoryId).id === cat.id).sort(cmpItem) }))
+    .filter(g => g.items.length > 0);
+  const sorted = groups.flatMap(g => g.items);
+  const cnt = (st) => sorted.filter(it => it.state === st).length;
+  const counts = {
+    inUse: sorted.length, done: cnt("done"), todo: cnt("todo"), searching: cnt("searching"), keep: cnt("keep"),
+    open: cnt("todo") + cnt("searching"),
+    sellingOpen: sorted.filter(it => it.selling && (it.state === "todo" || it.state === "searching")).length,
+  };
+  return { items: sorted, groups, counts, unlinkedRows, unlinkedNames: unlinkedNameSet.size, danglingRows, noCostRows, fromComponentRows };
 }
 
 // ─── 材料百科主视图 ─────────────
