@@ -673,7 +673,12 @@ function mergePriceHistory(local, file, merged, kind, now) {
   const tv = (e) => `${phTime(e.at)}|${parseFloat(e.pricePerG)}`;
   const explicit = new Map();
   [...a, ...b].forEach(e => { if (e.currency) { const s = explicit.get(tv(e)) || new Set(); s.add(curOf(e)); explicit.set(tv(e), s); } });
-  const absorbed = (e) => { if (e.currency) return false; const s = explicit.get(tv(e)); return !!s && s.size === 1 && !s.has(curOf(e)); };
+  // 审查 b4s1:合并后的这条不是人民币(没标过的一边按修改时间赢了)时反过来 —— 留没写币种的那条、丢另一边补了人民币的同一条。
+  // 以前照样丢没写币种的:现价还是日元,记录却全成了人民币,「较上次」变成假的「≈↓95%」,下次改价还会再补一条重复的 before
+  const unlabeled = new Set([...a, ...b].filter(e => !e.currency).map(tv));
+  const absorbed = curOf(merged) === "CNY"
+    ? (e) => { if (e.currency) return false; const s = explicit.get(tv(e)); return !!s && s.size === 1 && !s.has(curOf(e)); }
+    : (e) => !!e.currency && curOf(e) !== "JPY" && unlabeled.has(tv(e)) && explicit.get(tv(e)).size === 1;
   const byKey = new Map();
   [...a, ...b].filter(e => !absorbed(e)).forEach(e => {
     const k = key(e), had = byKey.get(k);
