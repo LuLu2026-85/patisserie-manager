@@ -6853,25 +6853,92 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
 // 只按中 / 日 / 法文名找(同选材料弹窗),NFKC + 不分大小写 + 不管空格
 const normIngSuggest = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 const _ingSuggestNames = new WeakMap();   // 材料对象 → 归一化后的名字(材料一改就是新对象,缓存自然作废)
-function suggestMaterialsForIng(text, materials, limit = 8) {
+// 第 4 批 B4-5:名字里多认 materials[].aliases(别名 / 俗称);传了 brands 时再认厂家名 ——
+// 只中厂家的排在所有名字命中之后(排序第一键),否则「本店优先」会让只中厂家的本店材料挤到精确名字命中前面。不传 brands = 和以前一样
+function suggestMaterialsForIng(text, materials, limit = 8, brands = null) {
   const k = normIngSuggest(text);
   if (!k || !Array.isArray(materials)) return [];
   const shopIds = new Set(_shopMaterials.map(s => s && s.materialId).filter(Boolean));
+  const bq = normSearch(text);
+  const brandKeys = (Array.isArray(brands) && bq.length >= 2) ? brandKeyMapOf(brands) : null;
   const hits = [];
   for (const m of materials) {
     if (!m || !m.id) continue;
     let names = _ingSuggestNames.get(m);
-    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
+    if (!names) { names = [m.nameZh, m.nameJa, m.nameFr, ...materialAliasesOf(m)].map(normIngSuggest).filter(Boolean); _ingSuggestNames.set(m, names); }
     // 0 = 名字完全一样,1 = 开头就是,2 = 名字里有
     let rank = 3;
     for (const n of names) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 3; if (r < rank) rank = r; }
-    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0 });
+    if (rank < 3) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0, brandOnly: 0 });
+    else if (brandKeys && materialBrandHit(m, bq, brandKeys)) hits.push({ m, rank, shop: shopIds.has(m.id) ? 1 : 0, brandOnly: 1 });
   }
   const nm = (m) => String(m.nameZh || m.nameJa || m.nameFr || "");
-  hits.sort((a, b) => (b.shop - a.shop) || (a.rank - b.rank)
+  hits.sort((a, b) => (a.brandOnly - b.brandOnly) || (b.shop - a.shop) || (a.rank - b.rank)
     || ((b.m.isBest ? 1 : 0) - (a.m.isBest ? 1 : 0)) || ((b.m.rating || 0) - (a.m.rating || 0))
     || (nm(a.m).length - nm(b.m).length) || nm(a.m).localeCompare(nm(b.m)));
   return hits.slice(0, limit).map(x => x.m);
+}
+
+// ─── 材料搜索共用(第 4 批 B4-5)────────────────────────────────────────
+// 材料百科首页 / 分类页 / 选材料弹窗 / 组件仓库按原料搜共用。只是文本搜索,**不进 smartMatchMaterial 的打分**(那套改之前先跑 match_probe)。
+// normSearch:NFKC → 小写 → 去法文重音(é→e,日文浊点不受影响,同 linkKeys)→ 去空白
+const normSearch = (s) => String(s == null ? "" : s).normalize("NFKC").toLowerCase()
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC").replace(/\s+/g, "");
+// materials[].aliases:别名 / 俗称(字符串数组;没有这个键 = 没有别名)
+const materialAliasesOf = (m) => (m && Array.isArray(m.aliases)) ? m.aliases.filter(a => typeof a === "string" && a.trim()) : [];
+const _matSearchKeys = new WeakMap();     // 材料对象 → 中 / 日 / 法名 + 别名的归一化结果(材料一改就是新对象,缓存自然作废)
+function materialSearchKeys(m) {
+  if (!m || typeof m !== "object") return [];
+  let keys = _matSearchKeys.get(m);
+  if (!keys) { keys = [m.nameZh, m.nameJa, m.nameFr, ...materialAliasesOf(m)].map(normSearch).filter(Boolean); _matSearchKeys.set(m, keys); }
+  return keys;
+}
+const _brandKeyMaps = new WeakMap();      // brands 数组 → Map(厂家 id → 中 / 日 / 法名归一化)
+function brandKeyMapOf(brands) {
+  if (!Array.isArray(brands)) return new Map();
+  let map = _brandKeyMaps.get(brands);
+  if (!map) {
+    map = new Map();
+    brands.forEach(b => { if (b && b.id != null && !map.has(b.id)) map.set(b.id, [b.nameZh, b.nameJa, b.nameFr].map(normSearch).filter(Boolean)); });
+    _brandKeyMaps.set(brands, map);
+  }
+  return map;
+}
+const _materialMaps = new WeakMap();      // materials 数组 → Map(id → 材料),同 materials.find 取第一条
+function materialMapOf(materials) {
+  if (!Array.isArray(materials)) return new Map();
+  let map = _materialMaps.get(materials);
+  if (!map) {
+    map = new Map();
+    materials.forEach(m => { if (m && m.id != null && !map.has(m.id)) map.set(m.id, m); });
+    _materialMaps.set(materials, map);
+  }
+  return map;
+}
+// 只有厂家名中:查询词(已归一化)至少 2 个字,单字厂家名 / 单字查询不乱中
+const materialBrandHit = (m, k, brandKeys) => {
+  if (!m || !brandKeys || !k || k.length < 2 || m.brandId == null) return false;
+  const bks = brandKeys.get(m.brandId);
+  return !!bks && bks.some(b => b.includes(k));
+};
+// k 是 normSearch 过的查询词。0 = 名字 / 别名完全一样,1 = 开头就是,2 = 名字里有,3 = 只有厂家名中,9 = 不中
+function materialQueryRank(m, k, brandKeys) {
+  if (!m || !k) return 9;
+  let rank = 9;
+  for (const n of materialSearchKeys(m)) { const r = n === k ? 0 : n.startsWith(k) ? 1 : n.includes(k) ? 2 : 9; if (r < rank) rank = r; }
+  if (rank < 9) return rank;
+  return materialBrandHit(m, k, brandKeys) ? 3 : 9;
+}
+// 配料行中不中:行里的中 / 日 / 法名(品牌字段要 2 个字以上),或者它关联的那条材料按上面的规则中
+function ingredientQueryHit(ing, k, matById, brandKeys) {
+  if (!ing || typeof ing !== "object" || !k) return false;
+  if ([ing.nameZh, ing.nameJa, ing.nameFr].some(s => normSearch(s).includes(k))) return true;
+  if (k.length >= 2 && normSearch(ing.brand).includes(k)) return true;
+  if (ing.materialId != null && matById) {
+    const m = matById.get(ing.materialId);
+    if (m && materialQueryRank(m, k, brandKeys) < 9) return true;
+  }
+  return false;
 }
 
 // 中文名 / 日文名输入框 + 联想下拉(三个编辑页共用,IngredientTable 里用)。
@@ -6889,7 +6956,7 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
   const touchingBox = useRef(false);   // 手指正按在下拉里(见 onBlur)
   const zh = lang === "zh";
   const text = value == null ? "" : String(value);
-  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials) : [], [open, composing, text, materials]);
+  const list = useMemo(() => (open && !composing) ? suggestMaterialsForIng(text, materials, 8, brands) : [], [open, composing, text, materials, brands]);
   const place = () => {
     const el = inputRef.current;
     if (!el || !el.getBoundingClientRect) return;
@@ -12784,10 +12851,14 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
       const hay = `${b.nameZh || ""} ${b.nameJa || ""} ${b.nameFr || ""} ${b.origin || ""}`.toLowerCase();
       return hay.includes(q);
     });
-    const allMaterials = materials.filter(m => {
-      const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-      return hay.includes(q);
-    });
+    // 第 4 批 B4-5:产品按名字 + 别名 + 厂家名找(1111 / 1838 条的名字里不带厂家名);
+    // 按 materialQueryRank 稳定排序:名字完全一样 → 开头就是 → 名字里有 → 只有厂家名中
+    const k = normSearch(q);
+    const bkm = brandKeyMapOf(brands);
+    const ranked = [];
+    materials.forEach((m, i) => { const r = materialQueryRank(m, k, bkm); if (r < 9) ranked.push([r, i, m]); });
+    ranked.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+    const allMaterials = ranked.map(x => x[2]);
     return {
       brands: showAll ? allBrands : allBrands.slice(0, 20),
       materials: showAll ? allMaterials : allMaterials.slice(0, 30),
@@ -13435,22 +13506,28 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
     // 2026-09-29 体检第 2 批:原来严格相等,misc / 旧编号的材料按分类筛不出来;认不出的归「其他」
     if (catFilter) list = list.filter(m => m.categoryId && getMaterialCat(m.categoryId).id === catFilter);
     if (brandFilter) list = list.filter(m => m.brandId === brandFilter);
+    // 第 4 批 B4-5:名字 + 别名 + 厂家名(同材料百科首页);只中厂家名的排在名字命中的后面
+    const brandOnlyIds = new Set();
     if (q) {
+      const qk = normSearch(q), bkm = brandKeyMapOf(brands);
       list = list.filter(m => {
-        const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-        return hay.includes(q);
+        const r = materialQueryRank(m, qk, bkm);
+        if (r === 3) brandOnlyIds.add(m.id);
+        return r < 9;
       });
     }
-    // 排序: 本店原料已有 (v17.4) > isBest > rating > 名字。_shopMaterials 是渲染期注入的,弹窗每次打开都是新的,不进依赖
+    // 排序: 本店原料已有 (v17.4) > 名字命中先于只中厂家名(第 4 批)> isBest > rating > 名字。_shopMaterials 是渲染期注入的,弹窗每次打开都是新的,不进依赖
     const shopIds = new Set(_shopMaterials.map(x => x && x.materialId).filter(Boolean));
     return [...list].sort((a, b) => {
       const sa = shopIds.has(a.id) ? 1 : 0, sb = shopIds.has(b.id) ? 1 : 0;
       if (sa !== sb) return sb - sa;
+      const ba = brandOnlyIds.has(a.id) ? 1 : 0, bb = brandOnlyIds.has(b.id) ? 1 : 0;
+      if (ba !== bb) return ba - bb;
       if ((b.isBest ? 1 : 0) !== (a.isBest ? 1 : 0)) return (b.isBest ? 1 : 0) - (a.isBest ? 1 : 0);
       if ((b.rating || 0) !== (a.rating || 0)) return (b.rating || 0) - (a.rating || 0);
       return (a.nameZh || a.nameJa || "").localeCompare(b.nameZh || b.nameJa || "");
     }).slice(0, 100); // 最多 100 条结果
-  }, [materials, q, catFilter, brandFilter]);
+  }, [materials, brands, q, catFilter, brandFilter]);
 
   // 动态取可选厂家 (根据当前 catFilter)
   const availableBrands = useMemo(() => {
@@ -13829,10 +13906,15 @@ function CategoryDetailView({
   if (brandFilter) {
     filteredProducts = filteredProducts.filter(m => m.brandId === brandFilter);
   }
+  // 第 4 批 B4-5:名字 + 别名 + 厂家名(同首页);只中厂家名的排在名字命中的后面(下面排序第一键)
+  const qk = normSearch(q);
+  const brandOnlyIds = new Set();
   if (q) {
+    const bkm = brandKeyMapOf(brands);
     filteredProducts = filteredProducts.filter(m => {
-      const hay = `${m.nameZh || ""} ${m.nameJa || ""} ${m.nameFr || ""}`.toLowerCase();
-      return hay.includes(q);
+      const r = materialQueryRank(m, qk, bkm);
+      if (r === 3) brandOnlyIds.add(m.id);
+      return r < 9;
     });
   }
 
@@ -13845,6 +13927,8 @@ function CategoryDetailView({
 
   // 排序
   productWithUsage.sort((a, b) => {
+    const ba = brandOnlyIds.has(a.id) ? 1 : 0, bb = brandOnlyIds.has(b.id) ? 1 : 0;
+    if (ba !== bb) return ba - bb;
     if (b._usage !== a._usage) return b._usage - a._usage;
     if ((b.isBest ? 1 : 0) !== (a.isBest ? 1 : 0)) return (b.isBest ? 1 : 0) - (a.isBest ? 1 : 0);
     if ((b.rating || 0) !== (a.rating || 0)) return (b.rating || 0) - (a.rating || 0);
