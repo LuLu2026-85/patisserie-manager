@@ -20297,6 +20297,7 @@ const PREP_TXT = {
     regBtn: "登记",
     regHint: "生产单上「做一批」点记入会自动登记,这里补登漏记的或者以前做的",
     errQty: "「做了多少」要填大于 0 的数",
+    errQtyWhole: (u) => `按「${u}」计,至少填 1`,
     errDate: "日期不能晚于今天",
     errTitle: "这一格填得不对",
     cancel: "取消",
@@ -20540,6 +20541,7 @@ const PREP_TXT = {
     regBtn: "登録",
     regHint: "製造リストの仕込み行を記録すると自動で登録されます。ここでは記録漏れや以前の分を登録します",
     errQty: "「仕込んだ量」は 0 より大きい数を",
+    errQtyWhole: (u) => `「${u}」単位なので 1 以上を`,
     errDate: "日付は本日まで",
     errTitle: "入力を確認してください",
     cancel: "キャンセル",
@@ -22424,9 +22426,11 @@ function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirm
   const sent = useRef(false);   // 提交成功过(面板马上要关):同一次渲染里的第二下点击不再提交
   const unit = (item && item.unit) || (cfg && cfg.unit) || "";
   const submit = () => {
-    const q = parseFloat(qty);
+    // 审查 ps1:按账本的规整先算好(按个计的四舍五入),toast 写的就是存下的数;按个计填 0.4 → 0,当没填(以前说登记了 0.4 個、账本什么都没写)
+    const q0 = parseFloat(qty), q = _prepQ(q0, unit, "add");
     const bad = [];
-    if (!(isFinite(q) && q > 0)) bad.push(X.errQty);
+    if (!(isFinite(q0) && q0 > 0)) bad.push(X.errQty);
+    else if (!(q > 0)) bad.push(X.errQtyWhole(unit));
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > t) bad.push(X.errDate);
     if (bad.length) { setErr(bad.join(";")); return; }
     setErr(null);
@@ -22502,7 +22506,8 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
   const bind = useDirtyGuard(() => ({ rows: rows.map(r => [r.value, r.wrong]), adds }));
   const sent = useRef(false);
   const newUnit = cfg ? cfg.unit : (item && item.unit) || "";
-  const num = (v) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : 0; };
+  // 审查 ps1:同账本 count 的规整(按个计四舍五入),预览、写进去的数和 toast 一致;漏记的一批按个计填 0.4 → 0,算没填
+  const num = (v) => { const n = _prepQ(v, newUnit, "add"); return n > 0 ? n : 0; };
   const before = _r3(lots.reduce((s, l) => s + l.left, 0));
   const after = _r3(rows.reduce((s, r) => s + (r.wrong ? 0 : num(r.value)), 0) + adds.reduce((s, a) => s + num(a.qty), 0));
   const d = _r3(after - before);
