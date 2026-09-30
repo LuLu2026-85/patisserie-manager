@@ -13548,7 +13548,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
   // 第 4 批:材料详情「你的使用情况」每一行点了去那一条的查看页(App 的 jumpToItem)
   onOpenUsage = null,
   // 第 4 批 B4-4「待换国产」看板:开关在 App(跳去配方再切回来看板还在),products 用来判断「在卖」,onOpenDataHealth 给「本店原料没写币种」的提示
-  products = [], domesticBoardOpen = false, setDomesticBoardOpen = () => {}, onOpenDataHealth = null,
+  products = [], domesticBoardOpen = false, setDomesticBoardOpen = () => {}, onOpenDataHealth = null, domesticBoardUi = null, setDomesticBoardUi = null,
   brandManageOpen = false, setBrandManageOpen = () => {}, requestDelete = () => {}, requestMerge = () => {} }) {
 
   // 「待换国产」标记的唯一写出口(看板的三档按钮 + 备注框都走这里;材料编辑页不改这组字段)。
@@ -13744,6 +13744,8 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
       onSetStatus={setDomesticStatus}
       onSetNote={(id, text) => setMaterialDomestic(id, { domesticNote: text }, null)}
       onOpenDataHealth={onOpenDataHealth}
+      ui={domesticBoardUi}
+      setUi={setDomesticBoardUi}
     />;
   }
 
@@ -14484,11 +14486,18 @@ function DomesticNoteInput({ value, onCommit, lang, style }) {
   );
 }
 
-function DomesticBoardView({ board, brands = [], lang, onBack, onViewMaterial, onOpenUsage, onSetStatus, onSetNote, onOpenDataHealth = null }) {
+function DomesticBoardView({ board, brands = [], lang, onBack, onViewMaterial, onOpenUsage, onSetStatus, onSetNote, onOpenDataHealth = null, ui = null, setUi = null }) {
   const zh = lang === "zh";
-  const [filter, setFilter] = useState("open");        // open(待换 + 在找)| keep | done | all
-  const [sellingOnly, setSellingOnly] = useState(false);
-  const [openUses, setOpenUses] = useState(() => new Set());   // 展开了「用在哪」的材料 id
+  // 审查 b4r1:下面三样存在 App(ui / setUi),从看板点进材料详情再返回、跳去配方再切回来都还在;没传(单独渲染)就存在自己这里
+  const [localUi, setLocalUi] = useState(null);
+  const U = (setUi ? ui : localUi) || {};
+  const patchUi = (f) => (setUi || setLocalUi)(prev => ({ ...(prev || {}), ...f(prev || {}) }));
+  const filter = U.filter || "open";                   // open(待换 + 在找)| keep | done | all
+  const sellingOnly = !!U.sellingOnly;
+  const openUses = new Set(U.openUses || []);          // 展开了「用在哪」的材料 id
+  const setFilter = (v) => patchUi(() => ({ filter: v }));
+  const setSellingOnly = (v) => patchUi(() => ({ sellingOnly: !!v }));
+  const setOpenUses = (f) => patchUi(p => ({ openUses: [...f(new Set(p.openUses || []))] }));
   const { counts } = board;
   const brandName = (id) => { const b = (brands || []).find(x => x && x.id === id); return b ? ((zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "") : ""; };
   const mName = (m) => (zh ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) || m.nameFr || "(无名)";
@@ -20906,6 +20915,9 @@ function App() {
   const [materialEditTarget, setMaterialEditTarget] = useState(null);
   // 第 4 批 B4-4:「待换国产」看板开着没有。放 App 不放 MaterialsView 外壳:从看板跳去配方 / 组件再切回材料百科,看板还在(外壳一切 tab 就卸载了)
   const [domesticBoardOpen, setDomesticBoardOpen] = useState(false);
+  // 审查 b4r1:看板的筛选 / 只看在卖的 / 展开的「用在哪」也放这里(以前在看板里,点进材料详情再返回、跳去配方再切回来都被清掉);看板关了就清
+  const [domesticBoardUi, setDomesticBoardUi] = useState(null);
+  useEffect(() => { if (!domesticBoardOpen) setDomesticBoardUi(null); }, [domesticBoardOpen]);
   // 🖨 打印设置（可用户自定义LOGO）
   const [printSettings, setPrintSettings] = useState(() => {
     const ps = stored?.printSettings || { logoUrl: "", brandName: "kororā", brandSubtitle: "Boulangerie • Pâtisserie • Café" };
@@ -23653,6 +23665,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           products={products}
           domesticBoardOpen={domesticBoardOpen}
           setDomesticBoardOpen={setDomesticBoardOpen}
+          domesticBoardUi={domesticBoardUi}
+          setDomesticBoardUi={setDomesticBoardUi}
           onOpenDataHealth={() => setShowDataHealth(true)}
         />
       )}
