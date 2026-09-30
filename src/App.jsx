@@ -18046,15 +18046,17 @@ function ProductEditForm({ product, recipes, creations, components = [], lang, o
   };
   // 备货 F 线:组成里有标了备货的配方 / 组件时,组成下面多一个勾选「装的是已经烤好的,不扣备货」。显示生效值(productPrepSkips);
   // 勾成和缺省一样时表单里直接删键(敲了又改回不算改过)
+  // 审查 ps2:配料里「来自组件」指向备货组件的行,记入生产同样会从账本扣(或按「装烤好的」不扣)—— 也要给勾选(礼盒里没标备货、但用到脆顶的饼干)
+  const usesMarkedComp = (ings) => (ings || []).some(ing => ing && _hasCompId(ing) && (components || []).some(o => o && o.id === ing.componentId && isPrepMarked(o)));
   const prepMarkedInItems = (form.items || []).some(it => {
     if (!it) return false;
     // 审查 ps1:组合产品里跟组件库走的部分来自备货组件,同样会从账本扣(或按「装烤好的」不扣)—— 以前不给勾选,「泡芙两个装」这种缺省不扣的改不过来
     if (it.linkedType === "creation") {
       const c = (creations || []).find(x => x && String(x.id) === String(it.linkedId));
-      return !!c && (c.layers || []).some(l => l && l.follow && !l.localVariant && l.sourceComponentId && (components || []).some(o => o && o.id === l.sourceComponentId && isPrepMarked(o)));
+      return !!c && (c.layers || []).some(l => l && ((l.follow && !l.localVariant && l.sourceComponentId && (components || []).some(o => o && o.id === l.sourceComponentId && isPrepMarked(o))) || usesMarkedComp(l.ingredients)));
     }
     const list = it.linkedType === "component" ? components : recipes;
-    return (list || []).some(o => o && String(o.id) === String(it.linkedId) && isPrepMarked(o));
+    return (list || []).some(o => o && String(o.id) === String(it.linkedId) && (isPrepMarked(o) || usesMarkedComp(o.ingredients)));
   });
   const setPrepSkip = (v) => setForm(f => { const { prepSkip, ...rest } = f; return v === productPrepSkips(rest) ? rest : { ...rest, prepSkip: v }; });
 
@@ -20206,6 +20208,7 @@ const PREP_TXT = {
     partNoUsed: "没填用量,没扣备货",
     partUnit: "单位对不上,没扣",
     partLocal: "本产品专用,没扣备货",
+    partPacked: "这个商品装的是做好的,记入生产不扣备货",
     packed: (n, u, store) => `装烤好的 ${n} ${u}(不扣${store})`,
     prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u ? " " + u : ""}`,
     toastProduct: (name, n, prep) => `✓ 已记入生产「${name}」+${n}(库存 +${n}${prep ? ";" + prep : ""})`,
@@ -20457,6 +20460,7 @@ const PREP_TXT = {
     partNoUsed: "使用量未入力のため未控除",
     partUnit: "単位不一致のため未控除",
     partLocal: "この製品専用のため未控除",
+    partPacked: "完成品を詰める商品のため、製造記録で作り置きを引きません",
     packed: (n, u, store) => `焼成済みを詰める ${n}${u}(${store}から引かない)`,
     prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u || ""}`,
     toastProduct: (name, n, prep) => `✓ 製造記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
@@ -21417,7 +21421,7 @@ function ProdMeta({ b, lang }) {
 // 一个要做的东西的块:配方 / 组件 = 缩好的配料;组合产品 = 每部分要多少 + 缩好的配料,备货的只写从库存取
 // 备货第 0 步:新可选 prop uid(取出配方行的块带 line.uid)/ fromLine({ kind, name },商品行 / 组合产品行里的块)/ prepView(页面算好的库存 Map),
 // 先只把 b.prep / uid / fromLine 透传给 onKitchen(C 线接上显示)
-function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
+function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView, skipDeduct = false }) {
   const X = prodTxt(lang);
   const zh = lang !== "ja";
   if (b.missing) return <div style={{ ...T.fs.caption, color: T.danger, marginTop: 8 }}>⚠ {X.missing}</div>;
@@ -21504,6 +21508,8 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView }) {
                     const e = p.comp ? pvOf("component", p.comp.id) : null;
                     if (!e || !e.item) return null;
                     const cap = (t, c) => <span data-prep-part="1" style={{ ...T.fs.caption, color: c, marginLeft: 6, ...T.num }}>{t}</span>;
+                    // 审查 ps2:商品按「装的是做好的」不扣(productPrepSkips)时,整行记入都不扣 —— 不写「现有 Y」,免得看着像会从库存扣
+                    if (skipDeduct) return cap(PX.partPacked, T.subtle);
                     if (prepView.linkOf && prepView.linkOf(l) !== "follow") return cap(PX.partLocal, T.subtle);
                     if (p.needed === null) return cap(PX.partNoUsed, T.warning);
                     const cu = e.cfg.unit;
@@ -21700,7 +21706,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           </button>
           {open && s.blocks.map((b, i) => prepView
             // 备货:取出配方行的块带 uid(厨房视图「烤好了,记下」走这一行);商品行 / 组合产品行里的块带 fromLine(厨房视图不给记入按钮)
-            ? <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} prepView={prepView}
+            ? <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} prepView={prepView} skipDeduct={isProduct && !!s.obj && productPrepSkips(s.obj)}
                 uid={pBake ? l.uid : undefined} fromLine={isProduct || l.kind === "creation" ? { kind: l.kind, name } : undefined} />
             : <ProdBlock key={i} b={b} lang={lang} showHead={isProduct} onKitchen={onKitchen} />)}
         </div>
