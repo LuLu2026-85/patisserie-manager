@@ -22569,6 +22569,22 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
   const unitMode = !!item && !!cfg && !prepSameUnit(item, cfg);
   const lots = prepLotsView(item, cfg, t);
   const [rows, setRows] = useState(() => lots.map(l => ({ lotId: l.id, madeAt: l.madeAt, made: l.made, left: l.left, status: l.status, value: unitMode ? "" : String(l.left), wrong: false })));
+  // 审查 ps3:面板开着时账本变了(撤销了一次报废 / 登记、厨房视图记了取出),行跟着现在的批走:新出现的批加一行(填现在剩的)、不在了的去掉、
+  // 没动过的行(还是填的当时剩的数)换成现在剩的;她填过的数和「这批记错了」照留。以前行停在打开那一刻,预览 / toast 说的数和账本存下的对不上
+  const lotSig = lots.map(l => [l.id, l.left, l.made, l.madeAt, l.status].join("|")).join("~");
+  useEffect(() => {
+    setRows(prev => {
+      const byId = new Map(prev.map(r => [r.lotId, r]));
+      const next = lots.map(l => {
+        const r = byId.get(l.id);
+        const fresh = { lotId: l.id, madeAt: l.madeAt, made: l.made, left: l.left, status: l.status };
+        if (!r) return { ...fresh, value: unitMode ? "" : String(l.left), wrong: false };
+        return { ...r, ...fresh, value: !unitMode && r.value === String(r.left) ? String(l.left) : r.value };
+      });
+      const keys = ["lotId", "madeAt", "made", "left", "status", "value", "wrong"];
+      return next.length === prev.length && next.every((r, i) => keys.every(k => r[k] === prev[i][k])) ? prev : next;
+    });
+  }, [lotSig]);
   const [adds, setAdds] = useState([]);
   const [err, setErr] = useState(null);
   const bind = useDirtyGuard(() => ({ rows: rows.map(r => [r.value, r.wrong]), adds }));
