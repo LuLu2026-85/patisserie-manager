@@ -24912,9 +24912,14 @@ function App() {
     const m = meta || {};
     const list = (Array.isArray(ops) ? ops : []).filter(o => o && typeof o === "object").map(o => (m.staff && o.type !== "dropItem" && o.type !== "putItem" ? { ...o, staff: true } : o));
     if (!list.length) return false;
+    // 审查 ps2:清掉整样(dropItem)的撤销放回 appSettings 里的原样(同 onPrepDrop),不放卡片拿到的 prepStockRead 视图 ——
+    // 视图筛掉了读不出的批(made 存成字符串、日期写法不对),撤销以后那几批就永远没了
+    const rawItems = appSettings.prepStock && appSettings.prepStock.items && typeof appSettings.prepStock.items === "object" ? appSettings.prepStock.items : {};
+    const dropRaw = new Map(list.filter(o => o.type === "dropItem" && rawItems[o.key] && typeof rawItems[o.key] === "object").map(o => [o.key, rawItems[o.key]]));
     if (!writePrep(list)) return false;
     const opIds = [...new Set(list.map(o => o.opId).filter(Boolean))];
-    const undoOps = Array.isArray(m.undoOps) ? m.undoOps : opIds.map(opId => ({ type: "revert", opId }));
+    const undoOps = Array.isArray(m.undoOps) ? m.undoOps.map(o => (o && o.type === "putItem" && dropRaw.has(o.key) ? { ...o, item: dropRaw.get(o.key) } : o))
+      : opIds.map(opId => ({ type: "revert", opId }));
     const undo = undoOps.length ? () => {
       const partial = undoOps.some(o => o && o.type === "revert" && prepRevertPreview(prepRawRef.current, o.opId).partial);
       if (writePrep(undoOps, null, { isUndo: true }) && partial) showToast(prepTxt(lang).partial);
