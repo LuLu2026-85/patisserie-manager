@@ -21285,7 +21285,7 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     const logged = own0 > 0 ? Math.min(qty, _r3(Math.min(lg, cap) + own0)) : Math.min(lg, cap);
     const pending = pend(logged);
     const actual = _r3(tk.filter(m => m.uid === l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
-    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
+    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy).reduce((a, m) => a + _prepNum(m.qty), 0));   // 审查 pt2:删了生产记录加回去的不算(同商品行 / 商品页的筛法)
     // 这个配方挂在哪些商品上(卡片灰字「要同时加商品库存,请用『从商品加』」;linkedType 缺省也算 recipe,同 13a 的判定)
     const onProducts = (ctx.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(obj.id)))
       .map(p => ({ id: p.id, name: prodName(p, ctx.lang) }));
