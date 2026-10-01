@@ -19572,20 +19572,39 @@ const prepOnHand = (item, cfg, today) => {
 // qty 按这一样账上的单位;按个计的向上取整。没开始记(item 不是对象)→ 一个都扣不到(short = qty)
 // 审查 pt2:补录往天的 take 照样从最早的批扣、后来做的批也扣(撤掉 pt1 的 madeBy)—— 账上旧批不够补录的数,只能是之后记的取出先进先出把它用光了,
 // 那些取出实际拿的是新批,补录的余数就该落在新批上(按 madeBy 挡掉会把账记多、还报「差 N 没扣」)
+// 审查 pt3:但旧批是被「那天之后的报废」清空的(报废清的是账上的数,补录的这几个早就跟着写掉了)就不是这样 —— 落到新批上等于扣两次。
+// 所以那天(today = 补录的那一天)之后报废掉的、那天以前做的批的数(disc),先从余数里抵掉,剩下的才扣那天之后做的批;抵掉的记 short(toast 叫她去盘点)。
+// 只在有那天之后的报废时起作用(补录今天 / 没报废过 → 一个字节不变)。同一次报废被几次补录各抵一遍,宁可少扣、记 short,不悄悄扣两次
+const _prepDiscAfter = (item, day) => {
+  if (!_prepIsObj(item) || !Array.isArray(item.moves) || !Array.isArray(item.lots)) return 0;
+  let n = 0;
+  item.moves.forEach(m => {
+    if (!_prepIsObj(m) || m.type !== "discard" || !(String(m.date || "") > day) || !Array.isArray(m.deltas)) return;
+    m.deltas.forEach(x => {
+      if (!Array.isArray(x) || !(x[1] < 0)) return;
+      const lot = item.lots.find(l => _prepLotOk(l) && l.id === x[0]);
+      if (lot && String(lot.madeAt) <= day) n += -x[1];
+    });
+  });
+  return _prepClean(n);
+};
 const prepTakePlan = (item, cfg, qty, today) => {
   const unit = _prepIsObj(item) ? item.unit : (cfg && cfg.unit);
   const q = _prepQ(qty, unit, "take");
   if (!(q > 0)) return { deltas: [], got: 0, short: 0 };
-  let rest = q;
+  let rest = q, cap = null;
+  const disc = _prepDiscAfter(item, today);
   const deltas = [], seen = new Set();
   for (const l of prepLotsView(item, cfg, today)) {
     if (!(rest > 0)) break;
     if (l.status === "expired" || l.id === undefined || l.id === null || seen.has(l.id)) continue;   // 过期的不扣;重复 id 的坏批只认第一批
     seen.add(l.id);
-    const t = _prepClean(Math.min(l.left, rest));
+    if (disc > 0 && cap === null && String(l.madeAt) > today) cap = _prepClean(Math.max(0, rest - disc));   // 那天之后做的批:最多扣「余数 − 报废抵掉的」
+    const t = _prepClean(Math.min(l.left, rest, cap === null ? rest : cap));
     if (!(t > 0)) continue;
     deltas.push([l.id, -t]);
     rest = _prepClean(rest - t);
+    if (cap !== null) cap = _prepClean(cap - t);
   }
   return { deltas, got: _prepClean(q - rest), short: rest };
 };
