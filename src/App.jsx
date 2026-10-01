@@ -17651,6 +17651,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
   if (editTarget !== null) {
     return <ProductEditForm
       product={editTarget._new ? null : editTarget}
+      prefill={editTarget._new ? editTarget._prefill : undefined}
       recipes={recipes}
       creations={creations}
       components={components}
@@ -18020,14 +18021,14 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
 }
 
 // [B6 修复] 加 components,商品可关联组件
-function ProductEditForm({ product, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {
+function ProductEditForm({ product, prefill, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {   // prefill:备货 ux2「去新建商品 →」带来的起点(名字 + 组成),只在新建时用
   // [B5 修复] note → notesZh/notesJa 双语
   // 第 4 批 B4-2:packagingCost 每件包装费(人民币;"" = 没填,离开保护把 "" 当没有这个字段)
   const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, priceCurrency: "CNY", packagingCost: "", notesZh: "", notesJa: "" };
   // 旧数据兼容:有 note 但没 notesZh/notesJa,迁移到 notesZh
   // 第 4 批 D 线顺带修:老商品没有 priceCurrency(= 日元,CLAUDE.md 币种第 6 条),以前被 empty 的 "CNY" 盖掉 ——
   // 编辑页币种按钮显示 ¥,不改售价点保存 450 円 就变成 ¥450(贵 23 倍)。打开时按 priceCurOf 补上真实币种
-  const initial = product ? { ...empty, ...product, ...(parseFloat(product.sellPrice) > 0 ? { priceCurrency: priceCurOf(product) } : {}) } : empty;
+  const initial = product ? { ...empty, ...product, ...(parseFloat(product.sellPrice) > 0 ? { priceCurrency: priceCurOf(product) } : {}) } : (prefill ? { ...empty, ...prefill } : empty);
   if (initial.note && !initial.notesZh && !initial.notesJa) {
     initial.notesZh = initial.note;
   }
@@ -22984,7 +22985,7 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
       {kind === "recipe" && !onProduct && (
         <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>
           {X.notOnProduct}
-          {typeof onGoTab === "function" && <> · <button type="button" className="k-btn" onClick={() => onGoTab("products")}
+          {typeof onGoTab === "function" && <> · <button type="button" className="k-btn" onClick={() => onGoTab("products", form.id !== undefined ? { kind, id: form.id } : undefined)}
             style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
         </div>
       )}
@@ -23242,7 +23243,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     onPrepOp([{ type: "dropItem", key }], { toast: X.cleared(name, q(oh.onHand), unit), staff, undoOps: [{ type: "putItem", key, item }] });
   };
   const jump = (target) => { if (typeof onJump === "function") confirmLeaveEditor(confirmDialog, lang, () => onJump(target)); };
-  const goTab = (tb) => { if (typeof onGoTab === "function") onGoTab(tb); };
+  const goTab = (tb, np) => { if (typeof onGoTab === "function") onGoTab(tb, np); };
 
   const lots = oh.lots;
   const shownLots = compact ? lots.slice(0, 3) : lots;
@@ -23380,7 +23381,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
         <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.m, overflowWrap: "anywhere" }}>
           {X.notOnProduct}
           {/* 审查 ps1:App 的 goTab 自己会问「还没保存」,这里再包一层 confirmLeaveEditor 会问两次 */}
-          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => goTab("products")}
+          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => goTab("products", { kind, id: obj.id })}
             style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
         </div>
       )}
@@ -24802,9 +24803,13 @@ function App() {
     if (tab !== "materialsPedia") { setBrandEditTarget(null); setMaterialEditTarget(null); }
   }, [tab]);
   // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
-  const goTab = (t) => {
+  const goTab = (t, newProduct) => {
     // 2026-09-29 体检第 2 批:家族详情 / 编辑是盖满屏的一层,以前点底栏切了页它还盖在上面,像导航失灵 —— 切页时一起关掉
-    const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); };
+    // 备货 ux2(10-02 LuLu 实测):备货卡 / 备货设置的「去新建商品 →」带 newProduct = { kind, id } → 直接打开新建商品,组成里已加好这一样 × 1、名字照它的中文名;
+    // 这一样已经不在了(新配方还没存)就和以前一样只切到商品列表。预填的是编辑页的起点,不算「改过」(useDirtyGuard 第一次按键才拍快照),取消什么都不建
+    const np = newProduct && t === "products" ? (newProduct.kind === "component" ? components : recipes).find(o => o && newProduct.id !== undefined && String(o.id) === String(newProduct.id)) : null;
+    const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null);
+      if (np) { setProductViewId(null); setProductEditTarget({ _new: true, _prefill: { nameZh: np.nameZh || "", ...(np.nameJa ? { nameJa: np.nameJa } : {}), items: [{ linkedId: np.id, linkedType: newProduct.kind === "component" ? "component" : "recipe", qty: 1 }] } }); } };
     // 家族编辑层开着时,点当前这个 tab 也会关掉它,所以也要问
     if ((t !== tab || familyEditTarget !== null) && anyEditorDirty()) {
       confirmDialog(
