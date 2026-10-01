@@ -22468,9 +22468,14 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
   const set = (k) => (e) => { const v = e.target.value; setForm(prev => ({ ...prev, [k]: v })); };
   const store = PREP_STORES.includes(form.prepStore) ? form.prepStore : (kind === "recipe" ? "freeze" : null);
   const item = form.id !== undefined && prepStock && !prepStock.readOnly && prepStock.items ? prepStock.items[prepKeyOf(kind, form.id)] : null;
-  const daily = item ? prepDailyUse(item, localDateStr()) : 0;
+  const daily0 = item ? prepDailyUse(item, localDateStr()) : 0;
+  // 审查 pt2:prepDailyUse 按账上的单位算,框旁边写的是表单现在的单位(刚改成 kg、还没盘点)—— 先换成表单的单位;换不了(個 → 片)按一批的 1/4。
+  // 同单位一个字节不变;换算过的保留两位小数向上取(1.5 kg 不写成 2)
+  const defU = kind === "component" ? "g" : "个";
+  const sameU = !!item && prepConvUnit(1, item.unit, u, defU) === 1;
+  const daily = daily0 > 0 ? (sameU ? daily0 : (prepConvUnit(daily0, item.unit, u, defU) || 0)) : 0;
   const y = parseFloat(form.yield);
-  const ph = daily > 0 ? X.cfgMinHint(fmtQty(Math.ceil(daily * 3))) : (y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
+  const ph = daily > 0 ? X.cfgMinHint(fmtQty(sameU ? Math.ceil(daily * 3) : Math.ceil(_r3(daily * 3) * 100) / 100)) : (y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
   const onProduct = kind === "recipe" && form.id !== undefined && prepProductsUsing(products, "recipe", form.id).length > 0;
   const lab = { ...T.fs.label, color: T.textTertiary, display: "block", marginBottom: 5 };
   const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
