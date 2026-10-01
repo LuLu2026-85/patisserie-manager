@@ -22480,7 +22480,8 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
   const sameU = !!item && prepConvUnit(1, item.unit, u, defU) === 1;
   const daily = daily0 > 0 ? (sameU ? daily0 : (prepConvUnit(daily0, item.unit, u, defU) || 0)) : 0;
   const y = parseFloat(form.yield);
-  const ph = daily > 0 ? X.cfgMinHint(fmtQty(sameU ? Math.ceil(daily * 3) : Math.ceil(_r3(daily * 3) * 100) / 100)) : (y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
+  // 审查 pt3:× 100 有浮点尾巴(0.07 × 100 = 7.000000000000001),先减 1e-9 再向上取,不然 0.07 写成 0.08
+  const ph = daily > 0 ? X.cfgMinHint(fmtQty(sameU ? Math.ceil(daily * 3) : Math.ceil(_r3(daily * 3) * 100 - 1e-9) / 100)) :(y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
   const onProduct = kind === "recipe" && form.id !== undefined && prepProductsUsing(products, "recipe", form.id).length > 0;
   const lab = { ...T.fs.label, color: T.textTertiary, display: "block", marginBottom: 5 };
   const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
