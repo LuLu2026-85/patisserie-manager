@@ -20397,6 +20397,7 @@ const PREP_TXT = {
     regHint: "生产单上「做一批」点记入会自动登记,这里补登漏记的或者以前做的",
     errQty: "「做了多少」要填大于 0 的数",
     errQtyWhole: (u) => `按「${u}」计,至少填 1`,
+    panelRounded: (n, u) => `按「${u}」计,记 ${n} ${u}`,   // 审查 pt4:生产单「实际取了」填 2.5 個 → 按个向上取整记 3,面板上先说
     errDate: "日期不能晚于今天",
     errTitle: "这一格填得不对",
     cancel: "取消",
@@ -20652,6 +20653,7 @@ const PREP_TXT = {
     regHint: "製造リストの仕込み行を記録すると自動で登録されます。ここでは記録漏れや以前の分を登録します",
     errQty: "「仕込んだ量」は 0 より大きい数を",
     errQtyWhole: (u) => `「${u}」単位なので 1 以上を`,
+    panelRounded: (n, u) => `「${u}」単位なので ${n}${u} で記録`,
     errDate: "日付は本日まで",
     errTitle: "入力を確認してください",
     cancel: "キャンセル",
@@ -21718,6 +21720,8 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
     );
     if (pBake || prep.sub === "use") {
       const zeroBake = pBake && s.zero;
+      // 审查 pt4:按个计的取出,按钮 / 预填写账上会扣的数(向上取整,同厨房视图 pt1 #5);以前写「记入 2.5 個」、实际扣 3
+      const bakeQ = pBake && prep.pending > 0 && _prepIsCount(u) ? _prepQ(prep.pending, u, "take") : prep.pending;
       return (
         <div data-prep-log={pBake ? "take" : "use"} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
           {pBake && prep.actual > 0 && <span data-prep-logged="1" style={{ ...T.fs.caption, color: T.success, ...T.num }}>{PX.loggedActual(fmtQty(prep.actual), u)}</span>}
@@ -21725,8 +21729,8 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           {prep.mode === "take" && (blockedTxt
             ? <span data-prep-blocked={prep.blocked} style={{ ...T.fs.caption, color: T.warning }}>{blockedTxt}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep ? " " : ""}{prep.blocked === "unit" && !readOnly && prepView && prepView.onOpenPrep && txtLink(PX.goPrep, () => prepView.onOpenPrep(prep.key))}</span>
             : !panel && (prep.pending > 0 || zeroBake) && (pBake
-              ? logPrepBtn(prep.logged > 0 || prep.actual > 0 ? (prep.pending > 0 ? X.logMore(fmtQty(prep.pending)) : PX.takeBtnZero) : prep.pending > 0 ? PX.takeLogBtn(fmtQty(prep.pending), u) : PX.takeBtnZero,
-                !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(prep.pending) : "" }))
+              ? logPrepBtn(prep.logged > 0 || prep.actual > 0 ? (prep.pending > 0 ? X.logMore(fmtQty(bakeQ)) : PX.takeBtnZero) : prep.pending > 0 ? PX.takeLogBtn(fmtQty(bakeQ), u) : PX.takeBtnZero,
+                !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(bakeQ) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
           {!pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.usedElsewhere > 0 && <span data-prep-useelsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.usedElsewhere(fmtQty(prep.usedElsewhere))}</span>}
@@ -21749,6 +21753,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       <Btn size="sm" variant="primary" disabled={!panelOk} onClick={submitPanel}>{PX.submit}</Btn>
       <Btn size="sm" variant="ghost" onClick={() => setPanel(null)}>{PX.logCancel}</Btn>
       {panelRawOk && !panelOk && <span data-prep-panelerr="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.errQtyWhole(pUnit)}</span>}
+      {pBake && panelOk && _prepIsCount(pUnit) && panelQ !== _prepClean(panelNum) && <span data-prep-panelround="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%", ...T.num }}>{PX.panelRounded(fmtQty(panelQ), pUnit)}</span>}
       {pMake && prep.shortToday > 0 && panelOk && (
         <span data-prep-settle="1" style={{ ...T.fs.caption, color: T.body, width: "100%", ...T.num }}>
           {PX.settle(fmtQty(prep.shortToday), pUnit, pStore, fmtQty(Math.max(0, _r3(panelQ - Math.min(prep.shortToday, panelQ)))))}
