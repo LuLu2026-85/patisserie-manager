@@ -19520,6 +19520,9 @@ const _prepLotOk = (l) => _prepIsObj(l) && _prepNonNeg(l.made) && _prepNonNeg(l.
 const _prepIsCount = (unit) => ingWeightFactor(unit) === 0;
 // 批次铁律 3:一律过 _r3,绝对值 < 0.0005 当 0(不留「0 点几」的幽灵批)
 const _prepClean = (v) => { const n = _r3(v); return Math.abs(n) < 0.0005 ? 0 : n; };
+// 建议 / 默认数向上取:保留两位小数(× 100 的浮点尾巴先去掉,0.07 不进成 0.08);_prepCeilQty 只对 kg / L 这种大单位取两位小数,个和 g 照旧取整(审查 pt3)
+const _prepCeil2 = (v) => Math.ceil(_r3(v) * 100 - 1e-9) / 100;
+const _prepCeilQty = (v, unit) => (ingWeightFactor(unit) > 1 ? _prepCeil2(v) : Math.ceil(v));
 const _prepPos = (v) => { const n = typeof v === "number" ? v : parseFloat(v); return isFinite(n) && n > 0 ? n : 0; };
 // 数量规整:读不出 = 0;按个计的东西,扣的数向上取整(冷冻的拿不出半个),加的数(做一批 / 盘点)四舍五入
 const _prepQ = (v, unit, how) => {
@@ -20108,7 +20111,8 @@ const prepDailyUse = (item, today) => {
   return total / Math.min(14, Math.max(1, _daysBetween(earliest, d) + 1));
 };
 // 「取出烤」默认个数:近 14 天日均向上取整,没记录 = 0(卡片提示「填今天要烤几个」)
-const prepDefaultBakeQty = (item, today) => Math.ceil(_prepClean(prepDailyUse(item, today)));
+// 审查 pt3:按 kg / L 记的(焦糖酱每天 0.3 kg)保留两位小数(以前一律取整,取出框预填 1 kg)
+const prepDefaultBakeQty = (item, today) => _prepCeilQty(_prepClean(prepDailyUse(item, today)), item && item.unit);
 // 采购页用:只含标了备货、已开始记、账本不只读、单位对得上的 → Map key → { kind, id, usable, min, batch, unit, name }
 const prepOnHandMap = (recipes, components, stock, today) => {
   const out = new Map();
@@ -22499,8 +22503,9 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
   const sameU = !!item && prepConvUnit(1, item.unit, u, defU) === 1;
   const daily = daily0 > 0 ? (sameU ? daily0 : (prepConvUnit(daily0, item.unit, u, defU) || 0)) : 0;
   const y = parseFloat(form.yield);
-  // 审查 pt3:× 100 有浮点尾巴(0.07 × 100 = 7.000000000000001),先减 1e-9 再向上取,不然 0.07 写成 0.08
-  const ph = daily > 0 ? X.cfgMinHint(fmtQty(sameU ? Math.ceil(daily * 3) : Math.ceil(_r3(daily * 3) * 100 - 1e-9) / 100)) :(y > 0 ? X.cfgMinHintBatch(fmtQty(Math.ceil(y / 4))) : "");
+  // 审查 pt3:× 100 有浮点尾巴(0.07 × 100 = 7.000000000000001),先减 1e-9 再向上取,不然 0.07 写成 0.08(_prepCeil2)。
+  // 表单单位是 kg / L 时同单位和「一批的 1/4」也保留两位小数(以前取整:0.8 kg 一批建议 1 = 一批的 125%);个和 g 一个字节不变
+  const ph = daily > 0 ? X.cfgMinHint(fmtQty(sameU ? _prepCeilQty(daily * 3, u) : _prepCeil2(daily * 3))) : (y > 0 ? X.cfgMinHintBatch(fmtQty(_prepCeilQty(y / 4, u))) : "");
   const onProduct = kind === "recipe" && form.id !== undefined && prepProductsUsing(products, "recipe", form.id).length > 0;
   const lab = { ...T.fs.label, color: T.textTertiary, display: "block", marginBottom: 5 };
   const inp = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
