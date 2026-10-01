@@ -20093,7 +20093,7 @@ const prepRestorePreview = (stock, prodLogId) => {
 // ≤ 0 → null;有一批多少 → { k, qty: k × 一批 };没有 → { k: 1, qty: null }
 const prepSuggestBatch = (cfg, usable, need, incoming, dailyUse = 0) => {
   if (!cfg) return null;
-  const min = cfg.min > 0 ? cfg.min : Math.ceil(_prepClean(_prepPos(dailyUse) * 3));
+  const min = cfg.min > 0 ? cfg.min : _prepCeilQty(_prepClean(_prepPos(dailyUse) * 3), cfg.unit);   // 审查 pt4:kg / L 两位小数(同编辑页 placeholder,pt3 #5 漏了这里)
   const deficit = _prepClean(min + _prepPos(need) - _prepPos(usable) - _prepPos(incoming));
   if (!(deficit > 0)) return null;
   if (cfg.batch > 0) { const k = Math.max(1, Math.ceil(_prepClean(deficit / cfg.batch))); return { k, qty: _prepClean(k * cfg.batch) }; }
