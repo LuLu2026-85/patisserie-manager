@@ -17635,7 +17635,9 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
       const store = X.storeName(cfg ? cfg.store : (kind === "recipe" ? "freeze" : null));
       if (ln.qty > 0) out.push(X.fRestoreConfirm(store, name, ln.qty, ln.unit));
       (ln.skipped || []).forEach(s => {
-        const t = s.reason === "count" ? X.skipCount(name) : s.reason === "discard" ? X.skipDiscard(name, X.md(s.madeAt)) : s.reason === "unit" ? X.skipUnit(name) : X.skipGone(name, s.madeAt ? X.md(s.madeAt) : "");
+        // reint:补录过更早的日子、没法按日期重算,照记下的数加回(backdate_spec §2.8)
+        const t = s.reason === "count" ? X.skipCount(name) : s.reason === "discard" ? X.skipDiscard(name, X.md(s.madeAt)) : s.reason === "unit" ? X.skipUnit(name)
+          : s.reason === "reint" ? X.skipReint(name) : X.skipGone(name, s.madeAt ? X.md(s.madeAt) : "");
         if (!out.includes(t)) out.push(t);
       });
     });
@@ -20577,10 +20579,13 @@ const PREP_TXT = {
     daysApprox: (x) => `大约只够 ${x} 天`,
     unitMismatch: (o, n) => `账上按「${o}」记,现在单位是「${n}」,换算不了,这一样先不自动加减。去盘点改一下,或者把单位改回去`,
     partial: "这期间又动过,按能撤的撤了",
+    // 补录往天之后的撤销 / 删记录没法按日期重算,照记下的数做了(backdate_spec §2.8)
+    partialReint: "这一步的备货没法按日期重算,照记下的数撤了,可能不准 —— 去「备货」盘点一次",
     skipCount: (name) => `「${name}」之后盘点过,以盘点为准,不加回`,
     skipDiscard: (name, d) => `「${name}」${d} 那批之后报废了,不加回`,
     skipGone: (name, d) => (d ? `「${name}」${d} 那批已经不在账上了,不加回` : `「${name}」有一部分已经不在账上了,不加回`),   // 作废 / 盘点删掉 / 早就修剪掉的批
     skipUnit: (name) => `「${name}」之后按新单位记过账,这次改单位的盘点不撤`,
+    skipReint: (name) => `「${name}」之后补录过更早的日子,没法按日期重算,会照记下的数加回,可能不准 —— 删掉后去「备货」盘点一次`,
     moveType: { make: "做了", take: "取出", discard: "报废", count: "盘点", restore: "加回" },
     via: { sheet: "生产单", product: "商品页", card: "备货页", kitchen: "厨房", health: "数据体检" },
     staffMark: "员工",
@@ -20758,6 +20763,17 @@ const PREP_TXT = {
     toastDiscard: (name, n, u) => `已报废「${name}」${n} ${u}`,
     toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n} ${u}(还剩 ${left})`,
     // 最近记录 / 空状态 / 详情页标签 / 角标
+    // 补录往天的那几条(backdate_spec §2.6):头部写那一天,登记的日子和时间放括号里;挡住的不写数
+    backMark: (d, hm) => `${d}${hm ? " " + hm : ""} 补记`,
+    backShortTag: (n) => `差 ${n}`,
+    backAbsorbedTag: (n) => `报废时已算掉 ${n}`,
+    pushedOnTag: "之后的取出顺延到后面的批",
+    blockedTag: (r) => (r === "count" ? "没扣(盘点过)" : r === "since" ? "没扣(开始记之前)" : r === "cut" ? "没扣(记录不全)" : "没扣(没法重算)"),
+    discardBakedTag: (list) => `其中 ${list} 已经烤掉(补记)`,
+    fixReintText: (d, hm) => `${d}${hm ? " " + hm : ""} 撤销(没法按日期重算,照记下的数撤了 —— 去盘点)`,
+    restoreReintTag: "没法按日期重算,照记下的数加回了,可能不准(去盘点)",
+    // 备货卡批次上面的常驻提示(backdate_spec §2.7,prepNeedsCountOf)
+    needCount: (n) => `建议盘点一次:补记 / 撤销的记录里有 ${n} 条没法完全对上(见「最近记录」),盘点之后这条就消失`,
     recentEmpty: "还没有记录",
     reasonExpired: "过期", reasonBad: "报废",
     emptyOwner: "还没有标「备货」的配方或组件",
@@ -20773,8 +20789,37 @@ const PREP_TXT = {
     fProdToast: (d, n, prep) => `✓ ${d} 生产 +${fmtQty(n)}(库存 +${fmtQty(n)};${prep})`,
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
-    fBeforeBooks: (names) => `;${names}那天还没开始记账或之后盘点过,没扣`,
-    fElsewhere: (nm, n, u) => `;⚠「${nm}」这天已经从取出行 / 备货页 / 厨房取出过 ${fmtQty(n)}${u ? " " + u : ""},这次又扣了一遍;生产记录要留着的话去「备货」盘点把数对上(点撤销会连生产记录和库存一起撤)`,   // 审查 pt3:以前叫她「重复了就点撤销」,撤销连生产记录 / 商品库存一起撤,再记又扣一遍
+    // 补录往天(backdate_spec §2.5):每一样按 prepBackPlan 的结果说一句,都不许出现钱。md = 补录那天,u = 账上的单位
+    fBackNone: "备货没扣,原因见后",   // 一样都没扣到时括号里写这个
+    // parts = [[n, md], …](每次报废吸收了几个、那次报废的日子);same = D 那天也有报废(先后分不出来)时给 D 的 M/D
+    fBackAbsorbed: (store, name, parts, u, same) => `;${store}「${name}」其中 ${(Array.isArray(parts) ? parts.filter(Array.isArray) : []).map(([n, d]) => `${fmtQty(n)}${u ? " " + u : ""}在 ${d}`).join("、")} 报废时已经一起记掉了,账上不再扣`
+      + (same ? `(${same} 那天先烤还是先报废分不出来,按先烤算;是报废之后才烤的话去「备货」盘点一次)` : ""),
+    // own = 那天账上就不够的(ownShort),pushed = 把之后的取出挤成不够的;late = { made, reg }(那天之后才登记、做的日子 ≤ 那天的那一批)
+    fBackShort: (store, name, md, q, own, pushed, u, late) => {
+      const U = (n) => `${fmtQty(n)}${u ? " " + u : ""}`;
+      const body = own > 0 && pushed > 0 ? `那天账上只有 ${U(q - own)},之后的取出也因此不够,一共差 ${U(own + pushed)}没扣`
+        : own > 0 ? `那天账上只有 ${U(q - own)},差 ${U(own)}没扣` : `之后的取出因此不够,差 ${U(pushed)}没扣`;
+      return `;${store}「${name}」补记 ${md} 的 ${U(q)}:${body}` + (own > 0 && late ? `(${late.made} 做的那批 ${late.reg} 才登记,${md} 那天账上还没有它)` : "")
+        + "。手上的数和账对得上就不用管,对不上去「备货」盘点一次";
+    },
+    fBackToday: (n, u) => `;今天再做一批会从新批里自动补扣这 ${fmtQty(n)}${u ? " " + u : ""},盘点过就不会`,
+    // 挡住了没扣:kind = since(那天在开始记之前)/ sinceSame(那天才开始记,md = 那天、hm = 第一次登记的时刻)/ count(md = 之后盘点的那天)/
+    // countSame(那天盘点过,hm = 那天最后一次盘点的时刻)/ cut / old / replay
+    fBackBlocked: (kind, store, name, md, hm) => {
+      const h = `${store}「${name}」`;
+      if (kind === "since") return `;${h}${md} 那天还没开始记库存,没扣`;
+      if (kind === "sinceSame") return hm ? `;${h}${md} ${hm} 才开始记库存,这次按「烤在开始记之前」算(登记的数已经是用过之后的),没扣;如果是 ${hm} 之后才烤的,去「备货」盘点一次`
+        : `;${h}${md} 那天才开始记库存,这次按「烤在开始记之前」算(登记的数已经是用过之后的),没扣;如果是之后才烤的,去「备货」盘点一次`;
+      if (kind === "count") return `;${h}${md} 盘点过,以盘点为准,没扣`;
+      if (kind === "countSame") return hm ? `;${h}${md} ${hm} 盘点过,这次按「烤在盘点之前」算,以盘点为准,没扣;如果是 ${hm} 之后才烤的,去「备货」再盘点一次`
+        : `;${h}${md} 盘点过,这次按「烤在盘点之前」算,以盘点为准,没扣;如果是盘点之后才烤的,去「备货」再盘点一次`;
+      if (kind === "cut") return `;${h}那几天的记录已经被自动清理掉一部分,没法按那一天算,没扣 —— 去「备货」盘点一次`;
+      if (kind === "old") return `;${h}${md} 在 60 天以前,账本只留 60 天的记录,没扣`;
+      return `;${h}那天之后的记录有对不上的地方(比如撤销过、改过「能放多久」),没法按日期重算,没扣 —— 去「备货」盘点一次(盘点之后的日子就能补录了)`;
+    },
+    // 审查 pt3:以前叫她「重复了就点撤销」,撤销连生产记录 / 商品库存一起撤,再记又扣一遍。
+    // backdate_spec §2.5(K1):只在这次真扣了时说,n = 那天已经从别处取出的,m = 这次真扣了的(min(n, 扣了的));md 空 = 今天,有 = 补录的那天
+    fElsewhere: (nm, n, m, u, md) => `;⚠「${nm}」${md ? `${md} 那天` : "这天"}已经从取出行 / 备货页 / 厨房取出过 ${fmtQty(n)}${u ? " " + u : ""},这次${md ? "补记" : ""}又扣了 ${fmtQty(m)}${u ? " " + u : ""};生产记录要留着的话去「备货」盘点把数对上(点撤销会连生产记录和库存一起撤)`,
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
@@ -20839,10 +20884,12 @@ const PREP_TXT = {
     daysApprox: (x) => `残り約 ${x} 日分`,
     unitMismatch: (o, n) => `記録は「${o}」、現在の単位は「${n}」で換算できません。自動の増減を止めています。棚卸しで直すか単位を戻してください`,
     partial: "その後変更があったため、戻せる分だけ戻しました",
+    partialReint: "作り置きは日付順に再計算できないため記録どおりに戻しました。ずれている可能性があるので「作り置き」で棚卸しを",
     skipCount: (name) => `「${name}」はその後棚卸し済みのため戻しません`,
     skipDiscard: (name, d) => `「${name}」${d} 分はその後廃棄済みのため戻しません`,
     skipGone: (name, d) => (d ? `「${name}」${d} 分は在庫記録にないため戻しません` : `「${name}」の一部は在庫記録にないため戻しません`),
     skipUnit: (name) => `「${name}」はその後新しい単位で記録済みのため、この単位変更の棚卸しは戻しません`,
+    skipReint: (name) => `「${name}」はその後さらに前の日付を補記したため日付順に再計算できず、記録どおりに戻します。ずれる可能性があるので削除後「作り置き」で棚卸しを`,
     moveType: { make: "仕込み", take: "使用", discard: "廃棄", count: "棚卸し", restore: "戻し" },
     via: { sheet: "製造リスト", product: "商品", card: "作り置き", kitchen: "キッチン", health: "データ診断" },
     staffMark: "スタッフ",
@@ -21015,6 +21062,15 @@ const PREP_TXT = {
     toastCount: (name, a, b) => `✓ 棚卸し「${name}」${a} → ${b}`,
     toastDiscard: (name, n, u) => `「${name}」${n}${u} を廃棄`,
     toastTake: (name, s, n, u, left) => `✓「${name}」${s} −${n}${u}(残り ${left})`,
+    backMark: (d, hm) => `${d}${hm ? " " + hm : ""} 補記`,
+    backShortTag: (n) => `${n} 不足`,
+    backAbsorbedTag: (n) => `廃棄で計上済み ${n}`,
+    pushedOnTag: "その後の使用分を後のロットへ",
+    blockedTag: (r) => (r === "count" ? "未控除(棚卸し済み)" : r === "since" ? "未控除(記録開始前)" : r === "cut" ? "未控除(記録不足)" : "未控除(再計算不可)"),
+    discardBakedTag: (list) => `うち ${list} は焼成済み(補記)`,
+    fixReintText: (d, hm) => `${d}${hm ? " " + hm : ""} 取り消し(日付順に再計算できないため記録どおりに戻しました。棚卸しを)`,
+    restoreReintTag: "日付順に再計算できないため記録どおりに戻しました。ずれている可能性があります(棚卸しを)",
+    needCount: (n) => `棚卸しをおすすめします:補記・取り消しの記録のうち ${n} 件が帳簿と完全には合っていません(「最近の記録」参照)。棚卸しすると消えます`,
     recentEmpty: "記録はまだありません",
     reasonExpired: "期限切れ", reasonBad: "廃棄",
     emptyOwner: "作り置き指定のレシピ・パーツがありません",
@@ -21030,8 +21086,32 @@ const PREP_TXT = {
     fProdToast: (d, n, prep) => `✓ ${d} 製造 ${fmtQty(n)} 件(${prep})`,
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
-    fBeforeBooks: (names) => `・${names}はその日まだ記録開始前か、後で棚卸し済みのため未控除`,
-    fElsewhere: (nm, n, u) => `・⚠「${nm}」はこの日すでに取り出し行・作り置き・キッチン画面から ${fmtQty(n)}${u || ""} 使用済み、今回さらに控除しました。生産記録を残すなら「作り置き」で棚卸しして数を合わせてください(取り消すと生産記録と在庫も一緒に戻ります)`,
+    fBackNone: "作り置きは未控除(理由は後述)",
+    fBackAbsorbed: (store, name, parts, u, same) => {
+      const ps = Array.isArray(parts) ? parts.filter(Array.isArray) : [];
+      return `・${store}「${name}」のうち ${ps.length ? `${fmtQty(ps[0][0])}${u || ""}は ${ps[0][1]}` : ""}`
+        + (ps.length > 1 ? `(${ps.slice(1).map(([n, d]) => `${fmtQty(n)}${u || ""}は ${d}`).join("、")})` : "") + "の廃棄でロットごと記録済みのため引きません"
+        + (same ? `(${same} は焼成と廃棄の順番が分からないため焼成が先として扱います。廃棄の後に焼いた場合は「作り置き」で棚卸しを)` : "");
+    },
+    fBackShort: (store, name, md, q, own, pushed, u, late) => {
+      const U = (n) => `${fmtQty(n)}${u || ""}`;
+      const body = own > 0 && pushed > 0 ? `その日の帳簿は ${U(q - own)} のみ、その後の使用分も足りなくなり計 ${U(own + pushed)} 未控除`
+        : own > 0 ? `その日の帳簿は ${U(q - own)} のみで ${U(own)} 未控除` : `その後の使用分が足りなくなり ${U(pushed)} 未控除`;
+      return `・${store}「${name}」${md} 分の ${U(q)} を補記:${body}` + (own > 0 && late ? `(${late.made} 仕込みのロットは ${late.reg} に登録したため、${md} 時点の帳簿にはありません)` : "")
+        + "。実物の数が帳簿と合っていればそのままで OK、合わなければ「作り置き」で棚卸しを";
+    },
+    fBackToday: (n, u) => `・本日このあと仕込みを記録すると、この ${fmtQty(n)}${u || ""} は新しいロットから自動で差し引かれます(棚卸しすれば引かれません)`,
+    fBackBlocked: (kind, store, name, md, hm) => {
+      const h = `${store}「${name}」`;
+      if (kind === "since") return `・${h}は ${md} 時点でまだ在庫記録前のため未控除`;
+      if (kind === "sinceSame") return `・${h}は ${md}${hm ? " " + hm : ""} に記録を始めたため、焼成は記録開始の前(登録した数は使用後)として扱い未控除。${hm ? hm + " 以降" : "記録開始の後"}に焼いた場合は「作り置き」で棚卸しを`;
+      if (kind === "count") return `・${h}は ${md} に棚卸し済みのため、棚卸しの数を正として未控除`;
+      if (kind === "countSame") return `・${h}は ${md}${hm ? " " + hm : ""} に棚卸し済み。焼成は棚卸しの前として扱い、棚卸しの数を正として未控除。${hm ? hm + " 以降" : "棚卸しの後"}に焼いた場合は「作り置き」でもう一度棚卸しを`;
+      if (kind === "cut") return `・${h}はその頃の記録の一部が自動で整理済みのため、その日として計算できず未控除。「作り置き」で棚卸しを`;
+      if (kind === "old") return `・${h}は ${md} が 60 日より前のため(記録は 60 日分のみ)未控除`;
+      return `・${h}はその日以降の記録に合わない所(取り消し・保存期間の変更など)があり、日付順に計算し直せないため未控除。「作り置き」で棚卸しを(棚卸し後の日付は補記できます)`;
+    },
+    fElsewhere: (nm, n, m, u, md) => `・⚠「${nm}」は${md ? ` ${md} に` : "この日"}すでに取り出し行・作り置き・キッチン画面から ${fmtQty(n)}${u || ""} 使用済みで、今回${md ? "の補記で" : ""}さらに ${fmtQty(m)}${u || ""} 控除しました。生産記録を残すなら「作り置き」で棚卸しして数を合わせてください(取り消すと生産記録と在庫も一緒に戻ります)`,
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
@@ -23169,11 +23249,18 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
   const lotColor = (l) => l.status === "expired" ? T.danger : (l.status === "today" || l.status === "soon") ? T.warning : T.line;
   const lotStatus = (l) => l.status === "expired" ? X.lotExpired(-l.daysLeft) : l.status === "today" ? X.lotToday : l.status === "nodate" ? X.lotNoDate : X.lotLeft(l.daysLeft);
   const unmarked = !cfg;
-  const moves = tracked && Array.isArray(item.moves) ? item.moves.filter(m => m && typeof m === "object").slice(-10).reverse() : [];
+  // backdate_spec §2.6:fix 是记账用的(按重放撤销时记差额),最近记录里不列;带 reint 的 fix(没法按日期重算、照记下的数撤了)列出来叫她盘点
+  const moves = tracked && Array.isArray(item.moves) ? item.moves.filter(m => m && typeof m === "object" && (m.type !== "fix" || m.reint)).slice(-10).reverse() : [];
+  // §2.7:上次盘点之后有补记 / 撤销没法完全对上 → 批次上面一行「建议盘点」(从 moves 现推,盘点之后消失)
+  const needs = tracked && !readOnly ? prepNeedsCountOf(item) : [];
   const productName = (pid) => { const p = (products || []).find(x => x && x.id === pid); return p ? (pickLang(p, "name", lang) || p.nameZh || "") : ""; };
   const moveText = (m) => {
-    const got = m.type === "take" ? _r3((parseFloat(m.qty) || 0) - (parseFloat(m.short) || 0)) : (parseFloat(m.qty) || 0);
-    const head = `${X.md(m.date)} ${_prepHm(m.at)} ${(X.moveType && X.moveType[m.type]) || m.type}`;
+    if (m.type === "fix") return X.fixReintText(X.md(m.date), _prepHm(m.at));
+    const back = m.type === "take" && _prepDateRe.test(String(m.regDate || "")) && String(m.date || "") < m.regDate;   // 补录往天的(含挡住的)
+    // 取出的数一律写账上真减少的 −Σ|deltas|(普通 take 等于 qty − short;补录的是净增减)
+    const got = m.type === "take" ? _r3((Array.isArray(m.deltas) ? m.deltas : []).reduce((a, d) => a + (Array.isArray(d) ? Math.abs(parseFloat(d[1]) || 0) : 0), 0)) : (parseFloat(m.qty) || 0);
+    // 补录的那一天后面不挂时间(像是那天几点),补记的日子和时间放进括号
+    const head = back ? `${X.md(m.date)} ${(X.moveType && X.moveType[m.type]) || m.type}` : `${X.md(m.date)} ${_prepHm(m.at)} ${(X.moveType && X.moveType[m.type]) || m.type}`;
     let body = "";
     if (m.type === "count" && Object.prototype.hasOwnProperty.call(m, "unitBefore")) {
       // 审查 ps1:改单位的盘点前后各带单位;改之后的单位 = 下一次改单位盘点之前的单位,没有就是账上现在的
@@ -23182,9 +23269,27 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
       body = ` ${X.qtyUnit(q(m.before), m.unitBefore || "")} → ${X.qtyUnit(q(m.after), nx ? (nx.unitBefore || "") : (item.unit || ""))}`;
     } else if (m.type === "count") body = ` ${q(m.before)} → ${q(m.after)}`;
     else if (m.type === "make" || m.type === "restore") body = ` +${q(got)}`;
+    else if (m.type === "take" && m.blocked) body = ` ${X.blockedTag(m.blocked)}`;   // 补录被挡住的:没扣,不写数
     else if (m.type === "take" || m.type === "discard") body = ` −${q(got)}`;
     const src = [];
-    if (m.type === "discard") src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
+    if (back) {
+      src.push(X.backMark(X.md(m.regDate), _prepHm(m.at)));
+      if (!m.blocked) {
+        const sh = _r3(_prepPos(m.short) - _prepPos(m.settledQty));
+        if (sh > 0) src.push(X.backShortTag(q(sh)));
+        if (_prepPos(m.absorbed) > 0) src.push(X.backAbsorbedTag(q(m.absorbed)));
+        const lotsAll = Array.isArray(item.lots) ? item.lots : [];
+        if ((Array.isArray(m.deltas) ? m.deltas : []).some(d => { const l = Array.isArray(d) ? lotsAll.find(x => x && x.id === d[0]) : null; return !!l && String(l.madeAt || "") > String(m.date || ""); })) src.push(X.pushedOnTag);
+      }
+    }
+    if (m.type === "discard") {
+      src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
+      // 补录往天被这次报废一起记掉的(还在的补录 take 的 absorbedBy 里提到它的;记的是补录那一刻的数)
+      const baked = (item.moves || []).filter(t => _prepIsBack(t) && !t.restoredBy && Array.isArray(t.absorbedBy)).flatMap(t => t.absorbedBy.filter(a => Array.isArray(a) && a[0] === m.id && _prepPos(a[1]) > 0).map(a => [_prepPos(a[1]), String(t.date || "")]))
+        .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+      if (baked.length) src.push(X.discardBakedTag(baked.map(([n, d]) => `${X.qtyUnit(q(n), unit)} ${X.md(d)}`).join("、")));
+    }
+    if (m.type === "restore" && m.reint) src.push(X.restoreReintTag);
     if (m.type === "make" && Array.isArray(m.settles)) { const sn = _r3(m.settles.reduce((a, x) => a + (Array.isArray(x) ? _prepPos(x[1]) : 0), 0)); if (sn > 0) src.push(X.moveSettled(q(sn))); }   // 审查 ps2
     if (m.productId) { const pn = productName(m.productId); if (pn) src.push(pn); }
     if (m.via && X.via && X.via[m.via] && !(m.productId && m.via === "sheet")) src.push(X.via[m.via]);
@@ -23234,6 +23339,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
             if (daily > 0) parts.push(X.settingDays(_prepDaysTxt(oh.usable / daily)));
             return parts.length ? <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 2 }}>{parts.join(" · ")}</div> : null;
           })()}
+          {needs.length > 0 && <div data-prep-needcount={String(needs.length)} style={{ ...T.fs.caption, color: T.warning, border: `1px solid ${T.warning}`, padding: T.sp.s, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.needCount(needs.length)}</div>}
           {shownLots.length > 0 && (
             <div style={{ marginTop: T.sp.s }}>
               {shownLots.map(l => (
@@ -23315,7 +23421,8 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
   useEffect(() => { if (focusKey && filter !== "all" && !rows.some(r => r.key === focusKey && passes(r, filter))) setFilter("all"); }, [focusKey]);   // eslint-disable-line
   function passes(r, f) {
     if (f === "all") return true;
-    if (f === "todo") return r.rank < 5 || !!(r.flags && r.flags.unit);   // 审查 pt1:单位对不上(自动加减停了,要去盘点)也算要处理的
+    // 审查 pt1:单位对不上(自动加减停了,要去盘点)也算要处理的;backdate_spec §2.7:卡片上有「建议盘点」的也算(不进排序、提醒条和角标)
+    if (f === "todo") return r.rank < 5 || !!(r.flags && r.flags.unit) || (!!r.item && prepNeedsCountOf(r.item).length > 0);
     return !!r.cfg && r.cfg.store === f;
   }
   const head = (
@@ -25410,8 +25517,11 @@ function App() {
     const undoOps = Array.isArray(m.undoOps) ? m.undoOps.map(o => (o && o.type === "putItem" && dropRaw.has(o.key) ? { ...o, item: dropRaw.get(o.key) } : o))
       : opIds.map(opId => ({ type: "revert", opId }));
     const undo = undoOps.length ? () => {
-      const partial = undoOps.some(o => o && o.type === "revert" && prepRevertPreview(prepRawRef.current, o.opId).partial);
-      if (writePrep(undoOps, null, { isUndo: true }) && partial) showToast(prepTxt(lang).partial);
+      // backdate_spec §2.8:缠住了却没法按日期重算(reint)→ 叫她盘点;别的跳过照旧「按能撤的撤了」
+      const pvs = undoOps.filter(o => o && o.type === "revert").map(o => prepRevertPreview(prepRawRef.current, o.opId, prepCfgsRef.current));
+      const reint = pvs.some(pv => pv.lines.some(l => (l.skipped || []).some(s => s && s.reason === "reint")));
+      const partial = pvs.some(pv => pv.partial);
+      if (writePrep(undoOps, null, { isUndo: true }) && (reint || partial)) showToast(reint ? prepTxt(lang).partialReint : prepTxt(lang).partial);
     } : null;
     if (m.toast) showToast(m.toast, undo ? { undo } : {});
     return true;
@@ -25437,7 +25547,7 @@ function App() {
   const logProdWithPrep = (productId, qty, date) => {
     const p = products.find(x => x && x.id === productId);
     const q = _r3(parseFloat(qty) || 0);
-    if (!p || !(q > 0) || productPrepSkips(p) || prepStock.readOnly) return false;
+    if (!p || !(q > 0) || productPrepSkips(p)) return false;
     const d = date || today;
     // 审查 pt2:日子填到以后(年份敲错)照扣(面团确实用了;pt1 改成走老路不扣,账上多出这几个、toast 一字不提)。
     // take 记下的日子由 prepApply 按今天封顶、靠 prodLogId 挂这条记录(删记录照样加回);H22 不查以后日子的记录
@@ -25446,52 +25556,80 @@ function App() {
     const flow = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx);
     // 只扣已开始记、单位对得上的(prepApply 的 take 对别的什么都不做;全都扣不了 = 走老路,文字不变)
     const objOf = (t) => (t.kind === "component" ? components : recipes).find(o => o && String(o.id) === String(t.id));
-    const acts0 = flow.takes.map(t => {
+    const acts = flow.takes.map(t => {
       const obj = objOf(t), cfg = obj ? prepCfgOf(t.kind, obj) : null, it = prepStock.items[t.key];
       return cfg && it && prepSameUnit(it, cfg) ? { t, obj, cfg, it } : null;
     }).filter(Boolean);
-    // 审查 ps1:补录的日子在这一样开始记之前,或者那天之后盘点过 → 那天用掉的不在账上 / 已经算进盘点,不扣(扣了就是扣两次;同数据体检 H22)。盘点当天的照扣
-    // 超过 60 天的也不扣:账本只留 60 天内的记录,这条 take 一写进去就被修剪掉,撤销 / 删这条生产记录都加不回(审查 ps1)
-    const tooOld = _daysBetween(d, localDateStr()) > 60;
-    // 审查 ps3:账本按 80 条剪过的日子(movesCutTo 当天和之前)也不扣:那之后的盘点可能已经被剪掉,查不到就会扣两次(同 H22)
-    const notOnBooks = (a) => tooOld || d < String(a.it.since || "") || d <= String(a.it.movesCutTo || "") || (a.it.moves || []).some(m => m && m.type === "count" && String(m.date || "") > d);
-    const acts = acts0.filter(a => !notOnBooks(a)), before = acts0.filter(notOnBooks);
+    // 账本是更新版本写的:走老路只记生产,另弹一条 readOnly(backdate_spec §2.5 / E20,以前不提)
+    if (prepStock.readOnly) { if (acts.length) showToast(X.readOnly); return false; }
     if (!acts.length) return false;
+    // backdate_spec §6.2 第 16 条:补录往天的不再在这里筛(审查 ps1 / ps3 的 tooOld / notOnBooks / fBeforeBooks 作废):每一样都写 take,
+    // 由 prepApply 按日期重放决定扣 / 挡(挡住的也写一条,toast 逐样说原因;超过 60 天 prepApply 一个字不写)。
+    // 「今天」和 prepBackPlan 的 today 都用 localDateStr()(和 writePrep 里 prepApply 用的同一个)
+    const now0 = localDateStr();
+    const td = d <= now0 ? d : now0, back = td < now0;
     const ex = findDayLog(productionLog, p.id, d);
     const logId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
     const opId = "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    // 审查 pt4:往已有的记录上加时记下加之前记录最后改的时间(prevLogAt),H22 靠它分出盘点之后、这次之前有没有旧版 app 改过这条
-    if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product", ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
-    const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:撤销改回这个数时 H22 按这个时间比盘点
+    // 审查 pt4:往已有的记录上加时记下加之前记录最后改的时间(prevLogAt);logBefore / logQty = 加之前这条记录几件、这次加几件(数据体检 H22 分段用,backdate_spec §2.1)
+    const logBefore = ex ? _r3(parseFloat(ex.batchQty) || 0) : 0;
+    // toast 的预算按记入这一刻的账本(和 prepApply 同一套:今天的 prepTakePlan、补录的 prepBackPlan),写之前算
+    const plans = acts.map(a => (back ? { bp: prepBackPlan(a.it, a.cfg, a.t.qty, td, now0) } : { tp: prepTakePlan(a.it, a.cfg, a.t.qty, now0) }));
+    if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product",
+      logBefore, logQty: q, ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
+    const before0 = ex ? { qty: logBefore, at: prodLogLastAt(ex) } : null;   // 审查 pt3:撤销改回这个数时 H22 按这个时间比盘点
     makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, q, d, { id: logId });
-    // toast:按记入这一刻的账本算扣了多少 / 差多少(prepApply 用同一个 prepTakePlan)
-    const bits = [], shorts = [], elsewhere = [];
+    // toast(backdate_spec §2.5):每一样按结果说一句,都不出现钱
+    const bits = [], notes = [], elsewhere = [];
+    const md = X.md(td);
     // 审查 pt1:这个商品直接装的那几样,这天已经在取出行 / 厨房 / 备货卡取过(同一批面团)—— 只在 toast 里提醒,账本行为不变(筛法同生产单商品行 _prepLineCalc 的 takenElsewhere)
     const direct = new Set((Array.isArray(p.items) ? p.items : []).filter(it => it).map(it => prepKeyOf(it.linkedType || "recipe", it.linkedId)));
-    acts.forEach(a => {
+    acts.forEach((a, ai) => {
       const nm = String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim();
-      const store = X.storeName(a.cfg.store);
-      // 审查 pt2:只提醒配方(面团取出去就是烤这个商品);组件(焦糖酱、慕斯)好多东西共用,备货卡取的多半是别的用途,提醒「重复了就点撤销」会叫她撤掉正确的扣减
-      if (direct.has(a.t.key) && a.t.key.startsWith("recipe:") && !elsewhere.some(e => e.key === a.t.key)) {
+      const store = X.storeName(a.cfg.store), u = a.it.unit;
+      let ded = 0;   // 这次账上真减少的
+      if (!back) {
+        const tp = plans[ai].tp;
+        ded = tp.got;
+        if (tp.got > 0) bits.push(X.fTakeBit(store, nm, tp.got, u));
+        if (tp.short > 0) notes.push(X.fShort(store, nm, tp.got, tp.short, u));
+      } else {
+        const pl = plans[ai].bp;
+        if (!pl.ok) {
+          if (pl.reason === "since") notes.push(pl.sameDay ? X.fBackBlocked("sinceSame", store, nm, md, _prepHm(pl.at)) : X.fBackBlocked("since", store, nm, md));
+          else if (pl.reason === "count") notes.push(pl.sameDay ? X.fBackBlocked("countSame", store, nm, md, _prepHm(pl.at)) : X.fBackBlocked("count", store, nm, X.md(pl.countDate)));
+          else notes.push(X.fBackBlocked(pl.reason === "old" || pl.reason === "cut" ? pl.reason : "replay", store, nm, md));
+        } else {
+          ded = pl.deducted;
+          if (pl.deducted > 0) bits.push(X.fTakeBit(store, nm, pl.deducted, u));
+          if (pl.absorbed > 0) notes.push(X.fBackAbsorbed(store, nm, pl.absorbedBy.map(x => [x.qty, X.md(x.date)]), u, pl.absorbedBy.some(x => x.date === td) ? md : ""));
+          if (pl.short > 0) {
+            // 那天账上没有的、之后才登记的批(取做的日子最早的一批)
+            const lt = pl.ownShort > 0 && pl.late.length ? pl.late.slice().sort((x, y) => (x.madeAt < y.madeAt ? -1 : x.madeAt > y.madeAt ? 1 : 0))[0] : null;
+            notes.push(X.fBackShort(store, nm, md, _prepQ(a.t.qty, u, "take"), pl.ownShort, _r3(pl.short - pl.ownShort), u, lt ? { made: X.md(lt.madeAt), reg: X.md(lt.regDate) } : null));
+            if (pl.shortToday > 0) notes.push(X.fBackToday(pl.shortToday, u));
+          }
+        }
+      }
+      // 审查 pt2:只提醒配方(面团取出去就是烤这个商品);组件(焦糖酱、慕斯)好多东西共用,备货卡取的多半是别的用途,提醒「重复了就点撤销」会叫她撤掉正确的扣减。
+      // backdate_spec §2.5(K1):只在这次真扣了时说,说的数 = min(那天已经从别处取出的, 这次真扣了的);补录的换「那天…这次补记又扣了」
+      if (ded > 0 && direct.has(a.t.key) && a.t.key.startsWith("recipe:") && !elsewhere.some(e => e.key === a.t.key)) {
         const n = _r3((a.it.moves || []).filter(m => m && m.type === "take" && m.date === d && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || a.t.key.startsWith("recipe:")))
           .reduce((s, m) => s + (parseFloat(m.qty) || 0), 0));
-        if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, a.it.unit) });
+        if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, _r3(Math.min(n, ded)), u, back ? md : "") });
       }
-      const td = d <= localDateStr() ? d : localDateStr();
-      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td, localDateStr());   // 同 prepApply 的 take:按那一天判过期(审查 ps3)
-      bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
-      if (tp.short > 0) shorts.push(X.fShort(store, nm, tp.got, tp.short, a.it.unit));
     });
     const srcs = new Map();
     // 没扣到的只说已开始记的那几样(没开始记的本来就不算账);本产品专用的部分是有意不扣,不提
     flow.untaken.forEach(u => { if (u.reason === "local" || !prepStock.items[u.key]) return; const k = u.src || u.name || ""; srcs.set(k, (srcs.get(k) || 0) + 1); });
-    flow.takes.forEach(t => { if (!acts0.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
-    const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("")
-      + (before.length ? X.fBeforeBooks(before.map(a => `${X.storeName(a.cfg.store)}「${String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim()}」`).join(lang === "ja" ? "・" : "、")) : "");
-    showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.join(lang === "ja" ? "・" : "、")) + shorts.join("") + untaken + elsewhere.map(e => e.txt).join(""), { undo: () => {
+    flow.takes.forEach(t => { if (!acts.some(a => a.t === t) && prepStock.items[t.key]) { const o = objOf(t); const k = o ? String(pickLang(o, "name", lang) || o.nameZh || "").trim() : String(t.id); srcs.set(k, (srcs.get(k) || 0) + 1); } });
+    const untaken = [...srcs].map(([k, n]) => X.fUntaken(k, n)).join("");
+    // 一样都没扣到:括号里写「备货没扣,原因见后」;补录的 toast 停 10 秒(今天的照旧 5 秒)
+    showToast(X.fProdToast(d === today ? X.fToday : d, q, bits.length ? bits.join(lang === "ja" ? "・" : "、") : X.fBackNone) + notes.join("") + untaken + elsewhere.map(e => e.txt).join(""), { ...(back ? { ms: 10000 } : {}), undo: () => {
       // 撤销:按记下的生产记录 id 找;找不到(商品页已经删了)→ 生产记录和商品库存都不动,只撤备货
       const cur = ((dataRef.current && dataRef.current.productionLog) || []).find(x => x && x.id === logId);
-      const pv = prepRevertPreview(prepStockLatestRef.current, opId);
+      const pv = prepRevertPreview(prepStockLatestRef.current, opId, prepCfgsRef.current);
+      const reint = pv.lines.some(l => (l.skipped || []).some(s => s && s.reason === "reint"));   // backdate_spec §2.8
       if (cur) {
         setProductionLog(prev => {
           const c = (prev || []).find(x => x && x.id === logId);
@@ -25503,17 +25641,19 @@ function App() {
       }
       writePrep([{ type: "revert", opId }], null, { isUndo: true });
       if (!cur) showToast(X.fUndoNoRecord);
+      else if (reint) showToast(X.partialReint);
       else if (pv.partial) showToast(X.partial);
     } });
     return true;
   };
   // F 线:删一条生产记录前,确认框要多写的那几句(本机账本里挂着这条记录的 take 会加回多少 / 为什么不加回)
-  const prepRestorePreviewOf = (logId) => prepRestorePreview(prepStock, logId);
+  // cfgs:缠住了的按「现在设置的能放多久」重放(backdate_spec §2.3),和 writePrep 补给 restoreRecord 的是同一份
+  const prepRestorePreviewOf = (logId) => prepRestorePreview(prepStock, logId, prepCfgs);
   // F 线:商品页删完一条生产记录后调(log = 删掉的那条),App 写 restoreRecord:只加回本机账本里挂着这条记录、还没加回过的 take
   // (别的设备记的 / 旧版记的没有 → 什么都不写;之后盘点过 / 报废过的按共同规则不加回,确认框已经写明)
   const onProdLogDeleted = (log) => {
     if (!log || log.id === undefined || log.id === null || log.id === "") return;
-    if (!prepRestorePreview(prepStock, log.id).lines.length) return;
+    if (!prepRestorePreview(prepStock, log.id, prepCfgs).lines.length) return;
     writePrep([{ type: "restoreRecord", prodLogId: log.id, opId: "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) }]);
   };
   // G 线:删配方 / 组件时把账本里这一样一起删(dropItem),撤销时放回(putItem)。
@@ -25580,7 +25720,12 @@ function App() {
       // 记入:logged 设成「封顶后的已记入 + 这次的计划数」;撤销:减回这次的计划数(add = 0 时不动单子)
       const setLogged = (add) => add > 0 ? (lines) => lines.map(l => l.uid === uid ? { ...l, logged: _r3(info.logged + add) } : l) : null;
       const unLogged = (add) => add > 0 ? (lines) => lines.map(l => l.uid === uid ? { ...l, logged: Math.max(0, _r3((parseFloat(l.logged) || 0) - add)) } : l) : null;
-      const undoPrep = (add) => () => writePrep([{ type: "revert", opId }], unLogged(add), { uid, isUndo: true });
+      // backdate_spec §2.8:撤销缠住了却没法按日期重算(reint)时出一条提示叫她盘点(以前这里不出提示,别的跳过照旧不提)
+      const undoPrep = (add) => () => {
+        const pv = prepRevertPreview(prepRawRef.current, opId, prepCfgsRef.current);
+        const reint = pv.lines.some(l => (l.skipped || []).some(s => s && s.reason === "reint"));
+        if (writePrep([{ type: "revert", opId }], unLogged(add), { uid, isUndo: true }) && reint) showToast(X.partialReint);
+      };
       // 按渲染时的账本预算扣到多少(和 prepApply 同一个 prepTakePlan),给 toast 用
       const takeParts = (takes) => takes.map(t => {
         const o = objOf(t.kind, t.id), cfg = prepCfgOf(t.kind, o), it = prepStock.items[t.key];
