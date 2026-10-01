@@ -19575,52 +19575,18 @@ const prepOnHand = (item, cfg, today) => {
   return { tracked, onHand, usable: _prepClean(onHand - expired), expired, lots, first: lots.find(l => l.status !== "expired") || null,
     expiredLots, soonLots, unitMismatch: tracked && !!cfg && !prepSameUnit(item, cfg) };
 };
-// 按先后从能用的批次扣 qty(只算不改,跳过过期):{ deltas: [[lotId, -q]], got, short }。prepApply 的 take 用同一个函数。
-// qty 按这一样账上的单位;按个计的向上取整。没开始记(item 不是对象)→ 一个都扣不到(short = qty)
-// 审查 pt2:补录往天的 take 照样从最早的批扣、后来做的批也扣(撤掉 pt1 的 madeBy)—— 账上旧批不够补录的数,只能是之后记的取出先进先出把它用光了,
-// 那些取出实际拿的是新批,补录的余数就该落在新批上(按 madeBy 挡掉会把账记多、还报「差 N 没扣」)
-// 审查 pt3:但旧批是被「那天之后的报废」清空的(报废清的是账上的数,补录的这几个早就跟着写掉了)就不是这样 —— 落到新批上等于扣两次。
-// 所以那天(today = 补录的那一天)之后报废掉的、那天以前做的批的数(disc),先从余数里抵掉,剩下的才扣那天之后做的批;抵掉的记 short(toast 叫她去盘点)。
-// 只在有那天之后的报废时起作用(补录今天 / 没报废过 → 一个字节不变)。同一次报废被几次补录各抵一遍,宁可少扣、记 short,不悄悄扣两次
-// 审查 pt4:按「那天的账」先进先出 —— 报废掉的数按那批做的日子放回队里(虚的:落在上面的记 short、不扣真批),不再只给那天之后做的批封顶
-// (以前那天以前做的、还活着的批照扣:9/20 A、9/22 B,9/28 报废 A,补录 9/25 的 8 → B 记 12、冰箱 20,不报差数)。
-// 只放那天还能用的批(那天已经过期的批那天本来就扣不到);批做的日子先读报废时记在 move 上的 madeAts(用完 30 天后批会被修剪掉),
-// 读不到再找账上的批。now(真正的今天,可不给)= 补录往天时同一天的报废也算(那天先烤后报废还是先报废后烤分不出来,宁可少扣、记 short);记今天的不算
-const _prepDiscVirtual = (item, cfg, day, now) => {
-  if (!_prepIsObj(item) || !Array.isArray(item.moves)) return [];
-  const lots = Array.isArray(item.lots) ? item.lots : [];
-  const shelf = cfg && cfg.shelfDays > 0 ? cfg.shelfDays : null;
-  const out = [];
-  item.moves.forEach(m => {
-    if (!_prepIsObj(m) || m.type !== "discard" || !Array.isArray(m.deltas)) return;
-    const md = String(m.date || "");
-    if (!(md > day || (md === day && !!now && day < now))) return;
-    const mas = Array.isArray(m.madeAts) ? m.madeAts : [];
-    m.deltas.forEach(x => {
-      if (!Array.isArray(x) || !(x[1] < 0)) return;
-      const y = mas.find(z => Array.isArray(z) && z[0] === x[0]);
-      const lot = y ? null : lots.find(l => _prepLotOk(l) && l.id === x[0]);
-      const ma = String(y ? y[1] : lot ? lot.madeAt : "");
-      if (!_prepDateRe.test(ma) || ma > day) return;
-      if (shelf && _daysBetween(day, plusDaysStr(ma, shelf)) < 0) return;
-      out.push({ id: null, virtual: true, madeAt: ma, left: _prepClean(-x[1]) });
-    });
-  });
-  return out;
-};
-const prepTakePlan = (item, cfg, qty, today, now) => {
+// 按先后从能用的批次扣 qty(只算不改,跳过过期):{ deltas: [[lotId, -q]], got, short }。prepApply 的 take、补录往天的重放(_prepRun)用同一个函数。
+// qty 按这一样账上的单位;按个计的向上取整。没开始记(item 不是对象)→ 一个都扣不到(short = qty)。day = 按哪一天判过期(补录往天的按那一天,审查 ps3)
+// 补录往天(2026-10-01 backdate_spec.md):不在这里特殊处理 —— 由 prepBackPlan 按日期重放算净增减(审查 pt1 到 pt4 的 madeBy / 第 5 个参数 now /
+// _prepDiscVirtual「报废的数当虚批」全部作废,见 backdate_spec §6.3)
+const prepTakePlan = (item, cfg, qty, day) => {
   const unit = _prepIsObj(item) ? item.unit : (cfg && cfg.unit);
   const q = _prepQ(qty, unit, "take");
   if (!(q > 0)) return { deltas: [], got: 0, short: 0 };
   let rest = q, got = 0;
-  const virt = _prepDiscVirtual(item, cfg, today, now);
-  const real = prepLotsView(item, cfg, today);
-  // 同一天做的:虚的排在前(宁可少扣)。sort 是稳定的,真批之间的先后照 prepLotsView
-  const list = virt.length ? [...virt, ...real].sort((a, b) => (a.madeAt !== b.madeAt ? (a.madeAt < b.madeAt ? -1 : 1) : 0)) : real;
   const deltas = [], seen = new Set();
-  for (const l of list) {
+  for (const l of prepLotsView(item, cfg, day)) {
     if (!(rest > 0)) break;
-    if (l.virtual) { rest = _prepClean(rest - Math.min(l.left, rest)); continue; }   // 落在报废掉的数上:不扣真批,记 short
     if (l.status === "expired" || l.id === undefined || l.id === null || seen.has(l.id)) continue;   // 过期的不扣;重复 id 的坏批只认第一批
     seen.add(l.id);
     const t = _prepClean(Math.min(l.left, rest));
@@ -19653,24 +19619,27 @@ const _prepMoveTouches = (m, id) => _prepIsObj(m) && (
   (Array.isArray(m.dropped) && m.dropped.some(x => _prepIsObj(x) && x.id === id)) ||
   (Array.isArray(m.madeBefore) && m.madeBefore.some(x => Array.isArray(x) && x[0] === id)) ||
   (Array.isArray(m.from) && m.from.some(x => Array.isArray(x) && x[1] === id)));
-// 修剪(只在写这一样时做;修剪前后现有数不变):只删 left === 0 的批 —— 作废了、又没有 move 再提到它的;用完超过 30 天的;
-// 用完的超过 40 个先删最早用完的。还有剩的批永不修剪。moves 只留 60 天内、最多最新 80 条。什么都没删返回同一个对象
+// 修剪(只在写这一样时做;修剪前后现有数不变):只删 left === 0、而且留着的 move 都不再提到它的批(补录往天的重放要用到窗口里提到的批,
+// backdate_spec §3.1 / 例 E16)—— 作废了的;用完超过 30 天的;用完的超过 40 个先删最早用完的。还有剩的批永不修剪。
+// moves 只留登记日(_prepRegOf:补录 take 按 regDate,其余按 date)60 天内、最多最新 80 条(审查 P4:按 date 剪会把刚补录到很早日子的 take 第二天就剪掉)。
+// 什么都没删返回同一个对象
 const _prepTrimItem = (it, today) => {
   if (!_prepIsObj(it)) return it;
   const lots0 = Array.isArray(it.lots) ? it.lots : [], moves0 = Array.isArray(it.moves) ? it.moves : [];
-  let moves = moves0.filter(m => !(_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && _daysBetween(m.date, today) > 60));
+  let moves = moves0.filter(m => !(_prepIsObj(m) && _prepDateRe.test(_prepRegOf(m)) && _daysBetween(_prepRegOf(m), today) > 60));
   // 审查 ps3:按条数(80)剪掉的最晚那天记在 movesCutTo:那天和之前的记录可能不全(剪的是最早插进去的,可能切在一天中间,也可能剪掉一次盘点)。
-  // 数据体检 H22 不查这些日子、商品页补录这些日子不扣(同「开始记之前」)。只往后挪;按 60 天剪的不记(那些日子本来就不查不扣)
+  // 数据体检 H22 不查这些日子、商品页补录这些日子不扣(同「开始记之前」)。只往后挪;按 60 天剪的不记(那些日子本来就不查不扣)。
+  // 按登记日算(backdate_spec §3.1 / C9:补录 take 登记得晚,按 date 会低估剪到哪一天)
   let cutTo = "";
   if (moves.length > 80) {
-    moves.slice(0, moves.length - 80).forEach(m => { if (_prepIsObj(m) && _prepDateRe.test(String(m.date || "")) && m.date > cutTo && m.date <= today) cutTo = m.date; });   // 审查 pt1:以后日子的旧记录不算
+    moves.slice(0, moves.length - 80).forEach(m => { const r = _prepIsObj(m) ? _prepRegOf(m) : ""; if (_prepDateRe.test(r) && r > cutTo && r <= today) cutTo = r; });   // 审查 pt1:以后日子的旧记录不算
     moves = moves.slice(moves.length - 80);
   }
   const cutMore = !!cutTo && !(String(it.movesCutTo || "") >= cutTo);
-  let lots = lots0.filter(l => !(_prepLotOk(l) && l.left === 0 && (
-    (l.voided && !moves.some(m => _prepMoveTouches(m, l.id))) ||
-    (_prepDateRe.test(String(l.usedUpAt || "")) && _daysBetween(l.usedUpAt, today) > 30))));
-  const used = lots.map((l, i) => [l, i]).filter(([l]) => _prepLotOk(l) && l.left === 0);
+  const touched = (l) => moves.some(m => _prepMoveTouches(m, l.id));
+  let lots = lots0.filter(l => !(_prepLotOk(l) && l.left === 0 && !touched(l) && (
+    l.voided || (_prepDateRe.test(String(l.usedUpAt || "")) && _daysBetween(l.usedUpAt, today) > 30))));
+  const used = lots.map((l, i) => [l, i]).filter(([l]) => _prepLotOk(l) && l.left === 0 && !touched(l));
   if (used.length > 40) {
     const u = (l) => String(l.usedUpAt || "");
     const drop = new Set(used.slice().sort(([a, i], [b, j]) => (u(a) !== u(b) ? (u(a) < u(b) ? -1 : 1) : i - j)).slice(0, used.length - 40).map(([, i]) => i));
@@ -19683,9 +19652,10 @@ const _prepFinish = (w, now, today) => { w.updatedAt = now; return _prepTrimItem
 const _prepNewItem = (cfg, now, today) => ({ kind: cfg.kind, id: cfg.id, nameZh: _normTxt(cfg.obj && cfg.obj.nameZh), nameJa: _normTxt(cfg.obj && cfg.obj.nameJa),
   unit: cfg.unit, since: today, lots: [], moves: [], updatedAt: now });
 // 一条 move 的公共字段;id = "mv_" + opId + "@" + key(同一个 op 在同一样上只有一条)。可选字段只在给了时写
+// logBefore / logQty(商品页和生产单商品行的 take:这次加之前那条生产记录的件数、这次加了几件)只给数据体检 H22 分段用(backdate_spec §2.1 / §4.4)
 const _prepMove = (op, key, type, now, date, extra) => {
   const m = { id: "mv_" + op.opId + "@" + key, op: op.opId, at: now, date, type, ...extra };
-  ["uid", "planQty", "prodLogId", "productId", "via", "lineKey", "prevLogAt"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
+  ["uid", "planQty", "prodLogId", "productId", "via", "lineKey", "prevLogAt", "logBefore", "logQty"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
   if (op.staff) m.staff = true;
   return m;
 };
@@ -19808,9 +19778,10 @@ const _prepUndoMove = (w, i, acc, today) => {
     acc.qty = _prepClean(acc.qty + Math.abs(before - _prepSum(w)));
   } else if (m.type === "count") {
     if (laterCount) { _prepSkip(acc, "count"); return true; }
-    // 这次盘点换了单位、之后又按新单位记过账(做 / 取 / 报废 / 加回):不撤 —— 撤了会把之后按新单位记的批当成旧单位
+    // 这次盘点换了单位、之后又按新单位记过账(做 / 取 / 报废 / 加回):不撤 —— 撤了会把之后按新单位记的批当成旧单位。
+    // 补录被挡住的 take 不算「记过账」(backdate_spec §1.1:它当时就没扣、只是记录,没碰任何批;同 _prepEntangled 的 _prepEff)
     if (Object.prototype.hasOwnProperty.call(m, "unitBefore") && prepConvUnit(1, m.unitBefore, w.unit, w.kind === "component" ? "g" : "个") !== 1
-      && w.moves.some((x, j) => j > i && _prepIsObj(x))) { _prepSkip(acc, "unit"); return true; }
+      && w.moves.some((x, j) => j > i && _prepEff(x))) { _prepSkip(acc, "unit"); return true; }
     const before = _prepSum(w);
     (Array.isArray(m.newLots) ? m.newLots : []).forEach(id => _prepUnmakeLot(w, i, id, today));   // 这次补的批
     if (Array.isArray(m.dropped)) {                                                                // 这次删掉的批放回原位(已有同 id 不放)
@@ -19833,27 +19804,330 @@ const _prepUndoMove = (w, i, acc, today) => {
   }
   return false;
 };
-// 通用撤销:这一样里 op === opId 的 move 反着做再删掉。返回 { it(null = 整样删掉), acc }。
+// ── 补录往天的取出:按日期重放(2026-10-01,唯一口径 .claude/prepstock/backdate_spec.md,下面到 prepNeedsCountOf 是它的附录 A)──
+// 账本(每一批的 left)= 把账本还知道的实物事件按日期重放一遍:补录的 take 当它是 D 那天发生的(排在那天账本登记过的所有事情之前,规则 S);
+// 删掉的生产记录、撤销掉的操作当它们从没发生过。补录时没法按日期算的一律不扣(写一条挡住的 take);撤销 / 删记录时没法按日期算的照记下的数做(标 reint)
+const _prepRegOf = (m) => (_prepIsObj(m) && _prepDateRe.test(String(m.regDate || "")) ? m.regDate : String((m && m.date) || ""));
+const _prepIsBack = (m) => _prepIsObj(m) && m.type === "take" && !m.blocked && _prepDateRe.test(String(m.regDate || "")) && String(m.date || "") < m.regDate;
+const _prepLotById = (lots, id) => lots.find(l => _prepIsObj(l) && l.id === id && typeof l.left === "number" && typeof l.made === "number");
+// 重放排序键:(日期, 段, 登记先后)。段 0 = 补录 take(含这次要记的),段 1 = 其他
+const _prepEvKey = (e) => [String(e.m.date || ""), (e.isNew || _prepIsBack(e.m)) ? 0 : 1, e.i];
+const _prepEvCmp = (a, b) => { const x = _prepEvKey(a), y = _prepEvKey(b); for (let j = 0; j < 3; j++) if (x[j] !== y[j]) return x[j] < y[j] ? -1 : 1; return 0; };
+// 窗口:从起点 S0 往前推(跨过 S 的「事后补的」记录),得到要回滚的那段尾巴 win 和起点批次。起点有两种:
+//   ① S 那天结束:win = 登记日 > S 的 move(必须正好是数组的一段尾巴);
+//   ② 最后一次盘点那一刻:S 推到最后一次盘点 C 那天之前时,win = C 之后登记的全部 move(C 那一刻账 = 实物;C 之后的事件在重放里都排在 C 后面)
+// 返回 { ok: true, S, afterCount, win, lots, born, dropped } / { ok: false, reason: "cut" | "replay" }
+const _prepWindow = (item, S0, today) => {
+  const all = Array.isArray(item.moves) ? item.moves : [];
+  let c = -1;
+  all.forEach((m, i) => { if (_prepIsObj(m) && m.type === "count") c = i; });
+  let S = S0, lost = false;
+  // 跨过 S 的(只看最后一次盘点之后登记的;盘点之前的已经被盘点对成实物):
+  // (a) 补录 take:日期 ≤ S < 登记日;(b) S 之后登记的加回(删生产记录):它加回的、之后没盘点过的 take 日期 ≤ S;
+  // (c) S 之后登记的校正 fix(撤销时按重放改的):它撤掉的那条日期 ofDate ≤ S
+  for (let changed = true; changed;) {
+    changed = false;
+    const back = (d) => { const s2 = plusDaysStr(d, -1); if (s2 < S) { S = s2; changed = true; } };
+    all.forEach((m, mi) => {
+      if (mi <= c || !_prepIsObj(m)) return;
+      if (_prepIsBack(m)) { if (m.date <= S && S < m.regDate) back(m.date); return; }
+      if (m.type === "restore" && _prepRegOf(m) > S) {
+        all.forEach((t, ti) => { if (_prepIsObj(t) && t.type === "take" && !t.blocked && t.restoredBy === m.op && String(t.date || "") <= S && !all.some((x, xi) => xi > ti && _prepIsObj(x) && x.type === "count")) back(t.date); });
+        (Array.isArray(m.from) ? m.from : []).forEach(f => { if (Array.isArray(f) && f[2] > 0 && !all.some(t => _prepIsObj(t) && t.id === f[0])) lost = true; });
+      } else if (m.type === "fix" && _prepRegOf(m) > S) { if (!_prepDateRe.test(String(m.ofDate || ""))) lost = true; else if (m.ofDate <= S) back(m.ofDate); }
+    });
+  }
+  if (lost) return { ok: false, reason: "cut", why: "lost" };   // 加回的那条 take 已经不在账本里(修剪 / 撤销删掉了),没法当它没发生过
+  let win, afterCount = false;
+  if (c >= 0 && S < String(all[c].date || "")) { win = all.slice(c + 1); afterCount = true; }
+  else {
+    const cut = _prepDateRe.test(String(item.movesCutTo || "")) ? item.movesCutTo : "";
+    if ((cut && S < cut) || !(_daysBetween(S, today) <= 61)) return { ok: false, reason: "cut", why: cut && S < cut ? "movesCutTo" : "61d" };
+    let k = all.length;
+    while (k > 0 && _prepIsObj(all[k - 1]) && _prepRegOf(all[k - 1]) > S) k--;
+    if (all.slice(0, k).some(m => !_prepIsObj(m) || _prepRegOf(m) > S)) return { ok: false, reason: "replay", why: "tail" };
+    win = all.slice(k);
+  }
+  const lots = (Array.isArray(item.lots) ? item.lots : []).map(l => (_prepIsObj(l) ? { ...l } : l));
+  const born = new Map();
+  for (let i = win.length - 1; i >= 0; i--) {
+    const m = win[i];
+    if (m.type === "make") {
+      for (const id of (Array.isArray(m.newLots) ? m.newLots : [])) {
+        const L = _prepLotById(lots, id);
+        const st = (Array.isArray(m.settles) ? m.settles : []).reduce((a, s) => a + (Array.isArray(s) ? _prepPos(s[1]) : 0), 0);
+        if (!L || L.voided || _prepPos(L.owe) > 0 || Math.abs(L.left - _prepClean(L.made - st)) >= 0.0005) return { ok: false, reason: "replay", why: !L ? "makeLotGone" : L.voided ? "makeVoided" : "makeLeft" };
+        born.set(id, { ...L });
+        lots.splice(lots.indexOf(L), 1);
+      }
+      continue;
+    }
+    if (m.type === "take" && m.blocked) continue;
+    if (m.type !== "take" && m.type !== "discard" && m.type !== "restore" && m.type !== "fix") return { ok: false, reason: "replay", why: "type:" + m.type };
+    for (const d of (Array.isArray(m.deltas) ? m.deltas : [])) {
+      if (!Array.isArray(d) || typeof d[1] !== "number" || d[1] === 0) continue;
+      const L = _prepLotById(lots, d[0]);
+      if (!L || L.voided || _prepPos(L.owe) > 0) return { ok: false, reason: "replay", why: !L ? "lotGone" : L.voided ? "voided" : "owe" };
+      L.left = _prepClean(L.left - d[1]);
+    }
+  }
+  if (lots.some(l => _prepIsObj(l) && typeof l.left === "number" && (l.left < 0 || l.left > l.made))) return { ok: false, reason: "replay", why: "range" };
+  // P1:窗口里已经加回过的 take(删了生产记录)= 从没发生过,重放里不出现;它的那次加回(登记得更晚,一定也在窗口里)只是记账,重放里什么都不做
+  const rops = new Set(win.filter(m => m.type === "restore").map(m => m.op));
+  const dropped = new Set();
+  for (const m of win) if (m.type === "take" && !m.blocked && m.restoredBy) { if (!rops.has(m.restoredBy)) return { ok: false, reason: "replay", why: "restoreMissing" }; dropped.add(m.id); }
+  return { ok: true, S, afterCount, win, lots, born, dropped };
+};
+// 重放一遍(restore / fix 只是记账用的,重放里什么都不做:它们撤掉的 take / move 在重放里本来就不出现)。rm:当作没发生的 move id(撤销 / 删记录,P2);extra:这次要记的补录 take(id "__new__")
+const _prepRun = (W, cfg, unit, rm, extra) => {
+  const gone = rm || new Set();
+  const revived = new Set();   // 拿掉的是一次加回 → 它加回的 take 回来
+  W.win.forEach(m => { if (m.type === "restore" && gone.has(m.id)) W.win.forEach(x => { if (x.type === "take" && x.restoredBy === m.op) revived.add(x.id); }); });
+  const drop = new Set([...W.dropped].filter(id => !revived.has(id)));
+  const ev = W.win.map((m, i) => ({ m, i, isNew: false })).filter(({ m }) => !(m.type === "take" && m.blocked) && !gone.has(m.id) && !drop.has(m.id));
+  if (extra) ev.push({ m: extra, i: Infinity, isNew: true });
+  ev.sort(_prepEvCmp);
+  const st = W.lots.map(l => (_prepIsObj(l) ? { ...l } : l));
+  const tk = new Map(), disc = new Map();
+  for (const { m, isNew } of ev) {
+    if (m.type === "take") {
+      const p = prepTakePlan({ unit, lots: st }, cfg, m.qty, m.date);   // 按 m.date 判过期的先进先出(4 个参数)
+      p.deltas.forEach(([id, d]) => { const L = _prepLotById(st, id); L.left = _prepClean(L.left + d); });
+      tk.set(m.id, { date: m.date, back: isNew || _prepIsBack(m), short: p.short, settled: 0 });
+    } else if (m.type === "make") {
+      (Array.isArray(m.newLots) ? m.newLots : []).forEach(id => {
+        const L = { ...W.born.get(id) };
+        let s = 0;
+        tk.forEach(t => {   // 补扣:同一天、排在它前面、还有没补完的差数的 take,按重放顺序
+          if (t.date !== m.date) return;
+          const n = _prepClean(Math.min(_prepClean(t.short - t.settled), _prepClean(L.made - s)));
+          if (n > 0) { s = _prepClean(s + n); t.settled = _prepClean(t.settled + n); }
+        });
+        L.left = _prepClean(L.made - s);
+        st.push(L);
+      });
+    } else if (m.type === "discard") {
+      let a = 0;
+      (Array.isArray(m.deltas) ? m.deltas : []).forEach(d => { const L = Array.isArray(d) ? _prepLotById(st, d[0]) : null; if (L && L.left > 0) { a = _prepClean(a + L.left); L.left = 0; } });
+      disc.set(m.id, { a, date: m.date });
+    }
+  }
+  return { st, tk, disc };
+};
+// 自检:重放出来的批次(按 id)和现在账上的一模一样
+const _prepSameLots = (item, st) => {
+  const cur = (Array.isArray(item.lots) ? item.lots : []).filter(_prepLotOk);
+  if (cur.length !== st.filter(_prepLotOk).length) return false;
+  return cur.every(L => { const r = _prepLotById(st, L.id); return !!r && Math.abs(r.left - L.left) < 0.0005; });
+};
+const _prepLotDiff = (a, b) => {   // b − a,逐批(两边都有的批),只列不为 0 的,按 a 的先后
+  const out = [];
+  a.forEach(L => { if (!_prepIsObj(L)) return; const r = _prepLotById(b, L.id); if (!r) return; const d = _prepClean(r.left - L.left); if (d !== 0) out.push([L.id, d]); });
+  return out;
+};
+// 补录 D 那天的 qty(纯函数,对没改过的账本算)。挡住:{ ok: false, reason: "old" | "since" | "cut" | "count" | "replay", sameDay?, at?, countDate? }(backdate_spec §1.6);
+// 能扣:{ ok: true, deltas: [[lotId, 净增减]](全 ≤ 0), deducted, absorbed, absorbedBy: [{ id, date, qty }], short, ownShort, pushed, shortToday, late: [{ lotId, madeAt, regDate }] }
+// qty = deducted + absorbed + short,short = ownShort(D 那天账上就不够)+ pushed(把之后的取出挤成不够);pushed 只给 toast 和测试读(§1.5 第 7 步「不另存」),附录 A 之外多返回的一个字段
+const prepBackPlan = (item, cfg, qty, day, today) => {
+  const no = (reason, extra) => ({ ok: false, reason, ...(extra || {}) });
+  if (!_prepIsObj(item) || !cfg || !_prepDateRe.test(String(day || "")) || !_prepDateRe.test(String(today || "")) || !(day < today)) return no("replay");
+  const unit = item.unit;
+  const q = _prepQ(qty, unit, "take");
+  const all = Array.isArray(item.moves) ? item.moves : [];
+  // ① 不能知道的(按顺序)
+  if (_daysBetween(day, today) > 60) return no("old");
+  const since = String(item.since || "");
+  if (day <= since) {
+    if (day < since) return no("since", { sameDay: false });
+    const at = all.filter(m => _prepIsObj(m) && m.date === since && !_prepDateRe.test(String(m.regDate || ""))).map(m => String(m.at || "")).sort()[0] || "";
+    return no("since", { sameDay: true, at });
+  }
+  const cut = _prepDateRe.test(String(item.movesCutTo || "")) ? item.movesCutTo : "";
+  if (cut && day <= cut) return no("cut");
+  const cs = all.filter(m => _prepIsObj(m) && m.type === "count" && _prepDateRe.test(String(m.date || "")) && m.date >= day);
+  if (cs.length) {
+    const countDate = cs.map(m => m.date).sort()[0];
+    if (countDate > day) return no("count", { countDate, sameDay: false });
+    return no("count", { countDate, sameDay: true, at: cs.filter(m => m.date === day).map(m => String(m.at || "")).sort().pop() || "" });
+  }
+  // ② 起点 + 回滚(含 P1)
+  const W = _prepWindow(item, plusDaysStr(day, -1), today);
+  if (!W.ok) return no(W.reason);
+  // ③ 重放两次 + 自检
+  const NEW = { type: "take", id: "__new__", date: day, qty: q };
+  const R0 = _prepRun(W, cfg, unit, null, null), R1 = _prepRun(W, cfg, unit, null, NEW);
+  if (!_prepSameLots(item, R0.st)) return no("replay");
+  for (const L of R1.st) { const r = _prepIsObj(L) ? _prepLotById(R0.st, L.id) : null; if (r && L.left > r.left + 0.0005) return no("replay"); }
+  // ④ 结果
+  const deltas = [];
+  prepLotsView({ lots: R0.st }, null, today).forEach(L => { const n = _prepClean(_prepLotById(R1.st, L.id).left - L.left); if (n < 0) deltas.push([L.id, n]); });
+  const deducted = _prepClean(-deltas.reduce((a, d) => a + d[1], 0));
+  let absorbed = 0; const absorbedBy = [];
+  R0.disc.forEach((v, id) => { const x = _prepClean(v.a - (R1.disc.get(id) || { a: 0 }).a); if (x > 0) { absorbed = _prepClean(absorbed + x); absorbedBy.push({ id, date: v.date, qty: x }); } });
+  const short = _prepClean(q - deducted - absorbed);
+  if (short < 0) return no("replay");
+  const me = R1.tk.get("__new__");
+  const ownShort = _prepClean(Math.min(short, Math.max(0, _prepClean(me.short - me.settled))));
+  let pt = 0;
+  R1.tk.forEach((t, id) => { if (id === "__new__" || t.back || t.date !== today) return; const t0 = R0.tk.get(id); pt = _prepClean(pt + (t.short - t.settled) - (t0.short - t0.settled)); });
+  const shortToday = _prepClean(Math.min(_prepClean(short - ownShort), Math.max(0, pt)));
+  const late = [];   // D 之后才登记、做的日子 ≤ D 的批(那天账上还没有它)
+  W.win.forEach(m => { if (m.type === "make" && m.date > day) (Array.isArray(m.newLots) ? m.newLots : []).forEach(id => { const L = W.born.get(id); if (L && L.madeAt <= day) late.push({ lotId: id, madeAt: L.madeAt, regDate: m.date }); }); });
+  return { ok: true, deltas, deducted, absorbed, absorbedBy, short, ownShort, pushed: _prepClean(short - ownShort), shortToday, late };
+};
+// P2:撤销 / 删记录时,这条 move 能不能照记下的增减反着做。「缠住了」= 不能,要按重放。它是最后一条会改账的 move(挡住的 take 不算)→ 没缠住;否则缠住 ⇔
+//   (a) 它自己是没挡住的补录 take(记的是净增减,里面有它挤动别的取出的那部分);或者
+//   (b) 它之后登记了「事后补的」记录,补的那天 ≤ 它的日期:没挡住的补录 take(那天 = 它的日期)、删生产记录的加回(那天 = 加回的 take 里最早的日期,
+//       take 找不到 = 很早)、撤销时按重放改的校正 fix(那天 = 撤掉的那条的日期 ofDate)
+const _prepEff = (m) => _prepIsObj(m) && !(m.type === "take" && m.blocked);
+const _prepRetroDate = (moves, x) => {   // 「事后补的」记录补的是哪天;不是这种记录 → ""
+  if (_prepIsBack(x)) return x.date;
+  if (x.type === "fix") return _prepDateRe.test(String(x.ofDate || "")) ? x.ofDate : "0000-00-00";
+  if (x.type === "restore") {
+    let d = "";
+    moves.forEach(t => { if (_prepIsObj(t) && t.type === "take" && !t.blocked && t.restoredBy === x.op && (!d || String(t.date || "") < d)) d = String(t.date || ""); });
+    (Array.isArray(x.from) ? x.from : []).forEach(f => { if (Array.isArray(f) && f[2] > 0 && !moves.some(t => _prepIsObj(t) && t.id === f[0])) d = "0000-00-00"; });
+    return d;
+  }
+  return "";
+};
+const _prepEntangled = (moves, i) => {
+  const m = moves[i];
+  if (!_prepEff(m)) return false;
+  if (!moves.some((x, j) => j > i && _prepEff(x))) return false;
+  if (_prepIsBack(m)) return true;
+  const md = String(m.date || "");
+  return moves.some((x, j) => { if (j <= i || !_prepIsObj(x)) return false; const d = _prepRetroDate(moves, x); return !!d && d <= md; });
+};
+// P2:按日期重放「ids 这几条 move 没发生过」。返回 { ok: true, diffs: [[lotId, 改多少]](两边都有的批), gone: [拿掉的 make 新建的批], U } / { ok: false, reason, why }
+// U:Map takeId → 拿掉以后、今天的普通 take 在重放里还没补完的差数(§4.1 的补扣基数要对成它)
+const prepRemovalPlan = (item, cfg, ids, today) => {
+  const no = (reason, why) => ({ ok: false, reason, why: why || reason });
+  if (!_prepIsObj(item) || !_prepDateRe.test(String(today || "")) || !Array.isArray(ids) || !ids.length) return no("replay");
+  const all = Array.isArray(item.moves) ? item.moves : [];
+  const rm = ids.map(id => all.find(m => _prepIsObj(m) && m.id === id));
+  if (rm.some(m => !m)) return no("replay");
+  const d0 = rm.map(m => String(m.date || "")).sort()[0];
+  if (!_prepDateRe.test(d0)) return no("replay");
+  const W = _prepWindow(item, plusDaysStr(d0, -1), today);
+  if (!W.ok) return no(W.reason, "window:" + W.reason + (W.why ? ":" + W.why : ""));
+  if (rm.some(m => !W.win.includes(m))) return no("replay", "notInWin");
+  const unit = item.unit;
+  const R = _prepRun(W, cfg, unit, null, null);
+  if (!_prepSameLots(item, R.st)) return no("replay", "selfcheck");
+  const Rn = _prepRun(W, cfg, unit, new Set(ids), null);
+  const gone = R.st.filter(l => _prepIsObj(l) && !_prepLotById(Rn.st, l.id)).map(l => l.id);
+  const diffs = _prepLotDiff(R.st, Rn.st);
+  const U = new Map();   // 拿掉以后,今天的普通 take 在重放里还没补完的差数
+  Rn.tk.forEach((t, id) => { if (!t.back && t.date === today) U.set(id, _prepClean(Math.max(0, _prepClean(t.short - t.settled)))); });
+  return { ok: true, diffs, gone, U };
+};
+// P2 之后:§4.1 的补扣基数(今天还差的)对成重放:今天的普通 take 的 short = 它已经被补扣的 + 重放里还没补完的;
+// 今天登记的补录 take 的 shortToday 降到它已经被补扣的那么多(挤到今天的差数在重放里就是今天那几条 take 的差数),short 跟着减同样多
+const _prepResetToday = (w, U, today) => {
+  w.moves.forEach((m, i) => {
+    if (!_prepIsObj(m) || m.type !== "take" || m.blocked || m.restoredBy || _prepLaterCount(w, i)) return;
+    if (_prepIsBack(m)) {
+      if (m.regDate !== today) return;
+      const st = _prepPos(m.shortToday), sq = _prepPos(m.settledQty);
+      if (st > sq) { const cut = _prepClean(st - sq); if (sq > 0) m.shortToday = sq; else delete m.shortToday; m.short = _prepClean(Math.max(0, _prepPos(m.short) - cut)); }
+    } else if (m.date === today && U.has(m.id)) m.short = _prepClean(_prepPos(m.settledQty) + U.get(m.id));
+  });
+};
+// K2:上次盘点之后,有没有建议她盘点一次的记录。[{ reason, id, date }],空 = 不用
+// reason:short(补录的差数没补完)/ cut / replay(补录被挡、没法算)/ countSameDay / sinceSameDay(当天盘点 / 当天开始记,按先烤算)/ reint(撤销 / 删记录没法按日期重算)
+const prepNeedsCountOf = (item) => {
+  if (!_prepIsObj(item) || !Array.isArray(item.moves)) return [];
+  const mv = item.moves;
+  let k = -1;
+  mv.forEach((m, i) => { if (_prepIsObj(m) && m.type === "count") k = i; });
+  const out = [];
+  mv.forEach((m, i) => {
+    if (i <= k || !_prepIsObj(m)) return;
+    if (m.reint) { out.push({ reason: "reint", id: m.id, date: m.date }); return; }
+    if (m.type !== "take" || m.restoredBy) return;
+    if (m.blocked) {
+      if (m.blocked === "cut" || m.blocked === "replay") out.push({ reason: m.blocked, id: m.id, date: m.date });
+      else if (m.blocked === "count" && mv.some(c => _prepIsObj(c) && c.type === "count" && c.date === m.date)) out.push({ reason: "countSameDay", id: m.id, date: m.date });
+      else if (m.blocked === "since" && m.date === item.since) out.push({ reason: "sinceSameDay", id: m.id, date: m.date });
+      return;
+    }
+    if (_prepIsBack(m) && _prepClean(_prepPos(m.short) - _prepPos(m.settledQty)) > 0) out.push({ reason: "short", id: m.id, date: m.date });
+  });
+  return out;
+};
+// 撤销 / 删记录要按「现在设置的能放多久」重放:{ [key]: cfg }(配方按 "recipe"、组件按 "component" 过 prepCfgOf,同一个 key 先到先得)。
+// App 的 writePrep 给没带 cfgs 的 revert / restoreRecord op 补上,两个预览也传它(backdate_spec §2.2)
+const prepCfgsOf = (recipes, components) => {
+  const out = {};
+  [["recipe", recipes], ["component", components]].forEach(([kind, list]) => (Array.isArray(list) ? list : []).forEach(o => {
+    const cfg = o ? prepCfgOf(kind, o) : null;
+    if (cfg && !Object.prototype.hasOwnProperty.call(out, cfg.key)) out[cfg.key] = cfg;
+  }));
+  return out;
+};
+// 撤销:这一样里 op === opId 的 move 反着做再删掉。返回 { it(null = 整样删掉), acc }。
 // 这一样是这个 op 开始记的(created):还有别的 move → 「开始记」挪到最早那条上(那条之后也被撤掉时整样才删);没有 move 也没有批了 → 整样删掉(回到「没开始记」)
-const _prepRevertItem = (key, it, opId, now, today) => {
+// backdate_spec §2.2(共同规则 1 的例外,C16):「缠住了」(_prepEntangled:补录 take 本身,或它之后登记了补的那天 ≤ 它的日期的事后补的记录)的
+// take / discard / make / restore 按日期重放算「这一条没发生过」(prepRemovalPlan),删掉这条、写一条 fix 记下差额(I-B7),再把今天的补扣基数对成重放(§2.4);
+// 算不出(cut / replay)→ 照下面的通用代码撤(按记下的数,和以前一样),另写一条 deltas 空、reint: true 的 fix 当痕迹(预览出 reason "reint",叫她盘点)。
+// cfg = 这一样现在的备货设置(按「现在设置的能放多久」重放;op.cfgs 没带 = null,不判过期,对不上就自检挡成 replay)
+const _prepRevertItem = (key, it, opId, now, today, cfg) => {
   const acc = _prepAcc(key, it);
   const w = _prepWork(it);
   const idxs = [];
   w.moves.forEach((m, i) => { if (_prepIsObj(m) && m.op === opId) idxs.push(i); });
   if (!idxs.length) return { it, acc };
+  let trace = null;   // 按重放算不出、照通用代码撤时留的痕迹(fix,deltas 空、reint)
+  if (idxs.length === 1) {
+    const i = idxs[0], m = w.moves[i];
+    const kind = m.type === "take" && !m.blocked && !m.restoredBy ? "take" : (m.type === "discard" || m.type === "make" || m.type === "restore") ? m.type : "";
+    if (kind && !_prepLaterCount(w, i) && _prepEntangled(w.moves, i)) {
+      acc.type = m.type;
+      const plan = prepRemovalPlan(it, cfg === undefined ? null : cfg, [m.id], today);
+      if (plan.ok) {
+        const before = _prepSum(w);
+        if (kind === "restore") w.moves.forEach(x => { if (_prepIsObj(x) && x.type === "take" && x.restoredBy === m.op) delete x.restoredBy; });   // 同通用撤销:它加回的 take 回到「发生过」
+        if (kind === "make") (Array.isArray(m.settles) ? m.settles : []).forEach(s => {   // 同通用撤销:它补扣过的 take 的合计退回
+          const tk = Array.isArray(s) ? w.moves.find(x => _prepIsObj(x) && x.type === "take" && x.id === s[0]) : null;
+          if (!tk) return;
+          const rest = _prepClean(_prepPos(tk.settledQty) - _prepPos(s[1]));
+          const other = _prepSettlersOf(w, tk.id).filter(([x]) => x !== m).pop();
+          if (rest > 0) { tk.settledQty = rest; if (other) tk.settledBy = other[0].op; } else { delete tk.settledBy; delete tk.settledQty; }
+        });
+        plan.gone.forEach(id => _prepUnmakeLot(w, i, id, today));
+        const fix = new Map();
+        plan.diffs.forEach(([id, d]) => { const lot = _prepLot(w, id); if (!lot) { _prepSkip(acc, "gone", null, id); return; } _prepSetLeft(lot, lot.left + d, today); fix.set(id, _prepClean((fix.get(id) || 0) + d)); });
+        (Array.isArray(m.deltas) ? m.deltas : []).forEach(d => { if (Array.isArray(d) && typeof d[1] === "number" && !plan.gone.includes(d[0])) fix.set(d[0], _prepClean((fix.get(d[0]) || 0) + d[1])); });
+        acc.qty = _prepClean(acc.qty + Math.abs(_prepSum(w) - before));
+        w.moves.splice(i, 1);
+        w.moves.push({ id: "mv_" + opId + "~fix@" + key, op: opId + "~fix", at: now, date: today, type: "fix", of: m.id, ofDate: m.date, deltas: [...fix.entries()].filter(([, d]) => d !== 0) });
+        _prepResetToday(w, plan.U, today);
+        if (m.created) { const f = w.moves.find(_prepIsObj); if (f) f.created = true; }
+        const t = _prepFinish(w, now, today);
+        if (m.created && !t.moves.length && !t.lots.length) return { it: null, acc };
+        return { it: t, acc };
+      }
+      _prepSkip(acc, "reint");   // 算不出:照通用代码撤(和审查前一样),留一条痕迹,叫她盘点
+      trace = { id: "mv_" + opId + "~fix@" + key, op: opId + "~fix", at: now, date: today, type: "fix", of: m.id, ofDate: m.date, deltas: [], reint: true };
+    }
+  }
   let createdGone = false;
   const keep = new Set();
   idxs.slice().reverse().forEach(i => { if (_prepUndoMove(w, i, acc, today)) keep.add(i); else if (w.moves[i].created) createdGone = true; });
   if (keep.size === idxs.length) return { it, acc };   // 一条都没撤成:账本原样(不写)
   w.moves = w.moves.filter((_, i) => !idxs.includes(i) || keep.has(i));
+  if (trace) w.moves.push(trace);
   if (createdGone) { const f = w.moves.find(_prepIsObj); if (f) f.created = true; }
   const t = _prepFinish(w, now, today);
   if (createdGone && !t.moves.length && !t.lots.length) return { it: null, acc };
   return { it: t, acc };
 };
 // 删商品生产记录:本机账本里挂着这条记录、还没加回过的 take 按记下的 deltas(和被补扣的 settledQty)加回,规则同撤销;
-// 记一条 restore move(没加回的写进 skipped:整样跳过写 key,某批跳过写 lotId),原 take 写 restoredBy。没有要加回的 → 原样返回
-const _prepRestoreItem = (key, it, op, now, today) => {
+// 记一条 restore move(没加回的写进 skipped:整样跳过写 key,某批跳过写 lotId),原 take 写 restoredBy。没有要加回的 → 原样返回。
+// backdate_spec §2.3:这几条 take(没挡住、之后没盘点过的)里有一条「缠住了」→ 按重放算「它们一起没发生过」:restore 的 deltas = 重放的差额,
+// from 全记在第一条上(只记账,重放不读);算不出 → 照通用代码加回,restore 记 reint: true(确认框和预览出 reason "reint")
+const _prepRestoreItem = (key, it, op, now, today, cfg) => {
   const acc = _prepAcc(key, it);
   acc.type = "restore";
   if (_prepHasOp(it, op.opId)) return { it, acc };
@@ -19862,22 +20136,46 @@ const _prepRestoreItem = (key, it, op, now, today) => {
   w.moves.forEach((m, i) => { if (_prepIsObj(m) && m.type === "take" && m.prodLogId === op.prodLogId && !m.restoredBy) cands.push(i); });
   if (!cands.length) return { it, acc };
   const sums = new Map(), from = [], rev = [];
-  const back = (i, id, amt) => {
-    const [g, eff] = _prepBack(w, i, id, amt, acc, today, rev);
-    if (g) sums.set(id, _prepClean((sums.get(id) || 0) + g));
-    if (eff) from.push([w.moves[i].id, id, eff]);
-  };
-  cands.forEach(i => {
-    const m = w.moves[i];
-    if (_prepLaterCount(w, i)) _prepSkip(acc, "count");
-    else {
-      (Array.isArray(m.deltas) ? m.deltas : []).forEach(d => { if (Array.isArray(d) && d[1] < 0) back(i, d[0], -d[1]); });
-      _prepBackSettled(m, _prepSettlersOf(w, m.id), (id, n) => back(i, id, n), acc);
-    }
-    m.restoredBy = op.opId;
-  });
+  let reint = false;
+  const live = cands.filter(i => !w.moves[i].blocked && !_prepLaterCount(w, i));
+  let done = false;
+  if (live.some(i => _prepEntangled(w.moves, i))) {
+    const plan = prepRemovalPlan(it, cfg === undefined ? null : cfg, live.map(i => w.moves[i].id), today);
+    if (plan.ok) {
+      cands.forEach(i => { if (!w.moves[i].blocked && _prepLaterCount(w, i)) _prepSkip(acc, "count"); });
+      plan.diffs.forEach(([id, d]) => {
+        const lot = _prepLot(w, id);
+        if (!lot) { _prepSkip(acc, "gone", null, id); return; }
+        if (lot.left === 0 && d > 0 && lot.usedUpAt && !rev.some(x => x[0] === id)) rev.push([id, lot.usedUpAt]);
+        _prepSetLeft(lot, lot.left + d, today);
+        sums.set(id, _prepClean((sums.get(id) || 0) + d));
+        acc.qty = _prepClean(acc.qty + Math.abs(d));
+      });
+      plan.diffs.forEach(([id, d]) => { if (d > 0) from.push([w.moves[live[0]].id, id, d]); });   // 记账用:全记在第一条上
+      cands.forEach(i => { w.moves[i].restoredBy = op.opId; });
+      _prepResetToday(w, plan.U, today);
+      done = true;
+    } else { reint = true; _prepSkip(acc, "reint"); }   // 算不出:照下面的通用代码加回(和审查前一样),restore 记 reint,叫她盘点
+  }
+  if (!done) {
+    const back = (i, id, amt) => {
+      const [g, eff] = _prepBack(w, i, id, amt, acc, today, rev);
+      if (g) sums.set(id, _prepClean((sums.get(id) || 0) + g));
+      if (eff) from.push([w.moves[i].id, id, eff]);
+    };
+    cands.forEach(i => {
+      const m = w.moves[i];
+      if (_prepLaterCount(w, i)) _prepSkip(acc, "count");
+      else {
+        (Array.isArray(m.deltas) ? m.deltas : []).forEach(d => { if (Array.isArray(d) && d[1] < 0) back(i, d[0], -d[1]); });
+        _prepBackSettled(m, _prepSettlersOf(w, m.id), (id, n) => back(i, id, n), acc);
+      }
+      m.restoredBy = op.opId;
+    });
+  }
   // deltas = 每批一共加回多少(显示 / 判断「动没动过这批」用);from = [[takeMoveId, lotId, 加回的数]](撤销这次加回时,只再扣还在账上的那几条 take 的)
   const mv = _prepMove(op, key, "restore", now, today, { qty: acc.qty, deltas: [...sums.entries()].filter(([, g]) => g !== 0), from });
+  if (reint) mv.reint = true;
   if (acc.skipped.length) mv.skipped = [...new Set(acc.skipped.map(s => s.lotId !== undefined ? s.lotId : key))];
   if (rev.length) mv.usedUpBefore = rev;
   w.moves.push(mv);
@@ -19905,12 +20203,15 @@ const _prepOne = (items, op, now, today) => {
       if (op.via) lot.via = op.via;
       if (op.uid) lot.uid = op.uid;
       // 补扣(默认值 7):今天取出时扣不够、还没补完也没加回过的 take,还差的数从这一批里扣掉(前一批没补完的这一批接着补,审查 ps1)。
-      // 这条 take 之后盘点过的不补(审查 ps1:盘点已经把账对成实物,差的那几个早就算进去了;改单位的盘点之后还会拿旧单位的数去扣)
+      // 这条 take 之后盘点过的不补(审查 ps1:盘点已经把账对成实物,差的那几个早就算进去了;改单位的盘点之后还会拿旧单位的数去扣)。
+      // backdate_spec §4.1:今天登记的补录 take 按它的 shortToday 补(挤到今天的取出上的那部分;D 那天自己的差数不补);挡住的不补
       let s = 0;
       const settles = [];
       w.moves.forEach((m, i) => {
-        if (!_prepIsObj(m) || m.type !== "take" || m.date !== today || !(_prepPos(m.short) > 0) || m.restoredBy || _prepLaterCount(w, i)) return;
-        const rem = _prepClean(_prepPos(m.short) - _prepPos(m.settledQty));
+        if (!_prepIsObj(m) || m.type !== "take" || m.blocked || m.restoredBy || _prepLaterCount(w, i)) return;
+        const isB = _prepIsBack(m);
+        const base = !isB && m.date === today ? _prepPos(m.short) : (isB && m.regDate === today ? _prepPos(m.shortToday) : 0);
+        const rem = _prepClean(base - _prepPos(m.settledQty));
         if (!(rem > 0)) return;
         const n = _prepClean(Math.min(rem, q - s));
         if (!(n > 0)) return;
@@ -19933,28 +20234,43 @@ const _prepOne = (items, op, now, today) => {
       if (!(q > 0)) return items;
       const w = _prepWork(it0);
       // 审查 ps3:补录往天的,按那一天判过期(以前按今天判:那天还能用、之后才过期的批被跳过,扣到新批上,留下一批假的「过期」)
+      // 审查 pt1:记下的日子也用 td(以后的日子按今天记;以前原样写进去,按 80 条剪掉后 movesCutTo 跳到以后,商品页一直到那天都不扣)
       const td = _prepDateRe.test(String(op.date || "")) && op.date <= today ? op.date : today;
-      const plan = prepTakePlan(w, op.cfg, q, td, today);
+      if (td < today) {
+        // 补录往天(backdate_spec §1 / §2.1):对没改过的原样(it0)按日期重放,账本存净增减。不能按那一天算的(开始记之前或当天、记录剪过、
+        // 那天或之后盘点过、重放对不上)写一条挡住的 take(不扣,toast 说原因,卡片出「建议盘点」);超过 60 天一个字不写(写了马上被修剪掉)
+        const plan = prepBackPlan(it0, op.cfg, q, td, today);
+        if (!plan.ok && plan.reason === "old") return items;
+        const extra = { qty: q, regDate: today };
+        if (plan.ok) {
+          plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
+          Object.assign(extra, { deltas: plan.deltas, short: plan.short });
+          if (plan.absorbed > 0) { extra.absorbed = plan.absorbed; extra.absorbedBy = plan.absorbedBy.map(a => [a.id, a.qty]); }
+          if (plan.shortToday > 0) extra.shortToday = plan.shortToday;
+        } else Object.assign(extra, { deltas: [], short: 0, blocked: plan.reason });
+        w.moves.push(_prepMove(op, key, "take", now, td, extra));
+        return _prepPut(items, key, _prepFinish(w, now, today));
+      }
+      const plan = prepTakePlan(w, op.cfg, q, td);
       plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
       // 一个都没扣到也写 move(short = qty):「已记入」封顶和体检 H22 靠它
-      // 审查 pt1:记下的日子也用 td(以后的日子按今天记;以前原样写进去,按 80 条剪掉后 movesCutTo 跳到以后,商品页一直到那天都不扣)
       w.moves.push(_prepMove(op, key, "take", now, td, { qty: q, deltas: plan.deltas, short: plan.short }));
       return _prepPut(items, key, _prepFinish(w, now, today));
     }
     case "discard": {
       if (!op.opId || !has || _prepHasOp(it0, op.opId)) return items;
       const w = _prepWork(it0);
-      const deltas = [], madeAts = [];
+      const deltas = [];
       (Array.isArray(op.lotIds) ? op.lotIds : []).forEach(id => {
         if (deltas.some(x => x[0] === id)) return;
         const lot = _prepLot(w, id);
         if (!lot || !(lot.left > 0)) return;
         deltas.push([id, -lot.left]);
-        madeAts.push([id, lot.madeAt]);   // 审查 pt4:批用完 30 天后会被修剪掉,补录往天要靠这里知道它是哪天做的(prepTakePlan)
         _prepSetLeft(lot, 0, today);
       });
       if (!deltas.length) return items;
-      w.moves.push(_prepMove(op, key, "discard", now, today, { qty: _prepClean(-deltas.reduce((a, x) => a + x[1], 0)), deltas, madeAts, reason: op.reason || "bad" }));
+      // backdate_spec §6.1 第 7 条:不再写 madeAts(审查 pt4 给虚批用的;被提到的用完批修剪时留着,§3.1)。老数据里有的留着不管
+      w.moves.push(_prepMove(op, key, "discard", now, today, { qty: _prepClean(-deltas.reduce((a, x) => a + x[1], 0)), deltas, reason: op.reason || "bad" }));
       return _prepPut(items, key, _prepFinish(w, now, today));
     }
     case "count": {
@@ -20027,7 +20343,7 @@ const _prepOne = (items, op, now, today) => {
       Object.keys(items).forEach(k => {
         const it = items[k];
         if (!_prepIsObj(it) || !_prepHasOp(it, op.opId)) return;
-        const r = _prepRevertItem(k, it, op.opId, now, today);
+        const r = _prepRevertItem(k, it, op.opId, now, today, op.cfgs ? op.cfgs[k] : undefined);   // cfgs:writePrep 自动补(backdate_spec §2.2)
         if (r.it !== it) out = _prepPut(out, k, r.it);
       });
       return out;
@@ -20038,7 +20354,7 @@ const _prepOne = (items, op, now, today) => {
       Object.keys(items).forEach(k => {
         const it = items[k];
         if (!_prepIsObj(it)) return;
-        const r = _prepRestoreItem(k, it, op, now, today);
+        const r = _prepRestoreItem(k, it, op, now, today, op.cfgs ? op.cfgs[k] : undefined);
         if (r.it !== it) out = _prepPut(out, k, r.it);
       });
       return out;
@@ -20070,25 +20386,26 @@ const prepApply = (raw, ops, nowIso, today) => {
 };
 // 撤销前算「会发生什么」(toast 用):{ partial, lines: [{ key, name, nameZh, nameJa, unit, type, qty, skipped: [{ reason, lotId?, madeAt? }], partial }] }。
 // reason:count = 之后盘点过整样不动 / discard = 那批之后报废了 / voided = 那批已作废 / gone = 那批已经不在账上 /
-// unit = 这次盘点换了单位、之后又按新单位记过账(整条不撤,那条盘点留着)。减到 0 以下的部分记成欠着(owe)也算 partial。和 prepApply 的 revert 同一套代码
-const prepRevertPreview = (stock, opId) => {
+// unit = 这次盘点换了单位、之后又按新单位记过账(整条不撤,那条盘点留着)/ reint = 缠住了却没法按日期重算,照记下的数撤(backdate_spec §2.2 / §2.8)。
+// 减到 0 以下的部分记成欠着(owe)也算 partial。和 prepApply 的 revert 同一套代码。cfgs(可选)= { [key]: 现在的备货设置 }(同 revert op 的 cfgs;不传 = 按 null 重放)
+const prepRevertPreview = (stock, opId, cfgs) => {
   const S = prepStockRead(stock);
   const lines = [];
   if (S.readOnly || !opId) return { partial: false, lines };
   const today = localDateStr(), now = new Date().toISOString();
-  Object.keys(S.items).forEach(k => { const it = S.items[k]; if (_prepHasOp(it, opId)) lines.push(_prepRevertItem(k, it, opId, now, today).acc); });
+  Object.keys(S.items).forEach(k => { const it = S.items[k]; if (_prepHasOp(it, opId)) lines.push(_prepRevertItem(k, it, opId, now, today, cfgs ? cfgs[k] : undefined).acc); });
   return { partial: lines.some(l => l.partial), lines };
 };
 // 删生产记录前算「会加回多少」(确认框用):本机账本里挂着这条记录、还没加回过的 take 才算。没有 → lines 空(别的设备记的 / 旧版记的)。
-// 返回形状照第 0 步的约定只有 { lines }(prep_step0_tests 钉死);撤不全看每行的 partial / skipped
-const prepRestorePreview = (stock, prodLogId) => {
+// 返回形状照第 0 步的约定只有 { lines }(prep_step0_tests 钉死);撤不全看每行的 partial / skipped(skipped 里的 reason "reint" 见 backdate_spec §2.3 / §2.8)。cfgs 同上
+const prepRestorePreview = (stock, prodLogId, cfgs) => {
   const S = prepStockRead(stock);
   const lines = [];
   if (S.readOnly || prodLogId === undefined || prodLogId === null || prodLogId === "") return { lines };
   const today = localDateStr(), now = new Date().toISOString();
   Object.keys(S.items).forEach(k => {
     const it = S.items[k];
-    const r = _prepRestoreItem(k, it, { opId: "__preview__", prodLogId }, now, today);
+    const r = _prepRestoreItem(k, it, { opId: "__preview__", prodLogId }, now, today, cfgs ? cfgs[k] : undefined);
     if (r.it !== it) lines.push(r.acc);
   });
   return { lines };
@@ -20107,17 +20424,20 @@ const prepSuggestBatch = (cfg, usable, need, incoming, dailyUse = 0) => {
 // 天数从有史以来第一次取出那天算起(最多 14、至少 1 天,同 salesSpanOf);没记录 = 0
 // 审查 ps4:盘点换过单位的,之前按旧单位记的 take 换算成现在的单位(g ↔ kg);换不了的(個 → 片)连同更早的都不算,天数从那次盘点之后算起。
 // 以前按原数加总:g 改 kg 后 9 天 1000 g + 1 kg 算成日均 900 kg,「大约够几天」、提醒线、建议批数、取出默认数全错两周
+// 补录往天的 take 按它的日期算(那天真用了这么多,含 absorbed / short / 挡住的);日期早于开始记(since)的不算(backdate_spec §4.2:
+// 开始记之前的需求只记得这一条,算进去会拉长天数、把日均拉低)。只补录一个较早的日子、中间没补,天数照样从它算起(§4.2 写明的副作用,§10 待她拍板)
 const prepDailyUse = (item, today) => {
   if (!_prepIsObj(item) || !Array.isArray(item.moves)) return 0;
   const d = _prepDateRe.test(String(today || "")) ? today : localDateStr();
   const from = plusDaysStr(d, -13);
+  const since = _prepDateRe.test(String(item.since || "")) ? item.since : "";
   const def = item.kind === "component" ? "g" : "个", kept = [];
   let u = item.unit, chg = "", floor = "";
   for (let i = item.moves.length - 1; i >= 0; i--) {   // 从后往前走:u = 这条 move 记下时账上的单位,chg = 它之后最近那次换单位的盘点日期
     const m = item.moves[i];
     if (!_prepIsObj(m)) continue;
     if (m.type === "count" && Object.prototype.hasOwnProperty.call(m, "unitBefore")) { u = m.unitBefore === null ? undefined : m.unitBefore; chg = String(m.date || ""); continue; }
-    if (m.type !== "take" || m.restoredBy || !_prepDateRe.test(String(m.date || "")) || m.date > d) continue;
+    if (m.type !== "take" || m.restoredBy || !_prepDateRe.test(String(m.date || "")) || m.date > d || (since && m.date < since)) continue;
     const q = u === item.unit ? _prepPos(m.qty) : prepConvUnit(_prepPos(m.qty), u, item.unit, def);
     if (q === null) { if (chg > floor) floor = chg; continue; }
     if (q > 0) kept.push([m.date, q]);
@@ -22584,10 +22904,15 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
 // 数量 > 0、日期不晚于今天;读不出就地 InlineError 说哪一格、怎么改。登记成功由卡片关掉面板(下一次点开拿新的 opId)
 // 今天取出时没扣到、还没补完的数(同 prepApply make 的补扣:加回过的、这条之后盘点过的不算,减掉已经补了的)。
 // 生产单「做一批」面板和备货卡「＋ 登记一批」共用(审查 ps2:卡片登记同样会补扣,以前面板和 toast 都不说,500 进账变 480)
+// backdate_spec §4.1:今天登记的补录 take 按它的 shortToday 算(挤到今天的取出上的那部分);挡住的不算
 function prepShortTodayOf(item, today) {
   const moves = item && Array.isArray(item.moves) ? item.moves : [];
-  return _r3(moves.filter((m, i) => m && m.type === "take" && m.date === today && _prepNum(m.short) > 0 && !m.restoredBy
-    && !moves.some((x, j) => j > i && x && x.type === "count")).reduce((a, m) => a + Math.max(0, _prepNum(m.short) - Math.max(0, _prepNum(m.settledQty))), 0));
+  return _r3(moves.reduce((a, m, i) => {
+    if (!m || typeof m !== "object" || m.type !== "take" || m.blocked || m.restoredBy || moves.some((x, j) => j > i && x && x.type === "count")) return a;
+    const isB = _prepIsBack(m);
+    const base = !isB && m.date === today ? _prepNum(m.short) : (isB && m.regDate === today ? _prepNum(m.shortToday) : 0);
+    return base > 0 ? a + Math.max(0, base - Math.max(0, _prepNum(m.settledQty))) : a;
+  }, 0));
 }
 function PrepRegisterPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDialog, opId, lotId }) {
   const X = prepTxt(lang);
@@ -25020,10 +25345,16 @@ function App() {
   // 今日 tab 的子页和备货页要展开的那一样(E 线:TodayView 收 sub / onSubChange / prepFocusKey;第 0 步 TodayView 还不读)
   const [todaySub, setTodaySub] = useState("sheet");
   const [prepFocusKey, setPrepFocusKey] = useState(null);
+  // 撤销 / 删记录按「现在设置的能放多久」重放要用的设置表(backdate_spec §2.2):{ [key]: cfg }。撤销闭包晚几秒才调 writePrep,读 ref 拿最新的
+  const prepCfgs = useMemo(() => prepCfgsOf(recipes, components), [recipes, components]);
+  const prepCfgsRef = useRef(prepCfgs);
+  prepCfgsRef.current = prepCfgs;
   // 唯一的写账出口。ops 交给 prepApply;planFn(可选)在同一次更新里改生产单的 lines(记入时改 logged)。
   // opts.uid:这次写账挂在生产单哪一行(记入时传);opts.isUndo:撤销闭包传 true。返回 false = 账本只读,没写
-  const writePrep = (ops, planFn, opts = {}) => {
+  // revert / restoreRecord 没带 cfgs 的补上(backdate_spec §6.2 第 14 条)
+  const writePrep = (ops0, planFn, opts = {}) => {
     if (prepStock.readOnly) { showToast(prepTxt(lang).readOnly); return false; }
+    const ops = (Array.isArray(ops0) ? ops0 : []).map(o => (o && typeof o === "object" && (o.type === "revert" || o.type === "restoreRecord") && !o.cfgs ? { ...o, cfgs: prepCfgsRef.current } : o));
     setAppSettings(prev => {
       const today = localDateStr(), now = new Date().toISOString();
       let planNext = null;
