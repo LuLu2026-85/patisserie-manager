@@ -21253,7 +21253,8 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     // 审查 ps4:这个商品直接装的那几样,今天已经在取出行 / 厨房 / 备货卡取过(同一批面团),再记商品行会再扣 —— 只给提示,账本行为不变。
     // 不算:这一行自己记的、商品记录扣的(带 prodLogId,各商品各记各的)、组合产品行(lineKey)和做一批行扣的配料(组件上的 sheet take)这些别的用量
     const direct = new Set((Array.isArray(obj.items) ? obj.items : []).filter(it => it).map(it => prepKeyOf(it.linkedType || "recipe", it.linkedId)));
-    const te = [...new Set(full.takes.filter(t => direct.has(t.key) && canTake(t)).map(t => t.key))].map(k => ({ key: k, qty: _r3(takesToday(k)
+    // 审查 pt2:只看配方(同商品页「又扣了一遍」提醒):组件好多东西共用,今天备货卡 / 厨房取的多半是别的用途
+    const te = [...new Set(full.takes.filter(t => direct.has(t.key) && t.key.startsWith("recipe:") && canTake(t)).map(t => t.key))].map(k => ({ key: k, qty: _r3(takesToday(k)
       .filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || k.startsWith("recipe:"))).reduce((a, m) => a + _prepNum(m.qty), 0)) })).filter(x => x.qty > 0);
     return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), ...(te.length ? { takenElsewhere: te } : {}), flow, readOnly, blocked: readOnly ? "readOnly" : null };
   }
@@ -25064,7 +25065,8 @@ function App() {
     acts.forEach(a => {
       const nm = String(pickLang(a.obj, "name", lang) || a.obj.nameZh || a.obj.nameJa || "").trim();
       const store = X.storeName(a.cfg.store);
-      if (direct.has(a.t.key) && !elsewhere.some(e => e.key === a.t.key)) {
+      // 审查 pt2:只提醒配方(面团取出去就是烤这个商品);组件(焦糖酱、慕斯)好多东西共用,备货卡取的多半是别的用途,提醒「重复了就点撤销」会叫她撤掉正确的扣减
+      if (direct.has(a.t.key) && a.t.key.startsWith("recipe:") && !elsewhere.some(e => e.key === a.t.key)) {
         const n = _r3((a.it.moves || []).filter(m => m && m.type === "take" && m.date === d && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || a.t.key.startsWith("recipe:")))
           .reduce((s, m) => s + (parseFloat(m.qty) || 0), 0));
         if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, a.it.unit) });
