@@ -4931,6 +4931,7 @@ const _dhPrepChecks = (d, A) => {
     });
     if (!keys.length) return;
     recs.forEach(r => {
+      if (r.date > today) return;   // 审查 pt2:日子在以后(年份敲错)的不查 —— 今天盘点也清不掉(「之后盘点过」要盘点日期晚于记录);新版商品页记这种日子照扣、take 记今天
       const q = parseFloat(r.batchQty);
       let takes = null;
       keys.forEach(k => {
@@ -25029,7 +25030,8 @@ function App() {
     const q = _r3(parseFloat(qty) || 0);
     if (!p || !(q > 0) || productPrepSkips(p) || prepStock.readOnly) return false;
     const d = date || today;
-    if (d > localDateStr()) return false;   // 审查 pt1:日子填到以后(年份敲错)→ 走原来的代码,不扣备货
+    // 审查 pt2:日子填到以后(年份敲错)照扣(面团确实用了;pt1 改成走老路不扣,账上多出这几个、toast 一字不提)。
+    // take 记下的日子由 prepApply 按今天封顶、靠 prodLogId 挂这条记录(删记录照样加回);H22 不查以后日子的记录
     const X = prepTxt(lang);
     const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang };
     const flow = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx);
