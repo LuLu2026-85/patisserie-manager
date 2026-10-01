@@ -4914,61 +4914,69 @@ const _dhPrepChecks = (d, A) => {
   push("H20", "display", h20);
   push("H21", "display", h21);
 
-  // H22 商品生产记录没扣备货(只查开始记之后、账上还留着 move 的日子;不自动补扣)
+  // H22 商品生产记录没扣备货(backdate_spec §4.4 / 附录 B,唯一口径;不自动补扣)。
+  // 只报「生产记录里有一部分件数,这台 App 没扣,而且之后没有归零点盖过它」:这台 App 记的每一次增加(商品页、生产单商品行)都留了 take
+  // (带 logBefore / logQty),扣了、差了、被报废吸收、因为「记录不全 / 没法重算」挡住的一律不报;被盘点或开始记挡住的(blocked count / since)
+  // 按「没扣」算一段,盖没盖住交给那天的归零点(那天的盘点、那天开始记的那一刻)判断(审查 P7)。没 take 的件数按现在的组成算应扣。
+  // 同一样备货的记录合成一个条目(审查 K6):key "H22:<备货 key>",records 挂每条记录。
+  // (作废的口径:审查 pt1 到 pt4 的 minDate / since 那天按 createdAt / lastAt / bornAt / postTakes / prevLogAt 都不晚于盘点,见 backdate_spec §6.3 / C10 / C11)
   const h22 = [];
   const ctx = { products, recipes, creations, components, materials, brands, productFamilies, lang: "zh" };
+  const groups = new Map();   // k → { k, it, unit, recs: [] }
   products.forEach(p => {
     if (productPrepSkips(p)) return;
-    const recs = productionLog.filter(r => r.productId === p.id && parseFloat(r.batchQty) > 0 && dateRe.test(String(r.date || "")));
-    if (!recs.length) return;
-    // 这个商品的组成会扣哪些已开始记、单位对得上的
-    const keys = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, 1, ctx).takes.map(t => t.key).filter(k => {
-      const it = S.items[k];
-      if (!it || !Array.isArray(it.moves) || !it.moves.length) return false;
-      const { kind, id } = where(k, it);
-      const cfg = prepCfgOf(kind, objOf(kind, id));
-      return !!cfg && prepSameUnit(it, cfg);
-    });
-    if (!keys.length) return;
-    recs.forEach(r => {
-      if (_daysBetween(r.date, today) > 60) return;   // 审查 pt4:超过 60 天的不查 —— 同商品页 logProdWithPrep 的 tooOld(补录超过 60 天的有意不扣)
-      if (r.date > today) return;   // 审查 pt2:日子在以后(年份敲错)的不查 —— 今天盘点也清不掉(「之后盘点过」要盘点日期晚于记录);新版商品页记这种日子照扣、take 记今天
-      const q = parseFloat(r.batchQty);
-      let takes = null;
-      keys.forEach(k => {
-        const it = S.items[k];
-        const mv = it.moves.filter(isObj);
-        const firstAt = mv.reduce((a, m) => (m.at && (!a || String(m.at) < a) ? String(m.at) : a), "");
-        const minDate = mv.reduce((a, m) => (dateRe.test(String(m.date || "")) && (!a || m.date < a) ? m.date : a), "");
-        const since = String(it.since || "");
-        if (!firstAt || !minDate || r.date < minDate) return;
-        if (dateRe.test(String(it.movesCutTo || "")) && r.date <= it.movesCutTo) return;   // 审查 ps3:那天的记录被 80 条上限剪掉过(可能切在一天中间),对不了
-        if (!(r.date > since || (r.date === since && String(r.createdAt || "") >= firstAt))) return;
-        if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 这天之后盘点过:账已经对成实物(商品页补录这种日子也不扣,审查 ps1)
-        // 审查 ps4:同一天、记录之后(按记录最后改的时间)盘点过的也不报 —— H21 叫她去盘点,盘完这条就该消失(商品页当天照扣的规则不变)
-        // 审查 pt1:按记录建的时间比(以前按最后改的时间:盘点后当天又记 +5,记录的修改时间跳到盘点之后,盘点前那 30 又被算成「没扣」)
-        // 审查 pt2:按建的时间比只在「盘点之后又加的那次,新版扣过了」(这条记录有盘点之后的 take)时才算;否则照 ps4 按最后改的时间比
-        // (旧版 app 盘点之后在同一条上 +5 不扣面团、只改修改时间 —— pt1 那样一律按建的时间比,这 5 个就没人报了)
-        // 审查 pt4:而且盘点之后的那几次新版 take 加之前,记录都没在盘点之后改过(take 上的 prevLogAt ≤ 盘点;没有 prevLogAt = 那次是新建记录)——
-        // 以前旧版盘点后 +5、新版再 +5,只要有盘点之后的 take 就整条按建的时间跳过,旧版那 5 个又没人报
-        const lastAt = prodLogLastAt(r), bornAt = String(r.createdAt || r.updatedAt || "");
-        const postTakes = (m) => mv.filter(t => t.type === "take" && t.prodLogId === r.id && String(t.at || "") > String(m.at || ""));
-        if (mv.some(m => m.type === "count" && m.date === r.date && (String(m.at || "") >= lastAt
-          || (String(m.at || "") >= bornAt && postTakes(m).length > 0 && postTakes(m).every(t => !(String(t.prevLogAt || "") > String(m.at || ""))))))) return;
-        if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
-        const t = takes.find(x => x.key === k);
-        const want = t ? _r3(t.qty) : 0;
-        const tks = mv.filter(m => m.type === "take" && m.prodLogId === r.id);
-        const got = _r3(tks.reduce((a, m) => a + (parseFloat(m.qty) || 0), 0));
-        // 审查 ps2:每条 take 各自存成三位小数,同一天分两次记(33.333 + 33.333 对 66.667)会差 0.001 —— 每条允许 0.0005 的舍入
-        if (!(want > got + 0.0005 * (tks.length + 1))) return;
-        const { kind, id } = where(k, it);
-        const o = objOf(kind, id), u = _normTxt(it.unit);
-        h22.push({ key: `H22:${r.id}:${k}`, kind: "prep", id: k, prepKey: k, jump: { kind: "prep", id: k },
-          labelZh: _dhName(p, "zh") || Z.fHd.kind(kind), labelJa: _dhName(p, "ja") || J.fHd.kind(kind),
-          detailZh: Z.fHd.notTaken(r.date, q, nm(o, it, k, "zh"), want, got, u), detailJa: J.fHd.notTaken(r.date, q, nm(o, it, k, "ja"), want, got, u) });
+    const line = { kind: "product", id: p.id, obj: p };
+    productionLog.filter(r => r.productId === p.id && parseFloat(r.batchQty) > 0 && dateRe.test(String(r.date || ""))
+        && r.date <= today && _daysBetween(r.date, today) <= 60).forEach(r => {   // 以后日子的不查(审查 pt2);60 天以前的不查(审查 pt4)
+      const qty = parseFloat(r.batchQty);
+      prepFlowOfSheetRow(line, qty, ctx).takes.forEach(t => {
+        const it = S.items[t.key]; if (!it || !Array.isArray(it.moves) || !it.moves.length) return;
+        const cfg = prepCfgOf(t.kind, objOf(t.kind, t.id)); if (!cfg || !prepSameUnit(it, cfg)) return;
+        const since = String(it.since || ""), mv = it.moves.filter(isObj);
+        if (r.date < since) return;
+        if (dateRe.test(String(it.movesCutTo || "")) && r.date <= it.movesCutTo) return;   // 审查 ps3:那天的记录被 80 条上限剪掉过,对不了
+        if (mv.some(m => m.type === "count" && dateRe.test(String(m.date || "")) && m.date > r.date)) return;   // 之后哪天盘点过 = 已经对成实物
+        // 那天的归零点(at):那天的盘点;那天就是开始记的那天时再加上「开始记」那一刻(那天登记的、不是补录的 move 里最早的 at;一条都不剩 = 整天都在开始记之前)
+        const resets = mv.filter(m => m.type === "count" && m.date === r.date).map(m => String(m.at || ""));
+        if (r.date === since) resets.push(mv.filter(m => m.date === since && !m.regDate).map(m => String(m.at || "")).sort()[0] || "9999");
+        // 这台 App 没扣的件数,分段
+        const tks = mv.map((m, i) => [m, i]).filter(([m]) => m.type === "take" && m.prodLogId === r.id && !m.restoredBy)
+          .sort(([a, i], [b, j]) => (String(a.at) < String(b.at) ? -1 : String(a.at) > String(b.at) ? 1 : i - j)).map(([m]) => m);
+        const gap = (m) => m.blocked === "count" || m.blocked === "since";   // 审查 P7:被盘点 / 开始记挡住的 = 没扣,盖没盖住交给归零点
+        const born = String(r.createdAt || ""), last = prodLogLastAt(r);
+        let segs = [];
+        if (!tks.length) segs = [{ a: qty, lo: born, hi: last }];
+        else if (tks.every(m => typeof m.logBefore === "number" && typeof m.logQty === "number")) {
+          let h = 0, lo = born;
+          tks.forEach(m => {
+            const g = _r3(m.logBefore - h); if (g > 0) segs.push({ a: g, lo, hi: String(m.prevLogAt || m.at || "") });
+            if (gap(m) && m.logQty > 0) segs.push({ a: _r3(m.logQty), lo: String(m.at || ""), hi: String(m.at || "") });
+            h = _r3(m.logBefore + m.logQty); lo = String(m.at || "");
+          });
+          const g = _r3(qty - h); if (g > 0) segs.push({ a: g, lo, hi: last || lo });
+          const E = _r3(qty - tks.reduce((a, m) => a + (gap(m) ? 0 : m.logQty), 0));
+          if (Math.abs(_r3(segs.reduce((a, s) => a + s.a, 0)) - Math.max(0, E)) > 0.001) segs = E > 0 ? [{ a: E, lo: born, hi: last }] : [];
+        } else {   // 改动之前的测试数据:没有 logBefore / logQty
+          const got = tks.reduce((a, m) => a + (gap(m) ? 0 : (parseFloat(m.qty) || 0)), 0);
+          if (t.qty > got + 0.0005 * (tks.length + 1)) segs = [{ a: _r3(qty * (1 - got / t.qty)), lo: born, hi: last }];
+        }
+        const later = (iso) => !!iso && localDateStr(iso) > r.date;   // 这段是之后才补记的(规则 S:排在那天最前)
+        const U = _r3(segs.filter(s => s.a > 0 && !(resets.length && (resets.some(c => c >= s.hi) || later(s.lo)))).reduce((a, s) => a + s.a, 0));
+        if (!(U >= 0.001)) return;
+        const want = ((prepFlowOfSheetRow(line, U, ctx).takes.find(x => x.key === t.key)) || {}).qty || 0;
+        if (!(want > 0.0005)) return;
+        if (!groups.has(t.key)) groups.set(t.key, { k: t.key, it, unit: _normTxt(it.unit), recs: [] });
+        groups.get(t.key).recs.push({ id: r.id, date: r.date, productId: p.id, qty, U, want: _r3(want) });
       });
     });
+  });
+  groups.forEach(g => {
+    const { kind, id } = where(g.k, g.it), o = objOf(kind, id);
+    const ds = g.recs.map(x => x.date).sort(), want = _r3(g.recs.reduce((a, x) => a + x.want, 0));
+    h22.push({ key: `H22:${g.k}`, kind: "prep", id: g.k, prepKey: g.k, jump: { kind: "prep", id: g.k }, records: g.recs,
+      labelZh: `${nm(o, g.it, g.k, "zh")}(${Z.fHd.kind(kind)})`, labelJa: `${nm(o, g.it, g.k, "ja")}(${J.fHd.kind(kind)})`,
+      detailZh: Z.fHd.notTakenGroup(g.recs.length, Z.md(ds[0]), Z.md(ds[ds.length - 1]), want, g.unit),
+      detailJa: J.fHd.notTakenGroup(g.recs.length, J.md(ds[0]), J.md(ds[ds.length - 1]), want, g.unit) });
   });
   push("H22", "display", h22);
   return { main, info };
@@ -20782,7 +20790,9 @@ const PREP_TXT = {
       H19: ["有库存但没标备货", "账上还记着这些东西的库存,但配方 / 组件已经取消了「备货」,生产单不会再扣它。要继续用就「去改」重新勾上;不用了就「清掉」(可以撤销)。"],
       H20: ["标了备货但没写能放多久", "没写「能放多久」的备货不会提醒快到期 / 过期。去编辑页的「📦 备货」填上天数。"],
       H21: ["备货的数量口径对不上", "标了备货但「产出数量」没填(算不出一批做多少,生产单上「做一批」记不进库存);或者账上记的单位和现在的单位对不上(改过单位、「同步回组件库」改了单位),这一样先不自动加减,去「备货」盘点一次就好。"],
-      H22: ["有生产记录没扣备货", "这些商品生产记录按组成应该从备货里扣,但账上没有扣的记录。多半是旧版 App 或别的设备记的(合并导入进来的),或者后来改过商品组成。这里不自动补扣:去「备货」看一眼,对不上就盘点。"],
+      // backdate_spec §4.4:同一样备货的记录合成一条;说明写清楚有意不扣的那两种例外(改了「装烤好的」/ 单位)
+      H22: ["有生产记录没扣备货", "这些商品生产记录按组成应该从备货里扣,但这台 App 没有扣:多半是旧版 App 或别的设备记的(合并导入进来的),或者后来改过「装烤好的」/ 单位设置,或者补录时被盘点挡住、之后那次盘点又撤销了。这里不自动补扣:去「备货」看一眼,对不上就盘点,盘点一次就消失。"
+        + "「装烤好的」商品记的生产本来就不进账本,之后改成「扣」,60 天内、没盘点过的旧记录会被当成没扣列出来;改单位期间记的生产(单位对不上,当时没扣),之后在编辑页把单位改回去、没盘点,也会列出来。这两种都确实可能少扣,盘点一次就消失。"],
       H23: ["备货账本是更新版本写的", "库存账是更新版本的 App 写的,这台先不显示也不改。请刷新到最新版(页面顶上有「新版本」提示时点刷新)。"],
     },
     fHd: {
@@ -20800,7 +20810,8 @@ const PREP_TXT = {
       noShelf: "没写能放多久",
       noYield: "产出数量没填",
       unit: (o, n) => `账上按「${o}」记,现在单位是「${n}」`,
-      notTaken: (d, n, name, want, got, u) => `${d} 生产 ${fmtQty(n)} 件 · 应扣「${name}」${fmtQty(want)}${u ? " " + u : ""},记下扣了 ${fmtQty(got)}`,
+      // H22 按备货合成一条(backdate_spec §4.4 / C19):k 条记录、最早到最晚的日子(M/D)、一共应扣多少
+      notTakenGroup: (k, d1, d2, want, u) => `${k} 条生产记录没扣(${d1 === d2 ? d1 : `${d1} 到 ${d2}`}),共 ${fmtQty(want)}${u ? " " + u : ""}`,
       kind: (k) => (k === "component" ? "组件" : "配方"),
     },
     fHb: { tidy: "按剩余数整理", clear: "清掉", edit: "去改", count: "去盘点", look: "去看", tidyDone: "✓ 已整理", clearDone: "✓ 已清掉" },
@@ -21036,7 +21047,8 @@ const PREP_TXT = {
       H19: ["在庫があるのに作り置き指定なし", "在庫の記録が残っていますが、作り置き指定が外れています。製造リストでは引かれません。使うなら「直す」で指定し直し、不要なら「消去」(元に戻せます)。"],
       H20: ["作り置きの保存期間が未入力", "保存期間がないと期限間近・期限切れのお知らせが出ません。編集画面の「📦 作り置き」で日数を入力してください。"],
       H21: ["作り置きの単位・出来数が合わない", "作り置き指定があるのに出来数が未入力(1 バッチの量が分からず、仕込み行を在庫に記録できません)、または記録の単位と現在の単位が合いません(自動の増減を止めています。「作り置き」で棚卸ししてください)。"],
-      H22: ["作り置きを引いていない製造記録", "構成上は作り置きから引くはずの製造記録に、引いた記録がありません。旧バージョンや他の端末の記録(マージインポート)か、後で商品構成を変えた可能性があります。自動では引きません。「作り置き」で確認し、合わなければ棚卸しを。"],
+      H22: ["作り置きを引いていない製造記録", "構成上は作り置きから引くはずの製造記録ですが、この端末では引いていません。旧バージョンや他の端末の記録(マージインポート)、後で「焼成済みを詰める」・単位の設定を変えた場合、または補記が棚卸しで止められ、その棚卸しを後で取り消した場合などです。自動では引きません。「作り置き」で確認し、合わなければ棚卸しを(棚卸しすると消えます)。"
+        + "「焼成済みを詰める」商品の製造記録はもともと引きません。後で「引く」に変えると、60 日以内で棚卸ししていない記録が未控除として出ます。単位が合わない間の製造記録(その時は未控除)も、単位を戻して棚卸ししていなければ出ます。どちらも実際に引き不足の可能性があり、棚卸しすると消えます。"],
       H23: ["新しいバージョンの在庫記録", "在庫記録が新しいバージョンで書かれています。最新版に更新してください。"],
     },
     fHd: {
@@ -21054,7 +21066,7 @@ const PREP_TXT = {
       noShelf: "保存期間未入力",
       noYield: "出来数未入力",
       unit: (o, n) => `記録は「${o}」、現在の単位は「${n}」`,
-      notTaken: (d, n, name, want, got, u) => `${d} 製造 ${fmtQty(n)} 件 · 「${name}」${fmtQty(want)}${u || ""} を引くはずが記録は ${fmtQty(got)}`,
+      notTakenGroup: (k, d1, d2, want, u) => `製造記録 ${k} 件が未控除(${d1 === d2 ? d1 : `${d1}〜${d2}`})、計 ${fmtQty(want)}${u || ""}`,
       kind: (k) => (k === "component" ? "パーツ" : "レシピ"),
     },
     fHb: { tidy: "残数で整理", clear: "消去", edit: "直す", count: "棚卸しへ", look: "見る", tidyDone: "✓ 整理しました", clearDone: "✓ 消去しました" },
@@ -25594,8 +25606,10 @@ function App() {
         const ex = findDayLog(productionLog, p.id, today);
         const prodLogId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
         const parts = takeParts(info.flow.takes.filter(t => t.tracked));
-        if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id, ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) }), setLogged(add), { uid })) return true;   // prevLogAt 同商品页(审查 pt4)
-        const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:同商品页
+        // prevLogAt 同商品页(审查 pt4);logBefore / logQty 同商品页(数据体检 H22 分段用,backdate_spec §6.2 第 17 条)
+        const logBefore = ex ? _r3(parseFloat(ex.batchQty) || 0) : 0;
+        if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id, logBefore, logQty: add, ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) }), setLogged(add), { uid })) return true;
+        const before0 = ex ? { qty: logBefore, at: prodLogLastAt(ex) } : null;   // 审查 pt3:同商品页
         makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add, undefined, { id: prodLogId });
         const prepList = parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、");
         showToast(X.toastProduct(pickLang(p, "name", lang) || p.nameZh || "", fmtQty(add), prepList) + shortTxt(parts) + untakenTxt(info.flow.untaken), { undo: () => {
