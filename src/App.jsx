@@ -4949,9 +4949,12 @@ const _dhPrepChecks = (d, A) => {
         // 审查 pt1:按记录建的时间比(以前按最后改的时间:盘点后当天又记 +5,记录的修改时间跳到盘点之后,盘点前那 30 又被算成「没扣」)
         // 审查 pt2:按建的时间比只在「盘点之后又加的那次,新版扣过了」(这条记录有盘点之后的 take)时才算;否则照 ps4 按最后改的时间比
         // (旧版 app 盘点之后在同一条上 +5 不扣面团、只改修改时间 —— pt1 那样一律按建的时间比,这 5 个就没人报了)
+        // 审查 pt4:而且盘点之后的那几次新版 take 加之前,记录都没在盘点之后改过(take 上的 prevLogAt ≤ 盘点;没有 prevLogAt = 那次是新建记录)——
+        // 以前旧版盘点后 +5、新版再 +5,只要有盘点之后的 take 就整条按建的时间跳过,旧版那 5 个又没人报
         const lastAt = prodLogLastAt(r), bornAt = String(r.createdAt || r.updatedAt || "");
+        const postTakes = (m) => mv.filter(t => t.type === "take" && t.prodLogId === r.id && String(t.at || "") > String(m.at || ""));
         if (mv.some(m => m.type === "count" && m.date === r.date && (String(m.at || "") >= lastAt
-          || (String(m.at || "") >= bornAt && mv.some(t => t.type === "take" && t.prodLogId === r.id && String(t.at || "") > String(m.at || "")))))) return;
+          || (String(m.at || "") >= bornAt && postTakes(m).length > 0 && postTakes(m).every(t => !(String(t.prevLogAt || "") > String(m.at || ""))))))) return;
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
         const t = takes.find(x => x.key === k);
         const want = t ? _r3(t.qty) : 0;
@@ -19682,7 +19685,7 @@ const _prepNewItem = (cfg, now, today) => ({ kind: cfg.kind, id: cfg.id, nameZh:
 // 一条 move 的公共字段;id = "mv_" + opId + "@" + key(同一个 op 在同一样上只有一条)。可选字段只在给了时写
 const _prepMove = (op, key, type, now, date, extra) => {
   const m = { id: "mv_" + op.opId + "@" + key, op: op.opId, at: now, date, type, ...extra };
-  ["uid", "planQty", "prodLogId", "productId", "via", "lineKey"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
+  ["uid", "planQty", "prodLogId", "productId", "via", "lineKey", "prevLogAt"].forEach(k => { if (op[k] !== undefined && op[k] !== null && op[k] !== "") m[k] = op[k]; });
   if (op.staff) m.staff = true;
   return m;
 };
@@ -25114,7 +25117,8 @@ function App() {
     const ex = findDayLog(productionLog, p.id, d);
     const logId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
     const opId = "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product" })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
+    // 审查 pt4:往已有的记录上加时记下加之前记录最后改的时间(prevLogAt),H22 靠它分出盘点之后、这次之前有没有旧版 app 改过这条
+    if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product", ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
     const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:撤销改回这个数时 H22 按这个时间比盘点
     makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, q, d, { id: logId });
     // toast:按记入这一刻的账本算扣了多少 / 差多少(prepApply 用同一个 prepTakePlan)
@@ -25259,7 +25263,7 @@ function App() {
         const ex = findDayLog(productionLog, p.id, today);
         const prodLogId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
         const parts = takeParts(info.flow.takes.filter(t => t.tracked));
-        if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id }), setLogged(add), { uid })) return true;
+        if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id, ...(ex ? { prevLogAt: prodLogLastAt(ex) } : {}) }), setLogged(add), { uid })) return true;   // prevLogAt 同商品页(审查 pt4)
         const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:同商品页
         makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add, undefined, { id: prodLogId });
         const prepList = parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、");
