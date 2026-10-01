@@ -23800,7 +23800,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: kitQ, via: "kitchen" };
     if (c.staff) op.staff = true;
     if (onPrepOp([op], { toast: msg, staff: !!c.staff }) === false) return;
-    setRecorded({ q: fmtQty(q), opId });   // 审查 pt4:连这次的 op 一起记,toast 撤销后账上没有这条 → 不再显示「✓ 记下了」
+    setRecorded({ q: fmtQty(q), opId, before: pitem });   // 审查 pt4:连这次的 op 一起记,toast 撤销后账上没有这条 → 不再显示「✓ 记下了」(账本还没换过 = 照旧显示)
     setOpId(_kitOpId());
   };
   const onProducts = isTake ? (c.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(target.id))) : [];
@@ -23891,7 +23891,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
             : (
               <>
                 {onProducts.length > 0 && note(T.subtle, "onlystore", PX.kitOnlyStore(storeNm))}
-                {recorded !== null && !!pitem && (pitem.moves || []).some(m => m && m.op === recorded.opId) ? (
+                {recorded !== null && (pitem === recorded.before || (!!pitem && (pitem.moves || []).some(m => m && m.op === recorded.opId))) ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
                     <span data-kitchen-recorded="1" style={{ fontSize: 18, color: T.success, ...T.num }}>{PX.kitDone(recorded.q, pcfg.unit)}</span>
                     <Btn size="sm" variant="ghost" onClick={() => setRecorded(null)}>{PX.kitAgain}</Btn>
