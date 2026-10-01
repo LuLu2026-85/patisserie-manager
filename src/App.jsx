@@ -4931,6 +4931,7 @@ const _dhPrepChecks = (d, A) => {
     });
     if (!keys.length) return;
     recs.forEach(r => {
+      if (_daysBetween(r.date, today) > 60) return;   // 审查 pt4:超过 60 天的不查 —— 同商品页 logProdWithPrep 的 tooOld(补录超过 60 天的有意不扣)
       if (r.date > today) return;   // 审查 pt2:日子在以后(年份敲错)的不查 —— 今天盘点也清不掉(「之后盘点过」要盘点日期晚于记录);新版商品页记这种日子照扣、take 记今天
       const q = parseFloat(r.batchQty);
       let takes = null;
