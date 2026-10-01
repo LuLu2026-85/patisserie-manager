@@ -4948,7 +4948,7 @@ const _dhPrepChecks = (d, A) => {
         // 审查 pt1:按记录建的时间比(以前按最后改的时间:盘点后当天又记 +5,记录的修改时间跳到盘点之后,盘点前那 30 又被算成「没扣」)
         // 审查 pt2:按建的时间比只在「盘点之后又加的那次,新版扣过了」(这条记录有盘点之后的 take)时才算;否则照 ps4 按最后改的时间比
         // (旧版 app 盘点之后在同一条上 +5 不扣面团、只改修改时间 —— pt1 那样一律按建的时间比,这 5 个就没人报了)
-        const lastAt = String(r.updatedAt || r.createdAt || ""), bornAt = String(r.createdAt || r.updatedAt || "");
+        const lastAt = prodLogLastAt(r), bornAt = String(r.createdAt || r.updatedAt || "");
         if (mv.some(m => m.type === "count" && m.date === r.date && (String(m.at || "") >= lastAt
           || (String(m.at || "") >= bornAt && mv.some(t => t.type === "take" && t.prodLogId === r.id && String(t.at || "") > String(m.at || "")))))) return;
         if (!takes) takes = prepFlowOfSheetRow({ kind: "product", id: p.id, obj: p }, q, ctx).takes;
@@ -18783,6 +18783,11 @@ const restockSuggest = (p) => {
 // 备货库存(prepstock)第 0 步:同一商品同一天的那条记录只有这一个查法(makeLogQty 里 upsert、生产单 / 商品页记入前预查 id 都走它;
 // 日期一定是 forDate || today,比较是严格 ===,取第一条 —— 合并导入后同一天可能两条,makeLogQty 累加进第一条)
 const findDayLog = (list, productId, d) => (list || []).find(x => x.productId === productId && x.date === d);
+// 审查 pt3:生产记录「最后一次真改」的时间(数据体检 H22 拿它比同一天的盘点)。撤销备货那次 +N、记录改回 +N 之前的数时,
+// updatedAt 是撤销那一刻,内容却和 +N 之前一样 —— 撤销另写 prepUndoAt(= 那次的 updatedAt)和 prepUndoPrevAt(+N 之前的这个时间);
+// 之后谁再改这条(updatedAt 变了,旧版 app 也一样)就不认这两个字段。updatedAt 照旧写撤销那一刻(合并导入按它取新)
+const prodLogLastAt = (r) => String((r && r.prepUndoAt && r.prepUndoAt === r.updatedAt ? r.prepUndoPrevAt : r && r.updatedAt) || (r && r.createdAt) || "");
+const prodLogUndone = (x, left, before) => { const now = new Date().toISOString(); return { ...x, batchQty: left, updatedAt: now, ...(before && before.qty === left ? { prepUndoAt: now, prepUndoPrevAt: before.at } : {}) }; };
 // 第 5 个参数 opts = { id }(备货第 0 步):**只在新建当天那条记录时**用这个 id(账本的 take 要挂 prodLogId)。不传时行为和以前一样
 const makeLogQty = ({ products, today, setSalesLog, setProductionLog, setProducts }) => (kind, productId, addQty, forDate, opts) => {
   const qn = parseFloat(addQty) || 0;
@@ -25062,6 +25067,7 @@ function App() {
     const logId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
     const opId = "op_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     if (!writePrep(acts.map(a => ({ type: "take", key: a.t.key, cfg: a.cfg, opId, qty: a.t.qty, date: d, prodLogId: logId, productId: p.id, via: "product" })))) return false;   // 只读(上面已经挡过,走不到):照老路只记生产
+    const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:撤销改回这个数时 H22 按这个时间比盘点
     makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, q, d, { id: logId });
     // toast:按记入这一刻的账本算扣了多少 / 差多少(prepApply 用同一个 prepTakePlan)
     const bits = [], shorts = [], elsewhere = [];
@@ -25096,7 +25102,7 @@ function App() {
           const c = (prev || []).find(x => x && x.id === logId);
           if (!c) return prev;
           const left = _r3((parseFloat(c.batchQty) || 0) - q);
-          return left > 0 ? prev.map(x => x === c ? { ...x, batchQty: left, updatedAt: new Date().toISOString() } : x) : prev.filter(x => x !== c);
+          return left > 0 ? prev.map(x => x === c ? prodLogUndone(x, left, before0) : x) : prev.filter(x => x !== c);
         });
         setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - q) } : x));
       }
@@ -25206,6 +25212,7 @@ function App() {
         const prodLogId = ex ? ex.id : "prod_log_" + Date.now() + Math.random().toString(36).slice(2, 6);
         const parts = takeParts(info.flow.takes.filter(t => t.tracked));
         if (!writePrep(takeOps(parts, add, { prodLogId, productId: p.id }), setLogged(add), { uid })) return true;
+        const before0 = ex ? { qty: _r3(parseFloat(ex.batchQty) || 0), at: prodLogLastAt(ex) } : null;   // 审查 pt3:同商品页
         makeLogQty({ products, today, setSalesLog, setProductionLog, setProducts })("prod", p.id, add, undefined, { id: prodLogId });
         const prepList = parts.map(x => X.prepMinus(x.store, x.name, q(x.got), x.cfg.unit)).join("、");
         showToast(X.toastProduct(pickLang(p, "name", lang) || p.nameZh || "", fmtQty(add), prepList) + shortTxt(parts) + untakenTxt(info.flow.untaken), { undo: () => {
@@ -25217,7 +25224,7 @@ function App() {
               const c = (prev || []).find(x => x && x.id === prodLogId);
               if (!c) return prev;
               const left = _r3((parseFloat(c.batchQty) || 0) - add);
-              return left > 0 ? prev.map(x => x === c ? { ...x, batchQty: left, updatedAt: new Date().toISOString() } : x) : prev.filter(x => x !== c);
+              return left > 0 ? prev.map(x => x === c ? prodLogUndone(x, left, before0) : x) : prev.filter(x => x !== c);
             });
             setProducts(prev => prev.map(x => x.id === p.id ? { ...x, currentStock: Math.max(0, (x.currentStock || 0) - add) } : x));
           }
