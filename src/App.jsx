@@ -19580,7 +19580,8 @@ const prepOnHand = (item, cfg, today) => {
 // 只在有那天之后的报废时起作用(补录今天 / 没报废过 → 一个字节不变)。同一次报废被几次补录各抵一遍,宁可少扣、记 short,不悄悄扣两次
 // 审查 pt4:按「那天的账」先进先出 —— 报废掉的数按那批做的日子放回队里(虚的:落在上面的记 short、不扣真批),不再只给那天之后做的批封顶
 // (以前那天以前做的、还活着的批照扣:9/20 A、9/22 B,9/28 报废 A,补录 9/25 的 8 → B 记 12、冰箱 20,不报差数)。
-// 只放那天还能用的批(那天已经过期的批那天本来就扣不到);批做的日子从账上的批读。now(真正的今天,可不给)= 补录往天时同一天的报废也算(那天先烤后报废还是先报废后烤分不出来,宁可少扣、记 short);记今天的不算
+// 只放那天还能用的批(那天已经过期的批那天本来就扣不到);批做的日子先读报废时记在 move 上的 madeAts(用完 30 天后批会被修剪掉),
+// 读不到再找账上的批。now(真正的今天,可不给)= 补录往天时同一天的报废也算(那天先烤后报废还是先报废后烤分不出来,宁可少扣、记 short);记今天的不算
 const _prepDiscVirtual = (item, cfg, day, now) => {
   if (!_prepIsObj(item) || !Array.isArray(item.moves)) return [];
   const lots = Array.isArray(item.lots) ? item.lots : [];
@@ -19590,10 +19591,12 @@ const _prepDiscVirtual = (item, cfg, day, now) => {
     if (!_prepIsObj(m) || m.type !== "discard" || !Array.isArray(m.deltas)) return;
     const md = String(m.date || "");
     if (!(md > day || (md === day && !!now && day < now))) return;
+    const mas = Array.isArray(m.madeAts) ? m.madeAts : [];
     m.deltas.forEach(x => {
       if (!Array.isArray(x) || !(x[1] < 0)) return;
-      const lot = lots.find(l => _prepLotOk(l) && l.id === x[0]);
-      const ma = String(lot ? lot.madeAt : "");
+      const y = mas.find(z => Array.isArray(z) && z[0] === x[0]);
+      const lot = y ? null : lots.find(l => _prepLotOk(l) && l.id === x[0]);
+      const ma = String(y ? y[1] : lot ? lot.madeAt : "");
       if (!_prepDateRe.test(ma) || ma > day) return;
       if (shelf && _daysBetween(day, plusDaysStr(ma, shelf)) < 0) return;
       out.push({ id: null, virtual: true, madeAt: ma, left: _prepClean(-x[1]) });
@@ -19937,16 +19940,17 @@ const _prepOne = (items, op, now, today) => {
     case "discard": {
       if (!op.opId || !has || _prepHasOp(it0, op.opId)) return items;
       const w = _prepWork(it0);
-      const deltas = [];
+      const deltas = [], madeAts = [];
       (Array.isArray(op.lotIds) ? op.lotIds : []).forEach(id => {
         if (deltas.some(x => x[0] === id)) return;
         const lot = _prepLot(w, id);
         if (!lot || !(lot.left > 0)) return;
         deltas.push([id, -lot.left]);
+        madeAts.push([id, lot.madeAt]);   // 审查 pt4:批用完 30 天后会被修剪掉,补录往天要靠这里知道它是哪天做的(prepTakePlan)
         _prepSetLeft(lot, 0, today);
       });
       if (!deltas.length) return items;
-      w.moves.push(_prepMove(op, key, "discard", now, today, { qty: _prepClean(-deltas.reduce((a, x) => a + x[1], 0)), deltas, reason: op.reason || "bad" }));
+      w.moves.push(_prepMove(op, key, "discard", now, today, { qty: _prepClean(-deltas.reduce((a, x) => a + x[1], 0)), deltas, madeAts, reason: op.reason || "bad" }));
       return _prepPut(items, key, _prepFinish(w, now, today));
     }
     case "count": {
