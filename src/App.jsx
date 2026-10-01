@@ -20420,7 +20420,7 @@ const PREP_TXT = {
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     fBeforeBooks: (names) => `;${names}那天还没开始记账或之后盘点过,没扣`,
-    fElsewhere: (nm, n, u) => `;⚠「${nm}」这天已经从取出行 / 备货页 / 厨房取出过 ${fmtQty(n)}${u ? " " + u : ""},这次又扣了一遍,重复了就点撤销`,
+    fElsewhere: (nm, n, u) => `;⚠「${nm}」这天已经从取出行 / 备货页 / 厨房取出过 ${fmtQty(n)}${u ? " " + u : ""},这次又扣了一遍;生产记录要留着的话去「备货」盘点把数对上(点撤销会连生产记录和库存一起撤)`,   // 审查 pt3:以前叫她「重复了就点撤销」,撤销连生产记录 / 商品库存一起撤,再记又扣一遍
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
@@ -20673,7 +20673,7 @@ const PREP_TXT = {
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     fBeforeBooks: (names) => `・${names}はその日まだ記録開始前か、後で棚卸し済みのため未控除`,
-    fElsewhere: (nm, n, u) => `・⚠「${nm}」はこの日すでに取り出し行・作り置き・キッチン画面から ${fmtQty(n)}${u || ""} 使用済み、今回さらに控除しました。重複なら取り消しを`,
+    fElsewhere: (nm, n, u) => `・⚠「${nm}」はこの日すでに取り出し行・作り置き・キッチン画面から ${fmtQty(n)}${u || ""} 使用済み、今回さらに控除しました。生産記録を残すなら「作り置き」で棚卸しして数を合わせてください(取り消すと生産記録と在庫も一緒に戻ります)`,
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
