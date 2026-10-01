@@ -19578,38 +19578,51 @@ const prepOnHand = (item, cfg, today) => {
 // 审查 pt3:但旧批是被「那天之后的报废」清空的(报废清的是账上的数,补录的这几个早就跟着写掉了)就不是这样 —— 落到新批上等于扣两次。
 // 所以那天(today = 补录的那一天)之后报废掉的、那天以前做的批的数(disc),先从余数里抵掉,剩下的才扣那天之后做的批;抵掉的记 short(toast 叫她去盘点)。
 // 只在有那天之后的报废时起作用(补录今天 / 没报废过 → 一个字节不变)。同一次报废被几次补录各抵一遍,宁可少扣、记 short,不悄悄扣两次
-const _prepDiscAfter = (item, day) => {
-  if (!_prepIsObj(item) || !Array.isArray(item.moves) || !Array.isArray(item.lots)) return 0;
-  let n = 0;
+// 审查 pt4:按「那天的账」先进先出 —— 报废掉的数按那批做的日子放回队里(虚的:落在上面的记 short、不扣真批),不再只给那天之后做的批封顶
+// (以前那天以前做的、还活着的批照扣:9/20 A、9/22 B,9/28 报废 A,补录 9/25 的 8 → B 记 12、冰箱 20,不报差数)。
+// 只放那天还能用的批(那天已经过期的批那天本来就扣不到);批做的日子从账上的批读。now(真正的今天,可不给)= 补录往天时同一天的报废也算(那天先烤后报废还是先报废后烤分不出来,宁可少扣、记 short);记今天的不算
+const _prepDiscVirtual = (item, cfg, day, now) => {
+  if (!_prepIsObj(item) || !Array.isArray(item.moves)) return [];
+  const lots = Array.isArray(item.lots) ? item.lots : [];
+  const shelf = cfg && cfg.shelfDays > 0 ? cfg.shelfDays : null;
+  const out = [];
   item.moves.forEach(m => {
-    if (!_prepIsObj(m) || m.type !== "discard" || !(String(m.date || "") > day) || !Array.isArray(m.deltas)) return;
+    if (!_prepIsObj(m) || m.type !== "discard" || !Array.isArray(m.deltas)) return;
+    const md = String(m.date || "");
+    if (!(md > day || (md === day && !!now && day < now))) return;
     m.deltas.forEach(x => {
       if (!Array.isArray(x) || !(x[1] < 0)) return;
-      const lot = item.lots.find(l => _prepLotOk(l) && l.id === x[0]);
-      if (lot && String(lot.madeAt) <= day) n += -x[1];
+      const lot = lots.find(l => _prepLotOk(l) && l.id === x[0]);
+      const ma = String(lot ? lot.madeAt : "");
+      if (!_prepDateRe.test(ma) || ma > day) return;
+      if (shelf && _daysBetween(day, plusDaysStr(ma, shelf)) < 0) return;
+      out.push({ id: null, virtual: true, madeAt: ma, left: _prepClean(-x[1]) });
     });
   });
-  return _prepClean(n);
+  return out;
 };
-const prepTakePlan = (item, cfg, qty, today) => {
+const prepTakePlan = (item, cfg, qty, today, now) => {
   const unit = _prepIsObj(item) ? item.unit : (cfg && cfg.unit);
   const q = _prepQ(qty, unit, "take");
   if (!(q > 0)) return { deltas: [], got: 0, short: 0 };
-  let rest = q, cap = null;
-  const disc = _prepDiscAfter(item, today);
+  let rest = q, got = 0;
+  const virt = _prepDiscVirtual(item, cfg, today, now);
+  const real = prepLotsView(item, cfg, today);
+  // 同一天做的:虚的排在前(宁可少扣)。sort 是稳定的,真批之间的先后照 prepLotsView
+  const list = virt.length ? [...virt, ...real].sort((a, b) => (a.madeAt !== b.madeAt ? (a.madeAt < b.madeAt ? -1 : 1) : 0)) : real;
   const deltas = [], seen = new Set();
-  for (const l of prepLotsView(item, cfg, today)) {
+  for (const l of list) {
     if (!(rest > 0)) break;
+    if (l.virtual) { rest = _prepClean(rest - Math.min(l.left, rest)); continue; }   // 落在报废掉的数上:不扣真批,记 short
     if (l.status === "expired" || l.id === undefined || l.id === null || seen.has(l.id)) continue;   // 过期的不扣;重复 id 的坏批只认第一批
     seen.add(l.id);
-    if (disc > 0 && cap === null && String(l.madeAt) > today) cap = _prepClean(Math.max(0, rest - disc));   // 那天之后做的批:最多扣「余数 − 报废抵掉的」
-    const t = _prepClean(Math.min(l.left, rest, cap === null ? rest : cap));
+    const t = _prepClean(Math.min(l.left, rest));
     if (!(t > 0)) continue;
     deltas.push([l.id, -t]);
     rest = _prepClean(rest - t);
-    if (cap !== null) cap = _prepClean(cap - t);
+    got = _prepClean(got + t);
   }
-  return { deltas, got: _prepClean(q - rest), short: rest };
+  return { deltas, got, short: _prepClean(q - got) };
 };
 // ── prepApply 用的内部工具(都只改工作副本 w,不碰传进来的账本)──
 const _prepWork = (it) => ({ ...it,
@@ -19914,7 +19927,7 @@ const _prepOne = (items, op, now, today) => {
       const w = _prepWork(it0);
       // 审查 ps3:补录往天的,按那一天判过期(以前按今天判:那天还能用、之后才过期的批被跳过,扣到新批上,留下一批假的「过期」)
       const td = _prepDateRe.test(String(op.date || "")) && op.date <= today ? op.date : today;
-      const plan = prepTakePlan(w, op.cfg, q, td);
+      const plan = prepTakePlan(w, op.cfg, q, td, today);
       plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
       // 一个都没扣到也写 move(short = qty):「已记入」封顶和体检 H22 靠它
       // 审查 pt1:记下的日子也用 td(以后的日子按今天记;以前原样写进去,按 80 条剪掉后 movesCutTo 跳到以后,商品页一直到那天都不扣)
@@ -25108,7 +25121,7 @@ function App() {
         if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, a.it.unit) });
       }
       const td = d <= localDateStr() ? d : localDateStr();
-      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td);   // 同 prepApply 的 take:按那一天判过期(审查 ps3)
+      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td, localDateStr());   // 同 prepApply 的 take:按那一天判过期(审查 ps3)
       bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
       if (tp.short > 0) shorts.push(X.fShort(store, nm, tp.got, tp.short, a.it.unit));
     });
