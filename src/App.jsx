@@ -19560,8 +19560,9 @@ const prepOnHand = (item, cfg, today) => {
 };
 // 按先后从能用的批次扣 qty(只算不改,跳过过期):{ deltas: [[lotId, -q]], got, short }。prepApply 的 take 用同一个函数。
 // qty 按这一样账上的单位;按个计的向上取整。没开始记(item 不是对象)→ 一个都扣不到(short = qty)
-// 审查 pt1:madeBy(可选,YYYY-MM-DD)= 补录往天的 take:那天之后才做的批不扣(那天还没有这一批,扣了就是让后来的新批替那天没记的面团买单)
-const prepTakePlan = (item, cfg, qty, today, madeBy) => {
+// 审查 pt2:补录往天的 take 照样从最早的批扣、后来做的批也扣(撤掉 pt1 的 madeBy)—— 账上旧批不够补录的数,只能是之后记的取出先进先出把它用光了,
+// 那些取出实际拿的是新批,补录的余数就该落在新批上(按 madeBy 挡掉会把账记多、还报「差 N 没扣」)
+const prepTakePlan = (item, cfg, qty, today) => {
   const unit = _prepIsObj(item) ? item.unit : (cfg && cfg.unit);
   const q = _prepQ(qty, unit, "take");
   if (!(q > 0)) return { deltas: [], got: 0, short: 0 };
@@ -19571,7 +19572,6 @@ const prepTakePlan = (item, cfg, qty, today, madeBy) => {
     if (!(rest > 0)) break;
     if (l.status === "expired" || l.id === undefined || l.id === null || seen.has(l.id)) continue;   // 过期的不扣;重复 id 的坏批只认第一批
     seen.add(l.id);
-    if (madeBy && String(l.madeAt || "") > madeBy) continue;
     const t = _prepClean(Math.min(l.left, rest));
     if (!(t > 0)) continue;
     deltas.push([l.id, -t]);
@@ -19882,7 +19882,7 @@ const _prepOne = (items, op, now, today) => {
       const w = _prepWork(it0);
       // 审查 ps3:补录往天的,按那一天判过期(以前按今天判:那天还能用、之后才过期的批被跳过,扣到新批上,留下一批假的「过期」)
       const td = _prepDateRe.test(String(op.date || "")) && op.date <= today ? op.date : today;
-      const plan = prepTakePlan(w, op.cfg, q, td, td < today ? td : "");   // 审查 pt1:补录的那天之后才做的批不扣,扣不到的记 short
+      const plan = prepTakePlan(w, op.cfg, q, td);
       plan.deltas.forEach(([id, d]) => { const lot = _prepLot(w, id); if (lot) _prepSetLeft(lot, lot.left + d, today); });
       // 一个都没扣到也写 move(short = qty):「已记入」封顶和体检 H22 靠它
       // 审查 pt1:记下的日子也用 td(以后的日子按今天记;以前原样写进去,按 80 条剪掉后 movesCutTo 跳到以后,商品页一直到那天都不扣)
@@ -25064,7 +25064,7 @@ function App() {
         if (n > 0) elsewhere.push({ key: a.t.key, txt: X.fElsewhere(nm, n, a.it.unit) });
       }
       const td = d <= localDateStr() ? d : localDateStr();
-      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td, td < localDateStr() ? td : "");   // 同 prepApply 的 take:按那一天判过期(审查 ps3)、那天之后做的批不扣(审查 pt1)
+      const tp = prepTakePlan(a.it, a.cfg, a.t.qty, td);   // 同 prepApply 的 take:按那一天判过期(审查 ps3)
       bits.push(X.fTakeBit(store, nm, tp.got + tp.short, a.it.unit));
       if (tp.short > 0) shorts.push(X.fShort(store, nm, tp.got, tp.short, a.it.unit));
     });
