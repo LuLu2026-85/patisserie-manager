@@ -18157,7 +18157,8 @@ function ProductEditForm({ product, prefill, recipes, creations, components = []
             })}
           </div>
         )}
-        {prepMarkedInItems && (
+        {/* ux2 审查:prepSkip 现在还决定生产单列不列配料 —— 存着显式值的商品(后来配方取消了备货)也要给勾选,否则改不回来(看打开时的商品,改回缺省删了键也不让勾选消失) */}
+        {(prepMarkedInItems || (!!product && typeof product.prepSkip === "boolean")) && (
           <label data-prep-skip="1" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, cursor: "pointer", minWidth: 0 }}>
             <input type="checkbox" checked={productPrepSkips(form)} onChange={e => setPrepSkip(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
             <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
@@ -20999,7 +21000,7 @@ const PREP_TXT = {
     fUndoNoRecord: "生产记录已经删了,只撤了备货",
     fRestoreConfirm: (store, name, n, u) => `这条生产记录扣过${store}「${name}」${fmtQty(n)}${u ? " " + u : ""},删掉后会加回去。`,
     fSkipLabel: "装的是已经烤好的,不扣备货(比如礼盒装烤好的饼干)",
-    fSkipHint: "只装一样、每件 1 个的(或只挂一个组件的)默认会扣(记入生产 = 烤出来 / 从备货分出来);礼盒和几个装的默认不扣",
+    fSkipHint: "只装一样、每件 1 个的(或只挂一个组件的)默认会扣(记入生产 = 烤出来 / 从备货分出来);礼盒和几个装的默认不扣。勾着时生产单上只写「装烤好的 N 个」,不列配料",
     fBuyToggle: "按手上的备货算(扣掉现有的、按整批做、留够提醒线;可能比不勾多)",
     fBuyLine: (name, need, u, have, min, k, qty) => `备货:${name} 这段时间要用 ${fmtQty(need)} ${u},手上能用 ${fmtQty(have)}${min > 0 ? `(提醒线 ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → 要做 ${k} 批(${fmtQty(qty)} ${u}),按 ${k} 批算原料` : " → 不用做,原料不算"),
@@ -21303,7 +21304,7 @@ const PREP_TXT = {
     fUndoNoRecord: "製造記録は削除済みのため、作り置きだけ戻しました",
     fRestoreConfirm: (store, name, n, u) => `この製造記録で${store}「${name}」${fmtQty(n)}${u || ""} を引いています。削除すると戻ります。`,
     fSkipLabel: "焼成済みを詰める(作り置きを引かない。例:焼き菓子の詰め合わせ)",
-    fSkipHint: "1 品・1 個入り(またはパーツ 1 つだけ)は既定で引きます(製造記録 = 焼成 / 作り置きから小分け)。詰め合わせ・複数個入りは既定で引きません",
+    fSkipHint: "1 品・1 個入り(またはパーツ 1 つだけ)は既定で引きます(製造記録 = 焼成 / 作り置きから小分け)。詰め合わせ・複数個入りは既定で引きません。チェック時は製造指示書に「焼成済みを詰める N 個」だけを出し、材料は出しません",
     fBuyToggle: "手持ちの作り置きで計算(在庫を差し引き・バッチ単位・補充ラインを確保。チェックなしより多くなる場合あり)",
     fBuyLine: (name, need, u, have, min, k, qty) => `作り置き:${name} 必要 ${fmtQty(need)}${u}、使用可 ${fmtQty(have)}${min > 0 ? `(補充ライン ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → ${k} バッチ(${fmtQty(qty)}${u})で材料計算` : " → 仕込み不要(材料に含めず)"),
@@ -21376,7 +21377,7 @@ const prepTxt = (lang) => PREP_TXT[lang === "ja" ? "ja" : "zh"];
 //     「来自组件」指向的备货组件)第一遍不展开、只累加要用多少;第二遍每样 deficit = 要用 + 提醒线 − 能用,> 0 才按整批展开原料;
 //     输出 out.prepPlan。换不了单位 / 没填用量 / 没有产出量 / 本产品专用的部分照旧走老路。
 //     已知限制:备货东西自己的配料里又用到另一个备货组件时,第二遍把它当普通原料展开,不扣第二层的库存。
-//   没有任何标记、不传这些时两种模式的输出逐字节不变
+//   没有任何标记、不传这些时采购模式的输出逐字节不变;生产模式下装烤好的商品(productPrepSkips)ux2 起即使没有任何备货标记也进 out.packed、不算要称的原料
 const _prodUnitOf = (unit) => {
   const u = String(unit === undefined || unit === null ? "" : unit).normalize("NFKC").trim();
   if (isGramUnit(u)) return /^(?:ml|毫升)$/i.test(u) ? "ml" : "g";
