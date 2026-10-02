@@ -20685,7 +20685,9 @@ const PREP_TXT = {
     kitLineDone: "✓ 这一行已记入",
     kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
     // 终审 r1:厨房列表把取出行和商品行的块合成一行时,列出每一行各多少,叫她回生产单各记各的(以前只写商品行,取出行那份没人记)
-    kitFromLines: (list) => `这里合起来了生产单上的 ${list},回生产单在各自那一行记入(同一批烤的只记一行;给礼盒等另烤的,各记各的)`,
+    // 终审 r2:每一行前面写是哪种行(商品「费南雪」和取出烤「费南雪」同名时分得清)
+    kitFromLines: (list) => `这里把生产单上的 ${list} 合在一起了,回生产单在各自那一行记入(同一批烤的只记一行;给礼盒等另烤的,各记各的)`,
+    kitPartKind: { recipe: "取出烤", product: "商品", creation: "组合产品" },
     kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
     kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
     // 终审 r2:今天单子上这一样的做一批已经全记入 —— 不叫她去备货页再登记一批(会记两遍),也不叫她再加一行(合并会当重复丢掉)
@@ -21000,6 +21002,7 @@ const PREP_TXT = {
     kitLineDone: "✓ この行は記録済み",
     kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
     kitFromLines: (list) => `製造リストの ${list} の合計です。それぞれの行で記録してください(同じ分なら 1 行だけ、ギフト用などに別に焼いた分はそれぞれ)`,
+    kitPartKind: { recipe: "取り出し", product: "商品", creation: "組み合わせ" },
     kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
     kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
     kitMakeLineDone: "✓ 本日の仕込みは製造リストで記録済み。追加で仕込む場合は、製造リストでこの行の数量を増やしてから記録してください",
@@ -24370,7 +24373,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
       {isTake && canRecord && (
         <div data-kitchen-record={fromLine && !uid ? "fromline" : viaLine ? (lineDone ? "done" : "line") : "direct"} style={{ marginTop: 16 }}>
           {fromLine && !uid ? note(T.body, "fromline", Array.isArray(fromLine.parts) && fromLine.parts.length
-            ? PX.kitFromLines(fromLine.parts.map(p => `「${p.name || ""}」${fmtQty(p.qty) || "0"}${pcfg && pcfg.unit ? " " + pcfg.unit : ""}`).join(zh ? "、" : "・"))
+            ? PX.kitFromLines(fromLine.parts.map(p => `${(p.kind && PX.kitPartKind[p.kind]) || ""}「${p.name || ""}」${fmtQty(p.qty) || "0"}${pcfg && pcfg.unit ? " " + pcfg.unit : ""}`).join(zh ? "、" : "・"))
             : PX.kitFromLine((fromLine && fromLine.name) || ""))
             : viaLine ? (lineDone ? note(T.success, "linedone", PX.kitLineDone)
               : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(kitQ) : "", pcfg.unit)}</Btn>)
@@ -24484,7 +24487,7 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
     let parts;
     if (it.srcs.some(x => x.kind === "recipe") && it.srcs.some(x => x.kind !== "recipe")) {
       const by = new Map();
-      it.srcs.forEach(x => { const e = by.get(x.uid); if (e) e.qty = _r3(e.qty + (x.qty || 0)); else by.set(x.uid, { name: x.name, qty: x.qty || 0 }); });
+      it.srcs.forEach(x => { const e = by.get(x.uid); if (e) e.qty = _r3(e.qty + (x.qty || 0)); else by.set(x.uid, { kind: x.kind, name: x.name, qty: x.qty || 0 }); });
       parts = [...by.values()];
     }
     return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin), ...(parts ? { parts } : {}) } : undefined];
