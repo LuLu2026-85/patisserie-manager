@@ -585,6 +585,35 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
    (旧版 `getIngUnitPrice` / `getIngLiveCost` 不认 `noCost`,打开编辑页还会把价写回这一行),成本和原料毛利率在旧版上偏高,两台电脑都刷新到新版之前别拿旧版的毛利率做决定;
    来自组件的行按快照算人民币;包装费 / 价格历史 / 看板标记 / 别名原样保留(旧版写入口都是先展开原对象再改)。
 
+## 2026-10 冷冻面团 / 备货库存(prepstock)
+
+LuLu 原话:「有一些东西是库存不够了我只烘烤就行的,比如饼干。我做好了面团之后冷冻,快没了解冻烘烤。」
+施工说明 `.claude/prepstock/plan.md`(顶上「09-30 LuLu 追加拍板」优先),签名表 `api.md`,**完整规则 `.claude/prepstock/RULES.md`(改这个功能前必读,下面只是最要紧的几条)**,
+补录往天(商品页选以前的日子)/ 补录之后的撤销和删记录 / 修剪 / 数据体检 H22 的**唯一口径 `.claude/prepstock/backdate_spec.md`**。
+**测试一键全跑:`bash .claude/scripts/prepstock/regress_prep.sh`**(先跑第 4 批 `regress4.sh` 并逐行比改前输出,只许配方编辑页 probe 那一行变;再跑 `prepstock/*_tests.cjs`、
+2 万轮随机测试、补录的独立「标准答案」随机测试 `fuzz/backdate_oracle_fuzz.cjs`、编辑页快照、375 / 768 / 1024 宽、语法、重复键;约 20 到 40 分钟)。
+
+1. **账本在 `appSettings.prepStock`**(`{ v: 1, items: { "recipe:<id>" | "component:<id>": { lots, moves, unit, since } } }`),不加顶层键,payload `version` 仍 17。
+   **只由 App 的 `writePrep(ops, planFn, opts)` 写**(账本和生产单 `logged` 同一次 `setAppSettings`);读一律过 `prepStockRead`,`v > 1` 整本只读。
+   纯函数整段在 `BEGIN/END prepstock helpers` 和 `prepstock sheet helpers` 两段,**段里不许有 React / setState / localStorage**(测试把整段抽出来跑)。
+2. **设置只由编辑页写**:`recipes[] / components[]` 的 `prepMode: "stock"` / `prepStore`(freeze / fridge / room)/ `prepShelfDays` / `prepMinStock` / `prepThawZh` / `prepThawJa`。
+   库存卡、提醒、体检、删除只写账本。IP 分发包只剥 `prepMinStock`。
+3. **生产单**:标了备货的配方,没写 `stage` = 取出烤(只写「从冷冻取 N → 解冻 → 烤」,不列配料);`stage: "make"` = 做一批存着(整张配方去称,记入 = 账本加一批)。
+   判重走 `prodLineKey`。还没开始记的(账本里没有这一样)不扣、不提醒;**过期的批不扣**;先进先出按做的日期。
+4. **以后新写「扣备货」的地方一律走 `prepFlowOfSheetRow(line, add, ctx)` + `writePrep`**(`add` = 还没记的部分,≤ 0 不调)。组合产品只有跟组件库走的备货部分才扣。
+5. **商品记入扣不扣看 `productPrepSkips(p)`**:`prepSkip` 显式 true / false 说了算;没有这个键 → 只装一样且每件 1 个,或只挂一个组件 = 扣;礼盒 / 几个装 = 不扣(她先烤好单个再装盒)。
+   不扣的商品在生产单上**每一样**都只写「装烤好的 N 个」,不列配料、不进「今天要称」;采购页照旧按原料算。「去新建商品 →」开新建页、预填这一样 × 1 和名字。
+6. **生产记录 id 只走 `findDayLog`**;账本的 take 挂 `prodLogId`,生产记录上不加字段。**删生产记录只加回本机账本里挂着它的 take**(别的设备 / 旧版记的不动)。
+7. **撤销 / 删记录**:只按 move 里记下的数做,之后盘点过的整样不加回、之后报废过的批不加回;**补录之后缠住了的按重放,规则全在 backdate_spec**。
+   账本核心函数和 spec 附录 A 一字不差,改完跑 `node .claude/scripts/prepstock/backdate/v2/cmp_defs.cjs src/App.jsx`(要「一样(29)」)和 oracle 8 个种子要「失败 0」。
+8. **单位对不对只走 `prepSameUnit`**;对不上 → 这一样停止自动加减、盘点进「改单位」模式。
+9. **合并导入不带库存、也不带 `prep*` 设置**(备货的设置和库存都在店里那台设备上管);覆盖导入 / 清除全部照 `prodPlan` 的规矩。
+10. **员工**:能看、记入、登记、取出、盘点、报废(都有撤销),不能改设置、不能加行;**任何地方不显示钱**。员工第 4 页「备货」,4 格窄屏字号规则 `STAFF_NAV4_CSS` 刻意没放进 `GLOBAL_CSS`。
+11. **`PREP_TXT` 各段往同一张表加键,同名会悄悄互相盖掉**(合并时白屏过一次),加键前 grep,`dupkeys.cjs` 会报。
+12. **已知没堵的两处(都只有程序内部能走到,界面上没有「撤销删生产记录」的入口)**:撤盘点时加回被之后的报废跳过(`backdate/oracle_2026-10-02/repro_count_revert_ib7.json`);
+    共同规则 4 → 撤销删记录 → 撤盘点(`backdate/recheck/trackA_1002/repro_rule4_lc_undo_restore_then_count.json`,候选修法在同目录 `app_fix2`)。要堵得先改 spec 附录 A。
+13. 录入包的配方 / 组件可以带 `prepMode / prepStore / prepShelfDays / prepThawZh / prepThawJa`,**永远不带 appSettings**(账本是每台设备自己的)。
+
 ## RURU_*.json files at repo root
 
 These are user-authored import packages (recipes, components, knowledge, materials encyclopedias) consumed via the "数据" → 导入 flow. They are data, not code — don't reformat or edit them unless the user asks. The full export shape includes `recipes`, `cats`, `components`, `creations`, `knowledge`, `exportedAt`, `version`; partial packages with just one or two of those keys are also valid imports.
