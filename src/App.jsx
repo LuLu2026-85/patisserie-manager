@@ -25615,7 +25615,8 @@ function App() {
         const tp = plans[ai].tp;
         ded = tp.got;
         if (tp.got > 0) bits.push(X.fTakeBit(store, nm, tp.got, u));
-        if (tp.short > 0) { const exp = prepOnHand(a.it, a.cfg, now0).expired; notes.push(exp > 0 ? X.fShortExp(store, nm, tp.got, tp.short, exp, u) : X.fShort(store, nm, tp.got, tp.short, u)); }   // 终审 r1
+        // (App 里的 prepOnHand 是采购页用的 Map,盖住了模块的同名函数 —— 这里按批次直接加,同生产单 takeParts)
+        if (tp.short > 0) { const exp = _r3(prepLotsView(a.it, a.cfg, now0).filter(l => l.status === "expired").reduce((s, l) => s + l.left, 0)); notes.push(exp > 0 ? X.fShortExp(store, nm, tp.got, tp.short, exp, u) : X.fShort(store, nm, tp.got, tp.short, u)); }   // 终审 r1
       } else {
         const pl = plans[ai].bp;
         if (!pl.ok) {
