@@ -21247,12 +21247,13 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     flowUntaken.push({ key: prepKeyOf(kind, id), name: name || "", reason, src: src || "" });
   };
   // 装烤好的商品(生产模式)组成里的每一样:不展开、不扣,只记「装烤好的 count 个」。标了备货的和以前一样(键 / 单位照备货设置);
-  // 没标的(ux2)键照同一个格式、单位照它自己的(配方空 = 个、组件空 = g、组合产品 = 个),多带 plain: true
+  // 没标的(ux2)键照同一个格式、单位照它自己的(配方空 = 个、组件空 = g;组合产品按结构「台 / 个」,同生产单块),多带 plain: true
   const packAdd = (linkedType, target, count, s2) => {
     const kind = linkedType === "creation" || linkedType === "component" ? linkedType : "recipe";
     const cfg = kind !== "creation" ? prepCfgOf(kind, target) : null;
     const key = cfg ? cfg.key : prepKeyOf(kind, target.id);
-    if (!packed.has(key)) packed.set(key, { key, kind, id: target.id, name: mLabel(target) || target.nameFr || "", unit: cfg ? cfg.unit : (_normTxt(target.unit) || (kind === "component" ? "g" : "个")), qty: 0, srcs: new Set(), ...(cfg ? {} : { plain: true }) });
+    const unit = cfg ? cfg.unit : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit : (_normTxt(target.unit) || (kind === "component" ? "g" : "个"));
+    if (!packed.has(key)) packed.set(key, { key, kind, id: target.id, name: mLabel(target) || target.nameFr || "", unit, qty: 0, srcs: new Set(), ...(cfg ? {} : { plain: true }) });
     const pk = packed.get(key);
     pk.qty += count;
     if (s2) pk.srcs.add(s2);
