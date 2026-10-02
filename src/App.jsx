@@ -22485,7 +22485,8 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onRaiseMake, onOpen
         // 终审 r1:做一批行已经全记入(incoming 0)就不算「单子上有了」(再也不会进账),给「＋ 做一批的行再加 N」把那一行的数量加上去
         // (onAddMake 走 mergeProdLines 会当重复丢掉);没填产出量 / 单位对不上的做一批行本来就不算 incoming,照旧写「单子上有了」
         const mkLine = on.has(makeKey) ? (lines || []).find(l => l && prodLineKey(l) === makeKey) : null;
-        const already = !!mkLine && (r.incoming > 0 || r.cfg.batch === null || !!r.oh.unitMismatch);
+        // 终审 r2:单子上的做一批还没记入、但量不够(还是红的 short)也不算「单子上有了」,同样给「再加 N」(suggest 已经减掉了 incoming)
+        const already = !!mkLine && ((r.incoming > 0 && !r.flags.short) || r.cfg.batch === null || !!r.oh.unitMismatch);
         const mkDone = !!mkLine && !already;
         // 不够 / 低于提醒线的行给「＋ 做一批加进今天」;单子上已经有做一批行时写「✓ 今天单子上有了」(这时建议可能已经算成不用做)
         const wantMake = (f.short || f.low) && (!!r.suggest || already);
