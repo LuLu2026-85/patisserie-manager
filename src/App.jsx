@@ -20620,20 +20620,27 @@ const prepWindowUsable = (oh0, pre, d0, d1, ohAt) => {
   const dd = _daysBetween(d0, d1);
   const days = isFinite(dd) ? Math.min(400, Math.max(1, dd + 1)) : 1;   // 日期读不出 = 当一天(只按开始日);上限防手滑选了好几年
   const ohEnd = days > 1 ? ohAt(dd + 1 > 400 ? plusDaysStr(d0, 399) : d1) : oh0;
-  const usableIn = (m, k) => { const e = m && m.get(k); return e ? _prepNum(e.usable) : 0; };
+  const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };   // 同 sheet helpers 的 _prepNum;本段要能单独抽出来测,不借后面那段的
+  const usableIn = (m, k) => { const e = m && m.get(k); return e ? num(e.usable) : 0; };
   const keys = [...oh0.keys()].filter(k => usableIn(oh0, k) > usableIn(ohEnd, k));
   if (!keys.length) return oh0;
-  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, _prepNum(p.need)]));
+  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, num(p.need)]));
   const daily = [oh0];
   for (let i = 1; i < days - 1; i++) daily.push(ohAt(plusDaysStr(d0, i)));
   if (days > 1) daily.push(ohEnd);
   const out = new Map(oh0);
   keys.forEach(k => {
-    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days;
+    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days, uEnd = usableIn(ohEnd, k);
+    // 终审 r3:按过期日分桶模拟(先进先出,先过期的先用)。桶 j = 第 j 天起不能用的量;到结束日还能用的(uEnd)最后才用、照算。
+    // 以前每天只拿「那天没过期的合计」封顶,结束日还能用的那批会被这段时间里的用量先算一遍、最后又加一遍(两批时多算、少买原料)
+    const buckets = [];
+    for (let j = 1; j < days; j++) { const q = usableIn(daily[j - 1], k) - usableIn(daily[j], k); if (q > 0) buckets.push([j, q]); }
     let used = 0;
-    // 第 i 天还剩能用的 = min(开始日的 − 已经用掉的, 那天没过期的批合计):先用掉的是最先过期的那几批
-    for (let i = 0; i < days && rate > 0; i++) used += Math.max(0, Math.min(rate, u0 - used, usableIn(daily[i], k)));
-    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + usableIn(ohEnd, k))) });
+    for (let i = 0; i < days && rate > 0; i++) {
+      let want = rate;
+      for (const bk of buckets) { if (want <= 0) break; if (bk[0] <= i || bk[1] <= 0) continue; const q = Math.min(want, bk[1]); bk[1] -= q; want -= q; used += q; }
+    }
+    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + uEnd)) });
   });
   return out;
 };
@@ -20780,7 +20787,7 @@ const PREP_TXT = {
     burnt: "烤坏的也算进来,晚上日结记「烤坏」",
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
-    takenElsewhereOf: (nm, n, u) => `⚠ 今天已经从取出行 / 备货页 / 厨房取出过「${nm}」${n} ${u},再记商品行会再扣一遍`,
+    takenElsewhereOf: (nm, n, u) => `⚠ 今天已经从备货页 / 厨房取出过「${nm}」${n} ${u},再记商品行会再扣一遍`,
     // 终审 r2:两行(取出行 + 商品行)各记过一边时说两种情况(同一批烤的别再记;给礼盒等另烤的照记),不一律说「会再扣」
     takenByLineOf: (nm, n, u) => `⚠ 今天已经在取出行记过「${nm}」${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
     takenByProduct: (n, u) => `⚠ 今天商品那边记生产时已经扣过 ${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
@@ -20826,6 +20833,8 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 装烤好的 ${n} ${u}(不扣备货)`,
     printPackedPlain: (n, u) => `☐ 装烤好的 ${n} ${u}`,
     printMakeHint: (store, n, u, date) => `做好后记入:${store} +${n} ${u} · 今天做的${date ? `,放到 ${date}` : ""}`,
+    printLoggedHead: (a, b, u) => `✓ 已记入 ${a} ${u}(已经做好了),下面只列还要做的 ${b} ${u}`,
+    printLoggedTotals: (list) => `⚠ 下面的合计按整行算,含已经记入的部分(${list}):那部分已经做好,别再称`,
     // ── D 线:厨房视图 / 员工外壳 ──
     kitModeTake: "取出烤", kitModeMake: "做一批",
     kitTag: (s) => (s === "freeze" ? "冷冻→烤" : s === "fridge" ? "冷藏→烤" : "取出→烤"),
@@ -21103,7 +21112,7 @@ const PREP_TXT = {
     burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
-    takenElsewhereOf: (nm, n, u) => `⚠ 本日すでに取り出し行・作り置き・キッチン画面から「${nm}」${n}${u} 使用済み。商品行を記録するとさらに引かれます`,
+    takenElsewhereOf: (nm, n, u) => `⚠ 本日すでに作り置き・キッチン画面から「${nm}」${n}${u} 使用済み。商品行を記録するとさらに引かれます`,
     takenByLineOf: (nm, n, u) => `⚠ 本日すでに取り出し行で「${nm}」${n}${u} を記録済み。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
     takenByProduct: (n, u) => `⚠ 本日すでに商品の製造記録で ${n}${u} 引かれています。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
     usedElsewhere: (n) => `⚠ 本日すでに ${n} 記録済み(削除した行の分)。押すと作り置きがさらに引かれます`,
@@ -21147,6 +21156,8 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 焼成済みを詰める ${n}${u}(作り置きから引かない)`,
     printPackedPlain: (n, u) => `☐ 焼成済みを詰める ${n}${u}`,
     printMakeHint: (store, n, u, date) => `仕込み後に記録:${store} +${n}${u} · 本日仕込み${date ? `、${date} まで` : ""}`,
+    printLoggedHead: (a, b, u) => `✓ ${a}${u} 記録済み(仕込み済み)。以下は残り ${b}${u} 分のみ`,
+    printLoggedTotals: (list) => `⚠ 下記の合計は行全体の量で、記録済みの分(${list})も含みます。その分は仕込み済みなので量り直さないでください`,
     // ── D 線:キッチン表示 / スタッフ ──
     kitModeTake: "出して焼く", kitModeMake: "仕込み",
     kitTag: (s) => (s === "freeze" ? "冷凍→焼成" : s === "fridge" ? "冷蔵→焼成" : "出して焼成"),
@@ -22063,7 +22074,8 @@ const prepSheetShown = (sheet, ctx, stock, today, productionLog) => (sheet || []
   const info = _prepLineBase(s, ctx, stock, today, productionLog);
   if (!info || info.mode !== "make" || !(info.logged > 0) || !(info.pending > 0) || !(info.pending < s.qty)) return s;
   const r = buildProdSheet([{ ...s.line, qty: String(info.pending) }], ctx)[0];
-  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks } : s;
+  // 终审 r3:带上已记 / 还要做的数 —— 打印抬头和「今天总共要称多少」要写明已经记入的那部分(纸上没有卡片的「✓ 已记入」)
+  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks, shownLogged: info.logged, shownPending: info.pending } : s;
 });
 // ─── END prepstock sheet helpers ───
 
@@ -23922,6 +23934,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
             <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{fmtQty(s.qty)} {lineUnit(s)}</div>
           </div>
           {s.missing && <div style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.missing}</div>}
+          {s.shownLogged > 0 && <div data-prep-print="logged" className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{PX.printLoggedHead(fmtQty(s.shownLogged), fmtQty(s.shownPending), lineUnit(s))}</div>}
           {/* 审查 ps2:数量 0 的取出烤行(同屏幕卡片):不印「数量是 0,不做」,印「店长没填数量 · 实际取了 ____」 */}
           {!s.missing && s.zero && (s.line.kind === "recipe" && s.obj && isPrepMarked(s.obj) && s.line.stage !== "make"
             ? <div style={{ fontSize: "10pt" }}>{prepTxt(L).zeroTakePrint(prepCfgOf("recipe", s.obj).unit)}</div>
@@ -23932,6 +23945,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       ))}
 
       <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{X.totals}</div>
+      {sheet.some(s => s.shownLogged > 0) && <div data-prep-print="loggedtotals" className="p-row" style={{ fontSize: "10pt", fontWeight: 700 }}>{PX.printLoggedTotals(sheet.filter(s => s.shownLogged > 0).map(s => `${lineName(s)} ${fmtQty(s.shownLogged)}${L === "ja" ? "" : " "}${lineUnit(s)}`).join("、"))}</div>}
       {prodNoYieldNames(sheet, L).length > 0 && <div className="p-row" style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.noYieldTotals(prodNoYieldNames(sheet, L).map(n => `「${n}」`).join(""))}</div>}
       <table><tbody>{totals.weigh.map(totalRow)}</tbody></table>
       {totals.nonGram.length > 0 && (<>
