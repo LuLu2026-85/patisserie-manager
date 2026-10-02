@@ -20629,11 +20629,17 @@ const prepWindowUsable = (oh0, pre, d0, d1, ohAt) => {
   if (days > 1) daily.push(ohEnd);
   const out = new Map(oh0);
   keys.forEach(k => {
-    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days;
+    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days, uEnd = usableIn(ohEnd, k);
+    // 终审 r3:按过期日分桶模拟(先进先出,先过期的先用)。桶 j = 第 j 天起不能用的量;到结束日还能用的(uEnd)最后才用、照算。
+    // 以前每天只拿「那天没过期的合计」封顶,结束日还能用的那批会被这段时间里的用量先算一遍、最后又加一遍(两批时多算、少买原料)
+    const buckets = [];
+    for (let j = 1; j < days; j++) { const q = usableIn(daily[j - 1], k) - usableIn(daily[j], k); if (q > 0) buckets.push([j, q]); }
     let used = 0;
-    // 第 i 天还剩能用的 = min(开始日的 − 已经用掉的, 那天没过期的批合计):先用掉的是最先过期的那几批
-    for (let i = 0; i < days && rate > 0; i++) used += Math.max(0, Math.min(rate, u0 - used, usableIn(daily[i], k)));
-    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + usableIn(ohEnd, k))) });
+    for (let i = 0; i < days && rate > 0; i++) {
+      let want = rate;
+      for (const bk of buckets) { if (want <= 0) break; if (bk[0] <= i || bk[1] <= 0) continue; const q = Math.min(want, bk[1]); bk[1] -= q; want -= q; used += q; }
+    }
+    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + uEnd)) });
   });
   return out;
 };
