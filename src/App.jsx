@@ -20789,6 +20789,10 @@ const PREP_TXT = {
     fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u ? " " + u : ""}`,
     fProdToast: (d, n, prep) => `✓ ${d} 生产 +${fmtQty(n)}(库存 +${fmtQty(n)};${prep})`,
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
+    // 终审 r1:扣不够、手上又有过期批时说清是过期(备货页上那批明明还在,「账上只有 0」对不上;该做的是报废,不是盘点)。
+    // fShortExp 给商品页(数和单位同 fShort);toastShortExp 给生产单 / 厨房视图 / 备货卡(数已经格式化好,同 toastShort / kitToastShort)
+    fShortExp: (store, name, got, short, exp, u) => `;${store}「${name}」能用的只有 ${fmtQty(got)}${u ? " " + u : ""},另有 ${fmtQty(exp)}${u ? " " + u : ""} 已过期(过期的不扣),差 ${fmtQty(short)}${u ? " " + u : ""} 没扣 —— 过期的去「备货」报废,数不对再盘点`,
+    toastShortExp: (store, name, got, sh, exp) => `;${store}「${name}」能用的只有 ${got},另有 ${exp} 已过期(过期的不扣),差 ${sh} 没扣 —— 过期的去「备货」报废,数不对再盘点`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     // 补录往天(backdate_spec §2.5):每一样按 prepBackPlan 的结果说一句,都不许出现钱。md = 补录那天,u = 账上的单位
     fBackNone: "备货没扣,原因见后",   // 一样都没扣到时括号里写这个
@@ -21087,6 +21091,8 @@ const PREP_TXT = {
     fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u || ""}`,
     fProdToast: (d, n, prep) => `✓ ${d} 製造 ${fmtQty(n)} 件(${prep})`,
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
+    fShortExp: (store, name, got, short, exp, u) => `・${store}「${name}」は使用可 ${fmtQty(got)}${u || ""} のみ(期限切れ ${fmtQty(exp)}${u || ""} は控除しません)、${fmtQty(short)}${u || ""} 未控除。期限切れは「作り置き」で廃棄、数が合わなければ棚卸し`,
+    toastShortExp: (store, name, got, sh, exp) => `・${store}「${name}」は使用可 ${got} のみ(期限切れ ${exp} は控除しません)、${sh} 未控除。期限切れは「作り置き」で廃棄、数が合わなければ棚卸し`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     fBackNone: "作り置きは未控除(理由は後述)",
     fBackAbsorbed: (store, name, parts, u, same) => {
@@ -23227,7 +23233,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     const plan = prepTakePlan(item, cfg, qty, t);
     // 审查 ps1:扣不够时同厨房视图 / 生产单,写「账上只有 X,差 Y 没扣(去盘点)」(以前只写扣到的数,差的那几个之后做一批时会被悄悄补扣)
     const r = doOp([op], X.toastTake(name, storeName, q(plan.got), unit, q(Math.max(0, _r3(oh.usable - plan.got))))
-      + (plan.short > 0 ? X.kitToastShort(storeName, name, q(plan.got), q(plan.short)) : ""));
+      + (plan.short > 0 ? (oh.expired > 0 ? X.toastShortExp(storeName, name, q(plan.got), q(plan.short), q(oh.expired)) : X.kitToastShort(storeName, name, q(plan.got), q(plan.short))) : ""));   // 终审 r1:有过期的说清
     if (r) setPanel(null);
     return r;
   };
@@ -24247,7 +24253,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     const plan = prepTakePlan(pitem, pcfg, kitQ, today);
     const q = _r3(plan.got + plan.short);
     let msg = PX.kitToastTake(name, storeNm, fmtQty(q), pcfg.unit, fmtQty(Math.max(0, _r3(oh.usable - plan.got))));
-    if (plan.short > 0) msg += PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));
+    if (plan.short > 0) msg += oh.expired > 0 ? PX.toastShortExp(storeNm, name, fmtQty(plan.got), fmtQty(plan.short), fmtQty(oh.expired)) : PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));   // 终审 r1
     const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: kitQ, via: "kitchen" };
     if (c.staff) op.staff = true;
     if (onPrepOp([op], { toast: msg, staff: !!c.staff }) === false) return;
@@ -25599,7 +25605,7 @@ function App() {
         const tp = plans[ai].tp;
         ded = tp.got;
         if (tp.got > 0) bits.push(X.fTakeBit(store, nm, tp.got, u));
-        if (tp.short > 0) notes.push(X.fShort(store, nm, tp.got, tp.short, u));
+        if (tp.short > 0) { const exp = prepOnHand(a.it, a.cfg, now0).expired; notes.push(exp > 0 ? X.fShortExp(store, nm, tp.got, tp.short, exp, u) : X.fShort(store, nm, tp.got, tp.short, u)); }   // 终审 r1
       } else {
         const pl = plans[ai].bp;
         if (!pl.ok) {
@@ -25738,10 +25744,12 @@ function App() {
         const o = objOf(t.kind, t.id), cfg = prepCfgOf(t.kind, o), it = prepStock.items[t.key];
         const tp = prepTakePlan(it, cfg, t.qty, today);
         // (App 里的 prepOnHand 是采购页用的 Map,这里按批次直接加:能用的 = 没过期的批剩的合计)
-        const usable = prepLotsView(it, cfg, today).filter(l => l.status !== "expired").reduce((a, l) => a + l.left, 0);
-        return { t, cfg, name: prodName(o, lang), store: X.storeName(cfg && cfg.store), got: tp.got, short: tp.short, left: _r3(usable - tp.got) };
+        const lv = prepLotsView(it, cfg, today);
+        const usable = lv.filter(l => l.status !== "expired").reduce((a, l) => a + l.left, 0);
+        const exp = _r3(lv.filter(l => l.status === "expired").reduce((a, l) => a + l.left, 0));   // 终审 r1:扣不够时说清有过期的
+        return { t, cfg, name: prodName(o, lang), store: X.storeName(cfg && cfg.store), got: tp.got, short: tp.short, exp, left: _r3(usable - tp.got) };
       }).filter(x => x.cfg);
-      const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
+      const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => x.exp > 0 ? X.toastShortExp(x.store, x.name, q(x.got), q(x.short), q(x.exp)) : X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
       const untakenTxt = (untaken) => {
         const by = new Map();
         // 审查 ps4:同商品页 logProdWithPrep —— 本产品专用的部分是有意不扣、还没开始记的不算「没扣到」,不提(以前都算进「没填用量或单位对不上」)
