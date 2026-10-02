@@ -20626,6 +20626,9 @@ const PREP_TXT = {
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
     takenElsewhereOf: (nm, n, u) => `⚠ 今天已经从取出行 / 备货页 / 厨房取出过「${nm}」${n} ${u},再记商品行会再扣一遍`,
+    // 终审 r2:两行(取出行 + 商品行)各记过一边时说两种情况(同一批烤的别再记;给礼盒等另烤的照记),不一律说「会再扣」
+    takenByLineOf: (nm, n, u) => `⚠ 今天已经在取出行记过「${nm}」${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
+    takenByProduct: (n, u) => `⚠ 今天商品那边记生产时已经扣过 ${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
     usedElsewhere: (n) => `⚠ 今天已经记入过 ${n}(删掉的行记的),再点会再扣一遍备货`,
     // 终审 r1:礼盒(装烤好的、不扣)的饼干要另烤一批走取出行,和单个商品行是两份真的用量 —— 说两种情况,不再一律「只记一行」
     dupe: (name) => `「${name}」在两行里都会扣:同一批烤的只记入一行;给礼盒等另烤的,两行各记各的`,
@@ -20944,6 +20947,8 @@ const PREP_TXT = {
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
     takenElsewhereOf: (nm, n, u) => `⚠ 本日すでに取り出し行・作り置き・キッチン画面から「${nm}」${n}${u} 使用済み。商品行を記録するとさらに引かれます`,
+    takenByLineOf: (nm, n, u) => `⚠ 本日すでに取り出し行で「${nm}」${n}${u} を記録済み。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
+    takenByProduct: (n, u) => `⚠ 本日すでに商品の製造記録で ${n}${u} 引かれています。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
     usedElsewhere: (n) => `⚠ 本日すでに ${n} 記録済み(削除した行の分)。押すと作り置きがさらに引かれます`,
     dupe: (name) => `「${name}」は 2 行で引かれます。同じ分なら 1 行だけ記録、ギフト用などに別に焼いた分はそれぞれ記録してください`,
     partHave: (n, u) => `· 在庫 ${n}${u}`,
@@ -21742,9 +21747,14 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     // 不算:这一行自己记的、商品记录扣的(带 prodLogId,各商品各记各的)、组合产品行(lineKey)和做一批行扣的配料(组件上的 sheet take)这些别的用量
     const direct = new Set((Array.isArray(obj.items) ? obj.items : []).filter(it => it).map(it => prepKeyOf(it.linkedType || "recipe", it.linkedId)));
     // 审查 pt2:只看配方(同商品页「又扣了一遍」提醒):组件好多东西共用,今天备货卡 / 厨房取的多半是别的用途
-    const te = [...new Set(full.takes.filter(t => direct.has(t.key) && t.key.startsWith("recipe:") && canTake(t)).map(t => t.key))].map(k => ({ key: k, qty: _r3(takesToday(k)
-      .filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || k.startsWith("recipe:"))).reduce((a, m) => a + _prepNum(m.qty), 0)) })).filter(x => x.qty > 0);
-    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), ...(te.length ? { takenElsewhere: te } : {}), flow, readOnly, blocked: readOnly ? "readOnly" : null };
+    // 终审 r2:生产单取出行记的(via sheet,没有 prodLogId / lineKey)另放 takenByLine —— 给礼盒另烤的那一行照记,不能一律说「会再扣一遍」
+    const te0 = [...new Set(full.takes.filter(t => direct.has(t.key) && t.key.startsWith("recipe:") && canTake(t)).map(t => t.key))].map(k => {
+      const ms = takesToday(k).filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || k.startsWith("recipe:")));
+      const sum = (xs) => _r3(xs.reduce((a, m) => a + _prepNum(m.qty), 0));
+      return { key: k, qty: sum(ms.filter(m => m.via !== "sheet")), line: sum(ms.filter(m => m.via === "sheet")) };
+    });
+    const te = te0.filter(x => x.qty > 0).map(x => ({ key: x.key, qty: x.qty })), tl = te0.filter(x => x.line > 0).map(x => ({ key: x.key, qty: x.line }));
+    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), ...(te.length ? { takenElsewhere: te } : {}), ...(tl.length ? { takenByLine: tl } : {}), flow, readOnly, blocked: readOnly ? "readOnly" : null };
   }
   const cfg = (kind === "recipe" || kind === "component") ? prepCfgOf(kind, obj) : null;
   if (cfg) {
@@ -21773,12 +21783,14 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     const logged = own0 > 0 ? Math.min(qty, _r3(Math.min(lg, cap) + own0)) : Math.min(lg, cap);
     const pending = pend(logged);
     const actual = _r3(tk.filter(m => m.uid === l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
-    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy).reduce((a, m) => a + _prepNum(m.qty), 0));   // 审查 pt2:删了生产记录加回去的不算(同商品行 / 商品页的筛法)
+    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId).reduce((a, m) => a + _prepNum(m.qty), 0));   // 审查 pt2:删了生产记录加回去的不算(同商品行 / 商品页的筛法)
+    // 终审 r2:商品行 / 商品页记生产扣的(带 prodLogId)另算 —— 给礼盒另烤的这一行照记,不是「备货页 / 厨房」取的
+    const takenByProduct = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy && m.prodLogId).reduce((a, m) => a + _prepNum(m.qty), 0));
     // 这个配方挂在哪些商品上(卡片灰字「要同时加商品库存,请用『从商品加』」;linkedType 缺省也算 recipe,同 13a 的判定)
     const onProducts = (ctx.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(obj.id)))
       .map(p => ({ id: p.id, name: prodName(p, ctx.lang) }));
     return { mode: item ? "take" : null, sub: "bake", key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
-      takenElsewhere, onProducts, flow: flowOf(pending), readOnly, blocked: !item ? null : readOnly ? "readOnly" : unitMismatch ? "unit" : null };
+      takenElsewhere, ...(takenByProduct > 0 ? { takenByProduct } : {}), onProducts, flow: flowOf(pending), readOnly, blocked: !item ? null : readOnly ? "readOnly" : unitMismatch ? "unit" : null };
   }
   // 组合产品行 / 没标备货但用到备货组件(「来自组件」)的配方 / 组件行:记入 = 只从账本扣
   const full = prepFlowOfSheetRow(lineObj, qty > 0 ? qty : 1, ctx);
@@ -22174,6 +22186,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
                 !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(bakeQ) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
+          {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenByProduct > 0 && <span data-prep-byproduct="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenByProduct(fmtQty(prep.takenByProduct), u)}</span>}
           {!pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.usedElsewhere > 0 && <span data-prep-useelsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.usedElsewhere(fmtQty(prep.usedElsewhere))}</span>}
           {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{(readOnly ? PX.onProductStaff : PX.onProduct)(prep.onProducts.map(p => p.name).join("」「"))}</span>}
         </div>
@@ -22252,6 +22265,9 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       )}
       {willTake && Array.isArray(prep.takenElsewhere) && prep.takenElsewhere.map(x => { const e = prepView.get(x.key); return e ? (
         <div key={x.key} data-prep-elsewhere-product={x.key} style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>{PX.takenElsewhereOf(e.name, fmtQty(x.qty), e.cfg.unit)}</div>
+      ) : null; })}
+      {willTake && Array.isArray(prep.takenByLine) && prep.takenByLine.map(x => { const e = prepView.get(x.key); return e ? (
+        <div key={x.key} data-prep-byline-product={x.key} style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>{PX.takenByLineOf(e.name, fmtQty(x.qty), e.cfg.unit)}</div>
       ) : null; })}
       {prepArea}
       {panelEl}
