@@ -21886,6 +21886,16 @@ const prepReachable = (products, plan, ctx, onHand) => {
   const r = computeMaterialNeeds(L, { ...(ctx || {}), products: (ctx && ctx.products) || products }, { onHand });
   return Array.isArray(r.prepPlan) && r.prepPlan.length > 0;
 };
+// 终审 r2:做一批行已经记过一部分(记完后又把数量加上去,比如提醒的「再加 N」)时,给页面看的块按还没记的那部分(pending)重算 ——
+// 卡片的配料 / 几批 /「做好点记入 = +N」、员工厨房列表的数量、打印的「做好后记入」都跟着它(以前按整行,已经做好的那批叫员工再称一遍)。
+// 只换 blocks;s 本身(qty / line)、记入、账本、「今天总共要称多少」照旧按整行。stock = prepStockRead 的结果
+const prepSheetShown = (sheet, ctx, stock, today, productionLog) => (sheet || []).map(s => {
+  if (!s || s.missing || !s.obj || !s.line || !(s.line.kind === "component" || (s.line.kind === "recipe" && s.line.stage === "make"))) return s;
+  const info = _prepLineBase(s, ctx, stock, today, productionLog);
+  if (!info || info.mode !== "make" || !(info.logged > 0) || !(info.pending > 0) || !(info.pending < s.qty)) return s;
+  const r = buildProdSheet([{ ...s.line, qty: String(info.pending) }], ctx)[0];
+  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks } : s;
+});
 // ─── END prepstock sheet helpers ───
 
 const PROD_TXT = {
@@ -22567,6 +22577,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const stock = prepOn ? (prepStock && prepStock.items ? prepStock : prepStockRead(null)) : null;
   const ctxS = prepOn ? { ...ctx, sheet } : null;   // ctx.sheet:prepLineInfo 才算「两行扣同一样」(dupes);提醒 / 卡片共用同一个 ctx,记忆化才命中
   const pending = prepOn ? prepPendingOf(sheet, ctxS, stock, productionLog, today) : null;
+  const shown = prepOn ? prepSheetShown(sheet, ctxS, stock, today, productionLog) : sheet;   // 终审 r2:记过一部分的做一批行,块按还没记的算(卡片 / 打印)
   const prepView = prepOn ? (() => {
     const items = new Map();
     [["recipe", recipes], ["component", components]].forEach(([kind, list]) => (list || []).forEach(o => {
@@ -22615,7 +22626,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     if (!prepView) return { date: today, sheet, totals, lang };
     const first = {};
     prepView.items.forEach(e => { if (e.item && !e.oh.unitMismatch && e.oh.first) first[e.key] = prepTxt(lang).md(e.oh.first.madeAt); });
-    return { date: today, sheet, totals, lang, prep: { today, first } };
+    return { date: today, sheet: shown, totals, lang, prep: { today, first } };
   };
 
   if (adding === "pick") {
@@ -22665,7 +22676,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
           actions={[{ label: X.addProducts, onClick: () => setAdding("products") }, { label: X.addPick, onClick: () => setAdding("pick") }]} />
       ) : (
         <>
-          {sheet.map(s => {
+          {sheet.map((s, si) => {
             const todayLogged = s.line.kind === "product" ? (productionLog || []).filter(x => x && String(x.productId) === String(s.line.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0) : 0;
             if (!prepOn) return (
               <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
@@ -22682,7 +22693,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
             const info = prepLineInfo(s, ctxS, stock, today, productionLog);
             const step = info && info.mode === "make" && info.cfg && info.cfg.batch ? info.cfg.batch : 1;
             return (
-              <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
+              <ProdLineCard key={s.line.uid} s={shown[si] || s} lang={lang} open={!closed[s.line.uid]}
                 onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
                 onQty={(v) => setLine(s.line.uid, { qty: v })}
                 onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d * step) })}
@@ -24592,7 +24603,9 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
   const openKitchen = (kind, id, qty, stage, uid, fromLine) => { setKitchenItem({ kind, id, qty, stage, uid, fromLine }); setPage("kitchen"); if (typeof window !== "undefined" && window.scrollTo) { try { window.scrollTo(0, 0); } catch (e) {} } };
   const kitchenTarget = kitchenItem ? _prodFind(kitchenItem.kind === "creation" ? creations : kitchenItem.kind === "component" ? components : recipes, kitchenItem.id) : null;
   const plan = prodPlanForToday(rawPlan, today);
-  const sheet = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  const sheet0 = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  // 终审 r2:记过一部分的做一批行按还没记的那部分列(同生产单卡片)
+  const sheet = prepOn && sheet0.length ? prepSheetShown(sheet0, ctx, prepStock && prepStock.items ? prepStock : prepStockRead(prepStock), today, productionLog) : sheet0;
   // 厨房视图另外要的(只用来显示 / 判断「这一行记完没有」):账本、今天单子的行、生产记录、员工标记
   const kctx = { ...ctx, prepStock, planLines: plan.lines, productionLog, staff: true };
   return (
