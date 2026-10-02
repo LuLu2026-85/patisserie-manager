@@ -20669,7 +20669,7 @@ const PREP_TXT = {
     kitThaw: "取出后",
     kitWhole: "整份做法(做面团时用)",
     kitHave: (store, n, u) => `${store}现有 ${n} ${u}`,
-    kitFirst: (d, m, u, k) => `先用 ${d} 那批(${m} ${u}${k === null || k === undefined ? "" : `,还能放 ${k} 天`})`,
+    kitFirst: (d, m, u, k) => `先用 ${d} 那批(${m} ${u}${k === null || k === undefined || k === "" ? "" : typeof k === "string" ? "," + k : `,还能放 ${k} 天`})`,   // 终审 r1:k 是字符串 = 现成的尾巴(今天到期写 lotToday,同生产单;以前写「还能放 0 天」)
     kitNotTracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
     kitShort: (have, short, u) => `⚠ 只有 ${have} ${u},差 ${short} ${u}`,
     kitExpired: (k, n, u) => `⚠ 有 ${k} 批过期了(共 ${n} ${u}),别用,去「备货」报废`,
@@ -20973,7 +20973,7 @@ const PREP_TXT = {
     kitThaw: "取り出し後",
     kitWhole: "全工程(仕込み用)",
     kitHave: (store, n, u) => `${store}在庫 ${n}${u}`,
-    kitFirst: (d, m, u, k) => `${d} 仕込み分から(${m}${u}${k === null || k === undefined ? "" : `、あと ${k} 日`})`,
+    kitFirst: (d, m, u, k) => `${d} 仕込み分から(${m}${u}${k === null || k === undefined || k === "" ? "" : typeof k === "string" ? "、" + k : `、あと ${k} 日`})`,
     kitNotTracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
     kitShort: (have, short, u) => `⚠ 在庫 ${have}${u}、${short}${u} 不足`,
     kitExpired: (k, n, u) => `⚠ 期限切れ ${k} ロット(計 ${n}${u})。使わずに「作り置き」で廃棄`,
@@ -24251,7 +24251,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const note = (color, attr, txt) => <div data-kitchen-prep={attr} style={{ fontSize: 16, color, marginTop: 8, lineHeight: 1.6, overflowWrap: "anywhere", ...T.num }}>{txt}</div>;
   const thaw = pcfg ? prodNote(zh ? (pcfg.thawZh || pcfg.thawJa) : (pcfg.thawJa || pcfg.thawZh)) : "";
   const takeSub = isTake && pitem && !oh.unitMismatch
-    ? [oh.first ? PX.kitFirst(PX.md(oh.first.madeAt), fmtQty(oh.first.left), pcfg.unit, oh.first.status === "nodate" ? null : oh.first.daysLeft) : "", PX.kitHave(storeNm, fmtQty(oh.usable), pcfg.unit)].filter(Boolean).join(" · ")
+    ? [oh.first ? PX.kitFirst(PX.md(oh.first.madeAt), fmtQty(oh.first.left), pcfg.unit, oh.first.status === "nodate" ? null : oh.first.status === "today" ? PX.lotToday : oh.first.daysLeft) : "", PX.kitHave(storeNm, fmtQty(oh.usable), pcfg.unit)].filter(Boolean).join(" · ")
     : "";
   // 组合产品的备货部分:「现有 Y g」(组件已开始记、单位对得上才有)
   const partHave = (l) => {
