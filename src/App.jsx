@@ -17651,6 +17651,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
   if (editTarget !== null) {
     return <ProductEditForm
       product={editTarget._new ? null : editTarget}
+      prefill={editTarget._new ? editTarget._prefill : undefined}
       recipes={recipes}
       creations={creations}
       components={components}
@@ -18020,14 +18021,14 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
 }
 
 // [B6 修复] 加 components,商品可关联组件
-function ProductEditForm({ product, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {
+function ProductEditForm({ product, prefill, recipes, creations, components = [], lang, onSave, onDelete, onBack }) {   // prefill:备货 ux2「去新建商品 →」带来的起点(名字 + 组成),只在新建时用
   // [B5 修复] note → notesZh/notesJa 双语
   // 第 4 批 B4-2:packagingCost 每件包装费(人民币;"" = 没填,离开保护把 "" 当没有这个字段)
   const empty = { nameZh: "", nameJa: "", imageUrls: [], items: [], currentStock: 0, threshold: 0, leadTimeDays: 0, sellPrice: 0, priceCurrency: "CNY", packagingCost: "", notesZh: "", notesJa: "" };
   // 旧数据兼容:有 note 但没 notesZh/notesJa,迁移到 notesZh
   // 第 4 批 D 线顺带修:老商品没有 priceCurrency(= 日元,CLAUDE.md 币种第 6 条),以前被 empty 的 "CNY" 盖掉 ——
   // 编辑页币种按钮显示 ¥,不改售价点保存 450 円 就变成 ¥450(贵 23 倍)。打开时按 priceCurOf 补上真实币种
-  const initial = product ? { ...empty, ...product, ...(parseFloat(product.sellPrice) > 0 ? { priceCurrency: priceCurOf(product) } : {}) } : empty;
+  const initial = product ? { ...empty, ...product, ...(parseFloat(product.sellPrice) > 0 ? { priceCurrency: priceCurOf(product) } : {}) } : (prefill ? { ...empty, ...prefill } : empty);
   if (initial.note && !initial.notesZh && !initial.notesJa) {
     initial.notesZh = initial.note;
   }
@@ -20792,6 +20793,7 @@ const PREP_TXT = {
     partLocal: "本产品专用,没扣备货",
     partPacked: "这个商品装的是做好的,记入生产不扣备货",
     packed: (n, u, store) => `装烤好的 ${n} ${u}(不扣${store})`,
+    packedPlain: (n, u) => `装烤好的 ${n} ${u}`,   // ux2:装烤好的商品里没标备货的那几样(不扣什么,所以不写括号)
     prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u ? " " + u : ""}`,
     toastProduct: (name, n, prep) => `✓ 已记入生产「${name}」+${n}(库存 +${n}${prep ? ";" + prep : ""})`,
     toastUse: (name, n, prep) => `✓ 已记入「${name}」+${n}${prep ? `(${prep})` : ""}`,
@@ -20821,6 +20823,7 @@ const PREP_TXT = {
     pickToast: (name) => `✓ 加了「${name}」取出烤;要做面团点「＋ 在售中」里的「做一批」或备货提醒`,
     printFirst: (d) => `先用 ${d} 做的`, sufTake: "(取出烤)", sufMake: "(做一批存着)", printActual: (u) => `实际做了 ____ ${u}`,
     printPacked: (n, u) => `☐ 装烤好的 ${n} ${u}(不扣备货)`,
+    printPackedPlain: (n, u) => `☐ 装烤好的 ${n} ${u}`,
     printMakeHint: (store, n, u, date) => `做好后记入:${store} +${n} ${u} · 今天做的${date ? `,放到 ${date}` : ""}`,
     // ── D 线:厨房视图 / 员工外壳 ──
     kitModeTake: "取出烤", kitModeMake: "做一批",
@@ -21111,6 +21114,7 @@ const PREP_TXT = {
     partLocal: "この製品専用のため未控除",
     partPacked: "完成品を詰める商品のため、製造記録で作り置きを引きません",
     packed: (n, u, store) => `焼成済みを詰める ${n}${u}(${store}から引かない)`,
+    packedPlain: (n, u) => `焼成済みを詰める ${n}${u}`,
     prepMinus: (store, name, n, u) => `${store} ${name} −${n}${u || ""}`,
     toastProduct: (name, n, prep) => `✓ 製造記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
     toastUse: (name, n, prep) => `✓ 記録「${name}」+${n}${prep ? `(${prep})` : ""}`,
@@ -21140,6 +21144,7 @@ const PREP_TXT = {
     pickToast: (name) => `✓「${name}」を焼成で追加しました。仕込みは「＋ 販売中」かアラートから`,
     printFirst: (d) => `${d} 仕込み分から`, sufTake: "(出して焼成)", sufMake: "(仕込み・保存用)", printActual: (u) => `実際の出来数 ____ ${u}`,
     printPacked: (n, u) => `☐ 焼成済みを詰める ${n}${u}(作り置きから引かない)`,
+    printPackedPlain: (n, u) => `☐ 焼成済みを詰める ${n}${u}`,
     printMakeHint: (store, n, u, date) => `仕込み後に記録:${store} +${n}${u} · 本日仕込み${date ? `、${date} まで` : ""}`,
     // ── D 線:キッチン表示 / スタッフ ──
     kitModeTake: "出して焼く", kitModeMake: "仕込み",
@@ -21361,6 +21366,8 @@ const prepTxt = (lang) => PREP_TXT[lang === "ja" ? "ja" : "zh"];
 //   生产模式:标了备货的配方在「取出」时(商品组成项,或 stage 不是 "make" 的配方行)不展开原料,进 fromFrozen(key = 配方 id);
 //     商品组成项是标了备货的组件 → 进 fromStock(和组合产品备货部分 / 「来自组件」备货行同一个 key,会合成一行);
 //     商品按组成判断「装的是已经烤好的」(productPrepSkips)时,它组成里的备货配方 / 组件进 packed,不展开、不进 fromFrozen / fromStock;
+//     ux2(10-02 LuLu:先烤好单个再装盒):没标备货的配方 / 组件 / 组合产品也一样进 packed(多带 plain: true),不展开去称、不进「这些没算进来」;
+//     采购模式照旧按原料算(装盒的饼干终归是原料烤出来的)。
 //     配方行 stage: "make"、直接加的组件行:照旧展开去称。fromFrozen / packed 只在非空时加键。
 //   opts.prepFlow(只配合生产模式):同一个地方另外记 out.prepFlow = { takes: [{ key, kind, id, qty(这一样自己的单位), srcs }],
 //     untaken: [{ key, name, reason: "noUsed" | "unit" | "local", src }] } —— 这几行会从备货账本扣什么。组合产品的部分只有跟组件库走(layerLinkState
@@ -21421,6 +21428,18 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   const untake = (kind, id, name, reason, src) => {
     if (!flowOn || curSkip) return;
     flowUntaken.push({ key: prepKeyOf(kind, id), name: name || "", reason, src: src || "" });
+  };
+  // 装烤好的商品(生产模式)组成里的每一样:不展开、不扣,只记「装烤好的 count 个」。标了备货的和以前一样(键 / 单位照备货设置);
+  // 没标的(ux2)键照同一个格式、单位照它自己的(配方空 = 个、组件空 = g;组合产品按结构「台 / 个」,同生产单块),多带 plain: true
+  const packAdd = (linkedType, target, count, s2) => {
+    const kind = linkedType === "creation" || linkedType === "component" ? linkedType : "recipe";
+    const cfg = kind !== "creation" ? prepCfgOf(kind, target) : null;
+    const key = cfg ? cfg.key : prepKeyOf(kind, target.id);
+    const unit = cfg ? cfg.unit : kind === "creation" ? creationWords(creationStructureOf(target), lang).unit : (_normTxt(target.unit) || (kind === "component" ? "g" : "个"));
+    if (!packed.has(key)) packed.set(key, { key, kind, id: target.id, name: mLabel(target) || target.nameFr || "", unit, qty: 0, srcs: new Set(), ...(cfg ? {} : { plain: true }) });
+    const pk = packed.get(key);
+    pk.qty += count;
+    if (s2) pk.srcs.add(s2);
   };
   // 采购第一遍:这一样(已开始记、有产出量)要用 qty(从 fromUnit 换成账上的单位,def = 空单位的缺省);换不了 → false(调用方走老路)
   const needAdd = (kind, target, qty, fromUnit, def, src) => {
@@ -21568,15 +21587,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
         const cfg = prepCfgOf(linkedType, target);
         const nm = mLabel(target) || target.nameFr || "";
         const s2 = (isItem ? outer : src) || "";
-        if (isItem && curSkip) {
-          // 装的是已经烤好的:不展开、不扣
-          const key = cfg.key;
-          if (!packed.has(key)) packed.set(key, { key, kind: linkedType, id: target.id, name: nm, unit: cfg.unit, qty: 0, srcs: new Set() });
-          const pk = packed.get(key);
-          pk.qty += count;
-          if (s2) pk.srcs.add(s2);
-          return;
-        }
+        // (装的是已经烤好的商品:组成项在下面商品循环里就走 packAdd 了,到不了这里)
         if (linkedType === "recipe") {
           // 取出烤:从冷冻 / 冷藏取 count 个,不列配料
           const k = String(target.id);
@@ -21629,6 +21640,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       if (!target) { skip("missing", mLabel(p)); return; }
       const src = mLabel(target) || target.nameFr || "";
       const unit = parseFloat(it.qty) || 1;
+      if (curSkip) { packAdd(it.linkedType, target, planQty * unit, outer); return; }   // 装的是已经烤好的:每一样都不展开、不扣(ux2 起没标备货的也是)
       addTarget(it.linkedType, target, planQty * unit, src, "item", undefined, outer);
     });
     curSkip = false;
@@ -21727,9 +21739,11 @@ const _prodBadRows = (rows) => rows.filter(r => !(r.qty !== null && r.qty > 0));
 // 组合产品走 creationBatch(用量 × 个数 ÷ 制作个数,备货的部分只写从库存取)。模具 / 炉温 / 时间:配方自己没写就用家族通用参数(fam 标出来)
 // 备货(B 线):第 5 个参数 prep —— "take" 取出烤(标了备货的配方,或商品直接挂的备货组件):不列配料,只带 unit / store / 取出后说明 / 模具炉温时间;
 //   "make" 做一批:原块多一个 prep: "make";"packed" 装烤好的(商品按组成判断不扣):只带 unit / store;undefined / 组合产品:和以前一样。
+//   ux2:"packed" 也给没标备货的配方 / 组件和组合产品 → { type, target, need, prep, plain: true, unit }(组合产品不带 unit,页面按结构取「个 / 台」),不列配料。
 //   prodBlockOf 永远不读账本(现有多少由页面另算)
 const prodBlockOf = (type, target, need, ctx, prep) => {
   if (!target) return { type, missing: true, need };
+  if (prep === "packed" && (type === "creation" || !isPrepMarked(target))) return { type, target, need, prep, plain: true, ...(type === "creation" ? {} : { unit: prepCfgOf(type, { ...target, prepMode: "stock" }).unit }) };
   if (type !== "creation" && (prep === "take" || prep === "packed")) {
     const cfg = prepCfgOf(type, target) || prepCfgOf(type, { ...target, prepMode: "stock" });
     if (prep === "packed") return { type, target, need, prep, unit: cfg.unit, store: cfg.store };
@@ -21771,13 +21785,14 @@ const buildProdSheet = (lines, ctx) => (lines || []).map(line => {
     const base = { line, qty, obj: p, leadTimeDays: parseFloat(p.leadTimeDays) || 0, noItems: (p.items || []).length === 0 };
     if (!(qty > 0)) return { ...base, zero: true, blocks: [] };
     // 备货(B 线):组成项是标了备货的配方 / 组件 → 取出块(商品按组成判断「装烤好的」时 → 装烤好的块);没标的和以前一样(不带 prep)
+    // ux2(10-02 LuLu:先烤好单个再装盒):装烤好的商品里每一样都是装烤好的块,没标备货的配方 / 组件 / 组合产品也不再展开配料
     const skips = productPrepSkips(p);
     const blocks = (p.items || []).map(it => {
       const type = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
       const list = type === "creation" ? ctx.creations : type === "component" ? ctx.components : ctx.recipes;
       const per = parseFloat(it.qty) || 1;
       const target = _prodFind(list, it.linkedId);
-      const prep = type !== "creation" && isPrepMarked(target) ? (skips ? "packed" : "take") : undefined;
+      const prep = skips ? "packed" : (type !== "creation" && isPrepMarked(target) ? "take" : undefined);
       return { ...(prep ? prodBlockOf(type, target, qty * per, ctx, prep) : prodBlockOf(type, target, qty * per, ctx)), per };
     });
     return { ...base, blocks };
@@ -22161,6 +22176,16 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView, skip
   // 备货(C 线,plan.md §2.3):prepView 由 ProductionSheetView 算好(只在 prepOn 时有);取出 / 装烤好的块没有 rows
   const PX = prepTxt(lang);
   const pvOf = (kind, id) => (prepView && prepView.get(prepKeyOf(kind, id))) || null;
+  // ux2:装烤好的商品里没标备货的那几样 —— 只一行「装烤好的 N 个」,没有配料、没有厨房视图按钮
+  if (b.prep === "packed" && b.plain) {
+    const u = b.type === "creation" ? creationWords(creationStructureOf(b.target), lang).unit : b.unit;
+    return (
+      <div data-prep-block="packed" data-prep-plain="1" style={{ marginTop: 10 }}>
+        {showHead && <div style={{ ...T.fs.small, fontWeight: 500 }}>{X.kinds[b.type]} · {name} <span style={{ ...T.num }}>× {fmtQty(b.need)} {u}</span></div>}
+        <div style={{ ...T.fs.small, color: T.body, marginTop: 2, ...T.num }}>{PX.packedPlain(fmtQty(b.need), u)}</div>
+      </div>
+    );
+  }
   if (b.type !== "creation" && (b.prep === "take" || b.prep === "packed")) {
     const e = pvOf(b.type, b.target.id);
     const store = PX.storeName(b.store);
@@ -23196,7 +23221,7 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
       {kind === "recipe" && !onProduct && (
         <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>
           {X.notOnProduct}
-          {typeof onGoTab === "function" && <> · <button type="button" className="k-btn" onClick={() => onGoTab("products")}
+          {typeof onGoTab === "function" && <> · <button type="button" className="k-btn" onClick={() => onGoTab("products", form.id !== undefined ? { kind, id: form.id } : undefined)}
             style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
         </div>
       )}
@@ -23457,7 +23482,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     onPrepOp([{ type: "dropItem", key }], { toast: X.cleared(name, q(oh.onHand), unit), staff, undoOps: [{ type: "putItem", key, item }] });
   };
   const jump = (target) => { if (typeof onJump === "function") confirmLeaveEditor(confirmDialog, lang, () => onJump(target)); };
-  const goTab = (tb) => { if (typeof onGoTab === "function") onGoTab(tb); };
+  const goTab = (tb, np) => { if (typeof onGoTab === "function") onGoTab(tb, np); };
 
   const lots = oh.lots;
   const shownLots = compact ? lots.slice(0, 3) : lots;
@@ -23598,7 +23623,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
         <div data-prep-noproduct="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.m, overflowWrap: "anywhere" }}>
           {X.notOnProduct}
           {/* 审查 ps1:App 的 goTab 自己会问「还没保存」,这里再包一层 confirmLeaveEditor 会问两次 */}
-          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => goTab("products")}
+          {!staff && onGoTab && <> · <button type="button" className="k-btn" onClick={() => goTab("products", { kind, id: obj.id })}
             style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0 }}>{X.goNewProduct}</button></>}
         </div>
       )}
@@ -23781,6 +23806,16 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
   const block = (b, showHead, key) => {
     if (b.missing) return <div key={key} style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {X.missing}</div>;
     const name = prodName(b.target, L);
+    // ux2:装烤好的商品里没标备货的那几样 —— 只印一行,不印配料表
+    if (b.prep === "packed" && b.plain) {
+      const u = b.type === "creation" ? creationWords(creationStructureOf(b.target), L).unit : b.unit;
+      return (
+        <div key={key} data-prep-print="packed" data-prep-plain="1" style={{ marginTop: "6px" }}>
+          {showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)} {u}</div>}
+          <div className="p-row" style={{ fontSize: "11pt" }}>{PX.printPackedPlain(fmtQty(b.need), u)}</div>
+        </div>
+      );
+    }
     if (b.type !== "creation" && (b.prep === "take" || b.prep === "packed")) {
       const head = showHead && <div className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{X.kinds[b.type]} · {name} × {fmtQty(b.need)} {b.unit}</div>;
       if (b.prep === "packed") return (
@@ -25036,9 +25071,13 @@ function App() {
     if (tab !== "materialsPedia") { setBrandEditTarget(null); setMaterialEditTarget(null); }
   }, [tab]);
   // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
-  const goTab = (t) => {
+  const goTab = (t, newProduct) => {
     // 2026-09-29 体检第 2 批:家族详情 / 编辑是盖满屏的一层,以前点底栏切了页它还盖在上面,像导航失灵 —— 切页时一起关掉
-    const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null); };
+    // 备货 ux2(10-02 LuLu 实测):备货卡 / 备货设置的「去新建商品 →」带 newProduct = { kind, id } → 直接打开新建商品,组成里已加好这一样 × 1、名字照它的中文名;
+    // 这一样已经不在了(新配方还没存)就和以前一样只切到商品列表。预填的是编辑页的起点,不算「改过」(useDirtyGuard 第一次按键才拍快照),取消什么都不建
+    const np = newProduct && t === "products" ? (newProduct.kind === "component" ? components : recipes).find(o => o && newProduct.id !== undefined && String(o.id) === String(newProduct.id)) : null;
+    const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null);
+      if (np) { setProductViewId(null); setProductEditTarget({ _new: true, _prefill: { nameZh: np.nameZh || "", ...(np.nameJa ? { nameJa: np.nameJa } : {}), items: [{ linkedId: np.id, linkedType: newProduct.kind === "component" ? "component" : "recipe", qty: 1 }] } }); } };
     // 家族编辑层开着时,点当前这个 tab 也会关掉它,所以也要问
     if ((t !== tab || familyEditTarget !== null) && anyEditorDirty()) {
       confirmDialog(
