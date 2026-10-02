@@ -23065,12 +23065,14 @@ function PrepTakePanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDial
   const bind = useDirtyGuard(() => ({ qty }));
   const sent = useRef(false);
   const unit = (item && item.unit) || cfg.unit;
+  // 终审 r1:按个计的取出向上取整(账本同一个 _prepQ),面板上先说「记 3 個」、记的也是这个数(同生产单「实际取了」面板 / 厨房视图按钮)
+  const qN = parseFloat(qty), qR = _prepQ(qN, unit, "take");
   const submit = () => {
     const q = parseFloat(qty);
-    if (!(isFinite(q) && q > 0)) { setErr(X.errTakeQty); return; }
+    if (!(isFinite(q) && q > 0 && qR > 0)) { setErr(X.errTakeQty); return; }
     setErr(null);
     if (sent.current) return;
-    if (onSubmit({ type: "take", key: cfg.key, cfg, opId, qty: q, date: today || localDateStr(), via: "card" }, q)) sent.current = true;
+    if (onSubmit({ type: "take", key: cfg.key, cfg, opId, qty: qR, date: today || localDateStr(), via: "card" }, qR)) sent.current = true;
   };
   return (
     <div {...bind} data-prep-panel="take" style={{ marginTop: T.sp.m, padding: T.sp.m, border: `1px solid ${T.line}`, background: T.paper }}>
@@ -23078,6 +23080,7 @@ function PrepTakePanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDial
         <span style={{ ...T.fs.label, color: T.subtle }}>{X.takeQty(unit)}</span>
         <input type="number" inputMode="decimal" min="0" value={qty} onWheel={blurOnWheel} onChange={e => setQty(e.target.value)}
           style={{ padding: "8px 10px", minHeight: 40, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small, ...T.num, boxSizing: "border-box", minWidth: 0 }} />
+        {isFinite(qN) && qN > 0 && _prepIsCount(unit) && qR !== _prepClean(qN) && <span data-prep-panelround="1" style={{ ...T.fs.caption, color: T.subtle, ...T.num }}>{X.panelRounded(fmtQty(qR), unit)}</span>}
       </label>
       {onProducts && onProducts.length > 0 && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.takeOnProduct(X.storeName(cfg.store))}</div>}
       {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
