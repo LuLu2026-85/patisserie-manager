@@ -20688,6 +20688,9 @@ const PREP_TXT = {
     kitFromLines: (list) => `这里合起来了生产单上的 ${list},回生产单在各自那一行记入(同一批烤的只记一行;给礼盒等另烤的,各记各的)`,
     kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
     kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
+    // 终审 r2:今天单子上这一样的做一批已经全记入 —— 不叫她去备货页再登记一批(会记两遍),也不叫她再加一行(合并会当重复丢掉)
+    kitMakeLineDone: "✓ 生产单上今天的「做一批」已记入;要再做一批,先在生产单把这一行的数量加上去再记入",
+    kitMakeLineDoneStaff: "✓ 生产单上今天的「做一批」已记入;要再做一批,请店长在生产单把这一行的数量加上去",
     kitMakeUsesStock: (names) => `这批要用库存里的${names}:在生产单上加一行「做一批」,做好后在那里点记入(会一起扣掉);在「备货」点「＋ 登记一批」不会扣它`,
     kitMakeUsesStockStaff: (names) => `这批要用库存里的${names}:请店长在生产单上加一行「做一批」,做好后在那里记入(会一起扣掉);在「备货」登记一批不会扣它`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
@@ -20999,6 +21002,8 @@ const PREP_TXT = {
     kitFromLines: (list) => `製造リストの ${list} の合計です。それぞれの行で記録してください(同じ分なら 1 行だけ、ギフト用などに別に焼いた分はそれぞれ)`,
     kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
     kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
+    kitMakeLineDone: "✓ 本日の仕込みは製造リストで記録済み。追加で仕込む場合は、製造リストでこの行の数量を増やしてから記録してください",
+    kitMakeLineDoneStaff: "✓ 本日の仕込みは製造リストで記録済み。追加で仕込む場合は、店長に製造リストのこの行の数量を増やしてもらってください",
     kitMakeUsesStock: (names) => `この仕込みは在庫の${names}を使います:製造リストに「仕込み」行を追加し、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」の「＋ ロット登録」では引かれません`,
     kitMakeUsesStockStaff: (names) => `この仕込みは在庫の${names}を使います:店長に製造リストへ「仕込み」行を追加してもらい、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」のロット登録では引かれません`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
@@ -24256,8 +24261,11 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const makeHint = (!isTake && pcfg && (prepRecipe || kind === "component")) ? (() => {
     // 终审 r1:那一行已经全记入(生产单卡片上没有记入按钮了)就不叫她「回生产单点记入」,照没在单子上处理(同上面 lineDone 的判法)
     const lineOpen = (l) => { const s = buildProdSheet([l], c)[0]; const info = s ? prepLineInfo(s, c, stock, today, c.productionLog || []) : null; return !info || !(info.qty > 0 ? info.pending <= 0 : info.actual > 0); };
-    const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")) && lineOpen(l));
+    const mkLines = planLines ? planLines.filter(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make"))) : [];
+    const onSheet = mkLines.some(lineOpen);
     if (onSheet && pcfg.batch !== null && valid) return PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit);
+    // 终审 r2:单子上有这一样的做一批、但已经全记入 → 不落到「去备货登记一批」(会记两遍)/「加一行做一批」(合并会丢掉)
+    if (!onSheet && mkLines.length) return c.staff ? PX.kitMakeLineDoneStaff : PX.kitMakeLineDone;
     // 审查 ps2:配料里「来自组件」用到已开始记的备货组件 → 「＋ 登记一批」不会扣那个组件(那是补登用的),叫她走生产单的「做一批」(那里一起扣)
     const used = prepFlowOfSheetRow({ kind, id: target.id, obj: target, ...(kind === "recipe" ? { stage: "make" } : {}) }, 1, c).takes.filter(t => stock.items[t.key]);
     if (used.length) {
