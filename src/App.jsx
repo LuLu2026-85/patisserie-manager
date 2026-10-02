@@ -18511,10 +18511,18 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
     // 备货 F 线:勾着「按手上的备货算」且够得着时传 { onHand }(结果多 prepPlan);否则第三个参数照旧不传。prepFlag = 勾选刚变、state 还没到这一帧时的新值
     const withPrep = prepReach && (typeof prepFlag === "boolean" ? prepFlag : usePrepStock);
-    // 终审 r1:手上能用的按这段时间的最后一天算(到那天还没过期的批才算;开始日在以后的,开始前就过期的自然也不算)
-    const ohWin = withPrep && typeof prepOnHandAt === "function" ? prepOnHandAt(endDate && endDate > today ? endDate : today) : prepOnHand;
-    const { grams, skipped, prepPlan } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
-      { products, recipes, creations, components, materials, brands, lang }, ...(withPrep ? [{ onHand: ohWin }] : []));
+    // 终审 r1 / r2:手上能用的 = 开始日还没过期的批里,这段时间用得上的部分 —— 开始前就过期的不算;这段时间里才过期的,
+    // 只算过期之前按这段时间平均每天的用量(先进先出)用得掉的(prepWindowUsable)。r1 按结束日算,会把用得完的批整批扔掉、多买原料
+    const pLines = (products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p }));
+    const pCtx = { products, recipes, creations, components, materials, brands, lang };
+    let ohWin = prepOnHand;
+    if (withPrep && typeof prepOnHandAt === "function") {
+      const d0 = startDate && startDate > today ? startDate : today, d1 = endDate && endDate > d0 ? endDate : d0;
+      const oh0 = prepOnHandAt(d0);
+      const pre = oh0.size ? computeMaterialNeeds(pLines, pCtx, { onHand: oh0 }).prepPlan || [] : [];
+      ohWin = prepWindowUsable(oh0, pre, d0, d1, prepOnHandAt);
+    }
+    const { grams, skipped, prepPlan } = computeMaterialNeeds(pLines, pCtx, ...(withPrep ? [{ onHand: ohWin }] : []));
     // 按 supplier 分组
     const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
     Object.entries(grams).forEach(([materialId, g]) => {
@@ -20482,6 +20490,32 @@ const prepOnHandMap = (recipes, components, stock, today) => {
   }));
   return out;
 };
+// 采购页「按手上的备货算」(终审 r2):开始日 d0 那天能用的(oh0 = prepOnHandMap(…, d0))里,d0 到 d1 这段时间真用得上的部分。
+// 这段时间里才过期的批:把这段时间要用的量(pre = 按 oh0 算的第一遍 prepPlan 的 need)平均到每天,先进先出(同一样能放的天数一样,先做的先过期、先用),
+// 只算过期之前用掉的;到结束日还没过期的照算。usable = min(开始日能用的, 过期前用掉的 + 结束日还能用的)。
+// ohAt(day) = 按那一天算的 prepOnHandMap。返回新的 Map(只改 usable);这段时间里没有会过期的 → 原样返回 oh0
+const prepWindowUsable = (oh0, pre, d0, d1, ohAt) => {
+  if (!(oh0 instanceof Map) || !oh0.size || typeof ohAt !== "function") return oh0;
+  const dd = _daysBetween(d0, d1);
+  const days = isFinite(dd) ? Math.min(400, Math.max(1, dd + 1)) : 1;   // 日期读不出 = 当一天(只按开始日);上限防手滑选了好几年
+  const ohEnd = days > 1 ? ohAt(dd + 1 > 400 ? plusDaysStr(d0, 399) : d1) : oh0;
+  const usableIn = (m, k) => { const e = m && m.get(k); return e ? _prepNum(e.usable) : 0; };
+  const keys = [...oh0.keys()].filter(k => usableIn(oh0, k) > usableIn(ohEnd, k));
+  if (!keys.length) return oh0;
+  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, _prepNum(p.need)]));
+  const daily = [oh0];
+  for (let i = 1; i < days - 1; i++) daily.push(ohAt(plusDaysStr(d0, i)));
+  if (days > 1) daily.push(ohEnd);
+  const out = new Map(oh0);
+  keys.forEach(k => {
+    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days;
+    let used = 0;
+    // 第 i 天还剩能用的 = min(开始日的 − 已经用掉的, 那天没过期的批合计):先用掉的是最先过期的那几批
+    for (let i = 0; i < days && rate > 0; i++) used += Math.max(0, Math.min(rate, u0 - used, usableIn(daily[i], k)));
+    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + usableIn(ohEnd, k))) });
+  });
+  return out;
+};
 // 生产单顶上的提醒 / 备货页排序 / 顶栏角标。每样一行
 //   { key, cfg, obj, item, oh, need, incoming, flags: { expired, short, today, soon, low, unit }, suggest, daily, days, lot, rank, untracked, unmarked }
 // 只看已经开始记的(账本只读 → [])。flags:
@@ -20847,7 +20881,7 @@ const PREP_TXT = {
     fBuyToggle: "按手上的备货算(扣掉现有的、按整批做、留够提醒线;可能比不勾多)",
     fBuyLine: (name, need, u, have, min, k, qty) => `备货:${name} 这段时间要用 ${fmtQty(need)} ${u},手上能用 ${fmtQty(have)}${min > 0 ? `(提醒线 ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → 要做 ${k} 批(${fmtQty(qty)} ${u}),按 ${k} 批算原料` : " → 不用做,原料不算"),
-    fBuyFoot: "过期的、这段时间里会过期的不算;成品库存(商品页的库存)这里一直不扣。",
+    fBuyFoot: "过期的不算;这段时间里会过期的,只算过期之前用得掉的(按这段时间平均每天的用量估);成品库存(商品页的库存)这里一直不扣。",
     fHealthClear: (name, n, u) => `已清掉「${name}」的备货库存(${fmtQty(n)}${u ? " " + u : ""}),可以撤销`,
     fHealthTidy: (name) => `已按剩余数整理「${name}」的批次记录`,
     fH: {
@@ -21149,7 +21183,7 @@ const PREP_TXT = {
     fBuyToggle: "手持ちの作り置きで計算(在庫を差し引き・バッチ単位・補充ラインを確保。チェックなしより多くなる場合あり)",
     fBuyLine: (name, need, u, have, min, k, qty) => `作り置き:${name} 必要 ${fmtQty(need)}${u}、使用可 ${fmtQty(have)}${min > 0 ? `(補充ライン ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → ${k} バッチ(${fmtQty(qty)}${u})で材料計算` : " → 仕込み不要(材料に含めず)"),
-    fBuyFoot: "期限切れ・期間中に期限切れになる分は除外。商品在庫はここでは差し引きません。",
+    fBuyFoot: "期限切れは除外。期間中に期限が切れる分は、切れる前に使い切れる分だけ計算(期間中の1日平均の使用量で概算)。商品在庫はここでは差し引きません。",
     fHealthClear: (name, n, u) => `「${name}」の在庫記録(${fmtQty(n)}${u || ""})を消去しました(元に戻せます)`,
     fHealthTidy: (name) => `「${name}」のロット記録を整理しました`,
     fH: {
