@@ -20620,14 +20620,15 @@ const PREP_TXT = {
     goPrep: "去「备货」→",
     willTake: (store, list) => `会从${store}扣:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n} ${u}(现有 ${have})`,
-    onProduct: (p) => `这个配方挂在商品「${p}」上;要加商品库存,请用「从商品加」加商品行。商品行写着「会从…扣」的,只记商品行就好(它会一起扣),别两行都记。`,
+    onProduct: (p) => `这个配方挂在商品「${p}」上;要加商品库存,请用「从商品加」加商品行。商品行写着「会从…扣」的,同一批烤的只记商品行就好(它会一起扣),别两行都记;给礼盒等另烤的,这一行照记。`,
     onProductStaff: (p) => `这个配方挂在商品「${p}」上;商品库存由店长加。`,
     burnt: "烤坏的也算进来,晚上日结记「烤坏」",
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
     takenElsewhereOf: (nm, n, u) => `⚠ 今天已经从取出行 / 备货页 / 厨房取出过「${nm}」${n} ${u},再记商品行会再扣一遍`,
     usedElsewhere: (n) => `⚠ 今天已经记入过 ${n}(删掉的行记的),再点会再扣一遍备货`,
-    dupe: (name) => `「${name}」在两行里都会扣,同一批只记入一行`,
+    // 终审 r1:礼盒(装烤好的、不扣)的饼干要另烤一批走取出行,和单个商品行是两份真的用量 —— 说两种情况,不再一律「只记一行」
+    dupe: (name) => `「${name}」在两行里都会扣:同一批烤的只记入一行;给礼盒等另烤的,两行各记各的`,
     partHave: (n, u) => `· 现有 ${n} ${u}`,
     partShort: (have, sh, u) => `· 只有 ${have} ${u},差 ${sh} ${u}`,
     partNoUsed: "没填用量,没扣备货",
@@ -20683,6 +20684,8 @@ const PREP_TXT = {
     kitOnlyStore: (store) => `这样只扣${store};柜台库存请在生产单上记商品行 —— 商品行写着「会从${store}扣」的,只记商品行,这里别再记`,
     kitLineDone: "✓ 这一行已记入",
     kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
+    // 终审 r1:厨房列表把取出行和商品行的块合成一行时,列出每一行各多少,叫她回生产单各记各的(以前只写商品行,取出行那份没人记)
+    kitFromLines: (list) => `这里合起来了生产单上的 ${list},回生产单在各自那一行记入(同一批烤的只记一行;给礼盒等另烤的,各记各的)`,
     kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
     kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
     kitMakeUsesStock: (names) => `这批要用库存里的${names}:在生产单上加一行「做一批」,做好后在那里点记入(会一起扣掉);在「备货」点「＋ 登记一批」不会扣它`,
@@ -20930,14 +20933,14 @@ const PREP_TXT = {
     goPrep: "「作り置き」へ →",
     willTake: (store, list) => `${store}から引く分:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n}${u}(在庫 ${have})`,
-    onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で商品行を追加してください。商品行に「…から引く分」と出ている場合は商品行だけ記録し(一緒に引かれます)、両方は記録しないでください。`,
+    onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で商品行を追加してください。商品行に「…から引く分」と出ている場合、同じ分なら商品行だけ記録し(一緒に引かれます)、両方は記録しないでください。ギフト用などに別に焼いた分はこの行で記録してください。`,
     onProductStaff: (p) => `このレシピは商品「${p}」に含まれます。商品在庫は店長が追加します。`,
     burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
     takenElsewhereOf: (nm, n, u) => `⚠ 本日すでに取り出し行・作り置き・キッチン画面から「${nm}」${n}${u} 使用済み。商品行を記録するとさらに引かれます`,
     usedElsewhere: (n) => `⚠ 本日すでに ${n} 記録済み(削除した行の分)。押すと作り置きがさらに引かれます`,
-    dupe: (name) => `「${name}」は 2 行で引かれます。同じ分は 1 行だけ記録してください`,
+    dupe: (name) => `「${name}」は 2 行で引かれます。同じ分なら 1 行だけ記録、ギフト用などに別に焼いた分はそれぞれ記録してください`,
     partHave: (n, u) => `· 在庫 ${n}${u}`,
     partShort: (have, sh, u) => `· 在庫 ${have}${u}、${sh}${u} 不足`,
     partNoUsed: "使用量未入力のため未控除",
@@ -20993,6 +20996,7 @@ const PREP_TXT = {
     kitOnlyStore: (store) => `${store}だけ引きます。店頭在庫は製造リストの商品行で記録 —— 商品行に「${store}から引く分」と出ている場合は商品行だけ記録し、ここでは記録しない`,
     kitLineDone: "✓ この行は記録済み",
     kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
+    kitFromLines: (list) => `製造リストの ${list} の合計です。それぞれの行で記録してください(同じ分なら 1 行だけ、ギフト用などに別に焼いた分はそれぞれ)`,
     kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
     kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
     kitMakeUsesStock: (names) => `この仕込みは在庫の${names}を使います:製造リストに「仕込み」行を追加し、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」の「＋ ロット登録」では引かれません`,
@@ -24355,7 +24359,9 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
       )}
       {isTake && canRecord && (
         <div data-kitchen-record={fromLine && !uid ? "fromline" : viaLine ? (lineDone ? "done" : "line") : "direct"} style={{ marginTop: 16 }}>
-          {fromLine && !uid ? note(T.body, "fromline", PX.kitFromLine((fromLine && fromLine.name) || ""))
+          {fromLine && !uid ? note(T.body, "fromline", Array.isArray(fromLine.parts) && fromLine.parts.length
+            ? PX.kitFromLines(fromLine.parts.map(p => `「${p.name || ""}」${fmtQty(p.qty) || "0"}${pcfg && pcfg.unit ? " " + pcfg.unit : ""}`).join(zh ? "、" : "・"))
+            : PX.kitFromLine((fromLine && fromLine.name) || ""))
             : viaLine ? (lineDone ? note(T.success, "linedone", PX.kitLineDone)
               : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(kitQ) : "", pcfg.unit)}</Btn>)
             : (
@@ -24451,7 +24457,7 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
     if (b.prep === "packed") return;
     if (b.type === "component" && b.prep === "take") return;   // 审查 ps1:组件从库存取的块同样不列(厨房视图对组件只有「做」的样子,生产单那一块已写取多少)
     const k = prodLineKey({ kind: b.type, id: b.target.id }) + (b.prep ? "\u0000" + b.prep : "");   // 没有 prep 时和以前的 type + id 一样
-    const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "" } : null;
+    const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "", qty: b.need || 0 } : null;
     const ex = seen.get(k);
     if (ex) { ex.qty = Math.round(((ex.qty || 0) + (b.need || 0)) * 1000) / 1000; if (src) ex.srcs.push(src); return; }
     const it = { kind: b.type, obj: b.target, qty: b.need, prep: b.prep, srcs: src ? [src] : [] };
@@ -24464,7 +24470,14 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
     if (one) return [it.kind, it.obj.id, it.qty, "take", one.uid];
     const names = [...new Set(it.srcs.filter(x => x.kind !== "recipe").map(x => x.name).filter(Boolean))];
     const first = it.srcs.find(x => x.kind !== "recipe") || it.srcs[0];
-    return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin) } : undefined];
+    // 终审 r1:合进来的有取出配方行(它自己要记)又有商品 / 组合产品行 → fromLine 多带 parts(每一行各多少),厨房视图列出来叫她各记各的
+    let parts;
+    if (it.srcs.some(x => x.kind === "recipe") && it.srcs.some(x => x.kind !== "recipe")) {
+      const by = new Map();
+      it.srcs.forEach(x => { const e = by.get(x.uid); if (e) e.qty = _r3(e.qty + (x.qty || 0)); else by.set(x.uid, { name: x.name, qty: x.qty || 0 }); });
+      parts = [...by.values()];
+    }
+    return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin), ...(parts ? { parts } : {}) } : undefined];
   };
   const prepCfg = (it) => (it.kind === "recipe" ? prepCfgOf("recipe", it.obj) : null);
   const onSale = [
