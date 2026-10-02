@@ -23309,7 +23309,8 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
       }
     }
     // 终审 r1:今天记的取出扣不够时也写「差 N」(同补录的;后来哪一批补扣过的减掉,补完就不写)。以前只写 −0 / −20,toast 一消失就不知道差了多少
-    if (!back && m.type === "take" && !m.blocked) { const sh = _r3(_prepPos(m.short) - _prepPos(m.settledQty)); if (sh > 0) src.push(X.backShortTag(q(sh))); }
+    // 终审 r2:删了生产记录加回去的(restoredBy)、后来盘点过的不写(同 prepShortTodayOf;以前删了记录「差 10」一直挂着)
+    if (!back && m.type === "take" && !m.blocked && !m.restoredBy) { const mvAll = item.moves || [], mi = mvAll.indexOf(m); const sh = mvAll.some((x, j) => j > mi && x && x.type === "count") ? 0 : _r3(_prepPos(m.short) - _prepPos(m.settledQty)); if (sh > 0) src.push(X.backShortTag(q(sh))); }
     if (m.type === "discard") {
       src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
       // 补录往天被这次报废一起记掉的(还在的补录 take 的 absorbedBy 里提到它的;记的是补录那一刻的数)
