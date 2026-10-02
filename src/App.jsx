@@ -20674,7 +20674,7 @@ const PREP_TXT = {
     kitShort: (have, short, u) => `⚠ 只有 ${have} ${u},差 ${short} ${u}`,
     kitExpired: (k, n, u) => `⚠ 有 ${k} 批过期了(共 ${n} ${u}),别用,去「备货」报废`,
     kitQtyHint: "填今天要烤几个",
-    kitBakedBtn: (n, u) => `烤好了,记下 −${n} ${u}`,
+    kitBakedBtn: (n, u) => n ? `烤好了,记下 −${n} ${u}` : "烤好了,记下",   // 终审 r1:框空着 / 0 时不留「− 个」
     kitOnlyStore: (store) => `这样只扣${store};柜台库存请在生产单上记商品行 —— 商品行写着「会从${store}扣」的,只记商品行,这里别再记`,
     kitLineDone: "✓ 这一行已记入",
     kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
@@ -20978,7 +20978,7 @@ const PREP_TXT = {
     kitShort: (have, short, u) => `⚠ 在庫 ${have}${u}、${short}${u} 不足`,
     kitExpired: (k, n, u) => `⚠ 期限切れ ${k} ロット(計 ${n}${u})。使わずに「作り置き」で廃棄`,
     kitQtyHint: "焼く数を入力してください",
-    kitBakedBtn: (n, u) => `焼成完了、−${n}${u} を記録`,
+    kitBakedBtn: (n, u) => n ? `焼成完了、−${n}${u} を記録` : "焼成完了、記録",
     kitOnlyStore: (store) => `${store}だけ引きます。店頭在庫は製造リストの商品行で記録 —— 商品行に「${store}から引く分」と出ている場合は商品行だけ記録し、ここでは記録しない`,
     kitLineDone: "✓ この行は記録済み",
     kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
