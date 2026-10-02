@@ -6352,7 +6352,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
           {_prepCfg && (
             <div style={{ marginTop: T.sp.s }}>
               <span data-prep-tag="1" style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, background: T.surface, padding: "2px 8px", borderRadius: T.radiusPill, display: "inline-block" }}>
-                {prepTxt(lang).tag}{_prepItem && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
+                {prepTxt(lang).tag}{_prepItem && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.usable) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
               </span>
             </div>
           )}
@@ -7472,7 +7472,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
             {c.prepMode === "stock" && (
               <span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
                 style={{ background: "#FFFFFF", color: T.warning, border: `0.5px solid ${T.warning}`, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
-                {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
+                {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.usable) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
               </span>
             )}
           </div>
@@ -18462,7 +18462,8 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components,采购计算支持组件
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang,
-  prepOnHand = null }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
+  prepOnHand = null, prepOnHandAt = null }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
+  // 终审 r1:prepOnHandAt(day) = 按那一天算的 prepOnHandMap;算的时候按结束日取(这段时间里会过期的批不算能用),没传照旧用 prepOnHand(今天的)
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
   const today = localDateStr();
   const plus = plusDaysStr;
@@ -18510,8 +18511,18 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
     // 备货 F 线:勾着「按手上的备货算」且够得着时传 { onHand }(结果多 prepPlan);否则第三个参数照旧不传。prepFlag = 勾选刚变、state 还没到这一帧时的新值
     const withPrep = prepReach && (typeof prepFlag === "boolean" ? prepFlag : usePrepStock);
-    const { grams, skipped, prepPlan } = computeMaterialNeeds((products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p })),
-      { products, recipes, creations, components, materials, brands, lang }, ...(withPrep ? [{ onHand: prepOnHand }] : []));
+    // 终审 r1 / r2:手上能用的 = 开始日还没过期的批里,这段时间用得上的部分 —— 开始前就过期的不算;这段时间里才过期的,
+    // 只算过期之前按这段时间平均每天的用量(先进先出)用得掉的(prepWindowUsable)。r1 按结束日算,会把用得完的批整批扔掉、多买原料
+    const pLines = (products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p }));
+    const pCtx = { products, recipes, creations, components, materials, brands, lang };
+    let ohWin = prepOnHand;
+    if (withPrep && typeof prepOnHandAt === "function") {
+      const d0 = startDate && startDate > today ? startDate : today, d1 = endDate && endDate > d0 ? endDate : d0;
+      const oh0 = prepOnHandAt(d0);
+      const pre = oh0.size ? computeMaterialNeeds(pLines, pCtx, { onHand: oh0 }).prepPlan || [] : [];
+      ohWin = prepWindowUsable(oh0, pre, d0, d1, prepOnHandAt);
+    }
+    const { grams, skipped, prepPlan } = computeMaterialNeeds(pLines, pCtx, ...(withPrep ? [{ onHand: ohWin }] : []));
     // 按 supplier 分组
     const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
     Object.entries(grams).forEach(([materialId, g]) => {
@@ -20598,6 +20609,32 @@ const prepOnHandMap = (recipes, components, stock, today) => {
   }));
   return out;
 };
+// 采购页「按手上的备货算」(终审 r2):开始日 d0 那天能用的(oh0 = prepOnHandMap(…, d0))里,d0 到 d1 这段时间真用得上的部分。
+// 这段时间里才过期的批:把这段时间要用的量(pre = 按 oh0 算的第一遍 prepPlan 的 need)平均到每天,先进先出(同一样能放的天数一样,先做的先过期、先用),
+// 只算过期之前用掉的;到结束日还没过期的照算。usable = min(开始日能用的, 过期前用掉的 + 结束日还能用的)。
+// ohAt(day) = 按那一天算的 prepOnHandMap。返回新的 Map(只改 usable);这段时间里没有会过期的 → 原样返回 oh0
+const prepWindowUsable = (oh0, pre, d0, d1, ohAt) => {
+  if (!(oh0 instanceof Map) || !oh0.size || typeof ohAt !== "function") return oh0;
+  const dd = _daysBetween(d0, d1);
+  const days = isFinite(dd) ? Math.min(400, Math.max(1, dd + 1)) : 1;   // 日期读不出 = 当一天(只按开始日);上限防手滑选了好几年
+  const ohEnd = days > 1 ? ohAt(dd + 1 > 400 ? plusDaysStr(d0, 399) : d1) : oh0;
+  const usableIn = (m, k) => { const e = m && m.get(k); return e ? _prepNum(e.usable) : 0; };
+  const keys = [...oh0.keys()].filter(k => usableIn(oh0, k) > usableIn(ohEnd, k));
+  if (!keys.length) return oh0;
+  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, _prepNum(p.need)]));
+  const daily = [oh0];
+  for (let i = 1; i < days - 1; i++) daily.push(ohAt(plusDaysStr(d0, i)));
+  if (days > 1) daily.push(ohEnd);
+  const out = new Map(oh0);
+  keys.forEach(k => {
+    const u0 = usableIn(oh0, k), rate = Math.max(0, needOf.get(k) || 0) / days;
+    let used = 0;
+    // 第 i 天还剩能用的 = min(开始日的 − 已经用掉的, 那天没过期的批合计):先用掉的是最先过期的那几批
+    for (let i = 0; i < days && rate > 0; i++) used += Math.max(0, Math.min(rate, u0 - used, usableIn(daily[i], k)));
+    out.set(k, { ...oh0.get(k), usable: _prepClean(Math.min(u0, used + usableIn(ohEnd, k))) });
+  });
+  return out;
+};
 // 生产单顶上的提醒 / 备货页排序 / 顶栏角标。每样一行
 //   { key, cfg, obj, item, oh, need, incoming, flags: { expired, short, today, soon, low, unit }, suggest, daily, days, lot, rank, untracked, unmarked }
 // 只看已经开始记的(账本只读 → [])。flags:
@@ -20696,7 +20733,7 @@ const PREP_TXT = {
     lotExpired: (k) => `过期 ${k} 天`,
     lotNoDate: "没写能放多久",
     daysApprox: (x) => `大约只够 ${x} 天`,
-    unitMismatch: (o, n) => `账上按「${o}」记,现在单位是「${n}」,换算不了,这一样先不自动加减。去盘点改一下,或者把单位改回去`,
+    unitMismatch: (o, n) => `账上按「${o}」记,现在单位是「${n}」,改了单位以后这一样先不自动加减。去盘点按「${n}」数一次,或者把单位改回去`,
     partial: "这期间又动过,按能撤的撤了",
     // 补录往天之后的撤销 / 删记录没法按日期重算,照记下的数做了(backdate_spec §2.8)
     partialReint: "这一步的备货没法按日期重算,照记下的数撤了,可能不准 —— 去「备货」盘点一次",
@@ -20736,14 +20773,18 @@ const PREP_TXT = {
     goPrep: "去「备货」→",
     willTake: (store, list) => `会从${store}扣:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n} ${u}(现有 ${have})`,
-    onProduct: (p) => `这个配方挂在商品「${p}」上;要加商品库存,请用「从商品加」加商品行。商品行写着「会从…扣」的,只记商品行就好(它会一起扣),别两行都记。`,
+    onProduct: (p) => `这个配方挂在商品「${p}」上;要加商品库存,请用「从商品加」加商品行。商品行写着「会从…扣」的,同一批烤的只记商品行就好(它会一起扣),别两行都记;给礼盒等另烤的,这一行照记。`,
     onProductStaff: (p) => `这个配方挂在商品「${p}」上;商品库存由店长加。`,
     burnt: "烤坏的也算进来,晚上日结记「烤坏」",
     settle: (s, u, store, n) => `今天取出时差 ${s} ${u}没扣到,这批记入后一起扣 → ${store} +${n} ${u}`,
     takenElsewhere: (n, u) => `⚠ 今天已经从备货页 / 厨房取出过 ${n} ${u},再记会再扣`,
     takenElsewhereOf: (nm, n, u) => `⚠ 今天已经从取出行 / 备货页 / 厨房取出过「${nm}」${n} ${u},再记商品行会再扣一遍`,
+    // 终审 r2:两行(取出行 + 商品行)各记过一边时说两种情况(同一批烤的别再记;给礼盒等另烤的照记),不一律说「会再扣」
+    takenByLineOf: (nm, n, u) => `⚠ 今天已经在取出行记过「${nm}」${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
+    takenByProduct: (n, u) => `⚠ 今天商品那边记生产时已经扣过 ${n} ${u}:同一批烤的别再记这一行;给礼盒等另烤的,这一行照记`,
     usedElsewhere: (n) => `⚠ 今天已经记入过 ${n}(删掉的行记的),再点会再扣一遍备货`,
-    dupe: (name) => `「${name}」在两行里都会扣,同一批只记入一行`,
+    // 终审 r1:礼盒(装烤好的、不扣)的饼干要另烤一批走取出行,和单个商品行是两份真的用量 —— 说两种情况,不再一律「只记一行」
+    dupe: (name) => `「${name}」在两行里都会扣:同一批烤的只记入一行;给礼盒等另烤的,两行各记各的`,
     partHave: (n, u) => `· 现有 ${n} ${u}`,
     partShort: (have, sh, u) => `· 只有 ${have} ${u},差 ${sh} ${u}`,
     partNoUsed: "没填用量,没扣备货",
@@ -20763,6 +20804,7 @@ const PREP_TXT = {
     undoGone: "生产记录已经删了,只撤了备货",
     remTitle: "备货提醒",
     remExpired: (k, d, n, u) => `有 ${k} 批过期了(${d} 做的 ${n} ${u}),别再用`,
+    remExpiredN: (k, d, n, u) => `有 ${k} 批过期了(最早 ${d} 做的,共 ${n} ${u}),别再用`,   // 终审 r1:几批一起过期时写合计(同生产单「共 N」),以前只写第一批的数
     remShort: (need, u, store, n) => `今天要取 ${need} ${u},${store}只有 ${n} ${u}`,
     remToday: (d, n, u) => `${d} 做的那批 ${n} ${u}今天到期,先用它`,
     remSoon: (d, n, u, k) => `${d} 做的那批 ${n} ${u}还能放 ${k} 天,先用它`,
@@ -20771,6 +20813,7 @@ const PREP_TXT = {
     remSuggest: (k, n, u) => (n ? (k > 1 ? `建议做 ${k} 批(${n} ${u})` : `建议做一批(${n} ${u})`) : "建议做一批"),
     remAdd: "＋ 做一批加进今天", remAddNoYield: "＋ 做一批加进今天(一批多少没填)", remOnSheet: "✓ 今天单子上有了",
     remHandle: "去处理", remMore: (k) => `还有 ${k} 项 → 看全部备货`, remStaff: "(店长加进生产单)",
+    remRaise: (n, u) => `＋ 今天的做一批再加 ${n} ${u}`,   // 终审 r1:做一批行已经全记入时(再也不会进账),把那一行的数量加上去
     remCollapsed: (k, a, b) => `备货提醒 ${k} 项(快到期 ${a} · 低于提醒线 ${b})▶`,
     ffTitle: "今天从冷冻 / 冷藏取", ffHave: (n) => `现有 ${n}`, ffLack: (n) => `差 ${n}`,
     stockList: (list) => `库存:${list}`, stockItem: (name, n, u, sh) => `${name} 现有 ${n} ${u}${sh ? `(差 ${sh} ${u})` : ""}`,
@@ -20788,17 +20831,24 @@ const PREP_TXT = {
     kitThaw: "取出后",
     kitWhole: "整份做法(做面团时用)",
     kitHave: (store, n, u) => `${store}现有 ${n} ${u}`,
-    kitFirst: (d, m, u, k) => `先用 ${d} 那批(${m} ${u}${k === null || k === undefined ? "" : `,还能放 ${k} 天`})`,
+    kitFirst: (d, m, u, k) => `先用 ${d} 那批(${m} ${u}${k === null || k === undefined || k === "" ? "" : typeof k === "string" ? "," + k : `,还能放 ${k} 天`})`,   // 终审 r1:k 是字符串 = 现成的尾巴(今天到期写 lotToday,同生产单;以前写「还能放 0 天」)
     kitNotTracked: (store) => `还没登记${store}里有多少 —— 登记以后这里会显示还剩多少`,
     kitShort: (have, short, u) => `⚠ 只有 ${have} ${u},差 ${short} ${u}`,
     kitExpired: (k, n, u) => `⚠ 有 ${k} 批过期了(共 ${n} ${u}),别用,去「备货」报废`,
     kitQtyHint: "填今天要烤几个",
-    kitBakedBtn: (n, u) => `烤好了,记下 −${n} ${u}`,
+    kitBakedBtn: (n, u) => n ? `烤好了,记下 −${n} ${u}` : "烤好了,记下",   // 终审 r1:框空着 / 0 时不留「− 个」
     kitOnlyStore: (store) => `这样只扣${store};柜台库存请在生产单上记商品行 —— 商品行写着「会从${store}扣」的,只记商品行,这里别再记`,
     kitLineDone: "✓ 这一行已记入",
     kitFromLine: (p) => `这一块属于生产单上的「${p}」,回生产单那一行记入`,
+    // 终审 r1:厨房列表把取出行和商品行的块合成一行时,列出每一行各多少,叫她回生产单各记各的(以前只写商品行,取出行那份没人记)
+    // 终审 r2:每一行前面写是哪种行(商品「费南雪」和取出烤「费南雪」同名时分得清)
+    kitFromLines: (list) => `这里把生产单上的 ${list} 合在一起了,回生产单在各自那一行记入(同一批烤的只记一行;给礼盒等另烤的,各记各的)`,
+    kitPartKind: { recipe: "取出烤", product: "商品", creation: "组合产品" },
     kitMakeToSheet: (store, n, u) => `做好以后回生产单点「记入」→ ${store} +${n} ${u}`,
     kitMakeToPrep: "做好以后去「备货」点「＋ 登记一批」",
+    // 终审 r2:今天单子上这一样的做一批已经全记入 —— 不叫她去备货页再登记一批(会记两遍),也不叫她再加一行(合并会当重复丢掉)
+    kitMakeLineDone: "✓ 生产单上今天的「做一批」已记入;要再做一批,先在生产单把这一行的数量加上去再记入",
+    kitMakeLineDoneStaff: "✓ 生产单上今天的「做一批」已记入;要再做一批,请店长在生产单把这一行的数量加上去",
     kitMakeUsesStock: (names) => `这批要用库存里的${names}:在生产单上加一行「做一批」,做好后在那里点记入(会一起扣掉);在「备货」点「＋ 登记一批」不会扣它`,
     kitMakeUsesStockStaff: (names) => `这批要用库存里的${names}:请店长在生产单上加一行「做一批」,做好后在那里记入(会一起扣掉);在「备货」登记一批不会扣它`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n} ${u}(还剩 ${left})`,
@@ -20907,6 +20957,10 @@ const PREP_TXT = {
     fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u ? " " + u : ""}`,
     fProdToast: (d, n, prep) => `✓ ${d} 生产 +${fmtQty(n)}(库存 +${fmtQty(n)};${prep})`,
     fShort: (store, name, got, short, u) => `;${store}「${name}」账上只有 ${fmtQty(got)}${u ? " " + u : ""},差 ${fmtQty(short)}${u ? " " + u : ""} 没扣(去「备货」盘点)`,
+    // 终审 r1:扣不够、手上又有过期批时说清是过期(备货页上那批明明还在,「账上只有 0」对不上;该做的是报废,不是盘点)。
+    // fShortExp 给商品页(数和单位同 fShort);toastShortExp 给生产单 / 厨房视图 / 备货卡(数已经格式化好,同 toastShort / kitToastShort)
+    fShortExp: (store, name, got, short, exp, u) => `;${store}「${name}」能用的只有 ${fmtQty(got)}${u ? " " + u : ""},另有 ${fmtQty(exp)}${u ? " " + u : ""} 已过期(过期的不扣),差 ${fmtQty(short)}${u ? " " + u : ""} 没扣 —— 过期的去「备货」报废,数不对再盘点`,
+    toastShortExp: (store, name, got, sh, exp) => `;${store}「${name}」能用的只有 ${got},另有 ${exp} 已过期(过期的不扣),差 ${sh} 没扣 —— 过期的去「备货」报废,数不对再盘点`,
     fUntaken: (name, k) => `;${name} 有 ${k} 个部分没填用量或单位对不上,没扣备货`,
     // 补录往天(backdate_spec §2.5):每一样按 prepBackPlan 的结果说一句,都不许出现钱。md = 补录那天,u = 账上的单位
     fBackNone: "备货没扣,原因见后",   // 一样都没扣到时括号里写这个
@@ -20946,7 +21000,7 @@ const PREP_TXT = {
     fBuyToggle: "按手上的备货算(扣掉现有的、按整批做、留够提醒线;可能比不勾多)",
     fBuyLine: (name, need, u, have, min, k, qty) => `备货:${name} 这段时间要用 ${fmtQty(need)} ${u},手上能用 ${fmtQty(have)}${min > 0 ? `(提醒线 ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → 要做 ${k} 批(${fmtQty(qty)} ${u}),按 ${k} 批算原料` : " → 不用做,原料不算"),
-    fBuyFoot: "过期的不算;成品库存(商品页的库存)这里一直不扣。",
+    fBuyFoot: "过期的不算;这段时间里会过期的,只算过期之前用得掉的(按这段时间平均每天的用量估);成品库存(商品页的库存)这里一直不扣。",
     fHealthClear: (name, n, u) => `已清掉「${name}」的备货库存(${fmtQty(n)}${u ? " " + u : ""}),可以撤销`,
     fHealthTidy: (name) => `已按剩余数整理「${name}」的批次记录`,
     fH: {
@@ -21001,7 +21055,7 @@ const PREP_TXT = {
     lotExpired: (k) => `期限切れ ${k} 日`,
     lotNoDate: "保存期間未設定",
     daysApprox: (x) => `残り約 ${x} 日分`,
-    unitMismatch: (o, n) => `記録は「${o}」、現在の単位は「${n}」で換算できません。自動の増減を止めています。棚卸しで直すか単位を戻してください`,
+    unitMismatch: (o, n) => `記録は「${o}」、現在の単位は「${n}」です。単位を変えたため自動の増減を止めています。棚卸しで「${n}」で数え直すか、単位を戻してください`,
     partial: "その後変更があったため、戻せる分だけ戻しました",
     partialReint: "作り置きは日付順に再計算できないため記録どおりに戻しました。ずれている可能性があるので「作り置き」で棚卸しを",
     skipCount: (name) => `「${name}」はその後棚卸し済みのため戻しません`,
@@ -21040,14 +21094,16 @@ const PREP_TXT = {
     goPrep: "「作り置き」へ →",
     willTake: (store, list) => `${store}から引く分:${list}`,
     willTakeItem: (name, n, u, have) => `${name} ${n}${u}(在庫 ${have})`,
-    onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で商品行を追加してください。商品行に「…から引く分」と出ている場合は商品行だけ記録し(一緒に引かれます)、両方は記録しないでください。`,
+    onProduct: (p) => `このレシピは商品「${p}」に含まれます。商品在庫も増やすには「商品から」で商品行を追加してください。商品行に「…から引く分」と出ている場合、同じ分なら商品行だけ記録し(一緒に引かれます)、両方は記録しないでください。ギフト用などに別に焼いた分はこの行で記録してください。`,
     onProductStaff: (p) => `このレシピは商品「${p}」に含まれます。商品在庫は店長が追加します。`,
     burnt: "焼き損じも含めて記録し、夜の締めで「焼き損じ」に",
     settle: (s, u, store, n) => `本日の使用で ${s}${u} 未控除。この仕込みから差し引きます → ${store} +${n}${u}`,
     takenElsewhere: (n, u) => `⚠ 本日すでに作り置き・キッチン画面から ${n}${u} 使用済み。記録するとさらに引かれます`,
     takenElsewhereOf: (nm, n, u) => `⚠ 本日すでに取り出し行・作り置き・キッチン画面から「${nm}」${n}${u} 使用済み。商品行を記録するとさらに引かれます`,
+    takenByLineOf: (nm, n, u) => `⚠ 本日すでに取り出し行で「${nm}」${n}${u} を記録済み。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
+    takenByProduct: (n, u) => `⚠ 本日すでに商品の製造記録で ${n}${u} 引かれています。同じ分ならこの行は記録しない、ギフト用などに別に焼いた分はこの行で記録してください`,
     usedElsewhere: (n) => `⚠ 本日すでに ${n} 記録済み(削除した行の分)。押すと作り置きがさらに引かれます`,
-    dupe: (name) => `「${name}」は 2 行で引かれます。同じ分は 1 行だけ記録してください`,
+    dupe: (name) => `「${name}」は 2 行で引かれます。同じ分なら 1 行だけ記録、ギフト用などに別に焼いた分はそれぞれ記録してください`,
     partHave: (n, u) => `· 在庫 ${n}${u}`,
     partShort: (have, sh, u) => `· 在庫 ${have}${u}、${sh}${u} 不足`,
     partNoUsed: "使用量未入力のため未控除",
@@ -21067,6 +21123,7 @@ const PREP_TXT = {
     undoGone: "製造記録は削除済みのため、作り置きだけ戻しました",
     remTitle: "作り置きアラート",
     remExpired: (k, d, n, u) => `期限切れ ${k} ロット(${d} 仕込み ${n}${u})。使わないでください`,
+    remExpiredN: (k, d, n, u) => `期限切れ ${k} ロット(最古 ${d} 仕込み、計 ${n}${u})。使わないでください`,
     remShort: (need, u, store, n) => `本日 ${need}${u} 必要、${store}は ${n}${u}`,
     remToday: (d, n, u) => `${d} 仕込み分 ${n}${u} は本日期限。先に使ってください`,
     remSoon: (d, n, u, k) => `${d} 仕込み分 ${n}${u} はあと ${k} 日。先に使ってください`,
@@ -21075,6 +21132,7 @@ const PREP_TXT = {
     remSuggest: (k, n, u) => (n ? (k > 1 ? `${k} バッチ推奨(${n}${u})` : `1 バッチ仕込み推奨(${n}${u})`) : "1 バッチ仕込み推奨"),
     remAdd: "＋ 本日の仕込みに追加", remAddNoYield: "＋ 本日の仕込みに追加(バッチ量未入力)", remOnSheet: "✓ 本日のリストにあり",
     remHandle: "処理する", remMore: (k) => `ほか ${k} 件 → 作り置き一覧`, remStaff: "(店長が製造リストに追加します)",
+    remRaise: (n, u) => `＋ 本日の仕込みを ${n}${u} 増やす`,
     remCollapsed: (k, a, b) => `作り置きアラート ${k} 件(期限間近 ${a} · 補充ライン割れ ${b})▶`,
     ffTitle: "本日 冷凍・冷蔵から", ffHave: (n) => `在庫 ${n}`, ffLack: (n) => `${n} 不足`,
     stockList: (list) => `在庫:${list}`, stockItem: (name, n, u, sh) => `${name} 在庫 ${n}${u}${sh ? `(${sh}${u} 不足)` : ""}`,
@@ -21092,17 +21150,21 @@ const PREP_TXT = {
     kitThaw: "取り出し後",
     kitWhole: "全工程(仕込み用)",
     kitHave: (store, n, u) => `${store}在庫 ${n}${u}`,
-    kitFirst: (d, m, u, k) => `${d} 仕込み分から(${m}${u}${k === null || k === undefined ? "" : `、あと ${k} 日`})`,
+    kitFirst: (d, m, u, k) => `${d} 仕込み分から(${m}${u}${k === null || k === undefined || k === "" ? "" : typeof k === "string" ? "、" + k : `、あと ${k} 日`})`,
     kitNotTracked: (store) => `${store}在庫は未登録です(登録すると残数が出ます)`,
     kitShort: (have, short, u) => `⚠ 在庫 ${have}${u}、${short}${u} 不足`,
     kitExpired: (k, n, u) => `⚠ 期限切れ ${k} ロット(計 ${n}${u})。使わずに「作り置き」で廃棄`,
     kitQtyHint: "焼く数を入力してください",
-    kitBakedBtn: (n, u) => `焼成完了、−${n}${u} を記録`,
+    kitBakedBtn: (n, u) => n ? `焼成完了、−${n}${u} を記録` : "焼成完了、記録",
     kitOnlyStore: (store) => `${store}だけ引きます。店頭在庫は製造リストの商品行で記録 —— 商品行に「${store}から引く分」と出ている場合は商品行だけ記録し、ここでは記録しない`,
     kitLineDone: "✓ この行は記録済み",
     kitFromLine: (p) => `製造リストの「${p}」の一部です。そちらで記録してください`,
+    kitFromLines: (list) => `製造リストの ${list} の合計です。それぞれの行で記録してください(同じ分なら 1 行だけ、ギフト用などに別に焼いた分はそれぞれ)`,
+    kitPartKind: { recipe: "取り出し", product: "商品", creation: "組み合わせ" },
     kitMakeToSheet: (store, n, u) => `仕込み後は製造リストで「記録」→ ${store} +${n}${u}`,
     kitMakeToPrep: "仕込み後「作り置き」で「＋ ロット登録」",
+    kitMakeLineDone: "✓ 本日の仕込みは製造リストで記録済み。追加で仕込む場合は、製造リストでこの行の数量を増やしてから記録してください",
+    kitMakeLineDoneStaff: "✓ 本日の仕込みは製造リストで記録済み。追加で仕込む場合は、店長に製造リストのこの行の数量を増やしてもらってください",
     kitMakeUsesStock: (names) => `この仕込みは在庫の${names}を使います:製造リストに「仕込み」行を追加し、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」の「＋ ロット登録」では引かれません`,
     kitMakeUsesStockStaff: (names) => `この仕込みは在庫の${names}を使います:店長に製造リストへ「仕込み」行を追加してもらい、仕込み後そこで記録してください(一緒に引かれます)。「作り置き」のロット登録では引かれません`,
     kitToastTake: (name, store, n, u, left) => `✓「${name}」${store} −${n}${u}(残り ${left})`,
@@ -21204,6 +21266,8 @@ const PREP_TXT = {
     fTakeBit: (store, name, n, u) => `${store}「${name}」−${fmtQty(n)}${u || ""}`,
     fProdToast: (d, n, prep) => `✓ ${d} 製造 ${fmtQty(n)} 件(${prep})`,
     fShort: (store, name, got, short, u) => `・${store}「${name}」は在庫 ${fmtQty(got)}${u || ""} のみ、${fmtQty(short)}${u || ""} 未控除(「作り置き」で棚卸し)`,
+    fShortExp: (store, name, got, short, exp, u) => `・${store}「${name}」は使用可 ${fmtQty(got)}${u || ""} のみ(期限切れ ${fmtQty(exp)}${u || ""} は控除しません)、${fmtQty(short)}${u || ""} 未控除。期限切れは「作り置き」で廃棄、数が合わなければ棚卸し`,
+    toastShortExp: (store, name, got, sh, exp) => `・${store}「${name}」は使用可 ${got} のみ(期限切れ ${exp} は控除しません)、${sh} 未控除。期限切れは「作り置き」で廃棄、数が合わなければ棚卸し`,
     fUntaken: (name, k) => `・${name} は ${k} パーツが使用量未入力・単位不一致のため未控除`,
     fBackNone: "作り置きは未控除(理由は後述)",
     fBackAbsorbed: (store, name, parts, u, same) => {
@@ -21238,7 +21302,7 @@ const PREP_TXT = {
     fBuyToggle: "手持ちの作り置きで計算(在庫を差し引き・バッチ単位・補充ラインを確保。チェックなしより多くなる場合あり)",
     fBuyLine: (name, need, u, have, min, k, qty) => `作り置き:${name} 必要 ${fmtQty(need)}${u}、使用可 ${fmtQty(have)}${min > 0 ? `(補充ライン ${fmtQty(min)})` : ""}` +
       (k > 0 ? ` → ${k} バッチ(${fmtQty(qty)}${u})で材料計算` : " → 仕込み不要(材料に含めず)"),
-    fBuyFoot: "期限切れは除外。商品在庫はここでは差し引きません。",
+    fBuyFoot: "期限切れは除外。期間中に期限が切れる分は、切れる前に使い切れる分だけ計算(期間中の1日平均の使用量で概算)。商品在庫はここでは差し引きません。",
     fHealthClear: (name, n, u) => `「${name}」の在庫記録(${fmtQty(n)}${u || ""})を消去しました(元に戻せます)`,
     fHealthTidy: (name) => `「${name}」のロット記録を整理しました`,
     fH: {
@@ -21836,9 +21900,14 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     // 不算:这一行自己记的、商品记录扣的(带 prodLogId,各商品各记各的)、组合产品行(lineKey)和做一批行扣的配料(组件上的 sheet take)这些别的用量
     const direct = new Set((Array.isArray(obj.items) ? obj.items : []).filter(it => it).map(it => prepKeyOf(it.linkedType || "recipe", it.linkedId)));
     // 审查 pt2:只看配方(同商品页「又扣了一遍」提醒):组件好多东西共用,今天备货卡 / 厨房取的多半是别的用途
-    const te = [...new Set(full.takes.filter(t => direct.has(t.key) && t.key.startsWith("recipe:") && canTake(t)).map(t => t.key))].map(k => ({ key: k, qty: _r3(takesToday(k)
-      .filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || k.startsWith("recipe:"))).reduce((a, m) => a + _prepNum(m.qty), 0)) })).filter(x => x.qty > 0);
-    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), ...(te.length ? { takenElsewhere: te } : {}), flow, readOnly, blocked: readOnly ? "readOnly" : null };
+    // 终审 r2:生产单取出行记的(via sheet,没有 prodLogId / lineKey)另放 takenByLine —— 给礼盒另烤的那一行照记,不能一律说「会再扣一遍」
+    const te0 = [...new Set(full.takes.filter(t => direct.has(t.key) && t.key.startsWith("recipe:") && canTake(t)).map(t => t.key))].map(k => {
+      const ms = takesToday(k).filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId && !m.lineKey && (m.via !== "sheet" || k.startsWith("recipe:")));
+      const sum = (xs) => _r3(xs.reduce((a, m) => a + _prepNum(m.qty), 0));
+      return { key: k, qty: sum(ms.filter(m => m.via !== "sheet")), line: sum(ms.filter(m => m.via === "sheet")) };
+    });
+    const te = te0.filter(x => x.qty > 0).map(x => ({ key: x.key, qty: x.qty })), tl = te0.filter(x => x.line > 0).map(x => ({ key: x.key, qty: x.line }));
+    return { mode: "product", sub: null, qty, logged, pending, todayLogged, tracked: full.takes.some(canTake), ...(te.length ? { takenElsewhere: te } : {}), ...(tl.length ? { takenByLine: tl } : {}), flow, readOnly, blocked: readOnly ? "readOnly" : null };
   }
   const cfg = (kind === "recipe" || kind === "component") ? prepCfgOf(kind, obj) : null;
   if (cfg) {
@@ -21867,12 +21936,14 @@ const _prepLineCalc = (s, ctx, st, today, productionLog) => {
     const logged = own0 > 0 ? Math.min(qty, _r3(Math.min(lg, cap) + own0)) : Math.min(lg, cap);
     const pending = pend(logged);
     const actual = _r3(tk.filter(m => m.uid === l.uid).reduce((a, m) => a + _prepNum(m.qty), 0));
-    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy).reduce((a, m) => a + _prepNum(m.qty), 0));   // 审查 pt2:删了生产记录加回去的不算(同商品行 / 商品页的筛法)
+    const takenElsewhere = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy && !m.prodLogId).reduce((a, m) => a + _prepNum(m.qty), 0));   // 审查 pt2:删了生产记录加回去的不算(同商品行 / 商品页的筛法)
+    // 终审 r2:商品行 / 商品页记生产扣的(带 prodLogId)另算 —— 给礼盒另烤的这一行照记,不是「备货页 / 厨房」取的
+    const takenByProduct = _r3(tk.filter(m => m.uid !== l.uid && !m.restoredBy && m.prodLogId).reduce((a, m) => a + _prepNum(m.qty), 0));
     // 这个配方挂在哪些商品上(卡片灰字「要同时加商品库存,请用『从商品加』」;linkedType 缺省也算 recipe,同 13a 的判定)
     const onProducts = (ctx.products || []).filter(p => p && (p.items || []).some(it => it && (it.linkedType || "recipe") === "recipe" && String(it.linkedId) === String(obj.id)))
       .map(p => ({ id: p.id, name: prodName(p, ctx.lang) }));
     return { mode: item ? "take" : null, sub: "bake", key: cfg.key, cfg, qty, logged, pending, actual, tracked: !!item, unitMismatch, noYield,
-      takenElsewhere, onProducts, flow: flowOf(pending), readOnly, blocked: !item ? null : readOnly ? "readOnly" : unitMismatch ? "unit" : null };
+      takenElsewhere, ...(takenByProduct > 0 ? { takenByProduct } : {}), onProducts, flow: flowOf(pending), readOnly, blocked: !item ? null : readOnly ? "readOnly" : unitMismatch ? "unit" : null };
   }
   // 组合产品行 / 没标备货但用到备货组件(「来自组件」)的配方 / 组件行:记入 = 只从账本扣
   const full = prepFlowOfSheetRow(lineObj, qty > 0 ? qty : 1, ctx);
@@ -21968,6 +22039,16 @@ const prepReachable = (products, plan, ctx, onHand) => {
   const r = computeMaterialNeeds(L, { ...(ctx || {}), products: (ctx && ctx.products) || products }, { onHand });
   return Array.isArray(r.prepPlan) && r.prepPlan.length > 0;
 };
+// 终审 r2:做一批行已经记过一部分(记完后又把数量加上去,比如提醒的「再加 N」)时,给页面看的块按还没记的那部分(pending)重算 ——
+// 卡片的配料 / 几批 /「做好点记入 = +N」、员工厨房列表的数量、打印的「做好后记入」都跟着它(以前按整行,已经做好的那批叫员工再称一遍)。
+// 只换 blocks;s 本身(qty / line)、记入、账本、「今天总共要称多少」照旧按整行。stock = prepStockRead 的结果
+const prepSheetShown = (sheet, ctx, stock, today, productionLog) => (sheet || []).map(s => {
+  if (!s || s.missing || !s.obj || !s.line || !(s.line.kind === "component" || (s.line.kind === "recipe" && s.line.stage === "make"))) return s;
+  const info = _prepLineBase(s, ctx, stock, today, productionLog);
+  if (!info || info.mode !== "make" || !(info.logged > 0) || !(info.pending > 0) || !(info.pending < s.qty)) return s;
+  const r = buildProdSheet([{ ...s.line, qty: String(info.pending) }], ctx)[0];
+  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks } : s;
+});
 // ─── END prepstock sheet helpers ───
 
 const PROD_TXT = {
@@ -22268,6 +22349,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
                 !(prep.logged > 0 || prep.actual > 0), () => setPanel({ val: prep.pending > 0 ? String(bakeQ) : "" }))
               : logPrepBtn(prep.logged > 0 ? X.logMore(fmtQty(prep.pending)) : X.logBtn(fmtQty(prep.pending)), !(prep.logged > 0), () => onLog())))}
           {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenElsewhere > 0 && <span data-prep-elsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenElsewhere(fmtQty(prep.takenElsewhere), u)}</span>}
+          {pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.takenByProduct > 0 && <span data-prep-byproduct="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.takenByProduct(fmtQty(prep.takenByProduct), u)}</span>}
           {!pBake && prep.mode === "take" && !blockedTxt && prep.pending > 0 && prep.usedElsewhere > 0 && <span data-prep-useelsewhere="1" style={{ ...T.fs.caption, color: T.warning, width: "100%" }}>{PX.usedElsewhere(fmtQty(prep.usedElsewhere))}</span>}
           {pBake && (prep.onProducts || []).length > 0 && <span data-prep-onproduct="1" style={{ ...T.fs.caption, color: T.subtle, width: "100%" }}>{(readOnly ? PX.onProductStaff : PX.onProduct)(prep.onProducts.map(p => p.name).join("」「"))}</span>}
         </div>
@@ -22346,6 +22428,9 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       )}
       {willTake && Array.isArray(prep.takenElsewhere) && prep.takenElsewhere.map(x => { const e = prepView.get(x.key); return e ? (
         <div key={x.key} data-prep-elsewhere-product={x.key} style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>{PX.takenElsewhereOf(e.name, fmtQty(x.qty), e.cfg.unit)}</div>
+      ) : null; })}
+      {willTake && Array.isArray(prep.takenByLine) && prep.takenByLine.map(x => { const e = prepView.get(x.key); return e ? (
+        <div key={x.key} data-prep-byline-product={x.key} style={{ ...T.fs.caption, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>{PX.takenByLineOf(e.name, fmtQty(x.qty), e.cfg.unit)}</div>
       ) : null; })}
       {prepArea}
       {panelEl}
@@ -22545,7 +22630,7 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose, prepSt
 // PREP_UI_KEY(sessionStorage korora_prep_ui_v1)在下面 E 线备货页那段定义,提醒条和备货页共用一个 key(合并时去掉了这里重复的 const)
 const _prepUiRead = () => { try { const o = JSON.parse(sessionStorage.getItem(PREP_UI_KEY) || "null"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } };
 const _prepUiWrite = (patch) => { try { sessionStorage.setItem(PREP_UI_KEY, JSON.stringify({ ..._prepUiRead(), ...patch })); } catch (e) {} };
-function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
+function PrepReminder({ rows, lang, staff, lines, onAddMake, onRaiseMake, onOpenPrep }) {
   const PX = prepTxt(lang);
   const [open, setOpen] = useState(() => !!_prepUiRead().reminderOpen);
   if (!rows || !rows.length) return null;
@@ -22565,10 +22650,10 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
   const lineOf = (r) => {
     const u = r.cfg.unit, st = PX.storeName(r.cfg.store), f = r.flags, lot = r.lot;
     const q = (n) => fmtQty(n) || "0";
-    if (r.rank === 0 && lot) return PX.remExpired(r.oh.expiredLots.length, PX.md(lot.madeAt), q(lot.left), u);
+    if (r.rank === 0 && lot) return r.oh.expiredLots.length > 1 ? PX.remExpiredN(r.oh.expiredLots.length, PX.md(lot.madeAt), q(r.oh.expired), u) : PX.remExpired(1, PX.md(lot.madeAt), q(lot.left), u);
     if (r.rank === 1) return PX.remShort(q(r.need), u, st, q(r.oh.usable));
     if (r.rank === 2 && lot) return lot.status === "today" ? PX.remToday(PX.md(lot.madeAt), q(lot.left), u) : PX.remSoon(PX.md(lot.madeAt), q(lot.left), u, lot.daysLeft);
-    if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? fmtQty(Math.round(r.days * 10) / 10) : "0");
+    if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? _prepDaysTxt(r.days) : "0");   // 终审 r1:和备货卡「大约够几天」同一个取法(向下取,不多说)
     return "";
   };
   return (
@@ -22584,7 +22669,12 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
         const f = r.flags;
         const kind = r.cfg.kind;
         const makeKey = prodLineKey(kind === "recipe" ? { kind, id: r.cfg.id, stage: "make" } : { kind, id: r.cfg.id });
-        const already = on.has(makeKey);
+        // 终审 r1:做一批行已经全记入(incoming 0)就不算「单子上有了」(再也不会进账),给「＋ 做一批的行再加 N」把那一行的数量加上去
+        // (onAddMake 走 mergeProdLines 会当重复丢掉);没填产出量 / 单位对不上的做一批行本来就不算 incoming,照旧写「单子上有了」
+        const mkLine = on.has(makeKey) ? (lines || []).find(l => l && prodLineKey(l) === makeKey) : null;
+        // 终审 r2:单子上的做一批还没记入、但量不够(还是红的 short)也不算「单子上有了」,同样给「再加 N」(suggest 已经减掉了 incoming)
+        const already = !!mkLine && ((r.incoming > 0 && !r.flags.short) || r.cfg.batch === null || !!r.oh.unitMismatch);
+        const mkDone = !!mkLine && !already;
         // 不够 / 低于提醒线的行给「＋ 做一批加进今天」;单子上已经有做一批行时写「✓ 今天单子上有了」(这时建议可能已经算成不用做)
         const wantMake = (f.short || f.low) && (!!r.suggest || already);
         const qty = r.suggest && r.suggest.qty ? r.suggest.qty : 1;
@@ -22603,6 +22693,7 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
               <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {already ? <span data-prep-remonsheet="1" style={{ ...T.fs.caption, color: T.success }}>{PX.remOnSheet}</span>
                   : staff ? <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.remStaff}</span>
+                  : mkDone ? <Btn size="sm" onClick={() => onRaiseMake && onRaiseMake(mkLine.uid, qty)}>{PX.remRaise(fmtQty(qty), r.cfg.unit)}</Btn>
                   : <Btn size="sm" onClick={() => onAddMake && onAddMake([add])}>{r.suggest && r.suggest.qty ? PX.remAdd : PX.remAddNoYield}</Btn>}
               </div>
             )}
@@ -22639,6 +22730,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
   const stock = prepOn ? (prepStock && prepStock.items ? prepStock : prepStockRead(null)) : null;
   const ctxS = prepOn ? { ...ctx, sheet } : null;   // ctx.sheet:prepLineInfo 才算「两行扣同一样」(dupes);提醒 / 卡片共用同一个 ctx,记忆化才命中
   const pending = prepOn ? prepPendingOf(sheet, ctxS, stock, productionLog, today) : null;
+  const shown = prepOn ? prepSheetShown(sheet, ctxS, stock, today, productionLog) : sheet;   // 终审 r2:记过一部分的做一批行,块按还没记的算(卡片 / 打印)
   const prepView = prepOn ? (() => {
     const items = new Map();
     [["recipe", recipes], ["component", components]].forEach(([kind, list]) => (list || []).forEach(o => {
@@ -22687,7 +22779,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     if (!prepView) return { date: today, sheet, totals, lang };
     const first = {};
     prepView.items.forEach(e => { if (e.item && !e.oh.unitMismatch && e.oh.first) first[e.key] = prepTxt(lang).md(e.oh.first.madeAt); });
-    return { date: today, sheet, totals, lang, prep: { today, first } };
+    return { date: today, sheet: shown, totals, lang, prep: { today, first } };
   };
 
   if (adding === "pick") {
@@ -22720,7 +22812,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
         <Btn size="sm" variant="ghost" disabled={!plan.lines.length} onClick={clearAll}>{X.clearAll}</Btn>
       </div>
       )}
-      {prepRows && prepRows.length > 0 && <PrepReminder rows={prepRows} lang={lang} staff={staff} lines={plan.lines} onAddMake={(adds) => addLines(adds)} onOpenPrep={onOpenPrep} />}
+      {prepRows && prepRows.length > 0 && <PrepReminder rows={prepRows} lang={lang} staff={staff} lines={plan.lines} onAddMake={(adds) => addLines(adds)}
+        onRaiseMake={(uid, d) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, qty: stepProdQty(l.qty, d) } : l))} onOpenPrep={onOpenPrep} />}
       {adding === "products" && <ProdAddProducts products={products} salesLog={salesLog} lines={plan.lines} today={today} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
       {adding === "onsale" && (prepOn
         ? <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} prepStock={stock} today={today} />
@@ -22736,7 +22829,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
           actions={[{ label: X.addProducts, onClick: () => setAdding("products") }, { label: X.addPick, onClick: () => setAdding("pick") }]} />
       ) : (
         <>
-          {sheet.map(s => {
+          {sheet.map((s, si) => {
             const todayLogged = s.line.kind === "product" ? (productionLog || []).filter(x => x && String(x.productId) === String(s.line.id) && x.date === today).reduce((a, x) => a + (parseFloat(x.batchQty) || 0), 0) : 0;
             if (!prepOn) return (
               <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
@@ -22753,7 +22846,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
             const info = prepLineInfo(s, ctxS, stock, today, productionLog);
             const step = info && info.mode === "make" && info.cfg && info.cfg.batch ? info.cfg.batch : 1;
             return (
-              <ProdLineCard key={s.line.uid} s={s} lang={lang} open={!closed[s.line.uid]}
+              <ProdLineCard key={s.line.uid} s={shown[si] || s} lang={lang} open={!closed[s.line.uid]}
                 onToggleOpen={() => setClosed(c => ({ ...c, [s.line.uid]: !c[s.line.uid] }))}
                 onQty={(v) => setLine(s.line.uid, { qty: v })}
                 onStep={(d) => setLine(s.line.uid, { qty: stepProdQty(s.line.qty, d * step) })}
@@ -23182,12 +23275,14 @@ function PrepTakePanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDial
   const bind = useDirtyGuard(() => ({ qty }));
   const sent = useRef(false);
   const unit = (item && item.unit) || cfg.unit;
+  // 终审 r1:按个计的取出向上取整(账本同一个 _prepQ),面板上先说「记 3 個」、记的也是这个数(同生产单「实际取了」面板 / 厨房视图按钮)
+  const qN = parseFloat(qty), qR = _prepQ(qN, unit, "take");
   const submit = () => {
     const q = parseFloat(qty);
-    if (!(isFinite(q) && q > 0)) { setErr(X.errTakeQty); return; }
+    if (!(isFinite(q) && q > 0 && qR > 0)) { setErr(X.errTakeQty); return; }
     setErr(null);
     if (sent.current) return;
-    if (onSubmit({ type: "take", key: cfg.key, cfg, opId, qty: q, date: today || localDateStr(), via: "card" }, q)) sent.current = true;
+    if (onSubmit({ type: "take", key: cfg.key, cfg, opId, qty: qR, date: today || localDateStr(), via: "card" }, qR)) sent.current = true;
   };
   return (
     <div {...bind} data-prep-panel="take" style={{ marginTop: T.sp.m, padding: T.sp.m, border: `1px solid ${T.line}`, background: T.paper }}>
@@ -23195,6 +23290,7 @@ function PrepTakePanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDial
         <span style={{ ...T.fs.label, color: T.subtle }}>{X.takeQty(unit)}</span>
         <input type="number" inputMode="decimal" min="0" value={qty} onWheel={blurOnWheel} onChange={e => setQty(e.target.value)}
           style={{ padding: "8px 10px", minHeight: 40, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small, ...T.num, boxSizing: "border-box", minWidth: 0 }} />
+        {isFinite(qN) && qN > 0 && _prepIsCount(unit) && qR !== _prepClean(qN) && <span data-prep-panelround="1" style={{ ...T.fs.caption, color: T.subtle, ...T.num }}>{X.panelRounded(fmtQty(qR), unit)}</span>}
       </label>
       {onProducts && onProducts.length > 0 && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: T.sp.s, overflowWrap: "anywhere" }}>{X.takeOnProduct(X.storeName(cfg.store))}</div>}
       {err && <div style={{ marginTop: T.sp.s }}><InlineError title={X.errTitle} detail={err} /></div>}
@@ -23341,7 +23437,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     const plan = prepTakePlan(item, cfg, qty, t);
     // 审查 ps1:扣不够时同厨房视图 / 生产单,写「账上只有 X,差 Y 没扣(去盘点)」(以前只写扣到的数,差的那几个之后做一批时会被悄悄补扣)
     const r = doOp([op], X.toastTake(name, storeName, q(plan.got), unit, q(Math.max(0, _r3(oh.usable - plan.got))))
-      + (plan.short > 0 ? X.kitToastShort(storeName, name, q(plan.got), q(plan.short)) : ""));
+      + (plan.short > 0 ? (oh.expired > 0 ? X.toastShortExp(storeName, name, q(plan.got), q(plan.short), q(oh.expired)) : X.kitToastShort(storeName, name, q(plan.got), q(plan.short))) : ""));   // 终审 r1:有过期的说清
     if (r) setPanel(null);
     return r;
   };
@@ -23401,6 +23497,9 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
         if ((Array.isArray(m.deltas) ? m.deltas : []).some(d => { const l = Array.isArray(d) ? lotsAll.find(x => x && x.id === d[0]) : null; return !!l && String(l.madeAt || "") > String(m.date || ""); })) src.push(X.pushedOnTag);
       }
     }
+    // 终审 r1:今天记的取出扣不够时也写「差 N」(同补录的;后来哪一批补扣过的减掉,补完就不写)。以前只写 −0 / −20,toast 一消失就不知道差了多少
+    // 终审 r2:删了生产记录加回去的(restoredBy)、后来盘点过的不写(同 prepShortTodayOf;以前删了记录「差 10」一直挂着)
+    if (!back && m.type === "take" && !m.blocked && !m.restoredBy) { const mvAll = item.moves || [], mi = mvAll.indexOf(m); const sh = mvAll.some((x, j) => j > mi && x && x.type === "count") ? 0 : _r3(_prepPos(m.short) - _prepPos(m.settledQty)); if (sh > 0) src.push(X.backShortTag(q(sh))); }
     if (m.type === "discard") {
       src.push(m.reason === "expired" ? X.reasonExpired : X.reasonBad);
       // 补录往天被这次报废一起记掉的(还在的补录 take 的 absorbedBy 里提到它的;记的是补录那一刻的数)
@@ -24343,8 +24442,13 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     lineDone = !!info && (info.qty > 0 ? info.pending <= 0 : info.actual > 0);
   }
   const makeHint = (!isTake && pcfg && (prepRecipe || kind === "component")) ? (() => {
-    const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")));
+    // 终审 r1:那一行已经全记入(生产单卡片上没有记入按钮了)就不叫她「回生产单点记入」,照没在单子上处理(同上面 lineDone 的判法)
+    const lineOpen = (l) => { const s = buildProdSheet([l], c)[0]; const info = s ? prepLineInfo(s, c, stock, today, c.productionLog || []) : null; return !info || !(info.qty > 0 ? info.pending <= 0 : info.actual > 0); };
+    const mkLines = planLines ? planLines.filter(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make"))) : [];
+    const onSheet = mkLines.some(lineOpen);
     if (onSheet && pcfg.batch !== null && valid) return PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit);
+    // 终审 r2:单子上有这一样的做一批、但已经全记入 → 不落到「去备货登记一批」(会记两遍)/「加一行做一批」(合并会丢掉)
+    if (!onSheet && mkLines.length) return c.staff ? PX.kitMakeLineDoneStaff : PX.kitMakeLineDone;
     // 审查 ps2:配料里「来自组件」用到已开始记的备货组件 → 「＋ 登记一批」不会扣那个组件(那是补登用的),叫她走生产单的「做一批」(那里一起扣)
     const used = prepFlowOfSheetRow({ kind, id: target.id, obj: target, ...(kind === "recipe" ? { stage: "make" } : {}) }, 1, c).takes.filter(t => stock.items[t.key]);
     if (used.length) {
@@ -24359,7 +24463,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     const plan = prepTakePlan(pitem, pcfg, kitQ, today);
     const q = _r3(plan.got + plan.short);
     let msg = PX.kitToastTake(name, storeNm, fmtQty(q), pcfg.unit, fmtQty(Math.max(0, _r3(oh.usable - plan.got))));
-    if (plan.short > 0) msg += PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));
+    if (plan.short > 0) msg += oh.expired > 0 ? PX.toastShortExp(storeNm, name, fmtQty(plan.got), fmtQty(plan.short), fmtQty(oh.expired)) : PX.kitToastShort(storeNm, name, fmtQty(plan.got), fmtQty(plan.short));   // 终审 r1
     const op = { type: "take", key: pcfg.key, cfg: pcfg, opId, qty: kitQ, via: "kitchen" };
     if (c.staff) op.staff = true;
     if (onPrepOp([op], { toast: msg, staff: !!c.staff }) === false) return;
@@ -24370,7 +24474,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
   const note = (color, attr, txt) => <div data-kitchen-prep={attr} style={{ fontSize: 16, color, marginTop: 8, lineHeight: 1.6, overflowWrap: "anywhere", ...T.num }}>{txt}</div>;
   const thaw = pcfg ? prodNote(zh ? (pcfg.thawZh || pcfg.thawJa) : (pcfg.thawJa || pcfg.thawZh)) : "";
   const takeSub = isTake && pitem && !oh.unitMismatch
-    ? [oh.first ? PX.kitFirst(PX.md(oh.first.madeAt), fmtQty(oh.first.left), pcfg.unit, oh.first.status === "nodate" ? null : oh.first.daysLeft) : "", PX.kitHave(storeNm, fmtQty(oh.usable), pcfg.unit)].filter(Boolean).join(" · ")
+    ? [oh.first ? PX.kitFirst(PX.md(oh.first.madeAt), fmtQty(oh.first.left), pcfg.unit, oh.first.status === "nodate" ? null : oh.first.status === "today" ? PX.lotToday : oh.first.daysLeft) : "", PX.kitHave(storeNm, fmtQty(oh.usable), pcfg.unit)].filter(Boolean).join(" · ")
     : "";
   // 组合产品的备货部分:「现有 Y g」(组件已开始记、单位对得上才有)
   const partHave = (l) => {
@@ -24448,7 +24552,9 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
       )}
       {isTake && canRecord && (
         <div data-kitchen-record={fromLine && !uid ? "fromline" : viaLine ? (lineDone ? "done" : "line") : "direct"} style={{ marginTop: 16 }}>
-          {fromLine && !uid ? note(T.body, "fromline", PX.kitFromLine((fromLine && fromLine.name) || ""))
+          {fromLine && !uid ? note(T.body, "fromline", Array.isArray(fromLine.parts) && fromLine.parts.length
+            ? PX.kitFromLines(fromLine.parts.map(p => `${(p.kind && PX.kitPartKind[p.kind]) || ""}「${p.name || ""}」${fmtQty(p.qty) || "0"}${pcfg && pcfg.unit ? " " + pcfg.unit : ""}`).join(zh ? "、" : "・"))
+            : PX.kitFromLine((fromLine && fromLine.name) || ""))
             : viaLine ? (lineDone ? note(T.success, "linedone", PX.kitLineDone)
               : <Btn size="lg" variant="primary" disabled={!valid} onClick={recordLine}>{PX.kitBakedBtn(valid ? fmtQty(kitQ) : "", pcfg.unit)}</Btn>)
             : (
@@ -24544,7 +24650,7 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
     if (b.prep === "packed") return;
     if (b.type === "component" && b.prep === "take") return;   // 审查 ps1:组件从库存取的块同样不列(厨房视图对组件只有「做」的样子,生产单那一块已写取多少)
     const k = prodLineKey({ kind: b.type, id: b.target.id }) + (b.prep ? "\u0000" + b.prep : "");   // 没有 prep 时和以前的 type + id 一样
-    const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "" } : null;
+    const src = s && s.line ? { kind: s.line.kind, uid: s.line.uid, name: s.obj ? prodName(s.obj, lang) : "", qty: b.need || 0 } : null;
     const ex = seen.get(k);
     if (ex) { ex.qty = Math.round(((ex.qty || 0) + (b.need || 0)) * 1000) / 1000; if (src) ex.srcs.push(src); return; }
     const it = { kind: b.type, obj: b.target, qty: b.need, prep: b.prep, srcs: src ? [src] : [] };
@@ -24557,7 +24663,14 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
     if (one) return [it.kind, it.obj.id, it.qty, "take", one.uid];
     const names = [...new Set(it.srcs.filter(x => x.kind !== "recipe").map(x => x.name).filter(Boolean))];
     const first = it.srcs.find(x => x.kind !== "recipe") || it.srcs[0];
-    return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin) } : undefined];
+    // 终审 r1:合进来的有取出配方行(它自己要记)又有商品 / 组合产品行 → fromLine 多带 parts(每一行各多少),厨房视图列出来叫她各记各的
+    let parts;
+    if (it.srcs.some(x => x.kind === "recipe") && it.srcs.some(x => x.kind !== "recipe")) {
+      const by = new Map();
+      it.srcs.forEach(x => { const e = by.get(x.uid); if (e) e.qty = _r3(e.qty + (x.qty || 0)); else by.set(x.uid, { kind: x.kind, name: x.name, qty: x.qty || 0 }); });
+      parts = [...by.values()];
+    }
+    return [it.kind, it.obj.id, it.qty, "take", undefined, first ? { kind: first.kind, name: (names.length ? names : [first.name]).join(PX.kitNamesJoin), ...(parts ? { parts } : {}) } : undefined];
   };
   const prepCfg = (it) => (it.kind === "recipe" ? prepCfgOf("recipe", it.obj) : null);
   const onSale = [
@@ -24643,7 +24756,9 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
   const openKitchen = (kind, id, qty, stage, uid, fromLine) => { setKitchenItem({ kind, id, qty, stage, uid, fromLine }); setPage("kitchen"); if (typeof window !== "undefined" && window.scrollTo) { try { window.scrollTo(0, 0); } catch (e) {} } };
   const kitchenTarget = kitchenItem ? _prodFind(kitchenItem.kind === "creation" ? creations : kitchenItem.kind === "component" ? components : recipes, kitchenItem.id) : null;
   const plan = prodPlanForToday(rawPlan, today);
-  const sheet = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  const sheet0 = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
+  // 终审 r2:记过一部分的做一批行按还没记的那部分列(同生产单卡片)
+  const sheet = prepOn && sheet0.length ? prepSheetShown(sheet0, ctx, prepStock && prepStock.items ? prepStock : prepStockRead(prepStock), today, productionLog) : sheet0;
   // 厨房视图另外要的(只用来显示 / 判断「这一行记完没有」):账本、今天单子的行、生产记录、员工标记
   const kctx = { ...ctx, prepStock, planLines: plan.lines, productionLog, staff: true };
   return (
@@ -25711,7 +25826,8 @@ function App() {
         const tp = plans[ai].tp;
         ded = tp.got;
         if (tp.got > 0) bits.push(X.fTakeBit(store, nm, tp.got, u));
-        if (tp.short > 0) notes.push(X.fShort(store, nm, tp.got, tp.short, u));
+        // (App 里的 prepOnHand 是采购页用的 Map,盖住了模块的同名函数 —— 这里按批次直接加,同生产单 takeParts)
+        if (tp.short > 0) { const exp = _r3(prepLotsView(a.it, a.cfg, now0).filter(l => l.status === "expired").reduce((s, l) => s + l.left, 0)); notes.push(exp > 0 ? X.fShortExp(store, nm, tp.got, tp.short, exp, u) : X.fShort(store, nm, tp.got, tp.short, u)); }   // 终审 r1
       } else {
         const pl = plans[ai].bp;
         if (!pl.ok) {
@@ -25786,6 +25902,8 @@ function App() {
   };
   // 采购页「按手上的备货算」用(F 线);第 0 步 prepOnHandMap 返回空 Map = 采购页和以前一样
   const prepOnHand = useMemo(() => prepOnHandMap(recipes, components, prepStock, today), [recipes, components, prepStock, today]);
+  // 终审 r1:采购页按「这段时间最后一天」还能用的算(到那天前会过期的批不算),由采购页按她选的结束日调用
+  const prepOnHandAt = useMemo(() => (day) => prepOnHandMap(recipes, components, prepStock, day), [recipes, components, prepStock]);
 
   // ─── 第 3 批 F1:今日生产单 ───
   // 当天计划 appSettings.prodPlan = { date, lines, updatedAt }。fn 收到今天的 lines(换了日期就是空的),返回新的 lines
@@ -25850,10 +25968,12 @@ function App() {
         const o = objOf(t.kind, t.id), cfg = prepCfgOf(t.kind, o), it = prepStock.items[t.key];
         const tp = prepTakePlan(it, cfg, t.qty, today);
         // (App 里的 prepOnHand 是采购页用的 Map,这里按批次直接加:能用的 = 没过期的批剩的合计)
-        const usable = prepLotsView(it, cfg, today).filter(l => l.status !== "expired").reduce((a, l) => a + l.left, 0);
-        return { t, cfg, name: prodName(o, lang), store: X.storeName(cfg && cfg.store), got: tp.got, short: tp.short, left: _r3(usable - tp.got) };
+        const lv = prepLotsView(it, cfg, today);
+        const usable = lv.filter(l => l.status !== "expired").reduce((a, l) => a + l.left, 0);
+        const exp = _r3(lv.filter(l => l.status === "expired").reduce((a, l) => a + l.left, 0));   // 终审 r1:扣不够时说清有过期的
+        return { t, cfg, name: prodName(o, lang), store: X.storeName(cfg && cfg.store), got: tp.got, short: tp.short, exp, left: _r3(usable - tp.got) };
       }).filter(x => x.cfg);
-      const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
+      const shortTxt = (parts) => parts.filter(x => x.short > 0).map(x => x.exp > 0 ? X.toastShortExp(x.store, x.name, q(x.got), q(x.short), q(x.exp)) : X.toastShort(x.store, x.name, q(x.got), q(x.short))).join("");
       const untakenTxt = (untaken) => {
         const by = new Map();
         // 审查 ps4:同商品页 logProdWithPrep —— 本产品专用的部分是有意不扣、还没开始记的不算「没扣到」,不提(以前都算进「没填用量或单位对不上」)
@@ -27929,6 +28049,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           suppliers={suppliers}
           lang={lang}
           prepOnHand={prepOnHand}
+          prepOnHandAt={prepOnHandAt}
         />
       )}
 
