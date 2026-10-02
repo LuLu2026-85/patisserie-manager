@@ -20832,6 +20832,8 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 装烤好的 ${n} ${u}(不扣备货)`,
     printPackedPlain: (n, u) => `☐ 装烤好的 ${n} ${u}`,
     printMakeHint: (store, n, u, date) => `做好后记入:${store} +${n} ${u} · 今天做的${date ? `,放到 ${date}` : ""}`,
+    printLoggedHead: (a, b, u) => `✓ 已记入 ${a} ${u}(已经做好了),下面只列还要做的 ${b} ${u}`,
+    printLoggedTotals: (list) => `⚠ 下面的合计按整行算,含已经记入的部分(${list}):那部分已经做好,别再称`,
     // ── D 线:厨房视图 / 员工外壳 ──
     kitModeTake: "取出烤", kitModeMake: "做一批",
     kitTag: (s) => (s === "freeze" ? "冷冻→烤" : s === "fridge" ? "冷藏→烤" : "取出→烤"),
@@ -21153,6 +21155,8 @@ const PREP_TXT = {
     printPacked: (n, u) => `☐ 焼成済みを詰める ${n}${u}(作り置きから引かない)`,
     printPackedPlain: (n, u) => `☐ 焼成済みを詰める ${n}${u}`,
     printMakeHint: (store, n, u, date) => `仕込み後に記録:${store} +${n}${u} · 本日仕込み${date ? `、${date} まで` : ""}`,
+    printLoggedHead: (a, b, u) => `✓ ${a}${u} 記録済み(仕込み済み)。以下は残り ${b}${u} 分のみ`,
+    printLoggedTotals: (list) => `⚠ 下記の合計は行全体の量で、記録済みの分(${list})も含みます。その分は仕込み済みなので量り直さないでください`,
     // ── D 線:キッチン表示 / スタッフ ──
     kitModeTake: "出して焼く", kitModeMake: "仕込み",
     kitTag: (s) => (s === "freeze" ? "冷凍→焼成" : s === "fridge" ? "冷蔵→焼成" : "出して焼成"),
@@ -22069,7 +22073,8 @@ const prepSheetShown = (sheet, ctx, stock, today, productionLog) => (sheet || []
   const info = _prepLineBase(s, ctx, stock, today, productionLog);
   if (!info || info.mode !== "make" || !(info.logged > 0) || !(info.pending > 0) || !(info.pending < s.qty)) return s;
   const r = buildProdSheet([{ ...s.line, qty: String(info.pending) }], ctx)[0];
-  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks } : s;
+  // 终审 r3:带上已记 / 还要做的数 —— 打印抬头和「今天总共要称多少」要写明已经记入的那部分(纸上没有卡片的「✓ 已记入」)
+  return r && !r.missing && !r.zero ? { ...s, blocks: r.blocks, shownLogged: info.logged, shownPending: info.pending } : s;
 });
 // ─── END prepstock sheet helpers ───
 
@@ -23928,6 +23933,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
             <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{fmtQty(s.qty)} {lineUnit(s)}</div>
           </div>
           {s.missing && <div style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.missing}</div>}
+          {s.shownLogged > 0 && <div data-prep-print="logged" className="p-row" style={{ fontSize: "11pt", fontWeight: 700 }}>{PX.printLoggedHead(fmtQty(s.shownLogged), fmtQty(s.shownPending), lineUnit(s))}</div>}
           {/* 审查 ps2:数量 0 的取出烤行(同屏幕卡片):不印「数量是 0,不做」,印「店长没填数量 · 实际取了 ____」 */}
           {!s.missing && s.zero && (s.line.kind === "recipe" && s.obj && isPrepMarked(s.obj) && s.line.stage !== "make"
             ? <div style={{ fontSize: "10pt" }}>{prepTxt(L).zeroTakePrint(prepCfgOf("recipe", s.obj).unit)}</div>
@@ -23938,6 +23944,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
       ))}
 
       <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{X.totals}</div>
+      {sheet.some(s => s.shownLogged > 0) && <div data-prep-print="loggedtotals" className="p-row" style={{ fontSize: "10pt", fontWeight: 700 }}>{PX.printLoggedTotals(sheet.filter(s => s.shownLogged > 0).map(s => `${lineName(s)} ${fmtQty(s.shownLogged)}${L === "ja" ? "" : " "}${lineUnit(s)}`).join("、"))}</div>}
       {prodNoYieldNames(sheet, L).length > 0 && <div className="p-row" style={{ fontSize: "10pt", fontWeight: 700 }}>⚠ {X.noYieldTotals(prodNoYieldNames(sheet, L).map(n => `「${n}」`).join(""))}</div>}
       <table><tbody>{totals.weigh.map(totalRow)}</tbody></table>
       {totals.nonGram.length > 0 && (<>
