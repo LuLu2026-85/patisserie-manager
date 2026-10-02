@@ -6352,7 +6352,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
           {_prepCfg && (
             <div style={{ marginTop: T.sp.s }}>
               <span data-prep-tag="1" style={{ ...T.fs.label, color: T.warning, border: `1px solid ${T.warning}`, background: T.surface, padding: "2px 8px", borderRadius: T.radiusPill, display: "inline-block" }}>
-                {prepTxt(lang).tag}{_prepItem && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
+                {prepTxt(lang).tag}{_prepItem && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.usable) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
               </span>
             </div>
           )}
@@ -7472,7 +7472,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
             {c.prepMode === "stock" && (
               <span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
                 style={{ background: "#FFFFFF", color: T.warning, border: `0.5px solid ${T.warning}`, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
-                {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.onHand) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
+                {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.usable) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
               </span>
             )}
           </div>
