@@ -116,7 +116,7 @@ There is no linter, type-checker, or test suite configured. Verification happens
 
 Single-page React 18 + Vite 5 app, pure client-side. All persistence is `localStorage` under the key `patisserie_v4`. No backend, no routing library, no CSS framework.
 
-**The entire application lives in `src/App.jsx` (~15000 lines).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
+**The entire application lives in `src/App.jsx` (~28500 lines as of 2026-10).** `src/main.jsx` only mounts it. Prefer editing this one file; do not split it into modules unless the user explicitly asks for a refactor.
 
 ## 设计系统 · kororā「1a 美術館」(2026-07-25 改版)
 
