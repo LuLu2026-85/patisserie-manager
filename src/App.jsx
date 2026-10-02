@@ -22451,7 +22451,7 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
     if (r.rank === 0 && lot) return r.oh.expiredLots.length > 1 ? PX.remExpiredN(r.oh.expiredLots.length, PX.md(lot.madeAt), q(r.oh.expired), u) : PX.remExpired(1, PX.md(lot.madeAt), q(lot.left), u);
     if (r.rank === 1) return PX.remShort(q(r.need), u, st, q(r.oh.usable));
     if (r.rank === 2 && lot) return lot.status === "today" ? PX.remToday(PX.md(lot.madeAt), q(lot.left), u) : PX.remSoon(PX.md(lot.madeAt), q(lot.left), u, lot.daysLeft);
-    if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? fmtQty(Math.round(r.days * 10) / 10) : "0");
+    if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? _prepDaysTxt(r.days) : "0");   // 终审 r1:和备货卡「大约够几天」同一个取法(向下取,不多说)
     return "";
   };
   return (
