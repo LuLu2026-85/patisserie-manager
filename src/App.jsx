@@ -20620,10 +20620,11 @@ const prepWindowUsable = (oh0, pre, d0, d1, ohAt) => {
   const dd = _daysBetween(d0, d1);
   const days = isFinite(dd) ? Math.min(400, Math.max(1, dd + 1)) : 1;   // 日期读不出 = 当一天(只按开始日);上限防手滑选了好几年
   const ohEnd = days > 1 ? ohAt(dd + 1 > 400 ? plusDaysStr(d0, 399) : d1) : oh0;
-  const usableIn = (m, k) => { const e = m && m.get(k); return e ? _prepNum(e.usable) : 0; };
+  const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };   // 同 sheet helpers 的 _prepNum;本段要能单独抽出来测,不借后面那段的
+  const usableIn = (m, k) => { const e = m && m.get(k); return e ? num(e.usable) : 0; };
   const keys = [...oh0.keys()].filter(k => usableIn(oh0, k) > usableIn(ohEnd, k));
   if (!keys.length) return oh0;
-  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, _prepNum(p.need)]));
+  const needOf = new Map((Array.isArray(pre) ? pre : []).filter(p => p && p.key).map(p => [p.key, num(p.need)]));
   const daily = [oh0];
   for (let i = 1; i < days - 1; i++) daily.push(ohAt(plusDaysStr(d0, i)));
   if (days > 1) daily.push(ohEnd);
