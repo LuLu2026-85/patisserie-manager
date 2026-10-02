@@ -20653,6 +20653,7 @@ const PREP_TXT = {
     remSuggest: (k, n, u) => (n ? (k > 1 ? `建议做 ${k} 批(${n} ${u})` : `建议做一批(${n} ${u})`) : "建议做一批"),
     remAdd: "＋ 做一批加进今天", remAddNoYield: "＋ 做一批加进今天(一批多少没填)", remOnSheet: "✓ 今天单子上有了",
     remHandle: "去处理", remMore: (k) => `还有 ${k} 项 → 看全部备货`, remStaff: "(店长加进生产单)",
+    remRaise: (n, u) => `＋ 今天的做一批再加 ${n} ${u}`,   // 终审 r1:做一批行已经全记入时(再也不会进账),把那一行的数量加上去
     remCollapsed: (k, a, b) => `备货提醒 ${k} 项(快到期 ${a} · 低于提醒线 ${b})▶`,
     ffTitle: "今天从冷冻 / 冷藏取", ffHave: (n) => `现有 ${n}`, ffLack: (n) => `差 ${n}`,
     stockList: (list) => `库存:${list}`, stockItem: (name, n, u, sh) => `${name} 现有 ${n} ${u}${sh ? `(差 ${sh} ${u})` : ""}`,
@@ -20962,6 +20963,7 @@ const PREP_TXT = {
     remSuggest: (k, n, u) => (n ? (k > 1 ? `${k} バッチ推奨(${n}${u})` : `1 バッチ仕込み推奨(${n}${u})`) : "1 バッチ仕込み推奨"),
     remAdd: "＋ 本日の仕込みに追加", remAddNoYield: "＋ 本日の仕込みに追加(バッチ量未入力)", remOnSheet: "✓ 本日のリストにあり",
     remHandle: "処理する", remMore: (k) => `ほか ${k} 件 → 作り置き一覧`, remStaff: "(店長が製造リストに追加します)",
+    remRaise: (n, u) => `＋ 本日の仕込みを ${n}${u} 増やす`,
     remCollapsed: (k, a, b) => `作り置きアラート ${k} 件(期限間近 ${a} · 補充ライン割れ ${b})▶`,
     ffTitle: "本日 冷凍・冷蔵から", ffHave: (n) => `在庫 ${n}`, ffLack: (n) => `${n} 不足`,
     stockList: (list) => `在庫:${list}`, stockItem: (name, n, u, sh) => `${name} 在庫 ${n}${u}${sh ? `(${sh}${u} 不足)` : ""}`,
@@ -22434,7 +22436,7 @@ function ProdAddOnSale({ recipes, creations, lines, lang, onAdd, onClose, prepSt
 // PREP_UI_KEY(sessionStorage korora_prep_ui_v1)在下面 E 线备货页那段定义,提醒条和备货页共用一个 key(合并时去掉了这里重复的 const)
 const _prepUiRead = () => { try { const o = JSON.parse(sessionStorage.getItem(PREP_UI_KEY) || "null"); return o && typeof o === "object" && !Array.isArray(o) ? o : {}; } catch (e) { return {}; } };
 const _prepUiWrite = (patch) => { try { sessionStorage.setItem(PREP_UI_KEY, JSON.stringify({ ..._prepUiRead(), ...patch })); } catch (e) {} };
-function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
+function PrepReminder({ rows, lang, staff, lines, onAddMake, onRaiseMake, onOpenPrep }) {
   const PX = prepTxt(lang);
   const [open, setOpen] = useState(() => !!_prepUiRead().reminderOpen);
   if (!rows || !rows.length) return null;
@@ -22473,7 +22475,11 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
         const f = r.flags;
         const kind = r.cfg.kind;
         const makeKey = prodLineKey(kind === "recipe" ? { kind, id: r.cfg.id, stage: "make" } : { kind, id: r.cfg.id });
-        const already = on.has(makeKey);
+        // 终审 r1:做一批行已经全记入(incoming 0)就不算「单子上有了」(再也不会进账),给「＋ 做一批的行再加 N」把那一行的数量加上去
+        // (onAddMake 走 mergeProdLines 会当重复丢掉);没填产出量 / 单位对不上的做一批行本来就不算 incoming,照旧写「单子上有了」
+        const mkLine = on.has(makeKey) ? (lines || []).find(l => l && prodLineKey(l) === makeKey) : null;
+        const already = !!mkLine && (r.incoming > 0 || r.cfg.batch === null || !!r.oh.unitMismatch);
+        const mkDone = !!mkLine && !already;
         // 不够 / 低于提醒线的行给「＋ 做一批加进今天」;单子上已经有做一批行时写「✓ 今天单子上有了」(这时建议可能已经算成不用做)
         const wantMake = (f.short || f.low) && (!!r.suggest || already);
         const qty = r.suggest && r.suggest.qty ? r.suggest.qty : 1;
@@ -22492,6 +22498,7 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
               <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {already ? <span data-prep-remonsheet="1" style={{ ...T.fs.caption, color: T.success }}>{PX.remOnSheet}</span>
                   : staff ? <span style={{ ...T.fs.caption, color: T.subtle }}>{PX.remStaff}</span>
+                  : mkDone ? <Btn size="sm" onClick={() => onRaiseMake && onRaiseMake(mkLine.uid, qty)}>{PX.remRaise(fmtQty(qty), r.cfg.unit)}</Btn>
                   : <Btn size="sm" onClick={() => onAddMake && onAddMake([add])}>{r.suggest && r.suggest.qty ? PX.remAdd : PX.remAddNoYield}</Btn>}
               </div>
             )}
@@ -22609,7 +22616,8 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
         <Btn size="sm" variant="ghost" disabled={!plan.lines.length} onClick={clearAll}>{X.clearAll}</Btn>
       </div>
       )}
-      {prepRows && prepRows.length > 0 && <PrepReminder rows={prepRows} lang={lang} staff={staff} lines={plan.lines} onAddMake={(adds) => addLines(adds)} onOpenPrep={onOpenPrep} />}
+      {prepRows && prepRows.length > 0 && <PrepReminder rows={prepRows} lang={lang} staff={staff} lines={plan.lines} onAddMake={(adds) => addLines(adds)}
+        onRaiseMake={(uid, d) => updatePlan(lines => lines.map(l => l.uid === uid ? { ...l, qty: stepProdQty(l.qty, d) } : l))} onOpenPrep={onOpenPrep} />}
       {adding === "products" && <ProdAddProducts products={products} salesLog={salesLog} lines={plan.lines} today={today} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} />}
       {adding === "onsale" && (prepOn
         ? <ProdAddOnSale recipes={recipes} creations={creations} lines={plan.lines} lang={lang} onAdd={addLines} onClose={() => setAdding(null)} prepStock={stock} today={today} />
@@ -24237,7 +24245,9 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
     lineDone = !!info && (info.qty > 0 ? info.pending <= 0 : info.actual > 0);
   }
   const makeHint = (!isTake && pcfg && (prepRecipe || kind === "component")) ? (() => {
-    const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")));
+    // 终审 r1:那一行已经全记入(生产单卡片上没有记入按钮了)就不叫她「回生产单点记入」,照没在单子上处理(同上面 lineDone 的判法)
+    const lineOpen = (l) => { const s = buildProdSheet([l], c)[0]; const info = s ? prepLineInfo(s, c, stock, today, c.productionLog || []) : null; return !info || !(info.qty > 0 ? info.pending <= 0 : info.actual > 0); };
+    const onSheet = !!planLines && planLines.some(l => l && String(l.id) === String(target.id) && (kind === "component" ? l.kind === "component" : (l.kind === "recipe" && l.stage === "make")) && lineOpen(l));
     if (onSheet && pcfg.batch !== null && valid) return PX.kitMakeToSheet(storeNm, fmtQty(need), pcfg.unit);
     // 审查 ps2:配料里「来自组件」用到已开始记的备货组件 → 「＋ 登记一批」不会扣那个组件(那是补登用的),叫她走生产单的「做一批」(那里一起扣)
     const used = prepFlowOfSheetRow({ kind, id: target.id, obj: target, ...(kind === "recipe" ? { stage: "make" } : {}) }, 1, c).takes.filter(t => stock.items[t.key]);
