@@ -20644,6 +20644,7 @@ const PREP_TXT = {
     undoGone: "生产记录已经删了,只撤了备货",
     remTitle: "备货提醒",
     remExpired: (k, d, n, u) => `有 ${k} 批过期了(${d} 做的 ${n} ${u}),别再用`,
+    remExpiredN: (k, d, n, u) => `有 ${k} 批过期了(最早 ${d} 做的,共 ${n} ${u}),别再用`,   // 终审 r1:几批一起过期时写合计(同生产单「共 N」),以前只写第一批的数
     remShort: (need, u, store, n) => `今天要取 ${need} ${u},${store}只有 ${n} ${u}`,
     remToday: (d, n, u) => `${d} 做的那批 ${n} ${u}今天到期,先用它`,
     remSoon: (d, n, u, k) => `${d} 做的那批 ${n} ${u}还能放 ${k} 天,先用它`,
@@ -20948,6 +20949,7 @@ const PREP_TXT = {
     undoGone: "製造記録は削除済みのため、作り置きだけ戻しました",
     remTitle: "作り置きアラート",
     remExpired: (k, d, n, u) => `期限切れ ${k} ロット(${d} 仕込み ${n}${u})。使わないでください`,
+    remExpiredN: (k, d, n, u) => `期限切れ ${k} ロット(最古 ${d} 仕込み、計 ${n}${u})。使わないでください`,
     remShort: (need, u, store, n) => `本日 ${need}${u} 必要、${store}は ${n}${u}`,
     remToday: (d, n, u) => `${d} 仕込み分 ${n}${u} は本日期限。先に使ってください`,
     remSoon: (d, n, u, k) => `${d} 仕込み分 ${n}${u} はあと ${k} 日。先に使ってください`,
@@ -22446,7 +22448,7 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onOpenPrep }) {
   const lineOf = (r) => {
     const u = r.cfg.unit, st = PX.storeName(r.cfg.store), f = r.flags, lot = r.lot;
     const q = (n) => fmtQty(n) || "0";
-    if (r.rank === 0 && lot) return PX.remExpired(r.oh.expiredLots.length, PX.md(lot.madeAt), q(lot.left), u);
+    if (r.rank === 0 && lot) return r.oh.expiredLots.length > 1 ? PX.remExpiredN(r.oh.expiredLots.length, PX.md(lot.madeAt), q(r.oh.expired), u) : PX.remExpired(1, PX.md(lot.madeAt), q(lot.left), u);
     if (r.rank === 1) return PX.remShort(q(r.need), u, st, q(r.oh.usable));
     if (r.rank === 2 && lot) return lot.status === "today" ? PX.remToday(PX.md(lot.madeAt), q(lot.left), u) : PX.remSoon(PX.md(lot.madeAt), q(lot.left), u, lot.daysLeft);
     if (r.rank === 3 || f.low) return r.cfg.min > 0 ? PX.remLow(st, q(r.oh.usable), u, q(r.cfg.min)) : PX.remLowDays(st, q(r.oh.usable), u, r.days !== null ? fmtQty(Math.round(r.days * 10) / 10) : "0");
