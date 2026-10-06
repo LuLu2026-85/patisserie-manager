@@ -13728,7 +13728,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           showToast("✓ 组合产品已保存");
           setViewId(c.id);
           setEditTarget(null);
-          if (onKnowledgeCheck) onKnowledgeCheck("creation", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮(第 0 步空壳)
+          if (onKnowledgeCheck) onKnowledgeCheck("creation", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮
         }}
         onDelete={() => {
           // 2026-09-29 体检第 2 批:以前只问「删除这个组合产品吗？」,不说哪些商品挂着它(删了商品页只剩「已删除」、
@@ -16015,10 +16015,112 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   );
 }
 
+// ─── 第 5 批 E3:知识库新加的文字(中 / 日成对;plan.md「页面」§11 的日文表 + design_edit §6.3)───
+// 加键时两边一起加(knowledge_tests 会查两边的键一样、都不是空的)
+const KNOW_TXT = {
+  zh: {
+    linkBar: (none, amb) => "🔗 关联按钮:" + [none ? `${none} 个找不到` : "", amb ? `${amb} 个同名` : ""].filter(Boolean).join(" · "),
+    view: "查看", hide: "收起",
+    allFixed: "✓ 都改好了",
+    notFound: "找不到",
+    ambHint: (n) => `有 ${n} 个同名 → 点一个改成它的全名`,
+    goEdit: "去改",
+    fixedOne: (a, b) => `✓ 按钮「${a}」改成「${b}」`,
+    sameNames: "这几个名字完全一样,先去把其中一个改名",
+    typeName: { recipe: "配方", component: "组件", creation: "组合产品" },
+    linkTo: (type, name) => `→ ${({ recipe: "配方", component: "组件", creation: "组合产品" })[type] || ""}「${name}」`,
+    ambN: (n) => `${n} 个同名`,
+    deleted: (t) => `已删除「${t}」`,
+    tagMgrBtn: "🏷 管理标签",
+    tagMgrTitle: (n) => `管理标签(${n} 个)`,
+    backToList: "← 返回知识库",
+    tagMgrHelp: "改名 = 把这个标签在所有知识里换成新名字;新名字和已有标签一样 = 合并。内置标签不能改名,可以把别的标签并进来。",
+    tagSearch: "🔍 搜标签",
+    builtin: "(内置)",
+    usedIn: (n) => `用在 ${n} 条`,
+    rename: "改名", remove: "去掉", ok: "确定", cancel: "取消",
+    renameTo: "改名:",
+    mergeInto: (to, n) => `会并进「${to}」(合并后 ${n} 条)`,
+    renamed: (a, b, n) => `✓「${a}」改成「${b}」(${n} 条)`,
+    removed: (n, tag) => `已从 ${n} 条知识上去掉「${tag}」`,
+    more: (n) => `更多 ${n} ▾`, less: "收起 ▴",
+    tagEmptyTitle: "没有符合的标签",
+    tagEmptyHint: (n) => `${n} 个标签里都没找到`,
+    noTags: "还没有标签",
+    noTagsHint: "在知识点的编辑页里给它加标签,这里就能统一改名、合并",
+    undoSkipped: (n) => `有 ${n} 条之后又改过,那几条没撤回`,
+    offerRenamed: (o, nn, n) => `「${o}」改名成「${nn}」:${n} 个知识按钮还写着旧名`,
+    offerCollided: (n, nn) => `${n} 个知识按钮现在有两个同名(新加了「${nn}」)`,
+    offerBoth: (n) => `${n} 个知识按钮跳不到原来那一条了`,
+    offerUnfixable: (u) => `(另有 ${u} 个没法自动改,在知识库顶上能看到)`,
+    btnRename: "改成新名", btnFull: "改全名", btnBoth: "改好",
+    fixedN: (m) => `✓ ${m} 个知识按钮改好了`,
+  },
+  ja: {
+    linkBar: (none, amb) => "🔗 関連ボタン:" + [none ? `見つからない ${none}` : "", amb ? `同名 ${amb}` : ""].filter(Boolean).join(" · "),
+    view: "見る", hide: "閉じる",
+    allFixed: "✓ すべて直りました",
+    notFound: "見つかりません",
+    ambHint: (n) => `同名が ${n} 件 → 1 つ選ぶと正式名に直します`,
+    goEdit: "編集する",
+    fixedOne: (a, b) => `✓ ボタン「${a}」を「${b}」に変更`,
+    sameNames: "名前がまったく同じです。先にどれかを改名してください",
+    typeName: { recipe: "レシピ", component: "パーツ", creation: "組み合わせ" },
+    linkTo: (type, name) => `→ ${({ recipe: "レシピ", component: "パーツ", creation: "組み合わせ" })[type] || ""}「${name}」`,
+    ambN: (n) => `同名 ${n} 件`,
+    deleted: (t) => `「${t}」を削除しました`,
+    tagMgrBtn: "🏷 タグ管理",
+    tagMgrTitle: (n) => `タグ管理(${n} 件)`,
+    backToList: "← ナレッジに戻る",
+    tagMgrHelp: "名前を変更すると、すべてのナレッジでこのタグが新しい名前になります。既存のタグと同じ名前にすると統合されます。組み込みタグは改名できませんが、他のタグを統合できます。",
+    tagSearch: "🔍 タグを検索",
+    builtin: "(組み込み)",
+    usedIn: (n) => `${n} 件で使用`,
+    rename: "名前を変更", remove: "外す", ok: "確定", cancel: "キャンセル",
+    renameTo: "新しい名前:",
+    mergeInto: (to, n) => `「${to}」に統合されます(統合後 ${n} 件)`,
+    renamed: (a, b, n) => `✓「${a}」を「${b}」に変更(${n} 件)`,
+    removed: (n, tag) => `${n} 件のナレッジから「${tag}」を外しました`,
+    more: (n) => `ほか ${n} ▾`, less: "閉じる ▴",
+    tagEmptyTitle: "該当するタグがありません",
+    tagEmptyHint: (n) => `${n} 件のタグの中に見つかりません`,
+    noTags: "タグはまだありません",
+    noTagsHint: "ナレッジの編集画面でタグを付けると、ここでまとめて改名・統合できます",
+    undoSkipped: (n) => `${n} 件はその後変更されたため、元に戻していません`,
+    offerRenamed: (o, nn, n) => `「${o}」を「${nn}」に改名:ナレッジのボタン ${n} 件が旧名のままです`,
+    offerCollided: (n, nn) => `ナレッジのボタン ${n} 件が同名になりました(「${nn}」を追加)`,
+    offerBoth: (n) => `ナレッジのボタン ${n} 件が元の項目に飛べなくなりました`,
+    offerUnfixable: (u) => `(ほか ${u} 件は自動で直せません。ナレッジ画面の上部で確認できます)`,
+    btnRename: "直す", btnFull: "直す", btnBoth: "直す",
+    fixedN: (m) => `✓ ナレッジのボタン ${m} 件を直しました`,
+  },
+};
+const knowTxt = (lang) => KNOW_TXT[lang === "ja" ? "ja" : "zh"];
+// 一项的显示名(跟语言走,另一语言兜底,再法文名)
+const _klDisplayName = (item, lang) => item ? (pickLang(item, "name", lang) || _klStr(item.nameFr)) : "";
+
 // ─── 知识库 View ───────────────────────────────────────────────
-function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, recipes, components, creations, onNavigate, confirmDialog }) {
+// 第 5 批 E3:顶上「🔗 关联按钮:N 个找不到 · M 个同名」(就地展开,同名的一键改成候选的全名)、「🏷 管理标签」(KnowledgeTagManager)、
+// 筛选条只显示常用的自定义标签(用过 ≥ 2 次,其余收进「更多」)、删知识 = 先删 + 撤销。getKnowledge = App 里最新的 knowledge(撤销时看「之后又改过没有」)
+function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, recipes, components, creations, onNavigate, confirmDialog, getKnowledge }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTag, setFilterTag] = useState("all");
+  const [linkOpen, setLinkOpen] = useState(false);   // 「关联按钮」那一行展开没有
+  const [tagMore, setTagMore] = useState(false);     // 筛选条「更多」展开没有
+  const [tagMgr, setTagMgr] = useState(false);       // 管理标签页开着没有
+  const KT = knowTxt(lang);
+  const linkProblems = useMemo(() => knowledgeLinkProblems(knowledge, recipes, components, creations), [knowledge, recipes, components, creations]);
+  const linkResolver = useMemo(() => makeKnowledgeLinkResolver(recipes, components, creations), [recipes, components, creations]);
+  const nowKnowledge = () => { const k = typeof getKnowledge === "function" ? getKnowledge() : null; return Array.isArray(k) ? k : knowledge; };
+  // 先做 + 撤销:pairs = [[原对象, 新对象]];撤销按对象身份换回,之后又改过的那条不换、提示一句
+  const swapIn = (pairs) => { const fwd = new Map(pairs); setKnowledge(prev => prev.map(k => fwd.has(k) ? fwd.get(k) : k)); };
+  const undoSwap = (pairs) => {
+    const cur = nowKnowledge();
+    const skipped = pairs.filter(([, n]) => !cur.includes(n)).length;
+    const back = new Map(pairs.map(([o, n]) => [n, o]));
+    setKnowledge(prev => prev.map(k => back.has(k) ? back.get(k) : k));
+    if (skipped) showToast(KT.undoSkipped(skipped));
+  };
 
   if (editTarget !== null) {
     return (
@@ -16027,6 +16129,8 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
         recipes={recipes}
         components={components}
         creations={creations}
+        knowledge={knowledge}
+        lang={lang}
         onSave={(k) => {
           setKnowledge(prev => {
             const found = prev.find(x => x.id === k.id);
@@ -16037,11 +16141,18 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
           setEditTarget(null);
         }}
         onDelete={() => {
-          confirmDialog("删除这条知识点吗？", () => {
-            setKnowledge(prev => prev.filter(x => x.id !== editTarget.id));
-            showToast("已删除");
-            setEditTarget(null);
-          });
+          // 第 5 批 E3:删知识不影响别的数据,改成先删 + 撤销(放回原位置),不再弹确认框
+          const cur = nowKnowledge();
+          const idx = cur.findIndex(x => x && x.id === editTarget.id);
+          const orig = idx >= 0 ? cur[idx] : editTarget;
+          setKnowledge(prev => prev.filter(x => x.id !== editTarget.id));
+          setEditTarget(null);
+          const title = pickLang(orig, "title", lang) || "";
+          showToast(KT.deleted(title), { undo: () => setKnowledge(prev => {
+            if (prev.some(x => x && x.id === orig.id)) return prev;
+            const at = idx >= 0 ? Math.min(idx, prev.length) : prev.length;
+            return [...prev.slice(0, at), orig, ...prev.slice(at)];
+          }) });
         }}
         onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
           // [B4 修复] 有 id 跳详情,无 id 回列表
@@ -16070,6 +16181,29 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
     }
   }
 
+  // 第 5 批 E3:管理标签 —— 同一页换成标签管理(照厂家管理页 BrandManageView 的做法,一个状态控制,「← 返回知识库」回来)
+  if (tagMgr) {
+    return (
+      <KnowledgeTagManager knowledge={knowledge} setKnowledge={setKnowledge} lang={lang} showToast={showToast}
+        onBack={() => setTagMgr(false)} swapIn={swapIn} undoSwap={undoSwap} nowKnowledge={nowKnowledge}
+        onTagChanged={(from, to) => { if (filterTag === from) setFilterTag(to || "all"); }} />
+    );
+  }
+
+  // 第 5 批 E3:关联按钮失效(数据体检 H9 同一份判断 knowledgeLinkProblems)。同名的点候选 = 这个按钮名换成候选现在能唯一命中的名字
+  const linkNone = linkProblems.filter(p => p.status === "none").length;
+  const linkAmb = linkProblems.length - linkNone;
+  const linkGroups = [];
+  linkProblems.forEach(p => { const g = linkGroups[linkGroups.length - 1]; if (g && g.k === p.k) g.items.push(p); else linkGroups.push({ k: p.k, kIndex: p.kIndex, items: [p] }); });
+  const fixLink = (p, newName) => {
+    if (!newName || !p.k || p.k.id === undefined || p.k.id === null) return;
+    const res = applyKnowledgeRepairs(nowKnowledge(), [{ kId: p.k.id, oldName: p.name, newName }], new Date().toISOString());
+    if (!res.changed) return;
+    const pairs = [...res.before.keys()].map(id => [res.before.get(id), res.after.get(id)]);
+    swapIn(pairs);
+    showToast(KT.fixedOne(p.name, newName), { undo: () => undoSwap(pairs) });
+  };
+
   // 搜索和筛选
   const filtered = knowledge.filter(k => {
     // 标签筛选
@@ -16095,7 +16229,8 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
           <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `知识库（${knowledge.length}）` : `ナレッジ（${knowledge.length}）`}</div>
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span data-k-tagmgr-open="1"><Btn onClick={() => setTagMgr(true)}>{KT.tagMgrBtn}</Btn></span>
           <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新增知识点" : "+ ナレッジ追加"}</Btn>
         </div>
       </div>
@@ -16111,6 +16246,54 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
         />
       </div>
 
+      {/* 第 5 批 E3:关联按钮失效(只在有问题时出现;展开后全部改好 → 收成一行「✓ 都改好了」) */}
+      {(linkProblems.length > 0 || linkOpen) && (
+        <div data-k-linkcheck="1" style={{ marginBottom: "1rem", padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${linkProblems.length ? T.warning : T.success}`, fontSize: 12, color: T.textSecondary, fontFamily: T.fontSans, lineHeight: 1.6 }}>
+          {linkProblems.length === 0 ? (
+            <span style={{ color: T.success }}>{KT.allFixed}</span>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span>{KT.linkBar(linkNone, linkAmb)}</span>
+                <button onClick={() => setLinkOpen(o => !o)} className="k-btn"
+                  style={{ ...T.fs.caption, color: T.info, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: T.fontSans, textDecoration: "underline", textUnderlineOffset: 3 }}>
+                  {linkOpen ? KT.hide : KT.view}
+                </button>
+              </div>
+              {linkOpen && linkGroups.map(g => (
+                <div key={(g.k && g.k.id !== undefined && g.k.id !== null) ? "k:" + g.k.id : "#" + g.kIndex} data-k-linkgroup={g.k && g.k.id !== undefined && g.k.id !== null ? String(g.k.id) : "#" + g.kIndex}
+                  style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineFaint}` }}>
+                  <div style={{ color: T.textPrimary, fontWeight: 500, overflowWrap: "anywhere" }}>{pickLang(g.k, "title", lang) || "—"}</div>
+                  {g.items.map(p => p.status === "none" ? (
+                    <div key={"n:" + p.name} data-k-linkitem="none" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 10 }}>
+                      <span style={{ overflowWrap: "anywhere" }}>「{p.name}」<span style={{ color: T.danger }}>{KT.notFound}</span></span>
+                      <Btn size="sm" onClick={() => setEditTarget(p.k)}>{KT.goEdit}</Btn>
+                    </div>
+                  ) : (
+                    <div key={"a:" + p.name} data-k-linkitem="ambiguous" style={{ marginTop: 4, paddingLeft: 10 }}>
+                      <div style={{ overflowWrap: "anywhere" }}>「{p.name}」<span style={{ color: T.warning }}>{KT.ambHint(p.cands.length)}</span></div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                        {p.cands.map(c => {
+                          const nn = uniqueLinkNameFor(c.type, c.item, linkResolver);
+                          const can = !!nn && p.k && p.k.id !== undefined && p.k.id !== null;
+                          return (
+                            <button key={c.type + ":" + c.item.id} data-k-linkcand={c.type + ":" + c.item.id} disabled={!can} title={nn ? undefined : KT.sameNames}
+                              onClick={() => fixLink(p, nn)} className="k-btn"
+                              style={{ ...T.fs.caption, padding: "3px 10px", borderRadius: T.radiusPill, border: `1px solid ${can ? T.border : T.line}`, background: T.bgCard, color: can ? T.ink : T.muted, cursor: can ? "pointer" : "not-allowed", fontFamily: T.fontSans, textAlign: "left", overflowWrap: "anywhere", maxWidth: "100%" }}>
+                              ({KT.typeName[c.type]} · {nn || _klDisplayName(c.item, lang)})
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
       {/* 标签筛选 */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
         <button onClick={() => setFilterTag("all")} style={{ padding: "4px 12px", fontSize: 12, border: filterTag === "all" ? "1.5px solid #111111" : "1px solid #CCCCCC", borderRadius: 20, background: filterTag === "all" ? "#111111" : "#FFFFFF", color: filterTag === "all" ? "#FFFFFF" : "#111111", cursor: "pointer" }}>{lang === "zh" ? "全部" : "すべて"}</button>
@@ -16124,22 +16307,30 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             </button>
           );
         })}
-        {/* 自定义标签筛选 */}
+        {/* 自定义标签筛选。第 5 批 E3:只显示用过 ≥ 2 次的(当前选中的那个也显示),其余收进最后的「更多 N ▾」,点开全显示 */}
         {(() => {
           const builtInIds = new Set(KNOWLEDGE_TAGS.map(t => t.id));
-          const customTags = new Set();
-          knowledge.forEach(k => (k.tags || []).forEach(t => {
-            if (!builtInIds.has(t)) customTags.add(t);
-          }));
-          return Array.from(customTags).sort().map(tag => {
-            const count = knowledge.filter(k => (k.tags || []).includes(tag)).length;
-            const active = filterTag === tag;
-            return (
-              <button key={tag} onClick={() => setFilterTag(tag)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? "#8B5CF6" : "#CCCCCC"}`, borderRadius: 20, background: active ? "#F3E8FF" : "#FFFFFF", color: active ? "#6D28D9" : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
-                {tag} <span style={{ color: "#999999", marginLeft: 2 }}>({count})</span>
+          const counts = knowledgeTagCounts(knowledge);
+          const customTags = Array.from(counts.keys()).filter(t => !builtInIds.has(t)).sort();
+          const shown = tagMore ? customTags : customTags.filter(t => counts.get(t) >= 2 || t === filterTag);
+          const hiddenN = customTags.length - shown.length;
+          return [
+            ...shown.map(tag => {
+              const count = counts.get(tag);
+              const active = filterTag === tag;
+              return (
+                <button key={tag} onClick={() => setFilterTag(tag)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? "#8B5CF6" : "#CCCCCC"}`, borderRadius: 20, background: active ? "#F3E8FF" : "#FFFFFF", color: active ? "#6D28D9" : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
+                  {tag} <span style={{ color: "#999999", marginLeft: 2 }}>({count})</span>
+                </button>
+              );
+            }),
+            (hiddenN > 0 || tagMore) && customTags.some(t => counts.get(t) < 2) ? (
+              <button key="__k_tagmore" data-k-tagmore={tagMore ? "open" : String(hiddenN)} onClick={() => setTagMore(v => !v)}
+                style={{ padding: "4px 12px", fontSize: 12, border: `1px dashed ${T.border}`, borderRadius: 20, background: "#FFFFFF", color: T.textSecondary, cursor: "pointer" }}>
+                {tagMore ? KT.less : KT.more(hiddenN)}
               </button>
-            );
-          });
+            ) : null,
+          ];
         })()}
       </div>
 
@@ -16243,6 +16434,123 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
   );
 }
 
+// ─── 第 5 批 E3:管理标签(design_edit §6.4;照厂家管理页 BrandManageView 的样子)──────────
+// 改名 / 合并 / 去掉都是「先做 + 撤销」(swapIn / undoSwap 由 KnowledgeView 给:按对象身份换,之后又改过的那条撤销时不换)。
+// 内置标签(KNOWLEDGE_TAGS)只显示,不能改名 / 去掉,可以把别的标签并进来(改名框里写内置标签的中文名 / 日文名 / id)。
+// 改名框包在 DirtyGuardScope 里:敲了字没确定就切页会先问
+function KnowledgeTagManager({ knowledge, setKnowledge, lang, showToast, onBack, swapIn, undoSwap, nowKnowledge, onTagChanged }) {
+  const KT = knowTxt(lang);
+  const zh = lang !== "ja";
+  const [q, setQ] = useState("");
+  const [ren, setRen] = useState(null);   // { tag, draft }:正在改名的那一个
+  const counts = useMemo(() => knowledgeTagCounts(knowledge), [knowledge]);
+  const builtIn = new Map(KNOWLEDGE_TAGS.map(t => [t.id, t]));
+  const nameOf = (t) => { const b = builtIn.get(t); return b ? (zh ? b.zh : b.ja) : t; };
+  // 按用的条数从多到少,同数按名字
+  const all = Array.from(counts.keys()).sort((a, b) => counts.get(b) - counts.get(a) || nameOf(a).localeCompare(nameOf(b), "zh"));
+  const kw = normSearch(q);
+  const list = kw ? all.filter(t => { const b = builtIn.get(t); return [t, b && b.zh, b && b.ja].some(s => s && normSearch(s).includes(kw)); }) : all;
+  const getCur = () => (typeof nowKnowledge === "function" ? nowKnowledge() : knowledge);
+  const pairsOf = (a, b) => a === b ? [] : a.map((k, i) => [k, b[i]]).filter(([x, y]) => x !== y);
+  const doRename = (from, draft) => {
+    const to = knowledgeTagTarget(draft);
+    if (!to || to === from) return;
+    const cur = getCur();
+    const pairs = pairsOf(cur, renameKnowledgeTag(cur, from, draft, new Date().toISOString()));
+    setRen(null);
+    if (!pairs.length) return;
+    swapIn(pairs);
+    if (onTagChanged) onTagChanged(from, to);
+    showToast(KT.renamed(from, nameOf(to), pairs.length), { undo: () => undoSwap(pairs) });
+  };
+  const doRemove = (tag) => {
+    const cur = getCur();
+    const pairs = pairsOf(cur, removeKnowledgeTag(cur, tag, new Date().toISOString()));
+    if (!pairs.length) return;
+    swapIn(pairs);
+    if (onTagChanged) onTagChanged(tag, null);
+    showToast(KT.removed(pairs.length, nameOf(tag)), { undo: () => undoSwap(pairs) });
+  };
+  const inpStyle = { padding: "8px 10px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radius, background: T.bgCard, fontFamily: T.fontSans, color: T.textPrimary, boxSizing: "border-box" };
+
+  return (
+    <div data-k-tagmgr="1">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 2 }}>{zh ? "知识库" : "ナレッジ"}</div>
+          <div style={{ fontFamily: T.fontSerif, fontSize: 22, fontWeight: 500, color: T.brand, letterSpacing: "-0.3px" }}>{KT.tagMgrTitle(all.length)}</div>
+        </div>
+        <Btn onClick={onBack}>{KT.backToList}</Btn>
+      </div>
+
+      <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: "1rem", lineHeight: 1.7, padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${T.accentSoft}` }}>
+        {KT.tagMgrHelp}
+      </div>
+
+      {all.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <input type="text" value={q} onChange={(e) => setQ(e.target.value)} className="k-input" placeholder={KT.tagSearch}
+            style={{ ...inpStyle, width: "100%" }} />
+        </div>
+      )}
+
+      {all.length === 0 ? (
+        <EmptyState variant="first" lang={lang} title={KT.noTags} hint={KT.noTagsHint} actions={[{ label: KT.backToList, onClick: onBack }]} />
+      ) : list.length === 0 ? (
+        <EmptyState variant="filter" lang={lang} title={KT.tagEmptyTitle} hint={KT.tagEmptyHint(all.length)}
+          chips={[{ label: `“${q}”`, onRemove: () => setQ("") }]} onClearAll={() => setQ("")} />
+      ) : (
+        <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg }}>
+          {list.map(t => {
+            const b = builtIn.get(t);
+            const n = counts.get(t);
+            const editing = !!ren && ren.tag === t;
+            let preview = "", canOk = false;
+            if (editing) {
+              const to = knowledgeTagTarget(ren.draft);
+              canOk = !!to && to !== t;
+              if (canOk && (builtIn.has(to) || counts.has(to))) {
+                const merged = knowledge.filter(k => k && Array.isArray(k.tags) && (k.tags.includes(t) || k.tags.includes(to))).length;
+                preview = KT.mergeInto(nameOf(to), merged);
+              }
+            }
+            return (
+              <div key={t} data-k-tagrow={t} className="k-row" style={{ padding: "8px 10px", borderBottom: `1px solid ${T.lineFaint}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ flex: "1 1 160px", minWidth: 0, ...T.fs.small, color: T.ink, fontFamily: T.fontSans, overflowWrap: "anywhere" }}>
+                    {t}
+                    {b ? <span style={{ color: T.textSecondary }}> · {zh ? b.zh : b.ja}{KT.builtin}</span> : null}
+                    <span style={{ ...T.fs.caption, ...T.num, color: T.muted }}> · {KT.usedIn(n)}</span>
+                  </span>
+                  {!b && !editing && <Btn size="sm" onClick={() => setRen({ tag: t, draft: t })}>{KT.rename}</Btn>}
+                  {!b && !editing && <Btn size="sm" variant="danger" onClick={() => doRemove(t)}>{KT.remove}</Btn>}
+                </div>
+                {editing && (
+                  <DirtyGuardScope watch={ren.draft}>
+                    <div data-k-tagrename={t} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6, paddingLeft: 12 }}>
+                      <span style={{ ...T.fs.caption, color: T.textSecondary }}>└ {KT.renameTo}</span>
+                      <input type="text" autoFocus value={ren.draft} className="k-input"
+                        onChange={(e) => { const v = e.target.value; setRen({ tag: t, draft: v }); }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !(e.nativeEvent && e.nativeEvent.isComposing)) { e.preventDefault(); if (canOk) doRename(t, ren.draft); }
+                          else if (e.key === "Escape") setRen(null);
+                        }}
+                        style={{ ...inpStyle, flex: "1 1 140px", minWidth: 0 }} />
+                      {preview && <span data-k-tagmerge="1" style={{ ...T.fs.caption, color: T.warning, overflowWrap: "anywhere" }}>→ {preview}</span>}
+                      <Btn size="sm" variant="primary" disabled={!canOk} onClick={() => doRename(t, ren.draft)}>{KT.ok}</Btn>
+                      <Btn size="sm" onClick={() => setRen(null)}>{KT.cancel}</Btn>
+                    </div>
+                  </DirtyGuardScope>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 知识 ↔ 配方/组件/蛋糕 的名字关联(v17.5, 2026-09-25)─────────────
 // 知识页的「关联配方」按钮,和配方 / 组件 / 蛋糕详情页底下的「相关知识」,都走这一套,两个方向永远对得上。
 // 从严到松四档,某一档只命中一个就是它;命中两个以上不猜(按钮灰 + 标「N 个同名」,反查时每个候选页都列):
@@ -16304,7 +16612,7 @@ function knowledgeLinksTo(type, id, knowledge, recipes, components, creations) {
 
 // ─── BEGIN knowledge-link repair helpers ───
 // 第 5 批 E3「知识关联失效 / 改名跟随 / 标签」(design_edit §6,plan.md「页面」§11)。**上面的四档规则一个字不改**,这里只改知识数据里的字符串。
-// 第 0 步写成真的:knowledgeLinkProblems(数据体检 H9 已改调它,输出和以前逐字节一样);其余是空壳,E3 写真的。段里不许有 React / setState
+// 第 0 步写成真的:knowledgeLinkProblems(数据体检 H9 已改调它,输出和以前逐字节一样);其余 E3 写成真的(测试 .claude/scripts/batch5/edit/knowledge_tests.cjs)。段里不许有 React / setState
 // 找不到 / 同名的按钮:[{ k, kIndex, name, status: "none" | "ambiguous", cands: [{ type, item }] }],按知识的顺序、每条知识里按钮的顺序;
 // 同一条知识里同一个名字只报一次(粘连的旧数据先 splitLinkNames 拆开)。数据体检 H9 和知识库顶上的「关联失效」共用这一个,别写第二份判断
 const knowledgeLinkProblems = (knowledge, recipes, components, creations) => {
@@ -16323,15 +16631,164 @@ const knowledgeLinkProblems = (knowledge, recipes, components, creations) => {
   });
   return out;
 };
-// 某一项现在能唯一命中它的名字(按 nameZh → nameJa → nameFr 试;都不行 = null)。空壳:null
-const uniqueLinkNameFor = (type, item, resolver) => null;
-// 数据变之前 / 之后,原来唯一跳到 T 的按钮现在跳不到 T 了 → { fixable: [{ kId, oldName, newName, target, why }], unfixable }。空壳:都空
-const knowledgeLinkRepairs = (knowledge, before, after, saved) => ({ fixable: [], unfixable: [] });
-// 按 repairs 改知识(拆开粘连的旧数据后逐个替换、去重,写 updatedAt)→ { list, changed }。空壳:原样返回同一个数组
-const applyKnowledgeRepairs = (knowledge, fixable, nowIso) => ({ list: knowledge, changed: 0 });
-// 标签改名 / 合并(to 等于内置标签的 id / 中文名 / 日文名时换成内置 id)、去掉;不含这个标签的知识原样(同一个引用)。空壳:原样返回同一个数组
-const renameKnowledgeTag = (knowledge, from, to, nowIso) => knowledge;
-const removeKnowledgeTag = (knowledge, tag, nowIso) => knowledge;
+// ── 第 5 批 E3 写成真的(下面这些)。判断「跳得到 / 同名 / 找不到」一律调上面的 makeKnowledgeLinkResolver,不另写一份四档规则 ──
+const _KL_NAME_FIELDS = ["nameZh", "nameJa", "nameFr"];
+const _klListKey = (type) => type === "recipe" ? "recipes" : type === "component" ? "components" : type === "creation" ? "creations" : null;
+// id 比较:配方的 id 有数字也有字符串(下拉框的值永远是字符串),按字符串比
+const _klSameId = (a, b) => a === b || (a !== undefined && a !== null && b !== undefined && b !== null && String(a) === String(b));
+const _klHits = (m, type, id) => !!m && !m.ambiguous && m.type === type && !!m.item && _klSameId(m.item.id, id);
+const _klStr = (v) => (v === undefined || v === null) ? "" : String(v).trim();
+// 一项的名字(去空白、去重),first = 先试的那个字段
+const _klNamesOf = (item, first) => {
+  const out = [];
+  [first, ..._KL_NAME_FIELDS].forEach(f => { if (!f || !item) return; const v = _klStr(item[f]); if (v && !out.includes(v)) out.push(v); });
+  return out;
+};
+// 旧按钮名是对着这一项的哪个名字认出来的(中 / 日 / 法):每个名字单独建一个只有它的解析器,四档规则原样复用
+const _klFieldOf = (name, item) => {
+  for (const f of _KL_NAME_FIELDS) {
+    const v = item && _klStr(item[f]);
+    if (v && makeKnowledgeLinkResolver([{ id: 0, nameZh: v }], [], [])(name)) return f;
+  }
+  return null;
+};
+// 某一项现在能唯一命中它的名字(按 nameZh → nameJa → nameFr 试;都不行 = null)
+const uniqueLinkNameFor = (type, item, resolver) => {
+  if (!item || typeof item !== "object" || typeof resolver !== "function") return null;
+  for (const n of _klNamesOf(item)) if (_klHits(resolver(n), type, item.id)) return n;
+  return null;
+};
+// 数据变之前 / 之后,原来唯一跳到 T 的按钮现在跳不到 T 了(T 还在)→ 可以改成 T 现在能唯一命中的名字。
+//   只看「之前唯一命中」的按钮(原来就找不到 / 同名的是 H9 的事);T 被删掉的不算(按钮变「找不到」是本意)。
+//   newName 先试「之前对上的那种语言」的新名字,再按中 → 日 → 法试,必须在 after 下唯一命中 T;都不行 → unfixable。
+//   why:T 自己的中 / 日 / 法名变了 = "renamed",否则(新加 / 改名的别的条目把按钮抢走或变同名)= "collided";by = 抢走按钮的那一项
+// → { fixable: [{ kId, oldName, newName, target: { type, id }, why, by? }], unfixable: [{ kId, name, target }] }。saved 只是说明是谁触发的,不影响结果
+const knowledgeLinkRepairs = (knowledge, before, after, saved) => {
+  const fixable = [], unfixable = [];
+  const Bf = before || {}, Af = after || {};
+  const resB = makeKnowledgeLinkResolver(Bf.recipes, Bf.components, Bf.creations);
+  const resA = makeKnowledgeLinkResolver(Af.recipes, Af.components, Af.creations);
+  const findIn = (S, type, id) => { const key = _klListKey(type); const list = (key && S && Array.isArray(S[key])) ? S[key] : []; return list.find(x => x && typeof x === "object" && _klSameId(x.id, id)) || null; };
+  (Array.isArray(knowledge) ? knowledge : []).forEach(k => {
+    if (!k || typeof k !== "object") return;
+    const seen = new Set();
+    (Array.isArray(k.relatedRecipes) ? k.relatedRecipes : []).flatMap(splitLinkNames).forEach(name => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const mb = resB(name);
+      if (!mb || mb.ambiguous) return;
+      const type = mb.type, id = mb.item.id, target = { type, id };
+      const tA = findIn(Af, type, id);
+      if (!tA) return;
+      const ma = resA(name);
+      if (_klHits(ma, type, id)) return;
+      const tB = mb.item;
+      const renamed = _KL_NAME_FIELDS.some(f => _klStr(tB[f]) !== _klStr(tA[f]));
+      const f0 = _klFieldOf(name, tB);
+      let newName = null;
+      for (const n of _klNamesOf(tA, f0)) if (_klHits(resA(n), type, id)) { newName = n; break; }
+      if (k.id === undefined || k.id === null || newName === null) { unfixable.push({ kId: k.id, name, target }); return; }
+      const by = !ma ? null : ma.ambiguous ? (ma.ambiguous.find(c => !(c.type === type && _klSameId(c.item.id, id))) || null) : ma;
+      fixable.push({ kId: k.id, oldName: name, newName, target, why: renamed ? "renamed" : "collided", ...(by && by.item ? { by: { type: by.type, id: by.item.id } } : {}) });
+    });
+  });
+  return { fixable, unfixable };
+};
+// 按 repairs 改知识:要改的那几条先拆开粘连的旧数据(splitLinkNames),旧名换成新名;换上去的新名在这条知识里已经有了就不重复加
+//   (这条知识里原来就有的重复不动)。只改名字还在的(之后被改掉 / 知识删了的跳过),改了的写 updatedAt,没改的知识原样(同一个引用)。
+// → { list, changed(换掉的按钮个数,同一条知识里同一个名字算一个), before: Map<kId, 原对象>, after: Map<kId, 新对象> }(撤销按对象身份换回)。
+//   一个都没换 → list 是传进来的同一个数组
+const applyKnowledgeRepairs = (knowledge, fixable, nowIso) => {
+  const before = new Map(), after = new Map();
+  const byK = new Map();
+  (Array.isArray(fixable) ? fixable : []).forEach(f => {
+    if (!f || f.kId === undefined || f.kId === null || typeof f.oldName !== "string" || typeof f.newName !== "string") return;
+    const nn = f.newName.trim();
+    if (!nn || nn === f.oldName) return;
+    const key = String(f.kId);
+    if (!byK.has(key)) byK.set(key, new Map());
+    if (!byK.get(key).has(f.oldName)) byK.get(key).set(f.oldName, nn);
+  });
+  if (!byK.size || !Array.isArray(knowledge)) return { list: knowledge, changed: 0, before, after };
+  const at = nowIso || new Date().toISOString();
+  let changed = 0;
+  const list = knowledge.map(k => {
+    if (!k || typeof k !== "object" || k.id === undefined || k.id === null || before.has(k.id)) return k;
+    const rep = byK.get(String(k.id));
+    if (!rep || !Array.isArray(k.relatedRecipes)) return k;
+    const items = [], hit = new Set();
+    k.relatedRecipes.forEach(raw => {
+      const parts = splitLinkNames(raw);
+      if (!parts.some(p => rep.has(p))) { items.push({ s: raw, rep: false }); return; }
+      parts.forEach(p => { if (rep.has(p)) { items.push({ s: rep.get(p), rep: true }); hit.add(p); } else items.push({ s: p, rep: false }); });
+    });
+    if (!hit.size) return k;
+    const kept = new Set(items.filter(x => !x.rep).flatMap(x => splitLinkNames(x.s)));
+    const added = new Set();
+    const rr = [];
+    items.forEach(x => {
+      if (!x.rep) { rr.push(x.s); return; }
+      if (kept.has(x.s) || added.has(x.s)) return;
+      added.add(x.s); rr.push(x.s);
+    });
+    const nk = { ...k, relatedRecipes: rr, updatedAt: at };
+    before.set(k.id, k); after.set(k.id, nk);
+    changed += hit.size;
+    return nk;
+  });
+  return { list: changed ? list : knowledge, changed, before, after };
+};
+// 每个标签用在几条知识上(同一条知识里写两遍算一条)→ Map<tag, n>,按第一次出现的顺序
+const knowledgeTagCounts = (knowledge) => {
+  const m = new Map();
+  (Array.isArray(knowledge) ? knowledge : []).forEach(k => {
+    if (!k || typeof k !== "object" || !Array.isArray(k.tags)) return;
+    new Set(k.tags.filter(t => typeof t === "string" && t)).forEach(t => m.set(t, (m.get(t) || 0) + 1));
+  });
+  return m;
+};
+// 改名框里填的字 → 真正要写进去的标签:去首尾空白;等于某个内置标签的 id / 中文名 / 日文名(不管全半角、大小写)→ 换成内置 id;空 = ""
+const knowledgeTagTarget = (to) => {
+  const t = _klStr(to);
+  if (!t) return "";
+  const nz = (s) => String(s).normalize("NFKC").trim().toLowerCase();
+  const b = KNOWLEDGE_TAGS.find(x => nz(x.id) === nz(t) || nz(x.zh) === nz(t) || nz(x.ja) === nz(t));
+  return b ? b.id : t;
+};
+// 标签改名 / 合并(to 等于内置标签的 id / 中文名 / 日文名时换成内置 id;等于已有的自定义标签 = 合并);内置标签本身不能改名(from 是内置 id → 原样返回)。
+// 每条含 from 的知识:tags 里 from 换成 to,to 只留第一次出现的那个,其余标签和顺序不动,写 updatedAt;不含 from 的知识原样(同一个引用);一条都没改 → 同一个数组
+const renameKnowledgeTag = (knowledge, from, to, nowIso) => {
+  if (!Array.isArray(knowledge) || typeof from !== "string" || !from || KNOWLEDGE_TAGS.some(t => t.id === from)) return knowledge;
+  const t = knowledgeTagTarget(to);
+  if (!t || t === from) return knowledge;
+  const at = nowIso || new Date().toISOString();
+  let n = 0;
+  const list = knowledge.map(k => {
+    if (!k || typeof k !== "object" || !Array.isArray(k.tags) || !k.tags.includes(from)) return k;
+    let seenTo = false;
+    const tags = [];
+    k.tags.forEach(x => {
+      const y = x === from ? t : x;
+      if (y === t) { if (seenTo) return; seenTo = true; }
+      tags.push(y);
+    });
+    n++;
+    return { ...k, tags, updatedAt: at };
+  });
+  return n ? list : knowledge;
+};
+// 去掉一个标签:每条含它的知识把它拿掉(写了几遍都拿掉),写 updatedAt;其余同上
+const removeKnowledgeTag = (knowledge, tag, nowIso) => {
+  if (!Array.isArray(knowledge) || typeof tag !== "string" || !tag) return knowledge;
+  const at = nowIso || new Date().toISOString();
+  let n = 0;
+  const list = knowledge.map(k => {
+    if (!k || typeof k !== "object" || !Array.isArray(k.tags) || !k.tags.includes(tag)) return k;
+    n++;
+    return { ...k, tags: k.tags.filter(x => x !== tag), updatedAt: at };
+  });
+  return n ? list : knowledge;
+};
 // ─── END knowledge-link repair helpers ───
 
 // ─── 知识点详情 ─────────────────────────────────────────────
@@ -16441,13 +16898,21 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
 }
 
 // ─── 知识点编辑 Form ────────────────────────────────────────
-function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], components = [], creations = [], lang = "zh" }) {
+function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], components = [], creations = [], lang = "zh", knowledge = [] }) {
   const [errorMsg, setErrorMsg] = useState("");
   const isNew = !item;
   const empty = { titleZh: "", titleJa: "", tags: [], relatedRecipes: [], contentZh: "", contentJa: "", imageUrls: [] };
   const [form, setForm] = useState(item ? { imageUrls: [], ...item, tags: item.tags || [], relatedRecipes: item.relatedRecipes || [] } : empty);
   const [relatedInput, setRelatedInput] = useState("");
   const dirtyBind = useDirtyGuard(() => ({ form, relatedInput }));   // 没保存就切页 / 返回时先问一句(「关联配方」框里敲了还没点添加的也算)
+  // 第 5 批 E3:关联胶囊后面标这个名字现在跳到哪(同知识页按钮的四档规则);「从已有项目选择」按 id 选、加能唯一命中它的名字;
+  // 自定义标签输入框的候选 = 已有的自定义标签,按用的次数排(少造「sable / サブレ」这种重复)
+  const KT = knowTxt(lang);
+  const linkResolver = useMemo(() => makeKnowledgeLinkResolver(recipes, components, creations), [recipes, components, creations]);
+  const customTagOptions = useMemo(() => {
+    const counts = knowledgeTagCounts(knowledge);
+    return Array.from(counts.keys()).filter(t => !KNOWLEDGE_TAGS.some(b => b.id === t)).sort((a, b) => counts.get(b) - counts.get(a) || (a < b ? -1 : a > b ? 1 : 0));
+  }, [knowledge]);
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
@@ -16525,7 +16990,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
             const active = form.tags.includes(tag.id);
             return (
               <button key={tag.id} onClick={() => toggleTag(tag.id)} style={{ padding: "5px 14px", fontSize: 12, border: `1.5px solid ${active ? tag.color : "#CCCCCC"}`, borderRadius: 20, background: active ? tag.bg : "#FFFFFF", color: active ? tag.color : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
-                {active ? "✓ " : ""}{tag.zh}
+                {active ? "✓ " : ""}{lang === "ja" ? tag.ja : tag.zh}
               </button>
             );
           })}
@@ -16540,6 +17005,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <input
             type="text"
+            list="k-custom-tag-options"
             placeholder="或输入自定义标签，回车添加"
             onKeyDown={e => {
               if (e.key === "Enter" && e.target.value.trim()) {
@@ -16552,6 +17018,9 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
             }}
             style={{ flex: 1, padding: "6px 10px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 6, background: "#FFFFFF", color: "#111111", fontFamily: "system-ui, sans-serif" }}
           />
+          <datalist id="k-custom-tag-options">
+            {customTagOptions.filter(t => !form.tags.includes(t)).map(t => <option key={t} value={t} />)}
+          </datalist>
           <span style={{ fontSize: 11, color: "#999999" }}>回车添加</span>
         </div>
       </div>
@@ -16589,8 +17058,14 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
           <select
             onChange={e => {
               if (e.target.value) {
-                const [type, name] = e.target.value.split("||");
-                if (!form.relatedRecipes.includes(name)) {
+                // 第 5 批 E3:选项值是「类型||id」(以前是「类型||名字」,名字里带「||」会拆错);加的是能唯一命中它的名字(同名的项目选了不再是同名),
+                // 一个都不唯一时加中文名,胶囊上会标「N 个同名」
+                const v = e.target.value, cut = v.indexOf("||");
+                const type = v.slice(0, cut), id = v.slice(cut + 2);
+                const list = type === "recipe" ? recipes : type === "component" ? components : creations;
+                const it = (list || []).find(x => x && String(x.id) === id);
+                const name = it ? (uniqueLinkNameFor(type, it, linkResolver) || it.nameZh || it.nameJa || it.nameFr) : "";
+                if (name && !form.relatedRecipes.includes(name)) {
                   setForm(prev => ({ ...prev, relatedRecipes: [...prev.relatedRecipes, name] }));
                 }
                 e.target.value = "";
@@ -16604,7 +17079,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
               <optgroup label="📘 配方">
                 {recipes.map(r => {
                   const name = r.nameZh || r.nameJa;
-                  return <option key={r.id} value={`recipe||${name}`}>{name}</option>;
+                  return <option key={r.id} value={`recipe||${r.id}`}>{name}</option>;
                 })}
               </optgroup>
             )}
@@ -16612,7 +17087,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
               <optgroup label="📦 组件">
                 {components.map(c => {
                   const name = c.nameZh || c.nameJa;
-                  return <option key={c.id} value={`component||${name}`}>{name}</option>;
+                  return <option key={c.id} value={`component||${c.id}`}>{name}</option>;
                 })}
               </optgroup>
             )}
@@ -16620,7 +17095,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
               <optgroup label="🎂 组合产品">
                 {creations.map(cr => {
                   const name = cr.nameZh || cr.nameJa;
-                  return <option key={cr.id} value={`creation||${name}`}>{name}</option>;
+                  return <option key={cr.id} value={`creation||${cr.id}`}>{name}</option>;
                 })}
               </optgroup>
             )}
@@ -16645,8 +17120,15 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
         {form.relatedRecipes.length > 0 && (
           <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {form.relatedRecipes.map((r, i) => (
-              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#F5F5F5", padding: "4px 10px", borderRadius: 20, fontSize: 12 }}>
+              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#F5F5F5", padding: "4px 10px", borderRadius: 20, fontSize: 12, flexWrap: "wrap", maxWidth: "100%", overflowWrap: "anywhere" }}>
                 {r}
+                {/* 第 5 批 E3:这个名字现在跳到哪(粘连的旧数据按拆开后的每个名字各标一个) */}
+                {splitLinkNames(r).map((nm, j) => {
+                  const m = linkResolver(nm);
+                  const txt = !m ? KT.notFound : m.ambiguous ? KT.ambN(m.ambiguous.length) : KT.linkTo(m.type, _klDisplayName(m.item, lang));
+                  const color = !m ? T.danger : m.ambiguous ? T.warning : T.muted;
+                  return <span key={j} data-k-linkstate={!m ? "none" : m.ambiguous ? "ambiguous" : "ok"} style={{ fontSize: 10, color, marginLeft: 2 }}>{txt}</span>;
+                })}
                 <button onClick={() => removeRelated(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999999", fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
               </span>
             ))}
@@ -28944,9 +29426,53 @@ function App() {
 
   // ═══ 第 5 批 E3:改名 / 新建 / 合并导入以后,知识按钮有跳不到原来那一条的 → toast 一键改(design_edit §6.3)═══
   // before / after = { recipes, components, creations }(改之前 / 之后);saved = { type, id }(编辑页保存)或 null(合并导入)。
-  // 第 0 步空壳:什么都不做。五个触发点已经接好:handleSaveRecipe、组件保存(ComponentsView.onSave)、组合产品保存(CreationsView.onSave)、
-  // 「↻ 同步回组件库」确认之后、合并导入成功之后
-  const offerKnowledgeRepairs = (before, after, saved) => {};
+  // 五个触发点:handleSaveRecipe、组件保存(ComponentsView.onSave)、组合产品保存(CreationsView.onSave)、「↻ 同步回组件库」确认之后、合并导入成功之后。
+  // 编辑页保存只在中 / 日 / 法名变了或新加了一条时才算;知识用 App 里最新的(dataRef)。有可修的才出 toast(8 秒,按钮「改成新名 / 改全名 / 改好」),
+  // 点了 = 按 applyKnowledgeRepairs 改知识里的名字(只改那个名字还在的),再出「✓ N 个知识按钮改好了 · 撤销」(按对象身份换回)。
+  // 只改知识数据里的字符串,四档规则一个字不改。出任何错都不能挡住保存本身,所以整段包在 try 里
+  const offerKnowledgeRepairs = (before, after, saved) => {
+    try {
+      const KT = knowTxt(lang);
+      const lk = saved ? (saved.type === "recipe" ? "recipes" : saved.type === "component" ? "components" : saved.type === "creation" ? "creations" : null) : null;
+      const findS = (S) => (lk && S && Array.isArray(S[lk])) ? (S[lk].find(x => x && x.id === saved.id) || null) : null;
+      const oldItem = findS(before), newItem = findS(after);
+      const nmF = (x, f) => (x && x[f] !== undefined && x[f] !== null) ? String(x[f]) : "";
+      if (saved && oldItem && newItem && ["nameZh", "nameJa", "nameFr"].every(f => nmF(oldItem, f) === nmF(newItem, f))) return;
+      const curK = () => (dataRef.current && Array.isArray(dataRef.current.knowledge)) ? dataRef.current.knowledge : knowledge;
+      const { fixable, unfixable } = knowledgeLinkRepairs(curK(), before, after, saved);
+      if (!fixable.length) return;
+      const n = fixable.length;
+      const hasRen = fixable.some(f => f.why === "renamed"), hasCol = fixable.some(f => f.why === "collided");
+      const dn = (x) => _klDisplayName(x, lang);
+      let msg, label;
+      if (hasRen && !hasCol && oldItem && newItem) {
+        const fields = lang === "ja" ? ["nameJa", "nameZh", "nameFr"] : ["nameZh", "nameJa", "nameFr"];
+        const f = fields.find(x => nmF(oldItem, x) !== nmF(newItem, x));
+        msg = KT.offerRenamed(nmF(oldItem, f) || dn(oldItem), nmF(newItem, f) || dn(newItem), n); label = KT.btnRename;
+      } else if (hasCol && !hasRen) {
+        // 「新加了」谁:编辑页保存 = 保存的这一条;合并导入 = 抢走第一个按钮的那一条
+        let by = newItem;
+        if (!by) { const f = fixable.find(x => x.by); const key = f && (f.by.type === "recipe" ? "recipes" : f.by.type === "component" ? "components" : "creations"); by = f && after && Array.isArray(after[key]) ? (after[key].find(x => x && x.id === f.by.id) || null) : null; }
+        if (by && dn(by)) { msg = KT.offerCollided(n, dn(by)); label = KT.btnFull; }
+        else { msg = KT.offerBoth(n); label = KT.btnBoth; }
+      } else { msg = KT.offerBoth(n); label = KT.btnBoth; }
+      if (unfixable.length) msg += KT.offerUnfixable(unfixable.length);
+      showToast(msg, { ms: 8000, actionLabel: label, undo: () => {
+        const res = applyKnowledgeRepairs(curK(), fixable, new Date().toISOString());
+        if (!res.changed) return;
+        const pairs = [...res.before.keys()].map(id => [res.before.get(id), res.after.get(id)]);
+        const fwd = new Map(pairs);
+        setKnowledge(prev => prev.map(k => fwd.has(k) ? fwd.get(k) : k));
+        showToast(KT.fixedN(res.changed), { undo: () => {
+          const now = curK();
+          const skipped = pairs.filter(([, nk]) => !now.includes(nk)).length;
+          const back = new Map(pairs.map(([o, nk]) => [nk, o]));
+          setKnowledge(prev => prev.map(k => back.has(k) ? back.get(k) : k));
+          if (skipped) showToast(KT.undoSkipped(skipped));
+        } });
+      } });
+    } catch (e) { /* 检查知识按钮出错不影响保存 */ }
+  };
   // 编辑页保存以后:之前 = 现在的三张表,之后 = 把保存的这一条换进去(新建的追加在末尾),交给 offerKnowledgeRepairs
   const knowledgeCheckOnSave = (type, saved) => {
     if (!saved || saved.id === undefined || saved.id === null) return;
@@ -28977,7 +29503,7 @@ function App() {
     // 保存后跳到该配方详情页 (LuLu UX: 不要跳回列表)
     setViewId(r.id);
     setTab("view");
-    knowledgeCheckOnSave("recipe", r);   // 第 5 批(E3):改名 / 新建以后检查知识按钮(第 0 步空壳)
+    knowledgeCheckOnSave("recipe", r);   // 第 5 批(E3):改名 / 新建以后检查知识按钮(复制的新版本也走这里)
   };
 
   const handleDeleteRecipe = () => {
@@ -30054,7 +30580,7 @@ function App() {
             if (d.appSettings && Object.keys(prepStockRead(d.appSettings.prepStock).items).length > 0) prepNotes.push(prepTxt(lang).mergeNotMerged);
             if (prepCfgDiff.size) prepNotes.push(prepTxt(lang).mergeCfgDiff(prepCfgDiff.size));
             setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines: prepNotes.length ? [...lines, ...prepNotes] : lines, skipped });
-            // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(第 0 步空壳;报告行不动)
+            // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(报告行不动)
             offerKnowledgeRepairs({ recipes: cur.recipes || [], components: cur.components || [], creations: cur.creations || [] },
               { recipes: [...(cur.recipes || []), ...recipeAdd], components: [...(cur.components || []), ...compAdd], creations: [...(cur.creations || []), ...creationAdd] }, null);
           }
@@ -31651,7 +32177,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
               showToast((zhL ? "✓ 已更新回组件库" : "✓ 部品庫を更新しました") + (othersN > 0 ? (zhL ? ` · 另外 ${othersN} 个组合产品跟着变了` : ` · ほかに ${othersN} 件の組み合わせも変わりました`) : ""));
               if (onDone) onDone();
-              // 第 5 批(E3):部分里改了中 / 日文名再同步回组件库 → 检查知识按钮(第 0 步空壳)
+              // 第 5 批(E3):部分里改了中 / 日文名再同步回组件库 → 检查知识按钮
               { const orig = components.find(c => c && c.id === updated.id); if (orig) knowledgeCheckOnSave("component", { ...orig, ...updated }); }
             }, { danger: false, refs });
           }}
@@ -31671,6 +32197,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <KnowledgeView
           knowledge={knowledge}
           setKnowledge={setKnowledge}
+          getKnowledge={() => (dataRef.current && dataRef.current.knowledge) || knowledge}
           lang={lang} setLang={setLang}
           viewId={knowledgeViewId} setViewId={setKnowledgeViewId}
           editTarget={knowledgeEditTarget} setEditTarget={setKnowledgeEditTarget}
