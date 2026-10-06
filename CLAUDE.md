@@ -110,7 +110,9 @@ LuLu 报 bug 时,默认进入"自主诊断 + 小改修复"模式,不走关口 A/
 - `npm run build` — production build to `dist/`
 - `npm run preview` — serve the production build locally
 
-There is no linter, type-checker, or test suite configured. Verification happens by running `npm run dev` and exercising the feature in the browser.
+There is no linter, type-checker, or `npm test`. **Regression suites live in `.claude/scripts/`** (git-ignored, carried between the two computers by the sync tool; node scripts with a fake DOM, run against real data `C:/Users/11508/Downloads/patisserie_2026-09-26.json`):
+`bash .claude/scripts/prepstock/regress_prep.sh` runs everything (it calls `batch4/regress4.sh`, which calls `batch3/regress.sh`; 20 to 40 min). Each batch section below names its own suite.
+Then verify in the browser with `npm run dev` and real data; for service-worker changes also `npm run build && node .claude/scripts/sw/sw_install_probe.cjs`.
 
 ## Project shape
 
@@ -135,7 +137,7 @@ UI 按 Claude Design 的交付稿整体重做过。**改版式之前先回设计
 3. **字体自托管在 `public/fonts/`**(Jost + Zen Kaku Gothic New + Noto Sans SC,共 346 个 woff2,约 7MB)。
  走 `public/fonts/fonts.css`,由 `index.html` 引入,不碰 Google CDN(国内打不开)。
  中日文字体按语言切换:App 往 `<html>` 写 `data-lang`,`GLOBAL_CSS` 里的 `--k-cjk` 变量据此切栈。
- **PWA 预缓存因此涨到约 8.3MB / 362 项。**
+ **PWA 预缓存因此涨到约 8.3MB / 362 项**(2026-10-02 实测约 9.2 MB / 364 项,字体占 7 MB)。
 
 ### 状态与反馈(设计稿 §09)
 
@@ -180,7 +182,8 @@ All saved together as a single JSON blob. See `.claude/manual.md §2` for the fu
 - `productFamilies` — recipe groupings sharing mold / temp / time.
 
 Plus 3 configs: `printSettings` (logo / brand name)、`customCompCats` (user-defined component categories)、
-`appSettings`(v17 新增,装日元汇率 `fxJpyToCny` 和价格显示口径 `displayCurrency`)。
+`appSettings`(v17 新增。装日元汇率 `fxJpyToCny`、价格显示口径 `displayCurrency`,后来又加了 `dismissedSeedIds`(2a)、`prodPlan` / `staffPin`(第 3 批)、
+`targetCostRate`(第 4 批)、`prepStock` 备货账本(2026-10);**新数据一律放进已有对象,不加顶层键**,全字段表见 `.claude/schema_full.md`)。
 
 ## 💱 币种与单价口径 (v17, 2026-08-31)
 
@@ -261,7 +264,8 @@ setter,**在 App 函数体里直接调用,不放 `useEffect`**。effect 在渲�
 
 Storage key is frozen at `patisserie_v4` for backward compatibility, but the payload's internal `version` field is currently `17`. Bump the payload `version` when adding fields; do not rename the storage key.
 
-Auto-save: a single `useEffect` in `App()` writes the full blob on every state change and flashes "✓ 已保存" for 2s.
+Auto-save: a single `useEffect` in `App()` writes the full blob on every state change; `SaveStatus` shows 「保存中… / 已保存 HH:MM / 保存失败 + 重试」
+(multi-window, backup and `pagehide` rules: 「体检第 1 批」 item 2 and 「2a」 item 1 below).
 
 ## Bilingual / trilingual content
 
@@ -269,7 +273,9 @@ Almost every user-facing string has paired fields: `nameZh`/`nameJa`/`nameFr`, `
 
 ## Tabs and view state
 
-The top-level `tab` state switches between `list` (recipes), `view`, `edit`, `materials`, `components`, `creations`, `knowledge`, `data`. Each major section has its own `*ViewId` (read) and `*EditTarget` (edit, `null` = new) pair. Navigation between sections (e.g. a knowledge entry linking to the recipe it relates to) is driven by the `onNavigate` callback that sets both the target id and the tab.
+The top-level `tab` state: the nav (`NAV` in `App()`) is `today`(今日:生产单 / 备货 / 日结)/ `products` / `purchase` / `list`(配方一览,含毛利一览、家族模式)/ `components` / `creations` / `knowledge` / `shopMaterials` / `suppliers` / `materialsPedia`(材料百科,含待换国产看板、厂家管理)/ `data`(含数据体检);
+plus `view` / `edit` for a recipe. Phone bottom bar = `MOBILE_NAV`, the rest sits in the 「更多」 drawer. **Switch tabs only through `goTab(t)`** (unsaved-change guard). 员工模式 replaces the whole shell with `StaffShell`.
+Each major section has its own `*ViewId` (read) and `*EditTarget` (edit, `null` = new) pair. Cross-section jumps go through `jumpToItem({ kind, id })` (data health, material usage rows, prep stock) or the older `onNavigate` callbacks.
 
 ## Shared primitives and conventions
 
@@ -580,7 +586,9 @@ LuLu 原话:「我组合这个单元是为了创作的时候方便,最终组合�
      组件已删的行在 `_ingContentKey` 里照常比单价 / 成本快照(同指向已删材料的行)。
    - **「↻ 同步回组件库」防互相引用**:部分里「来自组件 X」的行,X 已经(直接或间接)用到这个组件时不同步、组件库不动,toast 说明可以先存成本产品专用
      (规则同 🔗 选组件弹窗的 `componentReaches`)。不计价的行编辑页合计不算、旧价格表品牌下拉也不给它写价。
-   - **录入包生成脚本暂时不写 `componentId`**:合并导入按名字去重,指向会换人;映射只管同一个文件里的引用,录入 SOP 和预演脚本还没覆盖它。
+   - **录入包里的 `componentId`**(2026-09-30 起在用,第一例黑森林包,写法见 `.claude/recipe_entry_sop.md` 那一段):可以指向她 app 里**已有**的组件(id 从最新导出里取),
+     行里照样写一份人民币 `unitPrice` / `cost` 快照给老版本、`materialId` 留空;指向同一个包里新建的组件也行 —— 合并导入时那个组件若因同名被跳过,
+     `remapImportedComponentRefs` 把引用改写到本机那条。生成脚本要自查每个 `componentId` 在最新导出或包里确实存在。
 8. 旧版 app 遇到这些数据:不计价且没关联材料的行显示没价(只多一句提示,不多算钱);**不计价但关联了材料(为了核对过敏原)的行,旧版按材料实时价算进成本**
    (旧版 `getIngUnitPrice` / `getIngLiveCost` 不认 `noCost`,打开编辑页还会把价写回这一行),成本和原料毛利率在旧版上偏高,两台电脑都刷新到新版之前别拿旧版的毛利率做决定;
    来自组件的行按快照算人民币;包装费 / 价格历史 / 看板标记 / 别名原样保留(旧版写入口都是先展开原对象再改)。
@@ -655,9 +663,10 @@ These are user-authored import packages (recipes, components, knowledge, materia
 
 ## README
 
-The user-facing README is Chinese-only and describes the product, not the code:
-- bilingual recipe management, component warehouse, layered cakes, knowledge base, materials, import/export
-- data saved in the browser locally (no server)
+The user-facing README is Chinese-only and describes the product, not the code (rewritten 2026-10-02):
+- live URL + how updates arrive, a table of the pages (今日 / 商品 / 采购 / 配方一览 / 组件 / 组合产品 / 材料 / 数据 / 员工模式)
+- where data lives (localStorage / IndexedDB images / `patisserie_backup_v2`), backup and the two import buttons, directory tree, troubleshooting
+- when a batch adds a page or changes where data lives, update its page table and data table too
 
 ## Chrome DevTools MCP 调试环境
 
@@ -676,6 +685,10 @@ The user-facing README is Chinese-only and describes the product, not the code:
 |---|---|---|---|
 | **P1 一键补图（v14, 28 号晚完工）** | `.claude/scripts/orderie_image_fetcher.cjs`（**真 Node 脚本**）抓 orderie.jp 图到 `/tmp/orderie_cache/` + 写 manifest.json | 数据 Tab "📷 orderie 一键补图工具" → `<input webkitdirectory>` 让 LuLu 选 cache 文件夹 → handler 读 manifest + 文件 → blob → `putImageBlob` 入 IndexedDB | 文件夹 manifest.json + .jpg |
 | **P3 自动找图（v15, 29 号完工）** | `.claude/scripts/p3_crawl_v2.js`（**Chrome MCP 协议参考代码，不是 Node 脚本**）— Claude Code 通过 `mcp__chrome-devtools__navigate_page + evaluate_script` 调度浏览器跑乐天/亚马逊 SERP 抓 | 数据 Tab "📤 导出 P3 待爬清单" / "📥 导入 P3 候选" / "📂 恢复未完成 P3 批次"（详见 manual.md §11） | 双向：React 出 eligible JSON → CC 出 batch manifest.json |
+
+**⚠️ 现状(2026-10-02 核对)**:两个工作流在数据 tab 上的按钮 2026-05-01(`5f93ba2`)就拿掉了。React 端的代码还在,但没有入口:
+`showOrderieFetcher` 那个对话框没有任何地方会打开它,`handleP3ExportEligibleList` / `handleP3CandidatesImport` / `restoreP3Batch` 也没有地方调用。
+两个 Claude Code 端脚本还在 `.claude/scripts/` 里。要重新用,得先在数据 tab 加回按钮;上表是当时的做法,留作参考。
 
 **关键差异**：P3 因为 dev server 内 `fetch` 跨域被 CORS 拦死（详见 progress.md "P3 完工" 段教训 1），不能像 P1 那样用 Node 脚本直接 fetch；改走 Chrome MCP navigate + evaluate_script，让浏览器自身跑。
 

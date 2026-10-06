@@ -1,10 +1,15 @@
-# 甜点配方管理器
+# 甜点配方管理器(kororā)
 
-LuLu 自用的甜点店配方 / 组件 / 知识库管理工具。只在浏览器里跑，不需要服务器，数据存在你电脑本地。
+LuLu 自用的甜点店工具:配方 / 组件 / 组合产品 / 知识库 / 材料百科,加上开店要用的今日生产单、冷冻面团备货、日结、采购、过敏原标签和员工模式。
+只在浏览器里跑,不需要服务器,数据存在你自己的浏览器里。
 
 ---
 
-## 怎么跑
+## 平时怎么用
+
+- **线上版**:https://patisserie-manager-mpdi.vercel.app (推到 GitHub `main` 后 Vercel 自动部署;能「添加到主屏幕」,离线也能开)。
+  有新版本时页面顶上会出「有新版本」,点「刷新」就是新版。两台电脑都要各自刷新。
+- **本地开发**:
 
 ```bash
 npm install      # 第一次或换电脑后
@@ -12,22 +17,38 @@ npm run dev      # 浏览器打开 http://localhost:5173
 npm run build    # 打包到 dist/
 ```
 
+## 主要页面(2026-10)
+
+| 页面 | 做什么 |
+|---|---|
+| 今日 | 生产单(今天做什么、做多少、记入生产、打印)/ 备货(冷冻面团、面糊、备货组件的库存、到期、盘点)/ 日结(卖出和报损) |
+| 商品 | 可售商品的库存、补货线、包装费、过敏原和标签草稿 |
+| 采购 | 按一段时间的销量算要买多少原料(可扣掉手上现成的面团) |
+| 配方一览 | 配方和组合产品混排;毛利一览(建议售价);家族模式 |
+| 组件仓库 / 组合产品 | 可复用的组件;用组件搭成的成品(出整体配方、按个数缩放) |
+| 本店原料 / 供货商 / 材料百科 | 进货价、供货商送货日、材料百科(含待换国产看板、厂家管理) |
+| 数据 | 导入导出、自动备份、数据体检、汇率 |
+| 员工模式 | 给员工用:只有生产单 / 厨房视图 / 备货 / 日结,看不到任何钱 |
+
 ## 数据在哪
 
 | 数据 | 位置 |
 |---|---|
-| 配方 / 组件 / 组合 / 知识 / 材料 | 浏览器 **localStorage**（key: `patisserie_v4`）|
+| 配方 / 组件 / 组合 / 知识 / 材料 / 商品 / 生产和销售记录 / 备货账本 | 浏览器 **localStorage**(key: `patisserie_v4`,上限约 5 MB) |
 | 上传的图片 | 浏览器 **IndexedDB** |
-| `my_data_export.json` | 你手动导出的最新备份（项目根目录）|
+| 自动备份 | 浏览器 **IndexedDB**(`patisserie_backup_v2`,数据 tab 里能恢复) |
+| `my_data_export.json` | 某次手动导出的快照(项目根目录,不是最新) |
 
-⚠️ **清浏览器数据 = 删配方**。务必定期导出备份。
+⚠️ **清浏览器数据 = 删配方**。务必定期在数据 tab 导出备份。两台电脑的数据不会自动同步。
 
 ---
 
-## 备份 / 恢复
+## 备份 / 恢复 / 导入
 
-- **备份**：数据 Tab → "导出 JSON" → 覆盖项目根目录 `my_data_export.json`
-- **救数据**：`backups/` 里有历史快照（按日期命名）→ 拷一份到根目录改名为 `my_data_export.json` → 数据 Tab → "导入 JSON"
+- **备份**:数据 tab →「导出 JSON」。
+- **恢复**:数据 tab 的自动备份列表里点「恢复」;或拿导出的文件「选择 JSON(覆盖)」。
+- **两个导入按钮完全不同**:「选择 JSON(覆盖)」把整份数据换成文件里的(文件里没有的会被清空);
+  「合并导入」只加新的。**新配方的录入包(`RURU_*_合并导入.json`)一律用合并导入。**
 
 ---
 
@@ -35,13 +56,16 @@ npm run build    # 打包到 dist/
 
 ```
 patisserie-manager/
-├── src/App.jsx           ← 主代码（单文件，约 14000 行，故意不拆）
-├── src/main.jsx          ← 入口（只挂载 App）
-├── my_data_export.json   ← 当前主数据
-├── backups/              ← 历史数据快照（按日期命名的 .bak）
-├── RURU_packages/        ← 录入包归档（材料 / 配方 / 知识批量导入）
-├── CLAUDE.md             ← 给 Claude Code 看的工作规矩
-├── .claude/              ← Claude Code 工作文档（progress / handoff / SOP / skills）
+├── src/App.jsx           ← 主代码(单文件,约 28,500 行,故意不拆)
+├── src/main.jsx          ← 入口(只挂载 App)
+├── src/sw.js             ← 离线缓存
+├── public/layout.html    ← 798 厨房布局台(独立小工具)
+├── my_data_export.json   ← 某次导出的主数据快照
+├── backups/              ← 历史数据快照
+├── RURU_*_合并导入.json   ← 待导入的录入包
+├── RURU_packages/        ← 录入包归档
+├── CLAUDE.md             ← 给 Claude Code 看的工作规矩(每一批改动的规则都在里面)
+├── .claude/              ← Claude Code 工作文档和测试脚本(不进 git)
 └── README.md             ← 本文件
 ```
 
@@ -49,11 +73,12 @@ patisserie-manager/
 
 ## 想加新东西怎么办
 
-让 Claude 先读这两份文档：
-1. `CLAUDE.md` — 4 铁律 + 风险分级 + 关口流程
-2. `.claude/recipe_entry_sop.md` — 录入新 recipe / component / knowledge 的 4 阶段 SOP
+让 Claude 先读:
+1. `CLAUDE.md` —— 风险分级、每一批功能留下的规则
+2. `.claude/recipe_entry_sop.md` —— 录入新配方 / 组件 / 知识的流程
+3. 改哪一块,就先读 CLAUDE.md 里那一块的说明,并跑它列出的测试(总入口 `bash .claude/scripts/prepstock/regress_prep.sh`)
 
-代码改动全部进 `src/App.jsx` 单文件，不要拆模块（除非专门重构）。
+代码改动全部进 `src/App.jsx` 单文件,不要拆模块(除非专门重构)。推送上线前要 LuLu 点头。
 
 ---
 
@@ -61,8 +86,9 @@ patisserie-manager/
 
 | 现象 | 排查 |
 |---|---|
-| `npm run dev` 改文件不刷新 | 已开 polling 模式，重启服务器试试 |
-| 数据没了 | `backups/` 拿最新快照恢复 |
-| 图片丢了 | IndexedDB 被清，从备份导入恢复 |
-| 中日字段不成对（切日语空白）| 让 Claude 跑 `lang-pair-check` skill |
-| 想看某实体代码段 | Claude Code 输 `/section creations`（或 recipes / knowledge 等）|
+| 推送后看不到新功能 | 页面顶上点「刷新」;还不行就关掉标签页重开 |
+| 顶上红条「这份数据在别的窗口或标签页里改过了」 | 同时开了两个窗口,这个窗口已停止保存;刷新这一个 |
+| 数据没了 | 数据 tab 的自动备份里恢复,或用导出的 JSON |
+| 图片丢了 | IndexedDB 被清,从备份导入恢复 |
+| 中日字段不成对(切日语空白) | 让 Claude 跑 `lang-pair-check` skill |
+| 想看某实体代码段 | Claude Code 输 `/section creations`(或 recipes / knowledge 等) |
