@@ -1642,7 +1642,7 @@ const ingWeightFactor = (unit) => {
 };
 // ─── 第 5 批 2.4(S1):按个写的配料行按克换算 —— 第 0 步只放好签名(plan.md「数据」§4)───
 // 空壳 = 返回「行上没有 unitGrams、材料上没有 gramsPerPiece」时的值,也就是今天的算法(一个系数都不乘);S1 写真的。
-// 硬约束:这几个必须留在「getIngUnitPrice 到 END creation-follow helpers」这一段里(creation_follow_probe 只截这一段),
+// 硬约束:这几个必须留在「getIngUnitPrice 到 creation-follow 段结尾」那一段里(creation_follow_probe 只截这一段),
 // 只许用段里的 ingWeightFactor / _normCountUnit / _normTxt 和探针另截的 getMaterialEffectivePrice;**不许调 isGramUnit**
 // (不在段里,一调就 ReferenceError);不改 ingWeightFactor / _normCountUnit 的含义(备货线 prepConvUnit / prepSameUnit 靠它们)
 // 1 个(这一行的单位)约几克:行上 unitGrams 优先,其次材料的 gramsPerPiece(材料的 pieceUnit 和行单位相同时)。空壳:0
@@ -10314,7 +10314,7 @@ const printTimeText = (t, lang) => {
   if (/^\d+(\.\d+)?$/.test(s)) return lang === "ja" ? `${s} 分` : `${s} 分钟`;
   return s;
 };
-// 缩放后打印的抬头 printScaleText 第 5 批第 0 步挪进了 BEGIN scale helpers 段(RecipeView 上面)
+// 缩放后打印的抬头 printScaleText 第 5 批第 0 步挪进了缩放 helpers 段(RecipeView 上面)
 
 // ─── 模板1：厨房操作台版（简洁1页，大字号） ─────────────
 function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
