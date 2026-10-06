@@ -1593,10 +1593,11 @@ const getIngUnitPrice = (ing, materials, brands, cats) => {
   if (!ing) return 0;
   if (ing.noCost) return 0;
   // ① 材料百科 + 本店原料
+  // 第 5 批 2.4(S1):每克价 × 这一行的克重系数(g / ml / 空 1、kg / L 1000、按个写又填了克重的 = 1 个几克;换不了 = 不乘,老行为)
   if (ing.materialId) {
     const m = Array.isArray(materials) ? materials.find(x => x.id === ing.materialId) : null;
     if (m) {
-      const p = getMaterialEffectivePrice(m);
+      const p = linkedRowUnitPrice(ing, m);
       if (p > 0) return p;
     }
   }
@@ -1640,23 +1641,51 @@ const ingWeightFactor = (unit) => {
   if (/^(?:kg|千克|公斤|l|升)$/i.test(u)) return 1000;
   return 0;
 };
-// ─── 第 5 批 2.4(S1):按个写的配料行按克换算 —— 第 0 步只放好签名(plan.md「数据」§4)───
-// 空壳 = 返回「行上没有 unitGrams、材料上没有 gramsPerPiece」时的值,也就是今天的算法(一个系数都不乘);S1 写真的。
+// ─── 第 5 批 2.4(S1):按个写的配料行按克换算(规格 .claude/batch5/specs/spec_s1_piece_grams.md A 组 R1 到 R6)───
+// 配料行 unitGrams(「1 本 ≈ 2.2 g」,字符串)/ 材料 gramsPerPiece + pieceUnit(全店共用,单位一样才用)。
 // 硬约束:这几个必须留在「getIngUnitPrice 到 creation-follow 段结尾」那一段里(creation_follow_probe 只截这一段),
 // 只许用段里的 ingWeightFactor / _normCountUnit / _normTxt 和探针另截的 getMaterialEffectivePrice;**不许调 isGramUnit**
 // (不在段里,一调就 ReferenceError);不改 ingWeightFactor / _normCountUnit 的含义(备货线 prepConvUnit / prepSameUnit 靠它们)
-// 1 个(这一行的单位)约几克:行上 unitGrams 优先,其次材料的 gramsPerPiece(材料的 pieceUnit 和行单位相同时)。空壳:0
-const ingPieceGrams = (ing, m) => 0;
-// 这一行 1 单位 = 几克:g / ml / 空 = 1,kg / L = 1000,计件单位 = ingPieceGrams;换不了 = 0。空壳:= ingWeightFactor(行单位)
-const ingGramFactor = (ing, m) => ingWeightFactor(ing && ing.unit);
-// 关联了材料的行按这一行的单位算的单价(人民币)。空壳:= 今天的每克价(不乘系数)
-const linkedRowUnitPrice = (ing, m) => { const p = getMaterialEffectivePrice(m); return p > 0 ? p : 0; };
-// 编辑页写快照用(打开 / 保存刷新 / 选材料 / 撤销改价)。空壳:= 今天写的 String(pp);没价 ""
-const linkedRowSnapshotPrice = (ing, m) => { const p = getMaterialEffectivePrice(m); return p > 0 ? String(p) : ""; };
-// 「单位不符」:关联的材料还在、有价,单位换不成克(不计价的行不算)。空壳:false(今天没有这个判定)
-const ingUnitUnconverted = (ing, materials) => false;
-// 这一行有什么价格问题:"" | "noPrice" | "unit"(要把「没价」和「单位不符」分开数名字的地方用)。空壳:只有 noPrice
-const ingPriceIssue = (ing, materials) => (ingNoPrice(ing, materials) ? "noPrice" : "");
+// R1 1 个(这一行的单位)约几克:行上 unitGrams 优先(有限正数才算,不管单位、不管关联的是哪条材料);
+// 其次材料的 gramsPerPiece —— 只在材料写的 pieceUnit 和这一行的单位是同一个计件单位时(_normCountUnit 比,空 pieceUnit 不用)。都没有 → 0
+const ingPieceGrams = (ing, m) => {
+  const own = parseFloat(ing && ing.unitGrams);
+  if (isFinite(own) && own > 0) return own;
+  const g = parseFloat(m && m.gramsPerPiece);
+  if (!(isFinite(g) && g > 0)) return 0;
+  const mu = _normCountUnit(m.pieceUnit);
+  return (mu !== "" && mu === _normCountUnit(ing && ing.unit)) ? g : 0;
+};
+// R2 这一行 1 单位 = 几克:g / ml / 空 = 1,kg / L = 1000(这时行上的 unitGrams 不起作用),计件单位 = ingPieceGrams;换不了 = 0
+const ingGramFactor = (ing, m) => { const f = ingWeightFactor(ing && ing.unit); return f > 0 ? f : ingPieceGrams(ing, m); };
+// R3 关联了材料的行按这一行的单位算的单价(人民币)= 每克价 × 系数;系数 0(计件、没克重)= 老行为:按每克价
+const linkedRowUnitPrice = (ing, m) => {
+  const p = getMaterialEffectivePrice(m);
+  if (!(p > 0)) return 0;
+  const f = ingGramFactor(ing, m);
+  return f > 0 ? p * f : p;
+};
+// R4 编辑页写快照用(打开 / 保存刷新 / 选材料 / 撤销改价 / 改单位)。系数 0 或 1 时和以前写的 String(pp) 逐字节一样;没价 ""
+const linkedRowSnapshotPrice = (ing, m) => {
+  const p = linkedRowUnitPrice(ing, m);
+  if (!(p > 0)) return "";
+  const f = ingGramFactor(ing, m);
+  return (f === 0 || f === 1) ? String(p) : String(Number(p.toPrecision(12)));
+};
+// R5「单位不符」:关联了还在的、有价的材料,单位又换不成克(按个写、没填克重)。不计价 / 没关联 / 材料已删 / 材料没价 / 千克类 / 换算过的 → false
+const ingUnitUnconverted = (ing, materials) => {
+  if (!ing || ing.noCost || !ing.materialId || !Array.isArray(materials)) return false;
+  const m = materials.find(x => x && x.id === ing.materialId);
+  return !!m && getMaterialEffectivePrice(m) > 0 && ingGramFactor(ing, m) === 0;
+};
+// R6 这一行有什么价格问题:"" | "noPrice" | "unit"(要把「没价」和「单位不符」分开数名字的地方用;ingNoPrice ⇔ 这个不是 "")。
+// 来自组件的行永远不报 unit:组件里有单位不符的行时,这一行报 noPrice(顺着传过来的「不全」)
+const ingPriceIssue = (ing, materials) => {
+  if (ing && ing.noCost) return "";
+  if (ingLiveComp(ing, materials)) { const r = componentRowPrice(ing, materials); return (!(r.perUnit > 0) || r.incomplete) ? "noPrice" : ""; }
+  if (ingUnitUnconverted(ing, materials)) return "unit";
+  return getIngPriceSource(ing, materials) === "none" ? "noPrice" : "";
+};
 
 // ─── 第 4 批 B4-6 第一段(2026-09-30):配料行「不计价」和「来自组件」──────────────────────
 //   ing.noCost: true      这一行成本按 0 算,永远不算「没价」(只管钱:过敏原照查、生产单照称)。关掉 = 删掉这个键
@@ -1727,9 +1756,11 @@ const componentRowPrice = (ing, materials) => {
 // 第 4 批第 0 步(2026-09-30):「这一行没价」的唯一判定出口。配方详情红框 / 「N 项没价」、商品单件成本、配方一览、整体配方都走它。
 // B4-6:不计价 → 永远不算没价;来自组件(组件还在)→ 算不出单价,或组件自己有算不全的行(利润率要诚实)都算没价;
 // 其余(含组件已删的行)= 旧判定 getIngPriceSource === "none"。老数据两个标记都没有,结果和以前逐行一样
+// 第 5 批 2.4(S1,默认值 3):按个写、关联了有价材料、没填克重的行(ingUnitUnconverted「单位不符」)也算 —— 成本少算了,不能给绿色
 const ingNoPrice = (ing, materials) => {
   if (ing && ing.noCost) return false;
   if (ingLiveComp(ing, materials)) { const r = componentRowPrice(ing, materials); return !(r.perUnit > 0) || r.incomplete; }
+  if (ingUnitUnconverted(ing, materials)) return true;
   return getIngPriceSource(ing, materials) === "none";
 };
 // 给「来自组件」的配料行写快照:人民币单价(按行单位)+ 成本。算不出时单价 / 成本写空(老版本 App 显示「无价」,不按旧价算)
@@ -1818,6 +1849,10 @@ const _ingContentKey = (ing, matIds) => {
   const cid = _normTxt(ing.componentId);
   if (cid) k.push("c:" + cid);
   if (ing.noCost) k.push("nc");
+  // 第 5 批 2.4(S1,R22):行上的克重(unitGrams)算内容 —— _normNum 非空才加一项(没有这个键 / "" / 空白 → 老行 key 一个字节不变)。
+  // 材料的 gramsPerPiece 不进任何内容键(是材料的事,不是配料行的)
+  const ug = _normNum(ing.unitGrams);
+  if (ug) k.push("ug:" + ug);
   // 审查 b4r1:组件已删的行(同「指向已删材料」)价就是快照本身,要算内容 —— 不比的话组件里刷新的快照 / 手改的价到不了跟组件库走的部分,组件一删两边成本悄悄不一样
   if (!mid && !(cid && _componentsById.has(ing.componentId)) && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
   return k;
@@ -1908,8 +1943,12 @@ const creationBatch = (c, n, components, materials, brands) => {
     });
     const cost = calcLayerLiveCost(l, materials, brands) * factor;
     // 第 4 批 B4-6:不计价的行不算缺价;来自组件的行(组件还在)按 ingNoPrice(子组件算不全也算缺);其余照旧(会退回 cost 快照)
-    const missingIngs = ings.filter(({ ing }) => !ing.noCost && (parseFloat(ing.qty) || 0) > 0 && (ingLiveComp(ing, materials) ? ingNoPrice(ing, materials) : !(getIngLiveCost(ing, materials, brands, []) > 0))).map(x => x.ing);
-    return { layer: l, idx, comp, used, usedRaw: _normTxt(l.usedAmount), yieldNum, noUsed, scale, needed, stock, ings, cost, missingIngs, missingPrice: missingIngs.length > 0 };
+    // 第 5 批 2.4(S1,R14):「单位不符」的行(按个写、没填克重)也算缺价;这种行另列进 unitIngs(只在有这种行时才多这个键,老数据输出逐字节不变)
+    const missingIngs = ings.filter(({ ing }) => !ing.noCost && (parseFloat(ing.qty) || 0) > 0 && (ingLiveComp(ing, materials) ? ingNoPrice(ing, materials)
+      : (ingUnitUnconverted(ing, materials) || !(getIngLiveCost(ing, materials, brands, []) > 0)))).map(x => x.ing);
+    const unitIngs = missingIngs.filter(i => ingUnitUnconverted(i, materials));
+    return { layer: l, idx, comp, used, usedRaw: _normTxt(l.usedAmount), yieldNum, noUsed, scale, needed, stock, ings, cost, missingIngs, missingPrice: missingIngs.length > 0,
+      ...(unitIngs.length ? { unitIngs } : {}) };
   });
   const cost = parts.reduce((s, p) => s + p.cost, 0);
   return { serves, N, factor, parts, cost, incomplete: parts.some(p => p.missingPrice || p.noUsed) };
@@ -2036,7 +2075,12 @@ const ingGramsOf = (ing) => {
 };
 // 第 5 批 2.4(S1):配料行的克数,计件行有克重(unitGrams / 材料 gramsPerPiece)时也算得出(过敏原 / 配料表草稿 / 按总重缩放用)。
 // 第 0 步 = ingGramsOf(ing)(不看克重字段),S1 换成 ingGramFactor(ing, m) × 用量
-const ingGramsOfRow = (ing, m) => ingGramsOf(ing);
+// R24(S1 写真的):系数走 ingGramFactor(ing, m)(m = 关联的材料,可以为空:只看行上的 unitGrams);没有克重字段时 ⇔ ingGramsOf(ing)
+const ingGramsOfRow = (ing, m) => {
+  const f = ingGramFactor(ing, m);
+  const q = parseFloat(ing && ing.qty);
+  return (f > 0 && isFinite(q) && q >= 0) ? q * f : null;
+};
 const _ingDisplayName = (ing) => _normTxt(ing && ing.nameZh) || _normTxt(ing && ing.nameJa) || _normTxt(ing && ing.nameFr);
 const _entityNameZh = (e) => _normTxt(e && e.nameZh) || _normTxt(e && e.nameJa) || _normTxt(e && e.nameFr);
 const _partNameZh = (l, comp) => _normTxt(l && l.nameZh) || _entityNameZh(comp) || _normTxt(l && l.customName) || _normTxt(l && l.nameJa) || "(未命名部分)";
@@ -2121,7 +2165,8 @@ function allergenSummaryOf(kind, entity, ctx = {}, _depth = 0) {
       allergenCodesOf(m.allergenCodes).forEach(c => { contains.add(c); addSrc(sources, c, disp); addSrc(sourcesJa, c, dispJa); });
       allergenCodesOf(m.mayContainCodes).forEach(c => { may.add(c); addSrc(maySources, c, disp); addSrc(maySourcesJa, c, dispJa); });
       if (!allergenChecked(m)) { pushUnknown({ ...U, reason: "unchecked", materialId: m.id }); return; }
-      if (ingWeightFactor(ing.unit) === 0) pushUnknown({ ...U, reason: "nonGram", unit: _normTxt(ing.unit) });
+      // 第 5 批 2.4(S1,R26):填了克重(行上 unitGrams / 材料 gramsPerPiece)的计件行能按克算,不再算「未确认 · 单位不是克」
+      if (ingGramFactor(ing, m) === 0) pushUnknown({ ...U, reason: "nonGram", unit: _normTxt(ing.unit) });
     });
   };
   const e = entity || {};
@@ -2263,9 +2308,10 @@ function draftIngredientList(kind, entity, ctx = {}, _depth = 0) {
       if (!name) return;
       const exp = m ? _stripIngredientLead(m.labelIngredientsZh) : "";
       const text = exp ? `${name}(${exp})` : name;
-      const g = ingGramsOf(ing);
+      // 第 5 批 2.4(S1,R25):计件行有克重(行上 unitGrams / 材料 gramsPerPiece)时按重量排(材料已删 / 没关联只看行上的)
+      const g = ingGramsOfRow(ing, m);
       const mkey = m ? "m:" + m.id : "n:" + stripNote(name);
-      if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingWeightFactor(ing.unit) === 0 ? "nonGram" : "noQty", mkey, exp);
+      if (g === null) addNon(name, text, ing.qty, _normTxt(ing.unit), ingGramFactor(ing, m) === 0 ? "nonGram" : "noQty", mkey, exp);
       else addItem(name, text, g, !!exp, mkey, exp);
     });
   };
@@ -4149,8 +4195,11 @@ function mergeMaterialEntry(loc, inc, nowIso) {
   // 第 4 批 B4-4:「待换国产」标记(domesticStatus / domesticNote / domesticAt)不写 updatedAt,自带时间 domesticAt,
   // 这里按它整组取较新的一边(不看 updatedAt,也不碰价格那组)
   const withDomestic = pickGroupByStamp(merged, loc, inc, DOMESTIC_KEYS, "domesticAt");
+  // 第 5 批 2.4(S1,R44):材料的克重组(gramsPerPiece / pieceUnit / pieceAt,写的时候不写 updatedAt)按 pieceAt 整组取较新的一边,
+  // 不看 updatedAt,也不碰价格那组;清空(""+ 新 pieceAt)的一边照样赢;两边一样新(包括都没有)→ 同上一步的结果
+  const withPiece = pickGroupByStamp(withDomestic, loc, inc, PIECE_KEYS, "pieceAt");
   // 第 4 批 B4-3:价格历史取两边并集(不进 lockedKeys,那样另一台电脑的改价记录会整组丢掉);本机的生效价被这次导入改了就补 before + import
-  return withMergedPriceHistory(loc, inc, withDomestic, "material", nowIso);
+  return withMergedPriceHistory(loc, inc, withPiece, "material", nowIso);
 }
 // 第 4 批 B4-4:一组自带时间戳的字段(stampKey 记这组是什么时候改的)在合并导入时按这个时间整组取较新的一边,
 // 那一边没有的键删掉(清除标记写的是 "",带着空串的新一边照样赢)。两边时间一样(包括都没写)→ 原样用 mergeByNewer 的结果
@@ -4350,11 +4399,39 @@ function parsePackSizeToGrams(ps) {
   if (unit === "kg" || unit === "千克" || unit === "公斤" || unit === "l" || unit === "ℓ" || unit === "升") return num * 1000;
   return num;
 }
-// 第 5 批 2.4 / 按件计价(S1,第 0 步空壳 → null):
-//   packPieceHint:规格里能推出「每个几克」(「50g(約 20-25 本)」→ { gpp: 2.22, unit: "本" });推不出 → null
-//   parsePackCount:计件规格的个数(「20個」→ { n: 20, unit: "個" };「4号缶」「箱」这类容器不算 → null)
-const packPieceHint = (ps) => null;
-const parsePackCount = (ps) => null;
+// 第 5 批 2.4 / 按件计价(S1,规格 R39 / R40):
+//   packPieceHint:规格开头能推出「每个几克」→ { gpp, unit }。两种写法:「8g × 40 个」(每个 8 g)、「50g(約 20-25 本)」(50 ÷ 区间中值 22.5 = 2.22);
+//     g / kg / 克 / 千克 / 公斤不分大小写,四舍五入到 0.01,结果必须是有限正数;只看开头(第一段)。推不出 → null。unit 是匹配到的原字(NFKC 后)
+//   parsePackCount:计件规格的个数(「20個」→ { n: 20, unit: "個" });只认整数个数,「号缶 / 袋 / 箱」这类容器不算、「3.5個」不算 → null。
+//     调用方只在 parsePackSizeToGrams(ps) === 0 时才把它当计件规格
+const packPieceHint = (ps) => {
+  const s = String(ps == null ? "" : ps).normalize("NFKC").trim().replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
+  const F1 = /^(\d+(?:\.\d+)?)\s*(g|kg|克|千克|公斤)\s*[×xX*]\s*(\d+)\s*(個|个|本|枚|粒|片|根|颗|顆|袋|入)/i;
+  const F2 = /^(\d+(?:\.\d+)?)\s*(g|kg|克|千克|公斤)\s*\(\s*(?:約|约)?\s*(\d+)(?:\s*(?:[-~〜–—]|到|至)\s*(\d+))?\s*(個|个|本|枚|粒|片|根|颗|顆|袋|入)/i;
+  const k = (u) => /^(kg|千克|公斤)$/i.test(u) ? 1000 : 1;
+  const r2 = (x) => Math.round(x * 100) / 100;
+  let m = s.match(F1);
+  if (m) { const g = r2(parseFloat(m[1]) * k(m[2])); return (isFinite(g) && g > 0) ? { gpp: g, unit: m[4] } : null; }
+  m = s.match(F2);
+  if (m) {
+    const tot = parseFloat(m[1]) * k(m[2]);
+    const a = parseInt(m[3], 10), b = m[4] !== undefined ? parseInt(m[4], 10) : a;
+    const n = (a + b) / 2;
+    if (!(n > 0)) return null;
+    const g = r2(tot / n);
+    return (isFinite(g) && g > 0) ? { gpp: g, unit: m[5] } : null;
+  }
+  return null;
+};
+const parsePackCount = (ps) => {
+  const s = String(ps == null ? "" : ps).normalize("NFKC").trim().replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
+  const first = s.split(/[\/、，,]/).map(x => x.trim()).filter(Boolean)[0];
+  if (!first) return null;
+  const m = first.match(/^(\d+)\s*(個|个|本|枚|粒|片|入)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n > 0 ? { n, unit: m[2] } : null;
+};
 
 // ─── UI primitives ───────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
@@ -5227,15 +5304,21 @@ function computeDataHealth(data) {
     const scan = (ings, base) => (Array.isArray(ings) ? ings : []).forEach((ing, j) => {
       if (!ing || !ing.materialId) return;
       const m = matById.get(ing.materialId);
-      if (!m || !matHasPrice(m) || isGramUnit(ing.unit)) return;
+      // 第 5 批 2.4(S1,R47):跳过条件换成克重系数 —— kg / L 行(×1000)、填了克重的计件行(行上 unitGrams / 材料 gramsPerPiece)都能按克算,不再列
+      if (!m || !matHasPrice(m) || ingGramFactor(ing, m) > 0) return;
       const nmZh = _normTxt(ing.nameZh) || _normTxt(ing.nameJa) || zhN(m);
       const nmJa = _normTxt(ing.nameJa) || _normTxt(ing.nameZh) || jaN(m);
       const qty = _normTxt(ing.qty), unit = _normTxt(ing.unit);
+      // R49:材料还没有克重、规格能推出每个几克、推出的单位和这一行一样 → 多一个键 pieceFix(放最后),页面给一键「按规格估」
+      const g0 = parseFloat(m.gramsPerPiece);
+      const h = (isFinite(g0) && g0 > 0) ? null : packPieceHint(m.packSize);
+      const fix = (h && _normCountUnit(h.unit) === _normCountUnit(ing.unit)) ? { pieceFix: { materialId: m.id, gramsPerPiece: String(h.gpp), pieceUnit: h.unit } } : {};
       items.push({
         key: `${base.key}:${j}`, kind: base.kind, id: base.id, jump: base.jump,
         labelZh: `${base.ownerZh} · ${nmZh}`, labelJa: `${base.ownerJa} · ${nmJa}`,
         detailZh: `${TYPE[base.type][0]} · 用量 ${qty || "?"} ${unit} · 关联了「${zhN(m)}」(按克计价)→ 成本按 ${qty || "?"} 克算${base.noteZh ? " · " + base.noteZh : ""}`,
         detailJa: `${TYPE[base.type][1]} · 分量 ${qty || "?"} ${unit} · 「${jaN(m)}」(g 単価)と連動 → 原価は ${qty || "?"} g で計算${base.noteJa ? " · " + base.noteJa : ""}`,
+        ...fix,
       });
     });
     recipes.forEach((r, i) => scan(r.ingredients, { key: `H5:r:${r.id != null ? r.id : "#" + i}`, type: "recipe", kind: "recipe", id: r.id, jump: { kind: "recipe", id: r.id }, ownerZh: zhN(r) || noName.zh, ownerJa: jaN(r) || noName.ja }));
@@ -5255,8 +5338,9 @@ function computeDataHealth(data) {
     }));
     checks.push({ id: "H5", audit: "data-5", level: "money",
       titleZh: "单位对不上的关联配料", titleJa: "単位が合わない連動材料",
-      whyZh: "这些配料关联了材料百科(材料都按克计价),用量却写的是「個 / 本」这类。成本 = 材料每克价 × 用量,50 个干杏会按 50 克算,少算很多。改法:把用量改成克数;或者取消关联,直接填每个 / 每根的价。",
-      whyJa: "材料事典(g 単価)と連動しているのに、分量が「個・本」などになっています。原価 = g 単価 × 分量なので、干し杏 50 個が 50 g として計算されます。分量を g に直すか、連動を外して 1 個あたりの単価を入力してください。",
+      // 第 5 批 2.4(S1,R48):最后一句改法换成指向编辑页的「⚖ 按个写的原料」面板
+      whyZh: "这些配料关联了材料百科(材料都按克计价),用量却写的是「個 / 本」这类。成本 = 材料每克价 × 用量,50 个干杏会按 50 克算,少算很多。改法:在编辑页原料表下面「⚖ 按个写的原料」填 1 个约几克(可以存进材料百科,全店共用);或者把用量改成克数;或者取消关联,直接填每个 / 每根的价。",
+      whyJa: "材料事典(g 単価)と連動しているのに、分量が「個・本」などになっています。原価 = g 単価 × 分量なので、干し杏 50 個が 50 g として計算されます。編集画面の材料表の下「⚖ 個数単位の材料」で 1 個あたりの g を入力(材料事典に保存すれば全体に反映)、または分量を g に、または連動を外して 1 個あたりの単価を入力してください。",
       items });
   }
 
@@ -5633,6 +5717,11 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
       </>;
       case "H3": return <>
         <Btn size="sm" onClick={() => { fix.clearFamily(it); markDone(c, it, idx, "✓ 已改成不归属", "✓ 未所属にしました"); }}>{zh ? "改成不归属" : "未所属にする"}</Btn>
+        {jumpBtn(it.jump)}
+      </>;
+      // 第 5 批 2.4(S1,R49):材料规格能推出每个几克的,一键「按规格估」存进材料百科(只写克重三个键、不写 updatedAt,toast 带撤销)
+      case "H5": return <>
+        {it.pieceFix && fix.pieceGrams && <Btn size="sm" onClick={() => { if (fix.pieceGrams(it)) markDone(c, it, idx, `✓ 1 ${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g 存进了材料百科`, `✓ 1${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g を事典に保存`); }}>{zh ? `按规格估 1 ${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g,存进材料百科` : `規格から 1${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g として事典に保存`}</Btn>}
         {jumpBtn(it.jump)}
       </>;
       case "H7": return <>
@@ -6660,13 +6749,21 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         {(() => {
           const missing = (r.ingredients || []).filter(ing => ingNoPrice(ing, materials));
           if (missing.length === 0 || (r.ingredients || []).length === 0) return null;
-          const names = missing.map(ing => pickLang(ing, "name", lang)).join(" · ");
+          const names = (x) => x.map(ing => pickLang(ing, "name", lang)).join(" · ");
+          // 第 5 批 2.4(S1,R21):「按个写、没填克重」(单位不符)的行另起一段,按钮「去填克重」;没有这种行时和以前一样
+          const p2 = missing.filter(ing => ingPriceIssue(ing, materials) === "unit");
+          const p1 = missing.filter(ing => ingPriceIssue(ing, materials) === "noPrice");
+          const zh = lang === "zh";
+          const detail = !p2.length
+            ? (zh ? `${missing.length} 项原料没有单价：${names(missing)}` : `${missing.length} 件に単価がありません：${names(missing)}`)
+            : [p1.length ? (zh ? `${p1.length} 项原料没有单价：${names(p1)}` : `${p1.length} 件に単価がありません：${names(p1)}`) : "",
+               zh ? `${p2.length} 项按个写、没填每个几克(成本少算了):${names(p2)}` : `${p2.length} 件は個数単位で 1 個あたりの g が未入力(原価が過少):${names(p2)}`].filter(Boolean).join("\n");
           return (
             <div style={{ marginBottom: T.sp.xxl }}>
               <InlineError
-                title={lang === "zh" ? "成本算不全" : "原価が出せません"}
-                detail={lang === "zh" ? `${missing.length} 项原料没有单价：${names}` : `${missing.length} 件に単価がありません：${names}`}
-                actionLabel={lang === "zh" ? "去补单价" : "単価を入力"}
+                title={zh ? "成本算不全" : "原価が出せません"}
+                detail={detail}
+                actionLabel={!p2.length || p1.length ? (zh ? "去补单价" : "単価を入力") : (zh ? "去填克重" : "g を入力")}
                 onAction={onEdit}
               />
             </div>
@@ -6718,6 +6815,9 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                 else if (src === "nocost") badges.push({ t: lang === "zh" ? "不计价" : "原価外", c: T.muted, tip: lang === "zh" ? "这一行不计价,成本按 0 算" : "原価に入れない行" });
                 else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "コンポ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "コンポーネント:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
                 else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? (ingLiveComp(ing, materials) ? "来自组件,但算不出单价(组件没填产出量 / 单位对不上 / 循环 / 没价)" : "无价格信息") : "価格情報なし" });
+                // 第 5 批 2.4(S1,R21):按个写、关联了按克计价的材料 —— 没填克重 →「单位不符」(警示色);填了 →「≈2.2g/本」(灰)
+                if (ingUnitUnconverted(ing, materials)) { const u = _normTxt(ing.unit); badges.push({ t: lang === "zh" ? "单位不符" : "単位不一致", c: T.warning, tip: lang === "zh" ? `按「${u}」写、关联了按克计价的材料,没填 1 ${u} 约几克 → 成本按 1 ${u} = 1 g 算,少算了` : `「${u}」単位で g 単価の材料と連動、1${u} あたりの g が未入力 → 1${u} = 1 g で計算(過少)` }); }
+                else if (linkedMat && ingWeightFactor(ing.unit) === 0 && ingPieceGrams(ing, linkedMat) > 0) { const u = _normTxt(ing.unit); badges.push({ t: `≈${fmtQty(ingPieceGrams(ing, linkedMat))}g/${u}`, c: T.muted, tip: lang === "zh" ? `按 1 ${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g 换算成克` : `1${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g で換算` }); }
                 if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
                 else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のコンポーネントは削除済み" });
                 const shown = badges.slice(0, 2), rest = badges.slice(2);
@@ -7788,6 +7888,17 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>原材料{scale !== 1 && <span style={{ fontSize: 12, color: "#6D28D9", marginLeft: 8 }}>（已缩放 ×{scale.toFixed(3)}）</span>}</div>
         {(c.ingredients || []).length === 0 && <div style={{ fontSize: 13, color: "#999999" }}>（无原料）</div>}
+        {/* 第 5 批 2.4(S1,R21):按个写、关联了按克计价的材料、没填每个几克的行(单位不符)—— 只在有这种行时多一行黄字 */}
+        {(() => {
+          const un = (c.ingredients || []).filter(ing => ingUnitUnconverted(ing, materials));
+          if (!un.length) return null;
+          const names = un.map(ing => pickLang(ing, "name", lang)).join("、");
+          return (
+            <div data-unit-grams="detail" style={{ fontSize: 12, color: T.warning, marginBottom: 10, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+              {lang === "zh" ? `⚠ ${un.length} 行按个写、关联了按克计价的材料,没填每个几克,成本少算了:${names} · 去编辑页填` : `⚠ ${un.length} 行が個数単位(g 単価の材料と連動)で g 未入力のため原価が過少:${names} · 編集で入力`}
+            </div>
+          );
+        })()}
         {(() => {
           // 按 group 分组显示
           const compGrouped = {};
@@ -7907,7 +8018,9 @@ const ING_TABLE_TXT = {
     catTitle: (n) => `✓ 已关联「${n}」`,
     drift: "价格表已更新,点击同步",
     priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、個、kg …)按每个单位填",
-    unitMismatch: (u) => `这一行按「${u}」计量,但关联的材料按克计价,成本会算错。改成克,或者取消关联后直接填每${u}的价`,
+    // 第 5 批 2.4(S1,R31):指向下面的「⚖ 按个写的原料」面板;换算过的行另给一句
+    unitMismatch: (u) => `这一行按「${u}」计量,关联的材料按克计价,成本会少算。在下面「⚖ 按个写的原料」填 1 ${u} 约几克;或者改成克;或者取消关联后直接填每${u}的价`,
+    unitConverted: (u, g) => `按 1 ${u} ≈ ${g} g 换算成克(在下面改)`,
   },
   ja: {
     headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
@@ -7919,7 +8032,8 @@ const ING_TABLE_TXT = {
     catTitle: (n) => `✓ 価格表「${n}」に連動`,
     drift: "価格表の値に更新",
     priceTh: "g / ml の行は 100g(100ml)あたりで入力。その他の単位(本・個・kg など)は 1 単位あたり",
-    unitMismatch: (u) => `この行は「${u}」単位ですが、連動した材料はグラム単価です。原価が正しく計算されません。グラムに直すか、連動を外して 1${u}あたりの単価を入力してください`,
+    unitMismatch: (u) => `この行は「${u}」単位、連動材料は g 単価のため原価が過少になります。下の「⚖ 個数単位の材料」で 1${u} あたりの g を入力するか、g に直すか、連動を外して 1${u} あたりの単価を入力してください`,
+    unitConverted: (u, g) => `1${u} ≈ ${g} g で g に換算(下で変更)`,
   },
 };
 // 三页之间还剩的差异。品牌 datalist 的 id 三页不同(同一页面里不会同时出现两张表,分开只是沿用老 id);
@@ -8237,7 +8351,8 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
 // 配料表本体:「原材料」标题行(🤖 批量关联 / + 追加)+ 分组图例 + 表格(名字格带材料百科联想 IngNameInput)+ 品牌的 datalist。
 // 表格下面的成本汇总三页各不一样,留在编辑页里。
 // nextIdRef = 编辑页的 useRef(ings.length),新行 _id 从它取(_id 可能是 0,判断一律 !== null)。
-function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, brands, lang, onPickMaterial, onOpenBulk }) {
+// 第 5 批 2.4(S1):onSaveMaterialPiece(可选)= 编辑页保存时能写材料百科的克重 —— 只用来决定「⚖」面板里出不出「同时存进材料百科」(真正写在编辑页 doSave 里)
+function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, brands, lang, onPickMaterial, onOpenBulk, onSaveMaterialPiece }) {
   const v = ING_TABLE_VARIANTS[variant];
   const tx = ING_TABLE_TXT[lang === "zh" ? "zh" : "ja"];
 
@@ -8281,14 +8396,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
     }));
   };
   // v11: 单行撤销改价,恢复到 _originalPrice。关联的材料有价时原价是按人民币刷出来的,币种也放回 CNY
-  const revertPrice = (id) => setIngs(prev => prev.map(i => i._id !== id ? i : revertRow(i)));
-  const revertRow = (i) => {
-    const q = parseFloat(i.qty) || 0;
-    const op = parseFloat(i._originalPrice) || 0;
-    const m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
-    const { _priceModified, ...rest } = i;
-    return { ...rest, unitPrice: i._originalPrice || "", ...(m && getMaterialEffectivePrice(m) > 0 ? { currency: "CNY" } : {}), cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost };
-  };
+  // 第 5 批 2.4(S1):抽成模块级 revertIngRow —— 材料还有价时按这一行的单位现算(克重系数变了以后 unitPrice / _originalPrice 一起变)
+  const revertPrice = (id) => setIngs(prev => prev.map(i => i._id !== id ? i : revertIngRow(i, materials)));
   // 审查第 3 轮:单位在「克 / 毫升」和「本 / 個」之间换了,手改的单价口径就不对了(按本填的 30 会变成每克 30、存进本店原料),
   // 丢掉手改的价、回到材料百科的价,同 revertPrice。
   // 审查第 4 轮:改成离开单位框时拿「点进去之前的单位」比 —— 以前每敲一个键就判断,g 改 ml 敲到「m」、拼音输入「毫升」敲到「h」
@@ -8303,13 +8412,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
     const from = unitAtFocus.current[id];
     delete unitAtFocus.current[id];
     if (from === undefined) return;
-    setIngs(prev => prev.map(i => (i._id === id && i._priceModified && isGramUnit(from) !== isGramUnit(i.unit)) ? revertRow(i) : i));
-    // 第 4 批 B4-6:来自组件的行换了单位 → 按新单位重算快照(kg 行 = g 价 × 1000;对不上就清空)
+    // 第 5 批 2.4(S1):行变换抽成模块级 commitIngUnit —— 比的是克重系数(ingGramFactor,以前比 isGramUnit):
+    // 改成重量单位删 unitGrams;系数变了:改过价的撤销改价、没改过价的关联有价行按新系数重写快照;来自组件的行按新单位刷快照(第 4 批原有)
     setIngs(prev => {
-      const r = prev.find(i => i._id === id);
-      if (!r || r.noCost || from === (r.unit || "") || !ingLiveComp(r, materials)) return prev;   // 老行 / 单位没变:原样,不多一次渲染
-      const snap = componentRowSnapshot(r, materials);
-      return prev.map(i => i === r ? { ...i, ...snap, _originalPrice: snap.unitPrice } : i);
+      let ch = false;
+      const next = prev.map(i => { if (i._id !== id) return i; const n = commitIngUnit(i, from, materials); if (n !== i) ch = true; return n; });
+      return ch ? next : prev;   // 什么都不用改:原样,不多一次渲染
     });
   };
 
@@ -8409,8 +8517,11 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                 }));
               };
               const { material: linkedMat, brand: linkedMatBrand } = resolveIngMaterial(ing, materials, brands);
-              // C10:关联了材料(材料都按克计价)但单位不是 g / ml / 空 → 成本 = 用量 × 每克价,按「本」写的行只算出几分之一
-              const unitMismatch = !!linkedMat && !isGramUnit(ing.unit);
+              // C10:关联了材料(材料都按克计价)但单位换不成克 → 成本 = 用量 × 每克价,按「本」写的行只算出几分之一
+              // 第 5 批 2.4(S1,R31):比的是克重系数 —— kg / L 行(×1000)、填了克重的计件行(「⚖」面板)不再黄;换算过的行框里是每本价、口径「¥/本」
+              const gf = linkedMat ? ingGramFactor(ing, linkedMat) : null;
+              const unitMismatch = !!linkedMat && gf === 0;
+              const unitConverted = !!linkedMat && ingWeightFactor(ing.unit) === 0 && gf > 0;
               // 单价按每 100g 还是每单位填。审查第 7 轮:按「本」的关联行,材料有价时框里是打开时刷新来的每克价,口径写「/g」(以前写「¥/本」,1.29 像一根香草荚的价);材料没价时算的是手填价,仍写「/本」
               const basis = unitMismatch && getMaterialEffectivePrice(linkedMat) > 0 ? { per100: false, label: "g" } : ingPriceBasis(ing.unit);
               // ¥ / 円 切换按钮只给手写价的行。C7:判断「找不到关联材料」而不是「没有 materialId」——
@@ -8454,7 +8565,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : unitConverted ? tx.unitConverted(String(ing.unit).trim(), String(gf)) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
                       // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
@@ -8546,16 +8657,161 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
           {brandSuggestions.map(n => <option key={n} value={n} />)}
         </datalist>
       </div>
+      {/* 第 5 批 2.4(S1,R33):「⚖ 按个写的原料 · 每个约几克」—— 没有候选行时不渲染任何节点(其余编辑页 DOM 不变) */}
+      <UnitGramsPanel ings={ings} setIngs={setIngs} materials={materials} lang={lang} canSaveToMat={typeof onSaveMaterialPiece === "function"} />
     </>
   );
 }
 
+// ─── 第 5 批 2.4(S1,R33):「⚖ 按个写的原料 · 每个约几克」面板 ─────────────────
+// 候选 = 关联了还在的材料、单位是计件(本 / 個 / 枚…)、不是不计价的行;按「材料 + 计件单位」分组,每组一个克重框(写进组里每一行的 unitGrams,原文不整理)。
+// 改了克重:组里每一行按 commitIngUnit 第 2 步同一套比系数、刷价(改过价的撤销改价,没改过的按新系数重写快照)。
+// 「同时存进材料百科」:编辑页能写材料(canSaveToMat)、材料还没有克重、是这一页里这条材料的第一组才出现;勾选状态 = 组里有一行 _pieceToMat === true。
+// 她把这一组改成非空时,组里没有 _pieceToMat 键的行写 true(默认勾上;取消过的 false 不动);打开时就带着 unitGrams、她没动过的组不自动勾(打开不改就保存不写材料)
+const UGP_TXT = {
+  zh: {
+    title: "⚖ 按个写的原料 · 每个约几克",
+    hint: "这几行关联了材料百科(按克计价),用量却按「個 / 本」写。填上 1 个约几克,成本就按克算;不填的话 1 个按 1 g 算,会少算很多。",
+    fromMat: "(材料百科)",
+    fromSpec: (spec, g) => `按规格「${spec}」估 ${g} g · 用这个`,
+    matOtherUnit: (mu, g, u) => `材料百科写的是 1 ${mu} ≈ ${g} g(单位不同,这一行按「${u}」写)`,
+    noPrice: "材料没价,这里只影响配料表排序和采购克数",
+    check: (mat, u, g) => `同时存进材料百科「${mat}」:全店按「${u}」用它的地方都按 ${g ? g + " g" : "这里填的克重"} 算`,
+    useMat: (g) => `↺ 用材料百科的 ${g} g`,
+    otherGroup: "同一个材料只能存一个克重,另一组留在这一行上",
+    cost: "成本",
+  },
+  ja: {
+    title: "⚖ 個数単位の材料 · 1 個あたりの g",
+    hint: "材料事典(g 単価)と連動していますが、分量が「個・本」です。1 個あたりの g を入れると g で原価計算します。未入力だと 1 個 = 1 g として計算され、原価が大幅に少なくなります。",
+    fromMat: "(材料事典)",
+    fromSpec: (spec, g) => `規格「${spec}」から約 ${g} g · これを使う`,
+    matOtherUnit: (mu, g, u) => `事典は 1${mu} ≈ ${g} g(単位が異なります。この行は「${u}」)`,
+    noPrice: "材料の価格なし(原材料表の並びと仕入量のみに影響)",
+    check: (mat, u, g) => `材料事典「${mat}」にも保存:「${u}」で使うすべての箇所に反映`,
+    useMat: (g) => `↺ 事典の ${g} g に戻す`,
+    otherGroup: "同じ材料に保存できる g は 1 つだけ。もう一方はこの行に残ります",
+    cost: "原価",
+  },
+};
+// 组里每一行套一个变换 fn(row) → 新行,再按「改之前 / 改之后」的克重系数刷价(R30 第 2 步)
+const _ugpApply = (prev, ids, materials, fn) => prev.map(r => {
+  if (!ids.has(r._id)) return r;
+  const m = _findMatNullOk(materials, r.materialId);
+  let n = fn(r);
+  if (n === r) return r;
+  const fB = ingGramFactor(r, m), fA = ingGramFactor(n, m);
+  if (fB !== fA) {
+    if (n._priceModified) n = revertIngRow(n, materials);
+    else if (!n.noCost && m) {
+      const snap = linkedRowSnapshotPrice(n, m);
+      if (snap !== "") { const q = parseFloat(n.qty) || 0; n = { ...n, unitPrice: snap, currency: "CNY", _originalPrice: snap, cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : n.cost }; }
+    }
+  }
+  return n;
+});
+function UnitGramsPanel({ ings, setIngs, materials, lang, canSaveToMat }) {
+  const groups = pieceGroupsOf(ings, materials);
+  if (!groups.length) return null;
+  const zh = lang === "zh";
+  const X = UGP_TXT[zh ? "zh" : "ja"];
+  const firstGroupOfMat = new Map();
+  groups.forEach(g => { const k = String(g.materialId); if (!firstGroupOfMat.has(k)) firstGroupOfMat.set(k, g.key); });
+  const validG = (t) => { const n = parseFloat(t); return isFinite(n) && n > 0; };
+  return (
+    <div data-unit-grams="panel" style={{ marginTop: T.sp.l, padding: "12px 14px", border: `0.5px solid ${T.warning}`, borderRadius: T.radiusSm, background: "#FFFBEB", minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginBottom: 4 }}>{X.title}</div>
+      <div style={{ fontSize: 11, color: T.textSecondary, lineHeight: 1.6, marginBottom: 8, overflowWrap: "anywhere" }}>{X.hint}</div>
+      {groups.map(g => {
+        const m = _findMatNullOk(materials, g.materialId);
+        const ids = new Set(g.rows.map(r => r._id));
+        const u = _normTxt(g.rows[0].unit);
+        const own = g.rows.find(r => Object.prototype.hasOwnProperty.call(r, "unitGrams"));
+        const val = own ? String(own.unitGrams) : "";
+        const matG = _matHasGrams(m) ? String(m.gramsPerPiece) : "";
+        const matUnitOk = !!matG && ingPieceGrams({ unit: g.rows[0].unit }, m) > 0;
+        const h = !matG ? packPieceHint(m && m.packSize) : null;
+        const hOk = !!h && _normCountUnit(h.unit) === g.unitKey;
+        const isFirst = firstGroupOfMat.get(String(g.materialId)) === g.key;
+        const showCheck = canSaveToMat && !matG && isFirst;
+        const checked = g.rows.some(r => r._pieceToMat === true);
+        const hasPrice = getMaterialEffectivePrice(m) > 0;
+        const cand = validG(val) ? val : matUnitOk ? matG : hOk ? String(h.gpp) : "";
+        const setVal = (t) => setIngs(prev => _ugpApply(prev, ids, materials, (r) => {
+          if (String(t).trim() === "") {
+            if (!Object.prototype.hasOwnProperty.call(r, "unitGrams") && !Object.prototype.hasOwnProperty.call(r, "_pieceToMat")) return r;
+            const { unitGrams: _ug, _pieceToMat: _pm, ...rest } = r;
+            return rest;
+          }
+          const n = { ...r, unitGrams: t };
+          if (showCheck && !Object.prototype.hasOwnProperty.call(r, "_pieceToMat")) n._pieceToMat = true;
+          return n;
+        }));
+        const useMat = () => setIngs(prev => _ugpApply(prev, ids, materials, (r) => {
+          if (!Object.prototype.hasOwnProperty.call(r, "unitGrams") && !Object.prototype.hasOwnProperty.call(r, "_pieceToMat")) return r;
+          const { unitGrams: _ug, _pieceToMat: _pm, ...rest } = r;
+          return rest;
+        }));
+        const setCheck = (on) => setIngs(prev => prev.map(r => ids.has(r._id) ? { ...r, _pieceToMat: !!on } : r));
+        const matName = m ? ((zh ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) || m.nameFr || "") : "";
+        return (
+          <div key={g.key} data-unit-grams="group" style={{ borderTop: `0.5px solid ${T.borderSoft}`, paddingTop: 8, marginTop: 8, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 12, color: T.textPrimary }}>
+              <span style={{ overflowWrap: "anywhere", minWidth: 0 }}>{matName}</span>
+              <span style={{ color: T.textSecondary, whiteSpace: "nowrap" }}>1 {u} ≈</span>
+              <input type="text" inputMode="decimal" data-unit-grams="input" value={val}
+                placeholder={matUnitOk ? `${matG}${X.fromMat}` : ""}
+                onChange={e => setVal(e.target.value)}
+                style={{ width: matUnitOk ? 120 : 64, padding: "4px 6px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: 4, background: T.bgCard, color: T.textPrimary, maxWidth: "100%" }} />
+              <span style={{ color: T.textSecondary }}>g</span>
+              {matUnitOk && own && (
+                <button type="button" data-unit-grams="usemat" onClick={useMat}
+                  style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: "transparent", border: `0.5px solid ${T.border}`, color: T.textSecondary }}>{X.useMat(matG)}</button>
+              )}
+              {!matG && hOk && !validG(val) && (
+                <button type="button" data-unit-grams="spec" onClick={() => setVal(String(h.gpp))}
+                  style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: "transparent", border: `0.5px solid ${T.info}`, color: T.info, whiteSpace: "normal", textAlign: "left" }}>{X.fromSpec(_normTxt(m && m.packSize), String(h.gpp))}</button>
+              )}
+            </div>
+            {matG && !matUnitOk && (
+              <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4, overflowWrap: "anywhere" }}>{X.matOtherUnit(_normTxt(m.pieceUnit), matG, u)}</div>
+            )}
+            {showCheck && (
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 11, color: T.textSecondary, marginTop: 6, cursor: "pointer" }}>
+                <input type="checkbox" data-unit-grams="tomat" checked={checked} onChange={e => setCheck(e.target.checked)} style={{ marginTop: 2 }} />
+                <span style={{ overflowWrap: "anywhere" }}>{X.check(matName, u, validG(val) ? String(parseFloat(val)) : "")}</span>
+              </label>
+            )}
+            {canSaveToMat && !matG && !isFirst && (
+              <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{X.otherGroup}</div>
+            )}
+            {!hasPrice && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{X.noPrice}</div>}
+            {hasPrice && g.rows.map(r => {
+              const { unitGrams: _ug, ...noUg } = r;
+              const a = fmtCost(getIngLiveCost(noUg, materials, [], [])) || "¥0";
+              const b = cand ? (fmtCost(getIngLiveCost({ ...r, unitGrams: cand }, materials, [], [])) || "¥0") : "—";
+              return (
+                <div key={r._id} style={{ fontSize: 11, color: T.textSecondary, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
+                  <span style={{ overflowWrap: "anywhere", minWidth: 0 }}>{pickLang(r, "name", lang)} · {_normTxt(r.qty)} {_normTxt(r.unit)}</span>
+                  <span style={{ whiteSpace: "nowrap", ...T.num }}>{X.cost} {a} → {b}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // 🔗 选材料 / 🤖 批量关联:把一条材料百科写进配料行(两个弹窗、三个编辑页共用同一个写法)
+// 第 5 批 2.4(S1,R29):写进去的单价按这一行的单位(linkedRowSnapshotPrice:每克价 × 克重系数;g 行 / 换不了的行和以前一样是每克价)。
+// ingPieceGrams 不看 materialId,所以拿关联之前的行 i 和 mat 直接算就对
 function linkMaterialToIng(i, mat, brands, lang) {
   const b = brands.find(x => x.id === mat.brandId);
-  const pp = getMaterialEffectivePrice(mat);
+  const snap = linkedRowSnapshotPrice(i, mat);
   const q = parseFloat(i.qty) || 0;
-  const ok = !isNaN(pp) && pp > 0;
+  const ok = snap !== "";
   // C6:换了材料 = 价格重新从百科来,之前的改价标记作废,↺ 的原价也换成这次写进去的价(以前配方页选完材料一直是黄的)
   // 第 4 批 B4-6:关联材料 = 不再「来自组件」(两个关联互斥,componentId 删键);
   // 不计价的行只挂上关联(过敏原要用),单价 / 成本不写回去(critic M4:写了旧版 App 会按刷回来的价算钱)
@@ -8575,12 +8831,12 @@ function linkMaterialToIng(i, mat, brands, lang) {
     nameJa: i.nameJa || mat.nameJa || "",
     nameFr: i.nameFr || mat.nameFr || "",
     brand: b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : i.brand,
-    unitPrice: !isNaN(pp) && pp > 0 ? String(pp) : i.unitPrice,
-    // v17: pp 是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
+    unitPrice: ok ? snap : i.unitPrice,
+    // v17: 这个价是 getMaterialEffectivePrice 出口折算后的人民币,写进 unitPrice 必须标 CNY,
     // 否则缺省当日元、算成本时再乘一次汇率,成本会被压低 23 倍
-    currency: (!isNaN(pp) && pp > 0) ? "CNY" : i.currency,
-    cost: (!isNaN(pp) && pp > 0 && q > 0) ? (q * pp).toFixed(1) : i.cost,
-    _originalPrice: (ok ? String(pp) : i.unitPrice) || "",
+    currency: ok ? "CNY" : i.currency,
+    cost: (ok && q > 0) ? (q * parseFloat(snap)).toFixed(1) : i.cost,
+    _originalPrice: (ok ? snap : i.unitPrice) || "",
   };
 }
 
@@ -8634,9 +8890,15 @@ const ingHasName = (i) => !!i && !!(String(i.nameZh == null ? "" : i.nameZh).tri
 // rows 是保存时刷新过的行;返回 { n: 写了几条, undo }。
 // 审查第 2 轮:默认勾着会直接盖掉本店原料原来的进货价,所以给撤销(2a §09「先做 + 给撤销」):
 // 改掉的条目记下原样、新建的记下 id;撤销时只动「还是这次写的那个价」的条目,之后她又改过的不碰
-function saveIngPricesToShop(rows, setShopMaterials) {
-  // 只存按克计量的行:本店原料 pricePerG 是每克价,「本 / 個 / kg」行填的是每单位价,存进去会把每克价放大几十上千倍(审查第 1 轮)
-  const toUpsert = rows.filter(i => i._priceModified && i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0);
+// 第 5 批 2.4(S1,R32):多第三个参数 materials(三个调用点都传编辑页的 materials)。这一行的单价是「每这一行单位」的价,
+// 按克重系数折回每克价再存:g 行(系数 1)写出的字符串和以前逐字节一样;kg / L 行 ÷ 1000(以前不存);按个写、填了克重的行 ÷ 克重;
+// 按个写、没填克重的行照旧不存。材料已删时系数按单位算(ingWeightFactor,不看行上的 unitGrams;保存流程里 refreshIngForSave 先把这种行解除了关联,走不到)
+function saveIngPricesToShop(rows, setShopMaterials, materials) {
+  const factorOf = (i) => { const m = Array.isArray(materials) ? materials.find(x => x && x.id === i.materialId) : null;
+    return m ? ingGramFactor(i, m) : ingWeightFactor(i.unit); };
+  const priceOf = (i) => { const f = factorOf(i), p = parseFloat(i.unitPrice); return f === 1 ? String(p) : String(Number((p / f).toPrecision(12))); };
+  // 只存能折成每克价的行:本店原料 pricePerG 是每克价,「本 / 個」行没填克重时填的是每单位价,存进去会把每克价放大几十上千倍(审查第 1 轮)
+  const toUpsert = rows.filter(i => i._priceModified && i.materialId && factorOf(i) > 0 && parseFloat(i.unitPrice) > 0);
   if (toUpsert.length === 0 || typeof setShopMaterials !== "function") return { n: 0, undo: null };
   // 新 id 和时间在 updater 外面定好:开发模式 StrictMode 会把 updater 跑两遍,两遍结果要一样
   const now = new Date().toISOString();
@@ -8650,7 +8912,7 @@ function saveIngPricesToShop(rows, setShopMaterials) {
       if (idx >= 0) {
         const old = next[idx];
         if (!addedIds.has(old.id) && !(old.id in prevById)) prevById[old.id] = old;   // 同一材料两行时只记最早的原样
-        next[idx] = { ...old, pricePerG: String(parseFloat(ing.unitPrice)), currency: curOf(ing), updatedAt: now };   // v17: 币种跟手写价走;修改时间给合并导入用
+        next[idx] = { ...old, pricePerG: priceOf(ing), currency: curOf(ing), updatedAt: now };   // v17: 币种跟手写价走;修改时间给合并导入用
         // 第 4 批 B4-3:生效价变了才记一条(同价只刷修改时间,不记);撤销整条换回 prevById 里的原对象,这条记录跟着没了
         // 同一材料两行时拿这次保存之前的原样比(这一批新建的算新建),只记最后写进去的价
         const ph = withPriceHistory(addedIds.has(old.id) ? null : prevById[old.id], next[idx], "shop", "page", now);
@@ -8660,7 +8922,7 @@ function saveIngPricesToShop(rows, setShopMaterials) {
         const sm = {
           id: newId,
           materialId: ing.materialId,
-          pricePerG: String(parseFloat(ing.unitPrice)),
+          pricePerG: priceOf(ing),
           currency: curOf(ing),   // v17
           updatedAt: now,
         };
@@ -8688,10 +8950,11 @@ function refreshIngForSave(i, materials) {
   const m = (materials || []).find(x => x.id === i.materialId);
   if (!m) { const { _priceModified, ...rest } = i; const r = { ...rest, materialId: null }; return (!r.noCost && ingLiveComp(r, materials)) ? { ...r, ...componentRowSnapshot(r, materials) } : r; }
   if (i._priceModified || i.noCost) return i;
-  const pp = getMaterialEffectivePrice(m);
-  if (isNaN(pp) || pp <= 0) return i;
+  // 第 5 批 2.4(S1,R28):按这一行的单位写快照(linkedRowSnapshotPrice;系数 0 / 1 时和以前的 String(pp) 逐字节一样)
+  const snap = linkedRowSnapshotPrice(i, m);
+  if (snap === "") return i;
   const q = parseFloat(i.qty) || 0;
-  return { ...i, unitPrice: String(pp), currency: "CNY", cost: q > 0 ? (q * pp).toFixed(1) : i.cost };
+  return { ...i, unitPrice: snap, currency: "CNY", cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : i.cost };
 }
 // 第 4 批 B4-6:三个编辑页打开时每一行先过这里 —— 不计价的行不按材料刷价(原样);来自组件的行刷一份人民币快照
 // (编辑页合计读 i.cost)。其余返回 null,照各页原来的写法按材料百科刷新。2b「打开时不整理没关联的行」的例外只有来自组件这一种,
@@ -8709,13 +8972,15 @@ function refreshOpenRow(linked, idx, materials) {
   { const ov = ingOpenOverride(linked, idx, materials); if (ov) return ov; }   // 第 4 批 B4-6:不计价 / 来自组件
   // 🔗 如果有 materialId 关联材料百科,自动用最新价刷新
   // v11: 同时记录 _originalPrice 快照,给"改价->保存到本店"UX 判定 dirty 用
+  // 第 5 批 2.4(S1,R27):关联行的单价按这一行的单位刷(每克价 × 克重系数;g 行 / 换不了的行和以前一样)。
+  // 不看 _priceModified(存盘数据里没有这个临时键;E4 的 reopenIngRow 自己把改过价的行挑出去)
   if (linked.materialId && Array.isArray(materials)) {
     const m = materials.find(x => x.id === linked.materialId);
     if (m) {
-      const pp = getMaterialEffectivePrice(m);
-      if (!isNaN(pp) && pp > 0) {
+      const snap = linkedRowSnapshotPrice(linked, m);
+      if (snap !== "") {
         const q = parseFloat(linked.qty) || 0;
-        return { ...linked, _id: idx, unitPrice: String(pp), currency: "CNY", _originalPrice: String(pp), cost: q > 0 ? (q * pp).toFixed(1) : linked.cost };  // v17: pp 已折成人民币;不标 CNY,「保存到本店原料」会把人民币数当日元存进去
+        return { ...linked, _id: idx, unitPrice: snap, currency: "CNY", _originalPrice: snap, cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : linked.cost };  // v17: 已折成人民币;不标 CNY,「保存到本店原料」会把人民币数当日元存进去
       }
     }
   }
@@ -8723,26 +8988,150 @@ function refreshOpenRow(linked, idx, materials) {
 }
 const openIngRow = (i, idx, cats, materials) => refreshOpenRow(autoLinkIng(i, cats), idx, materials);
 
-// 第 5 批第 0 步(裁决 7):三个编辑页汇总条的合计抽成这几个,**里面照旧算法**(每行存下的成本快照 cost 按币种折人民币再加,不计价的行不算);
-// S1 只改这几个函数(改成每行「用量 × 单价」现算,10 元以下走 fmtCost),编辑页正文不用再动。存下来的 totalCost 快照不走这里
-const editorRowCostCNY = (i) => (i.noCost ? 0 : toCNY(i.cost, curOf(i)));   // v17: 各按各的币种折成人民币;审查 b4r1:不计价的行不算
+// 第 5 批 2.4(S1,R30):配料表「↺ 撤销改价」(IngredientTable.revertRow 抽出来的纯函数)。
+// 材料还在、有价 → 按这一行的单位现算(linkedRowSnapshotPrice),unitPrice 和 _originalPrice 一起写(M6:克重系数变了以后两个一起变,
+// 她再填材料自己的每本价也不算「改过价」);材料没价 / 已删 → 照以前退回 _originalPrice
+function revertIngRow(i, materials) {
+  const q = parseFloat(i.qty) || 0;
+  const m = i.materialId ? (materials || []).find(x => x && x.id === i.materialId) : null;
+  const { _priceModified, ...rest } = i;
+  const snap = m ? linkedRowSnapshotPrice(i, m) : "";
+  if (snap !== "") return { ...rest, unitPrice: snap, currency: "CNY", cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : i.cost, _originalPrice: snap };
+  const op = parseFloat(i._originalPrice) || 0;
+  return { ...rest, unitPrice: i._originalPrice || "", ...(m && getMaterialEffectivePrice(m) > 0 ? { currency: "CNY" } : {}), cost: q > 0 && op > 0 ? (q * op).toFixed(1) : i.cost };
+}
+// 第 5 批 2.4(S1,R30):离开单位框时的行变换(IngredientTable.commitUnit 用)。row 已经是新单位,from = 点进单位框那一刻的 unit || "";
+// from === undefined → 原样。① 新单位是重量单位、行上有 unitGrams → 删掉这个键;② 克重系数(改之前 / 之后)变了:改过价的行撤销改价,
+// 没改过价的关联有价行按新系数重写快照;③ 来自组件的行换了单位 → 按新单位刷组件快照(第 4 批原有)。计件单位之间换(本 → 根)不删 unitGrams
+function commitIngUnit(row, from, materials) {
+  if (from === undefined) return row;
+  const m = row.materialId ? (materials || []).find(x => x && x.id === row.materialId) : null;
+  let r = row;
+  if (ingWeightFactor(r.unit) > 0 && Object.prototype.hasOwnProperty.call(r, "unitGrams")) { const { unitGrams: _ug, ...rest } = r; r = rest; }
+  const fB = ingGramFactor({ ...row, unit: from }, m), fA = ingGramFactor(r, m);
+  if (fB !== fA) {
+    if (r._priceModified) r = revertIngRow(r, materials);
+    else if (!r.noCost && m) {
+      const snap = linkedRowSnapshotPrice(r, m);
+      if (snap !== "") { const q = parseFloat(r.qty) || 0; r = { ...r, unitPrice: snap, currency: "CNY", _originalPrice: snap, cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : r.cost }; }
+    }
+  }
+  if (!r.noCost && from !== (r.unit || "") && ingLiveComp(r, materials)) { const s = componentRowSnapshot(r, materials); r = { ...r, ...s, _originalPrice: s.unitPrice }; }
+  return r;
+}
+
+// 第 5 批 2.4(S1,R38,钱 1):三个编辑页汇总条的合计。每行按「用量 × 单价」现算(和列表 / 详情的实时成本同一个口径),
+// 不再把每行已经舍到 0.1 元的成本快照加起来(费南雪编辑页 86.0%、列表 85.9% 就是这么来的);用量 0 / 单价 0 的行退回成本快照,不计价的行不算。
+// 只改显示:存下来的 totalCost / unitCost / margin 快照照旧(review_b4r1 R4 靠它),每行的 cost 格也照旧是快照(各行加起来可以和合计差几分钱,有意的)。
+// 10 元以下走 fmtCost(不显示成「¥0」「¥1」)。(第 0 步的旧算法:noCost ? 0 : toCNY(cost, curOf) 加总,`¥${n.toFixed(0)}`)
+const editorRowCostCNY = (i) => {
+  if (!i || i.noCost) return 0;
+  const q = parseFloat(i.qty) || 0, p = toCNY(i.unitPrice, curOf(i));
+  return (q > 0 && p > 0) ? q * p : toCNY(i.cost, curOf(i));
+};
 const editorIngsTotal = (ings) => (ings || []).reduce((s, i) => s + editorRowCostCNY(i), 0);
-const fmtEditorTotal = (n) => `¥${n.toFixed(0)}`;
+const fmtEditorTotal = (n) => (n > 0 && n < 10) ? fmtCost(n) : `¥${n.toFixed(0)}`;
 // 组件编辑页「总成本」那一格以前写的是 ¥{n.toFixed(0)}:「¥」和数字是两个文字节点(编辑页快照按文字节点比)。
 // 把 fmtEditorTotal 的结果照样拆成两段交给 React(数组里的字符串不用 key);不是「¥数字」开头的(S1 以后的「<¥0.01」)原样
 const _editorTotalNodes = (s) => (typeof s === "string" && /^¥\d/.test(s)) ? ["¥", s.slice(1)] : s;
 
-// 第 5 批 2.4(S1):保存时把勾了「同时存进材料百科」的计件行的克重拆出来写材料(同一个材料最多一条),这些行去掉 unitGrams。
-// 第 0 步空壳:rows 原样(同一个数组),writes 空;writeMaterialPieces 不写(只写克重三个键、不写 updatedAt,返回撤销)
-const pieceRowsForSave = (rows, materials) => ({ rows, writes: [] });
-const writeMaterialPieces = (setMaterials, writes, nowIso) => ({ n: 0, undo: null });
+// 第 5 批 2.4(S1,R33 / R34 / R35):「⚖ 按个写的原料」面板的候选和分组 + 保存时把勾了「同时存进材料百科」的克重拆出来写材料。
+// 候选行 = 不是不计价、关联了还在的材料(容忍 null 的 find)、计件单位(ingWeightFactor 0);按「材料 id + 计件单位(_normCountUnit)」分组,按第一次出现的顺序
+const _findMatNullOk = (materials, id) => Array.isArray(materials) ? materials.find(x => x && x.id === id) : undefined;
+const _pieceCandidate = (r, materials) => !!(r && !r.noCost && r.materialId && _findMatNullOk(materials, r.materialId) && ingWeightFactor(r.unit) === 0);
+const _matHasGrams = (m) => { const g = parseFloat(m && m.gramsPerPiece); return isFinite(g) && g > 0; };   // 材料「有克重」(和 pieceUnit 无关)
+const pieceGroupsOf = (rows, materials) => {
+  const groups = [], byKey = new Map();
+  (rows || []).forEach(r => {
+    if (!_pieceCandidate(r, materials)) return;
+    const key = String(r.materialId) + "\u0001" + _normCountUnit(r.unit);
+    if (!byKey.has(key)) { const g = { key, materialId: r.materialId, unitKey: _normCountUnit(r.unit), rows: [] }; byKey.set(key, g); groups.push(g); }
+    byKey.get(key).rows.push(r);
+  });
+  return groups;
+};
+// 保存时:每条材料只看它在这一页的第一组 —— 材料没有克重,组里有一行「勾着、克重有效」(同一行两条都成立)→ 一条 write
+// { materialId, grams: String(parseFloat(那一行的 unitGrams)), unit: 组里第一行的单位原文 }。所以每个材料最多一条。
+// writes 空 → 原数组;否则单位和 write 一样的候选行去掉 unitGrams(之后跟着材料百科走,系数还是同一个数,快照不用变),别的行原对象返回。
+// _pieceToMat 不在这里去(保存时和别的临时键一起去)
+const pieceRowsForSave = (rows, materials) => {
+  const seenMat = new Set(), writes = [];
+  pieceGroupsOf(rows, materials).forEach(g => {
+    const mk = String(g.materialId);
+    if (seenMat.has(mk)) return;
+    seenMat.add(mk);
+    if (_matHasGrams(_findMatNullOk(materials, g.materialId))) return;
+    const row = g.rows.find(r => r._pieceToMat === true && isFinite(parseFloat(r.unitGrams)) && parseFloat(r.unitGrams) > 0);
+    if (!row) return;
+    writes.push({ materialId: g.materialId, grams: String(parseFloat(row.unitGrams)), unit: _normTxt(g.rows[0].unit) });
+  });
+  if (!writes.length) return { rows, writes: [] };
+  const out = rows.map(r => {
+    if (!_pieceCandidate(r, materials) || !Object.prototype.hasOwnProperty.call(r, "unitGrams")) return r;
+    const w = writes.find(x => x.materialId === r.materialId);
+    if (!w || _normCountUnit(r.unit) !== _normCountUnit(w.unit)) return r;
+    const { unitGrams: _ug, ...rest } = r;
+    return rest;
+  });
+  return { rows: out, writes };
+};
+// 写材料的克重三个键 gramsPerPiece / pieceUnit / pieceAt(所有 id 相同的材料都写),**不写 updatedAt、不动别的键**
+// (updatedAt 决定合并导入时价格那组取哪一边;标个克重不该让这台的旧价盖掉另一台的新价)。返回 { n, undo };
+// 撤销只还原「这三个键仍然是这次写的值」的材料(原来有的放回原值、原来没有的删键),之后又被改过的不动;不回写配方 / 组件的行。
+// 原值按 id 只记一份(该 id 第一条材料的;同 saveIngPricesToShop 的 prevById 写法);writes 里同一个 materialId 只用第一条
+const PIECE_KEYS = ["gramsPerPiece", "pieceUnit", "pieceAt"];
+const writeMaterialPieces = (setMaterials, writes, nowIso) => {
+  if (!writes || !writes.length || typeof setMaterials !== "function") return { n: 0, undo: null };
+  const wById = new Map();
+  writes.forEach(w => { if (w && !wById.has(w.materialId)) wById.set(w.materialId, w); });
+  let orig = new Map();
+  setMaterials(prev => {
+    orig = new Map();   // updater 可能跑两遍(StrictMode),每遍从头记
+    return (prev || []).map(x => {
+      const w = x ? wById.get(x.id) : undefined;
+      if (!w) return x;
+      if (!orig.has(x.id)) orig.set(x.id, Object.fromEntries(PIECE_KEYS.map(k => [k, Object.prototype.hasOwnProperty.call(x, k) ? { has: true, v: x[k] } : { has: false }])));
+      return { ...x, gramsPerPiece: w.grams, pieceUnit: w.unit, pieceAt: nowIso };
+    });
+  });
+  const undo = () => setMaterials(prev => (prev || []).map(x => {
+    const w = x ? wById.get(x.id) : undefined;
+    if (!w || !orig.has(x.id)) return x;
+    if (!(x.gramsPerPiece === w.grams && x.pieceUnit === w.unit && x.pieceAt === nowIso)) return x;
+    const o = orig.get(x.id), next = { ...x };
+    PIECE_KEYS.forEach(k => { if (o[k].has) next[k] = o[k].v; else delete next[k]; });
+    return next;
+  }));
+  return { n: writes.length, undo };
+};
+// 编辑页保存时写材料克重 + 每条 write 一个 toast(带撤销)。layerPage = 组合产品的部分编辑页(多一句「立即生效」)
+const savePieceWrites = (writes, rows, materials, setMaterials, showToast, lang, layerPage) => {
+  if (!writes || !writes.length || typeof setMaterials !== "function") return;
+  const now = new Date().toISOString();
+  const zh = lang === "zh";
+  writes.forEach(w => {
+    const { undo } = writeMaterialPieces(setMaterials, [w], now);
+    if (typeof showToast !== "function") return;
+    const mat = _findMatNullOk(materials, w.materialId);
+    const matName = mat ? ((zh ? (mat.nameZh || mat.nameJa) : (mat.nameJa || mat.nameZh)) || mat.nameFr || "") : "";
+    const row = (rows || []).find(r => r && r.materialId === w.materialId && _normCountUnit(r.unit) === _normCountUnit(w.unit));
+    const nm = row ? pickLang(row, "name", lang) : "";
+    showToast(zh
+      ? `✓ 材料百科记上了「${matName}」1 ${w.unit} ≈ ${w.grams} g${layerPage ? "(立即生效,组合产品不保存也会保留)" : ""} · 撤销后材料百科去掉这个克重;刚才这一条里的「${nm}」也回到没填克重(会重新显示单位不符)`
+      : `✓ 材料事典「${matName}」に 1${w.unit} ≈ ${w.grams} g を保存${layerPage ? "(すぐ反映・組み合わせを保存しなくても残ります)" : ""} · 取り消すと事典の g も消え、この項目の「${nm}」も未入力に戻ります`, { undo });
+  });
+};
 
 // C6:改了「关联材料百科」的行的单价 → 提示条 + 「同时保存到本店原料」(默认勾上)。三个编辑页共用
-function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
+// 第 5 批 2.4(S1,R32):多收 materials,「能不能存」和 saveIngPricesToShop 同一个克重系数(factorOf);
+// 按个写、填了克重的行各多一行「按 1 本 ≈ 2.2 g 折成每克价存进本店原料」(没有这种行时 DOM 不变)
+function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang, materials }) {
   const mod = ings.filter(i => i._priceModified);
   if (mod.length === 0) return null;
-  const ok = mod.filter(i => i.materialId && isGramUnit(i.unit) && parseFloat(i.unitPrice) > 0).length;   // 和 saveIngPricesToShop 同一条件
-  const nonGram = mod.some(i => i.materialId && !isGramUnit(i.unit));
+  const factorOf = (i) => { const m = Array.isArray(materials) ? materials.find(x => x && x.id === i.materialId) : null; return m ? ingGramFactor(i, m) : ingWeightFactor(i.unit); };
+  const ok = mod.filter(i => i.materialId && factorOf(i) > 0 && parseFloat(i.unitPrice) > 0).length;   // 和 saveIngPricesToShop 同一条件
+  const nonGram = mod.some(i => i.materialId && factorOf(i) === 0);
+  const pieceRows = mod.filter(i => i.materialId && ingWeightFactor(i.unit) === 0 && factorOf(i) > 0);
   const zh = lang === "zh";
   // 09-29 浏览器实测补:这种行改的价不光存不进本店原料,材料百科有价时成本也不按它算(getIngUnitPrice 关联行取材料的价),以前只说了前半句
   const nonGramText = zh ? "按「本 / 個」这类单位计量的行,改的单价不会存到本店原料;材料百科有价时,成本也还是按材料的每克价算(单位对不上,见单位格的黄框)。要按每本 / 每个算,点行首 🔗「取消关联」,再填每本的价。" : "本・個などの単位の行は、変更した単価が仕入れ原料に保存されません。材料事典に価格がある場合、原価も材料のグラム単価で計算されます。1本・1個あたりで計算するには、行頭の 🔗 で連動を解除してから単価を入力してください。";
@@ -8762,6 +9151,14 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang }) {
       {ok > 0 && nonGram && (
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>{nonGramText}</div>
       )}
+      {pieceRows.map((i, k) => {
+        const u = _normTxt(i.unit), g = String(factorOf(i)), nm = pickLang(i, "name", lang);
+        return (
+          <div key={"pc" + k} data-unit-grams="banner" style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
+            {zh ? `按个写的「${nm}」按 1 ${u} ≈ ${g} g 折成每克价存进本店原料(克重是估的,存进去的每克价也是估的)` : `「${nm}」は 1${u} ≈ ${g} g で g 単価に換算して保存します(g は目安のため単価も目安)`}
+          </div>
+        );
+      })}
       {/* 只在「能存、但她取消了勾」时说;本来就存不了(本 / 個 行、单价 0)时上面已经说了原因 */}
       {ok > 0 && !saveToShop && (
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5, marginTop: 6 }}>
@@ -8883,7 +9280,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   // 第 5 批 E4 本机草稿(第 0 步空壳:banner 是 null,markSaved / discard 不做事)
   const draft = useEditorDraft(dirtyBind, { kind: "component", id: (component && component.id) ? component.id : null, base: (component && component.id) ? component : null, lang });
 
-  const totalCost = editorIngsTotal(ings);  // 第 5 批第 0 步:合计抽成 editorIngsTotal(旧算法:各行成本快照按币种折人民币再加,不计价的不算)
+  const totalCost = editorIngsTotal(ings);  // 第 5 批:合计走 editorIngsTotal(S1 起每行「用量 × 单价」现算,和详情页的实时成本一样)
+  // 第 5 批 2.4(S1,R36):保存时把勾了「同时存进材料百科」的克重写进材料(每条一个 toast,带撤销)。没有 setMaterials(单独挂的测试)→ 不给这个出口,面板也不出勾选
+  const onSaveMaterialPiece = typeof setMaterials === "function" ? (writes, rows) => savePieceWrites(writes, rows, materials, setMaterials, showToast, lang, false) : undefined;
 
   // 未关联材料对话框 state
   const [unlinkedDialog, setUnlinkedDialog] = useState(null); // null | { items: [...] }
@@ -8893,12 +9292,12 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
     // 🔗 自动用材料百科最新价刷新有 materialId 的 ing;改过价的保留她填的价(C6)
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
-      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials, materials);   // 审查第 2 轮:给撤销
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
     // 第 5 批 2.4(S1):勾了「同时存进材料百科」的计件行写材料克重(第 0 步空壳:rows 原样,writes 空,不写)
     const pieced = pieceRowsForSave(refreshedIngs, materials);
-    if (pieced.writes.length > 0) writeMaterialPieces(setMaterials, pieced.writes, new Date().toISOString());
+    if (pieced.writes.length > 0 && onSaveMaterialPiece) onSaveMaterialPiece(pieced.writes, refreshedIngs);
     const total = pieced.rows.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     const { stepsZh, stepsJa } = stepsForSave(steps);   // C11:中日按行对齐存(中间空着的留 "")
     // 备货(E 线):备货的几个键按规矩整理(空 = 删键);老数据没有这些键 → 原样
@@ -9089,7 +9488,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.component */}
         <IngredientTable variant="component" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
-          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} onSaveMaterialPiece={onSaveMaterialPiece} />
         <div style={{ marginTop: 12, padding: "10px 14px", background: "#F5F5F5", borderRadius: 6, fontSize: 13 }}>
           总成本：<strong style={{ fontSize: 16 }}>{_editorTotalNodes(fmtEditorTotal(totalCost))}</strong>
           {form.yield && parseFloat(form.yield) > 0 && <span style={{ color: "#666666", marginLeft: 16 }}>每{form.unit || "g"}成本：¥{(totalCost/parseFloat(form.yield)).toFixed(2)}</span>}
@@ -9163,7 +9562,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       )}
 
       {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
-      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} materials={materials} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -11858,22 +12257,24 @@ function SheetSteps({ steps, lang }) {
   );
 }
 
-// 整体配方「这一批的成本」后面那个「算不全」标签(第 5 批第 0 步从 CreationRecipeSheet 抽出来,文字和以前一样;S1 在这里加「· N 项单位不符」)。
-// 不是算不全 → null;是 → { parts: [标签的几段文字](和以前 JSX 里的三段一样,空的那段不出文字节点), title: 悬停的明细 }
+// 整体配方「这一批的成本」后面那个「算不全」标签(第 5 批第 0 步从 CreationRecipeSheet 抽出来;S1(规格 R19)在这里加「· N 项单位不符」)。
+// 返回 { text, title }(调用方只在 batch.incomplete 时用):没价的名字不含「单位不符」的行(按 unitIngs 分开数名字,不相减),单位不符另写一段。
+// 另挂一个**不可枚举**的 parts = 标签的几段文字(给 JSX 用:和以前三段一样,空的那段不出文字节点;没有单位不符时 DOM 和以前一样)
 const creationIncompleteText = (batch, lang) => {
-  if (!batch || !batch.incomplete) return null;
   const zh = lang === "zh";
-  const parts = batch.parts || [];
-  const noUsedCount = parts.filter(p => p.noUsed).length;
-  const missingNames = [...new Set(parts.flatMap(p => p.missingIngs.map(i => pickLang(i, "name", lang))).filter(Boolean))];
-  return {
-    parts: [
-      zh ? "算不全" : "未確定",
-      missingNames.length ? (zh ? `：${missingNames.length} 项原料没价` : `：価格なし ${missingNames.length}`) : "",
-      noUsedCount ? (zh ? `，${noUsedCount} 个部分没填用量` : `、未入力 ${noUsedCount}`) : "",
-    ],
-    title: [missingNames.length ? `${zh ? "没价" : "価格なし"}：${missingNames.join("、")}` : "", noUsedCount ? (zh ? `${noUsedCount} 个部分没填用量` : `使用量未入力 ${noUsedCount}`) : ""].filter(Boolean).join("\n"),
-  };
+  const parts = (batch && batch.parts) || [];
+  const nm = (i) => pickLang(i, "name", lang);
+  const uniq = (a) => [...new Set(a.filter(Boolean))];   // 先去空串再去重(按第一次出现的顺序)
+  const names1 = uniq(parts.flatMap(p => p.missingIngs.filter(i => !(p.unitIngs || []).includes(i)).map(nm)));
+  const names2 = uniq(parts.flatMap(p => (p.unitIngs || []).map(nm)));
+  const nu = parts.filter(p => p.noUsed).length;
+  const segs = zh
+    ? ["算不全", names1.length ? "：" + names1.length + " 项原料没价" : "", nu ? "，" + nu + " 个部分没填用量" : "", names2.length ? " · " + names2.length + " 项单位不符" : ""]
+    : ["未確定", names1.length ? "：価格なし " + names1.length : "", nu ? "、未入力 " + nu : "", names2.length ? " · 単位不一致 " + names2.length : ""];
+  const title = [names1.length ? (zh ? "没价：" : "価格なし：") + names1.join("、") : "",
+    nu ? (zh ? nu + " 个部分没填用量" : "使用量未入力 " + nu) : "",
+    names2.length ? (zh ? "单位不符：" : "単位不一致：") + names2.join("、") : ""].filter(Boolean).join("\n");
+  return Object.defineProperty({ text: segs.join(""), title }, "parts", { value: segs, enumerable: false });
 };
 
 function CreationRecipeSheet({ c, lang, components = [], materials = [], brands = [], onPrint }) {
@@ -11886,7 +12287,7 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
   const n = parseFloat(nText) > 0 ? parseFloat(nText) : serves;
   const batch = creationBatch(c, n, components, materials, brands);
   const unit = W.unit;
-  const incText = creationIncompleteText(batch, lang);   // 第 5 批第 0 步:「算不全」那一句
+  const incText = batch.incomplete ? creationIncompleteText(batch, lang) : null;   // 第 5 批:「算不全」那一句(S1 多「· N 项单位不符」)
   const assembly = pickSteps(c, lang);
   const overallNotes = pickLang(c, "notes", lang);
   const box = { background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" };
@@ -12033,7 +12434,10 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   const zh = lang !== "ja";
   const parts = (batch && batch.parts) || [];
   const noUsedCount = parts.filter(p => p.noUsed).length;
-  const missingCount = new Set(parts.flatMap(p => p.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size;
+  // 第 5 批 2.4(S1,R20):「没价」的名字不含单位不符的行(creationBatch 的 unitIngs),单位不符另数一项 —— 名字集合分开数,不相减
+  const nm = (i) => _normTxt(i.nameZh) || _normTxt(i.nameJa);
+  const missingCount = new Set(parts.flatMap(p => p.missingIngs.filter(i => !(p.unitIngs || []).includes(i)).map(nm))).size;
+  const unitCount = new Set(parts.flatMap(p => (p.unitIngs || []).map(nm))).size;
   const ambiguousCount = parts.filter(p => !p.noUsed && usedAmountAmbiguous(p.layer.usedAmount)).length;
   const zeroCost = !(costPerPortion > 0);
   const incomplete = !!(batch && batch.incomplete) || (zeroCost && parts.length > 0);  // 还没加部分时只显示「—」,不提示
@@ -12041,8 +12445,9 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   const reasons = [
     noUsedCount ? (zh ? `${noUsedCount} 个部分没填用量（或读不出数字）` : `使用量未入力 ${noUsedCount}`) : "",
     missingCount ? (zh ? `${missingCount} 项原料没价` : `価格なし ${missingCount}`) : "",
+    unitCount ? (zh ? `${unitCount} 项单位不符` : `単位不一致 ${unitCount}`) : "",
     ambiguousCount ? (zh ? `${ambiguousCount} 个部分的用量只按开头的数字算` : `使用量が曖昧 ${ambiguousCount}`) : "",
-    (zeroCost && !noUsedCount && !missingCount) ? (zh ? "还算不出成本" : "原価を計算できません") : "",
+    (zeroCost && !noUsedCount && !missingCount && !unitCount) ? (zh ? "还算不出成本" : "原価を計算できません") : "",
   ].filter(Boolean);
   const showPct = priceNum > 0 && !zeroCost;
   return {
@@ -13242,7 +13647,8 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
 
-  const totalCost = editorIngsTotal(ings);  // 第 5 批第 0 步:同另外两个编辑页走 editorIngsTotal(这一页没显示它,S1 删掉这一行)
+  // 第 5 批 2.4(S1,R36):保存时把勾了「同时存进材料百科」的克重写进材料(每条一个 toast,带撤销)。没有 setMaterials(单独挂的测试)→ 不给这个出口,面板也不出勾选
+  const onSaveMaterialPiece = typeof setMaterials === "function" ? (writes, rows) => savePieceWrites(writes, rows, materials, setMaterials, showToast, lang, true) : undefined;
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
 
   // 未关联材料对话框
@@ -13255,13 +13661,13 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     // 改过价的关联行保留她填的价(C6);勾着「保存到本店原料」就同时写进去
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     if (saveToShop) {
-      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials, materials);   // 审查第 2 轮:给撤销
       // 审查第 2 轮:部分保存时本店原料就写进去了,不等组合产品保存;提示写明,免得她以为「不保存离开」能撤回
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料(立即生效,组合产品不保存也会保留)` : `✓ ${n} 件を仕入れ原料に保存(すぐ反映・組み合わせを保存しなくても残ります)`, { undo });
     }
     // 第 5 批 2.4(S1):勾了「同时存进材料百科」的计件行写材料克重 —— 只在这里写一次(同步回组件库确认后也走这里);第 0 步空壳
     const pieced = pieceRowsForSave(refreshedIngs, materials);
-    if (pieced.writes.length > 0) writeMaterialPieces(setMaterials, pieced.writes, new Date().toISOString());
+    if (pieced.writes.length > 0 && onSaveMaterialPiece) onSaveMaterialPiece(pieced.writes, refreshedIngs);
     const total = pieced.rows.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     onSave({
       ...form,
@@ -13356,7 +13762,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.layer */}
         <IngredientTable variant="layer" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
-          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} onSaveMaterialPiece={onSaveMaterialPiece} />
         {/* 2026-09-29 体检第 2 批:以前叫「该层成本」,其实是组件整批的成本(还是存下来的成本快照),
             和产品编辑页按用量折算的「本层成本」差好几倍。改名 + 按实时价 + 另给一行按用量折算的这一部分成本 */}
         {(() => {
@@ -13417,7 +13823,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       </div>
 
       {/* C6:改了关联材料百科的单价 → 提示条 + 保存到本店原料 */}
-      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} materials={materials} />
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {layer.sourceComponentId && linkState !== "orphan" ? (
@@ -17023,13 +17429,80 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
 // (袋价 2200 不该因为把单包从 1000g 改成 500g 就被冲掉)。
 // draft 只在正在输入的那一格保留原始字符串,失焦归一化 ——
 // 免得 1000÷3 再×3 = 999.999999 这种来回换算的抖动。
-function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, lang, inpStyle, textSpec = false, priceLabel = null, required = false, autoFocus = false }) {
-  const [draft, setDraft] = useState(null);   // { field: "pack" | "case" | "g", value }
+// 第 5 批 2.4(S1,R41):材料百科编辑页的克重行「按个用时,每个约几克(可选)· 1 [单位] ≈ [克数] g」(在 PackPriceFields 最下面,只有材料编辑页有)。
+// 材料没克重、规格推不出每个几克、规格也不是按个数写的 → 收成一行可点的小字「+ 按个用时每个几克」。
+// 本店原料有进货价(shopPpgCNY > 0)时,改了克重提示每个成本会怎么变,不改本店原料
+function PieceGramsRow({ packSize, pieceGrams, pieceUnit, onPieceChange, pieceInitGrams, shopPpgCNY, lang, inpStyle }) {
+  const zh = lang === "zh";
+  const [open, setOpen] = useState(false);
+  const valid = (t) => { const n = parseFloat(t); return isFinite(n) && n > 0; };
+  const h = packPieceHint(packSize);
+  const cnt = parsePackCount(packSize);
+  const gStr = pieceGrams == null ? "" : String(pieceGrams), uStr = pieceUnit == null ? "" : String(pieceUnit);
+  if (!open && !valid(gStr) && !h && !cnt) {
+    return (
+      <div data-unit-grams="matrow" style={{ marginTop: 10 }}>
+        <button type="button" onClick={() => setOpen(true)} style={{ padding: 0, border: "none", background: "none", cursor: "pointer", fontSize: 11, color: T.textTertiary, textDecoration: "underline" }}>
+          {zh ? "+ 按个用时每个几克" : "+ 個数で使う場合の g"}
+        </button>
+      </div>
+    );
+  }
+  const changed = _normNum(gStr) !== _normNum(pieceInitGrams);
+  const small = { ...inpStyle, width: 64, padding: "6px 8px" };
+  return (
+    <div data-unit-grams="matrow" style={{ marginTop: 12, paddingTop: 10, borderTop: `0.5px solid ${T.borderSoft}`, minWidth: 0 }}>
+      <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 6, letterSpacing: "0.3px" }}>{zh ? "按个用时,每个约几克(可选)" : "個数で使う場合の 1 個あたりの g(任意)"}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: T.textSecondary }}>1</span>
+        <input data-unit-grams="matunit" value={uStr} onChange={e => onPieceChange({ pieceUnit: e.target.value })} placeholder={zh ? "本" : "本"} style={small} />
+        <span style={{ fontSize: 12, color: T.textSecondary }}>≈</span>
+        <input data-unit-grams="matgrams" type="text" inputMode="decimal" value={gStr} onChange={e => onPieceChange({ gramsPerPiece: e.target.value })} style={small} />
+        <span style={{ fontSize: 12, color: T.textSecondary }}>g</span>
+        {h && !gStr.trim() && (
+          <Btn size="sm" onClick={() => onPieceChange({ gramsPerPiece: String(h.gpp), pieceUnit: h.unit })}>{zh ? `按规格估 ${String(h.gpp)} g/${h.unit}` : `規格から ${String(h.gpp)} g/${h.unit}`}</Btn>
+        )}
+      </div>
+      {valid(gStr) && !_normTxt(uStr) && (
+        <div style={{ fontSize: 11, color: T.warning, marginTop: 4 }}>{zh ? "填上单位才生效" : "単位を入れると有効になります"}</div>
+      )}
+      <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 6, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+        {zh ? "配方里按「本 / 個」写、关联这个材料的原料,成本和采购量按它换成克。" : "レシピで「本・個」単位で連動している材料は、これで g に換算して原価・仕入量を計算します。"}
+      </div>
+      {shopPpgCNY > 0 && changed && valid(gStr) && (() => {
+        const a = valid(pieceInitGrams) ? fmtCost(shopPpgCNY * parseFloat(pieceInitGrams)) : "—";
+        const b = fmtCost(shopPpgCNY * parseFloat(gStr));
+        return (
+          <div data-unit-grams="shophint" style={{ fontSize: 11, color: T.warning, marginTop: 6, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+            {zh ? `本店原料里有进货价,成本按那条的每克价算:每个成本会从 ${a} 变成 ${b}。要按报价单的每个价算,请去本店原料页按新克重重填` : `仕入れ原料の価格で原価計算します:1 個の原価が ${a} → ${b} になります`}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+// 第 5 批 2.4 按件计价(S1,规格 R41 / R43):只有材料百科编辑页传 pieceGrams / pieceUnit / onPieceChange(+ pieceInitGrams / shopPpgCNY 给提示用),
+// 这时下面多一行「按个用时,每个约几克」(克重行),规格按个数写(「20個」)、又填了同单位的克重时进「件模式」:一包克数 = 个数 × 每个克数,
+// 袋价 / 箱价解锁,多一格「每{u}价」;改克重时保住每个价(第一次填克重不动价)。本店原料页不传这些 → 行为和 DOM 和以前逐字节一样
+function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, lang, inpStyle, textSpec = false, priceLabel = null, required = false, autoFocus = false,
+  pieceGrams, pieceUnit, onPieceChange, pieceInitGrams = "", shopPpgCNY = 0 }) {
+  const [draft, setDraft] = useState(null);   // { field: "pack" | "case" | "g" | "piece", value }
   const [anchor, setAnchor] = useState("g");  // 最后编辑过的价格口径
   // 她最后填的袋价 / 箱价原数。改规格时拿它重算单价,不再用「当前每克价 × 当前克数」现算 ——
   // 以前把单包 1000 删空再打 500,中间经过「1」「空」「5」,每步都拿上一步算坏的单价去乘,袋价最后变 11000(2026-09-29 体检修)
   const [anchorVal, setAnchorVal] = useState(0);
-  const g = parsePackSizeToGrams(packSize);
+  const withPiece = typeof onPieceChange === "function";
+  const gpp = parseFloat(pieceGrams);
+  const pieceOk = (ps, gp, pu) => {   // 件模式:传了、计件规格、克重有效、克重单位和规格的计件单位一样
+    if (!withPiece || parsePackSizeToGrams(ps) !== 0) return null;
+    const cnt = parsePackCount(ps);
+    return (cnt && isFinite(gp) && gp > 0 && _normCountUnit(pu) !== "" && _normCountUnit(pu) === _normCountUnit(cnt.unit)) ? cnt : null;
+  };
+  // 一包几克:按规格读;件模式下 = 个数 × 每个克数(不传那三个 props 时就是 parsePackSizeToGrams,和以前一样)
+  const gramsOf = (ps, gp, pu) => { const g0 = parsePackSizeToGrams(ps); if (g0 > 0 || !withPiece) return g0; const c = pieceOk(ps, gp, pu); return c ? c.n * gp : 0; };
+  const pieceCnt = pieceOk(packSize, gpp, pieceUnit);
+  const pieceMode = !!pieceCnt;
+  const g = gramsOf(packSize, gpp, pieceUnit);
   const cp = parseFloat(casePack) || 0;
   const ppg = parseFloat(pricePerG) || 0;
   const money = (n) => n > 0 ? String(Math.round(n * 100) / 100) : "";
@@ -17053,7 +17526,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
   };
   const editSpec = (key) => (e) => {
     const v = e.target.value;
-    const ng = key === "packSize" ? parsePackSizeToGrams(v) : g;
+    const ng = key === "packSize" ? gramsOf(v, gpp, pieceUnit) : g;
     const ncp = key === "casePack" ? (parseFloat(v) || 0) : cp;
     const patch = { [key]: v };
     const keep = anchor === "pack" ? (anchorVal > 0 ? anchorVal : packPrice) : anchor === "case" ? (anchorVal > 0 ? anchorVal : casePrice) : 0;
@@ -17061,11 +17534,33 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
     if (keep > 0 && div > 0) patch.pricePerG = r6(keep / div);
     onChange(patch);
   };
+  // 件模式的「每{u}价」:填它 → 每克价 = 每个价 ÷ 每个克数,记住按「每个」报的价
+  const editPiecePrice = (e) => {
+    const v = e.target.value;
+    setDraft({ field: "piece", value: v });
+    if (!v.trim()) { setAnchor("piece"); setAnchorVal(0); onChange({ pricePerG: "" }); return; }
+    const n = parseFloat(v);
+    if (isNaN(n) || n < 0) return;
+    setAnchor("piece"); setAnchorVal(n);
+    onChange({ pricePerG: r6(n / gpp) });
+  };
+  // 克重行改了克重 / 单位:件模式前后都成立、克重变了 → 保住每个价(一包 = n 个,pack / case 锚点时同样结果);第一次填克重(原来无效)不动价
+  const editPiece = (patch) => {
+    const ng = Object.prototype.hasOwnProperty.call(patch, "gramsPerPiece") ? patch.gramsPerPiece : pieceGrams;
+    const nu = Object.prototype.hasOwnProperty.call(patch, "pieceUnit") ? patch.pieceUnit : pieceUnit;
+    const g2 = parseFloat(ng);
+    onPieceChange(patch);
+    if (pieceMode && pieceOk(packSize, g2, nu) && g2 !== gpp) {
+      const perPiece = (anchor === "piece" && anchorVal > 0) ? anchorVal : ppg * gpp;
+      if (perPiece > 0) onChange({ pricePerG: r6(perPiece / g2) });
+    }
+  };
 
   const zh = lang === "zh";
   const lab = { fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" };
   const lockStyle = { ...inpStyle, background: "#F5F5F5", color: T.textTertiary };
   const hasG = g > 0, hasCase = g > 0 && cp > 0;
+  const specCnt = withPiece && parsePackSizeToGrams(packSize) === 0 ? parsePackCount(packSize) : null;   // 计件规格(还没进件模式时给另一句锁定提示)
   return (
     <>
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
@@ -17092,10 +17587,17 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
       </div>
       {String(packSize || "").trim() && !hasG && (
         <div style={{ fontSize: 11, color: T.warning, margin: "-6px 0 10px" }}>
-          {zh ? "规格里没认出克数(比如「20個」「4号缶」),袋价和箱价没法换算,直接填单价" : "規格からグラム数を読めません。単価を直接入力してください"}
+          {specCnt
+            ? (zh ? `规格按个数写的:填上「1 ${specCnt.unit} 约几克」,袋价 / 箱价 / 每${specCnt.unit}价就能换算;不知道克数就直接填单价` : `規格が個数です。1${specCnt.unit} あたりの g を入れるとパック価・箱価・1${specCnt.unit} 価を換算できます(不明なら単価を直接入力)`)
+            : (zh ? "规格里没认出克数(比如「20個」「4号缶」),袋价和箱价没法换算,直接填单价" : "規格からグラム数を読めません。単価を直接入力してください")}
         </div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+      {pieceMode && (
+        <div data-unit-grams="packcount" style={{ fontSize: 11, color: T.textTertiary, margin: "-6px 0 10px" }}>
+          {zh ? `单包 ${pieceCnt.n} ${pieceCnt.unit} ≈ ${fmtQty(g)} g` : `1 パック ${pieceCnt.n}${pieceCnt.unit} ≈ ${fmtQty(g)} g`}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: pieceMode ? "repeat(auto-fit, minmax(110px, 1fr))" : "1fr 1fr 1fr", gap: 12 }}>
         <div>
           <label style={lab}>{zh ? `袋价(${sym}/包)` : `パック価(${sym})`}</label>
           <input type="number" step="0.01" value={show("pack", money(packPrice))} onChange={editPrice("pack", g)} onBlur={() => setDraft(null)}
@@ -17110,6 +17612,12 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
           <label style={lab}>{(priceLabel || (zh ? "单价" : "単価")) + `(${sym}/100g)` + (required ? " *" : "")}</label>
           <input type="number" step="0.01" value={show("g", p100)} onChange={editPrice("g", 100)} onBlur={() => setDraft(null)} placeholder={cur === "CNY" ? "例:13" : "例:220"} style={inpStyle} autoFocus={autoFocus} />
         </div>
+        {pieceMode && (
+          <div data-unit-grams="piecepay">
+            <label style={lab}>{zh ? `每${pieceUnit}价(${sym}/${pieceUnit})` : `1${pieceUnit}価(${sym}/${pieceUnit})`}</label>
+            <input type="number" step="0.01" value={show("piece", ppg > 0 ? money(ppg * gpp) : "")} onChange={editPiecePrice} onBlur={() => setDraft(null)} style={inpStyle} />
+          </div>
+        )}
       </div>
       {/* v17: 双币对照 —— 报价单给的是一种钱,记账和成本用另一种,两个数得同时看见 */}
       {ppg > 0 && (
@@ -17125,6 +17633,8 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
       <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, lineHeight: 1.6 }}>
         {zh ? `💡 三格填任意一格,另外两格自动算。拿到的是袋价 / 箱价就直接填,不用自己换算 ${sym}/100g。` : "💡 いずれか 1 つ入力すれば残り 2 つは自動換算。"}
       </div>
+      {/* 第 5 批 2.4(S1,R41):材料百科编辑页的克重行(本店原料页不传 onPieceChange,没有这一行) */}
+      {withPiece && <PieceGramsRow packSize={packSize} pieceGrams={pieceGrams} pieceUnit={pieceUnit} onPieceChange={editPiece} pieceInitGrams={pieceInitGrams} shopPpgCNY={shopPpgCNY} lang={lang} inpStyle={inpStyle} />}
     </>
   );
 }
@@ -17160,7 +17670,17 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
   // 第 4 批第 2 段:别名 / 俗称(materials[].aliases)按一行文字编辑,保存时才切成数组;记住打开时的文字,没动过就不碰这个键
   const [aliasInit] = useState(() => materialAliasesOf(material).join("、"));
   const [aliasText, setAliasText] = useState(aliasInit);
-  const dirtyBind = useDirtyGuard(() => ({ form, aliasText }));   // 没保存就切页 / 返回时先问一句
+  // 第 5 批 2.4(S1,R41 / R42):克重行的两个框(材料的 gramsPerPiece / pieceUnit)。打开时显示的值记成初值:
+  // 克数框 = 材料的 gramsPerPiece(没有这个键 → 空);单位框 = 材料有 pieceUnit 键 → 它,否则规格的计件单位,否则规格估出来的单位,否则空
+  const [pieceInit] = useState(() => {
+    const m = material || {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(m, k);
+    const h = packPieceHint(m.packSize), cnt = parsePackCount(m.packSize);
+    return { g: has("gramsPerPiece") && m.gramsPerPiece != null ? String(m.gramsPerPiece) : "", u: has("pieceUnit") ? (m.pieceUnit == null ? "" : String(m.pieceUnit)) : (cnt ? cnt.unit : h ? h.unit : "") };
+  });
+  const [pieceG, setPieceG] = useState(pieceInit.g);
+  const [pieceU, setPieceU] = useState(pieceInit.u);
+  const dirtyBind = useDirtyGuard(() => ({ form, aliasText, pieceG, pieceU }));   // 没保存就切页 / 返回时先问一句
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   // 当前大分类下已有材料的厂家 → 给 BrandPicker 排前并标「本类」(厂家的主分类只是提示,真正的归属看材料)
   const inCatBrandIds = useMemo(() => new Set(materials.filter(m => m.categoryId === form.categoryId && m.brandId).map(m => m.brandId)), [materials, form.categoryId]);
@@ -17223,6 +17743,15 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
       const list = splitAliases(aliasText, saved);
       if (list.length > 0 || (material && Object.prototype.hasOwnProperty.call(material, "aliases"))) saved.aliases = list;
       else delete saved.aliases;
+    }
+    // 第 5 批 2.4(S1,R42):克重三个键。改过(克数按 _normNum 比;克数有效时单位按 _normTxt 比)才写,pieceAt 和 updatedAt 同一个时间;
+    // 克数无效(空 / 0 / 负 / 读不出)→ 写 "" / "" / 时间(不删键,合并导入不会从另一边补回来);没改 → 三个键和原材料完全一样
+    const pgValid = (() => { const n = parseFloat(pieceG); return isFinite(n) && n > 0; })();
+    const pieceChanged = _normNum(pieceG) !== _normNum(pieceInit.g) || (pgValid && _normTxt(pieceU) !== _normTxt(pieceInit.u));
+    if (pieceChanged) {
+      if (pgValid) { saved.gramsPerPiece = String(parseFloat(pieceG)); saved.pieceUnit = _normTxt(pieceU); }
+      else { saved.gramsPerPiece = ""; saved.pieceUnit = ""; }
+      saved.pieceAt = nowIso;
     }
     onSave(saved);
   };
@@ -17310,7 +17839,10 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与价格</div>
         {/* 2026-09-29 体检第 2 批:原来没传 textSpec,单包是数字框,「1KG」「200g/1KG」这类老规格(97%)显示成空框,重填会覆盖原文 */}
         <PackPriceFields packSize={form.packSize} casePack={form.casePack} pricePerG={form.pricePerG} currency={form.currency}
-          onChange={patch => setForm(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inpStyle} textSpec />
+          onChange={patch => setForm(prev => ({ ...prev, ...patch }))} lang={lang} inpStyle={inpStyle} textSpec
+          pieceGrams={pieceG} pieceUnit={pieceU} pieceInitGrams={pieceInit.g}
+          onPieceChange={(patch) => { if (Object.prototype.hasOwnProperty.call(patch, "gramsPerPiece")) setPieceG(patch.gramsPerPiece); if (Object.prototype.hasOwnProperty.call(patch, "pieceUnit")) setPieceU(patch.pieceUnit); }}
+          shopPpgCNY={(() => { const sm = material && material.id ? _shopMaterials.find(x => x && x.materialId === material.id) : null; return sm ? toCNY(sm.pricePerG, curOf(sm)) : 0; })()} />
       </div>
 
       {/* 核心参数 */}
@@ -17445,7 +17977,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   // 第 5 批 E4 本机草稿(第 0 步空壳:banner 是 null,markSaved / discard 不做事)
   const draft = useEditorDraft(dirtyBind, { kind: "recipe", id: recipe ? recipe.id : null, base: recipe || null, lang });
 
-  const totalCost = editorIngsTotal(ings);  // 第 5 批第 0 步:合计抽成 editorIngsTotal(旧算法:各行成本快照按币种折人民币再加,不计价的不算)
+  const totalCost = editorIngsTotal(ings);  // 第 5 批:合计走 editorIngsTotal(S1 起每行「用量 × 单价」现算,和详情页的实时成本一样)
+  // 第 5 批 2.4(S1,R36):保存时把勾了「同时存进材料百科」的克重写进材料(每条一个 toast,带撤销)。没有 setMaterials(单独挂的测试)→ 不给这个出口,面板也不出勾选
+  const onSaveMaterialPiece = typeof setMaterials === "function" ? (writes, rows) => savePieceWrites(writes, rows, materials, setMaterials, showToast, lang, false) : undefined;
   const qty = parseFloat(form.yield) || 0;
   const price = toCNY(form.price, priceCurOf(form));   // v17: 同上,折算后再比
   const unitCost = qty > 0 ? totalCost / qty : 0;
@@ -17466,12 +18000,12 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
     const refreshedIngs = validIngs.map(i => refreshIngForSave(i, materials));
     // v11: 如果勾了"保存到本店原料",把改过价且有 materialId 的 ing 写入 shopMaterials
     if (saveToShop) {
-      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials);   // 审查第 2 轮:给撤销
+      const { n, undo } = saveIngPricesToShop(refreshedIngs, setShopMaterials, materials);   // 审查第 2 轮:给撤销
       if (n > 0 && typeof showToast === "function") showToast(lang === "zh" ? `✓ ${n} 项已保存到本店原料` : `✓ ${n} 件を仕入れ原料に保存`, { undo });
     }
     // 第 5 批 2.4(S1):勾了「同时存进材料百科」的计件行写材料克重(第 0 步空壳:rows 原样,writes 空,不写)
     const pieced = pieceRowsForSave(refreshedIngs, materials);
-    if (pieced.writes.length > 0) writeMaterialPieces(setMaterials, pieced.writes, new Date().toISOString());
+    if (pieced.writes.length > 0 && onSaveMaterialPiece) onSaveMaterialPiece(pieced.writes, refreshedIngs);
     const total = pieced.rows.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     const q = parseFloat(form.yield) || 0, p = parseFloat(form.price) || 0;
     const uc = q > 0 ? total / q : 0, mg = p > 0 ? ((p - uc) / p) * 100 : 0;
@@ -17607,7 +18141,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       {card(<>
         {/* 配料表:三个编辑页共用 IngredientTable,差异在 ING_TABLE_VARIANTS.recipe */}
         <IngredientTable variant="recipe" ings={ings} setIngs={setIngs} nextIdRef={nextIngId} cats={cats} materials={materials} brands={brands} lang={lang}
-          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} />
+          onPickMaterial={setPickerTargetIngId} onOpenBulk={() => setShowBulkMatch(true)} onSaveMaterialPiece={onSaveMaterialPiece} />
 
         {/* Cost summary */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: "1rem" }}>
@@ -17685,7 +18219,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       )}
 
       {/* v11: 改价提示条 — 至少一行关联材料百科的 ing 被改过单价才显示(C6 起三页共用 PriceChangeBanner) */}
-      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} />
+      <PriceChangeBanner ings={ings} saveToShop={saveToShop} setSaveToShop={setSaveToShop} lang={lang} materials={materials} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -19419,15 +19953,23 @@ const productUnitCost = (p, ctx) => {
       // 审查 r1:个数按「整个」算(和采购页 / 生产单一样);配方一览和组合产品详情按一份(÷ 每个分几份)显示,商品页把这点说清楚
       // 审查 r5:个数已经填成小数(按 1/N 个 = 一块卖)就不再说「按整个算、请填 1/N」
       if (parseFloat(target.portions) > 1 && q >= 1 - 1e-9) wholeCreation.push({ target, portions: parseFloat(target.portions), qty: q });
-      if (b.incomplete) missing.push({ reason: "creation", type, target,
-        noUsed: b.parts.filter(x => x.noUsed).length,
-        noPrice: new Set(b.parts.flatMap(x => x.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size });
+      // 第 5 批 2.4(S1,R17):组合产品条目的 noPrice = 不含单位不符的名字数,单位不符的名字数另记 unit(只在 > 0 时有这个键)
+      if (b.incomplete) {
+        const nm = (i) => _normTxt(i.nameZh) || _normTxt(i.nameJa);
+        const unit = new Set(b.parts.flatMap(x => (x.unitIngs || []).map(nm))).size;
+        missing.push({ reason: "creation", type, target,
+          noUsed: b.parts.filter(x => x.noUsed).length,
+          noPrice: new Set(b.parts.flatMap(x => x.missingIngs.filter(i => !(x.unitIngs || []).includes(i)).map(nm))).size,
+          ...(unit > 0 ? { unit } : {}) });
+      }
       return;
     }
     const y = parseFloat(target.yield) || 0;
     cost += getIngsLiveCost(target.ingredients, materials, brands) * q / Math.max(1, y || 1);
+    // 配方 / 组件条目:noPrice = 总行数(含单位不符,代码不变),单位不符的行数另记 unit(只在 > 0 时有);纯没价 = noPrice − unit
     const noPrice = (target.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length;
-    if (noPrice) missing.push({ reason: "noPrice", type, target, noPrice });
+    const unit = (target.ingredients || []).filter(ing => ingPriceIssue(ing, materials) === "unit").length;
+    if (noPrice) missing.push({ reason: "noPrice", type, target, noPrice, ...(unit > 0 ? { unit } : {}) });
     if (!(y > 0)) noYield.push(target);
   });
   return { cost, incomplete: missing.length > 0, missing, noYield, wholeCreation, noItems: items.length === 0 };
@@ -19501,8 +20043,11 @@ const recipeCostInfo = (r, materials, brands) => {
   const ings = (r && r.ingredients) || [];
   const total = ings.reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
   const yieldN = parseFloat(r && r.yield) || 0;
+  // 第 5 批 2.4(S1,R15):noPriceN 含单位不符的行(代码不变);单位不符的行数另记 unitN(只在 > 0 时有这个键,放最后);纯没价 = noPriceN − unitN
+  const unitN = ings.filter(ing => ingPriceIssue(ing, materials) === "unit").length;
   return { total, yieldN, unitCost: yieldN > 0 ? total / yieldN : 0, unit: (r && r.unit) || "個",
-    noPriceN: ings.filter(ing => ingNoPrice(ing, materials)).length, noYield: !(yieldN > 0) };
+    noPriceN: ings.filter(ing => ingNoPrice(ing, materials)).length, noYield: !(yieldN > 0),
+    ...(unitN > 0 ? { unitN } : {}) };
 };
 // 组合产品的成本(人民币)。和组合产品页同一口径:单份 = 总成本 ÷ 制作个数 ÷ 每个分几份;算不全 / 用量读不准走 creationMarginView 的判定
 const creationCostInfo = (c, components, materials, brands) => {
@@ -19513,10 +20058,15 @@ const creationCostInfo = (c, components, materials, brands) => {
   const batch = creationBatch(c, null, components, materials, brands);
   const parts = batch.parts || [];
   const noUsedN = parts.filter(p => p.noUsed).length;
-  const missingN = new Set(parts.flatMap(p => p.missingIngs.map(i => _normTxt(i.nameZh) || _normTxt(i.nameJa)))).size;
+  // 第 5 批 2.4(S1,R16):没价的名字不含单位不符的行,单位不符的名字另数 unitN(只在 > 0 时有)。名字集合分开数,**不相减**(审查 M9:
+  // 同一个名字在 A 部分没价、在 B 部分单位不符时,相减会把真没价的那条藏掉)
+  const name = (i) => _normTxt(i.nameZh) || _normTxt(i.nameJa);
+  const missingN = new Set(parts.flatMap(p => p.missingIngs.filter(i => !(p.unitIngs || []).includes(i)).map(name))).size;
+  const unitN = new Set(parts.flatMap(p => (p.unitIngs || []).map(name))).size;
   const ambiguousN = parts.filter(p => !p.noUsed && usedAmountAmbiguous(p.layer.usedAmount)).length;
   const incomplete = !!batch.incomplete || (!(perPortion > 0) && parts.length > 0);
-  return { batch, total, perUnit, perPortion, noUsedN, missingN, ambiguousN, incomplete, unsure: incomplete || ambiguousN > 0 };
+  return { batch, total, perUnit, perPortion, noUsedN, missingN, ambiguousN, incomplete, unsure: incomplete || ambiguousN > 0,
+    ...(unitN > 0 ? { unitN } : {}) };
 };
 // 毛利一览(配方一览的第 4 个模式)的行,纯函数:给页面和测试共用。钱全是人民币。
 // 配方:每 r.unit;组合产品:每份(= 总成本 ÷ serves ÷ portions,和售价同口径);商品:每件(组合产品按整个算,见 productUnitCost)+ 包装费
@@ -19529,7 +20079,10 @@ const marginOverviewRows = (data) => {
     const ci = recipeCostInfo(r, materials, brands);
     const mi = marginInfo({ price: r.price, priceCurrency: priceCurOf(r), cost: ci.unitCost, incomplete: ci.unitCost > 0 && ci.noPriceN > 0 });
     const issues = [];
-    if (ci.noPriceN > 0) issues.push({ code: "noPrice", n: ci.noPriceN });
+    // 第 5 批 2.4(S1,R18):没价和单位不符分两项(没有单位不符时和以前一样)
+    const pure = ci.noPriceN - (ci.unitN || 0);
+    if (pure > 0) issues.push({ code: "noPrice", n: pure });
+    if (ci.unitN > 0) issues.push({ code: "unit", n: ci.unitN });
     if (ci.noYield && ci.total > 0) issues.push({ code: "noYield" });
     if (!(ci.total > 0)) issues.push({ code: "noCost" });
     items.push({ kind: "recipe", id: r.id, x: r, familyId: famOk(r.familyId) ? r.familyId : null, onSale: !!r.onSale,
@@ -19541,6 +20094,7 @@ const marginOverviewRows = (data) => {
     const mi = marginInfo({ price: c.price, priceCurrency: priceCurOf(c), cost: ci.perPortion, incomplete: ci.unsure });
     const issues = [];
     if (ci.missingN > 0) issues.push({ code: "noPrice", n: ci.missingN });
+    if (ci.unitN > 0) issues.push({ code: "unit", n: ci.unitN });   // 第 5 批 2.4(S1,R18)
     if (ci.noUsedN > 0) issues.push({ code: "noUsed", n: ci.noUsedN });
     if (ci.ambiguousN > 0) issues.push({ code: "ambiguous", n: ci.ambiguousN });
     if (!(ci.perPortion > 0)) issues.push({ code: "noCost" });
@@ -19558,7 +20112,16 @@ const marginOverviewRows = (data) => {
     const issues = [];
     if (uc.noItems) issues.push({ code: "noItems" });
     else {
-      uc.missing.forEach(m => issues.push(m.reason === "missing" ? { code: "missingLink" } : { code: "noPrice", n: m.noPrice || 0, noUsed: m.noUsed || 0 }));
+      // 第 5 批 2.4(S1,R18):有单位不符的条目另出一项 unit;配方 / 组件条目的 noPrice 是总行数,纯没价 = noPrice − unit;组合产品条目的 noPrice 已不含单位不符
+      uc.missing.forEach(m => {
+        if (m.reason === "missing") issues.push({ code: "missingLink" });
+        else if (!(m.unit > 0)) issues.push({ code: "noPrice", n: m.noPrice || 0, noUsed: m.noUsed || 0 });
+        else {
+          const pure = m.reason === "noPrice" ? m.noPrice - m.unit : (m.noPrice || 0);
+          if (pure > 0 || m.noUsed > 0) issues.push({ code: "noPrice", n: pure, noUsed: m.noUsed || 0 });
+          issues.push({ code: "unit", n: m.unit });
+        }
+      });
       if (uc.noYield.length) issues.push({ code: "noYield" });
       if (!(uc.cost > 0)) issues.push({ code: "noCost" });
     }
@@ -19634,7 +20197,7 @@ const MO_TXT = {
     empty: "没有符合条件的", emptyFirst: "还没有配方 / 组合产品", emptyProducts: "还没有商品",
     prodHint: "商品按组成项算成本(组合产品按整个);没写币种的售价按日元折算(≈)。包装费在商品编辑页填。合并导入不会把已有商品的售价 / 包装费带到另一台设备。",
     wholeNote: (p) => `按整个(${p} 份)算`,
-    iss: { noPrice: (n) => `${n} 项没价`, noYield: "缺出品数", noCost: "缺成本", noUsed: (n) => `${n} 个部分没填用量`, ambiguous: (n) => `${n} 个用量读不准`,
+    iss: { noPrice: (n) => `${n} 项没价`, unit: (n) => `单位不符 ${n}`, noYield: "缺出品数", noCost: "缺成本", noUsed: (n) => `${n} 个部分没填用量`, ambiguous: (n) => `${n} 个用量读不准`,
       unpriced: "未定价", jpyPrice: "日元售价", belowTarget: "低于目标", noItems: "没挂配方", missingLink: "挂的已删" },
     shown: (a, b) => `${a} / ${b} 条`,
   },
@@ -19651,7 +20214,7 @@ const MO_TXT = {
     empty: "該当なし", emptyFirst: "レシピ / 組立製品がありません", emptyProducts: "商品がありません",
     prodHint: "商品の原価は構成から計算(組立製品は 1 台)。通貨未設定の売価は円として換算(≈)。包装費は商品編集で入力。マージインポートでは既存商品の売価・包装費は同期されません。",
     wholeNote: (p) => `1 台(${p} カット)で計算`,
-    iss: { noPrice: (n) => `単価なし ${n}`, noYield: "出来数なし", noCost: "原価なし", noUsed: (n) => `使用量未入力 ${n}`, ambiguous: (n) => `使用量要確認 ${n}`,
+    iss: { noPrice: (n) => `単価なし ${n}`, unit: (n) => `単位不一致 ${n}`, noYield: "出来数なし", noCost: "原価なし", noUsed: (n) => `使用量未入力 ${n}`, ambiguous: (n) => `使用量要確認 ${n}`,
       unpriced: "売価未設定", jpyPrice: "円の売価", belowTarget: "目標未達", noItems: "構成なし", missingLink: "関連先削除済み" },
     shown: (a, b) => `${a} / ${b} 件`,
   },
@@ -19855,9 +20418,12 @@ function ProductCostNote({ uc, lang }) {
   const zh = lang !== "ja";
   const nm = (o) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
   const kindName = { recipe: zh ? "配方" : "レシピ", creation: zh ? "组合产品" : "組立製品", component: zh ? "组件" : "パーツ" };
+  // 第 5 批 2.4(S1,R21):有单位不符(m.unit > 0)的条目把「单位不符」另写一项;没有的逐字节同以前
+  const unitTxt = (n) => zh ? `${n} 项单位不符` : `単位不一致 ${n}`;
   const reasons = uc.missing.map(m => m.reason === "missing" ? (zh ? `挂的${kindName[m.type]}已删除` : `関連の${kindName[m.type]}が削除済み`)
-    : m.reason === "noPrice" ? (zh ? `「${nm(m.target)}」${m.noPrice} 项原料没价` : `「${nm(m.target)}」単価なし ${m.noPrice}`)
-    : `「${nm(m.target)}」` + [m.noUsed ? (zh ? `${m.noUsed} 个部分没填用量` : `使用量未入力 ${m.noUsed}`) : "", m.noPrice ? (zh ? `${m.noPrice} 项原料没价` : `単価なし ${m.noPrice}`) : ""].filter(Boolean).join(zh ? "、" : "・"));
+    : m.reason === "noPrice" ? (!(m.unit > 0) ? (zh ? `「${nm(m.target)}」${m.noPrice} 项原料没价` : `「${nm(m.target)}」単価なし ${m.noPrice}`)
+      : `「${nm(m.target)}」` + [(m.noPrice - m.unit) > 0 ? (zh ? `${m.noPrice - m.unit} 项原料没价` : `単価なし ${m.noPrice - m.unit}`) : "", unitTxt(m.unit)].filter(Boolean).join(zh ? "、" : "・"))
+    : `「${nm(m.target)}」` + [m.noUsed ? (zh ? `${m.noUsed} 个部分没填用量` : `使用量未入力 ${m.noUsed}`) : "", m.noPrice ? (zh ? `${m.noPrice} 项原料没价` : `単価なし ${m.noPrice}`) : "", m.unit > 0 ? unitTxt(m.unit) : ""].filter(Boolean).join(zh ? "、" : "・"));
   return (
     <div data-costnote="1" style={{ fontSize: 12, color: T.warning, marginTop: 10, lineHeight: 1.6 }}>
       {uc.incomplete && <div>⚠ {zh ? "成本不全·毛利率虚高:" : "原価不完全・粗利率は過大:"}{reasons.join(zh ? ";" : "、")}</div>}
@@ -21973,7 +22539,9 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
         return;
       }
       if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-      grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier;
+      // 第 5 批 2.4(S1,R23):采购克数乘这一行的克重系数(kg / L ×1000、按个写填了克重的 × 每个几克;计件没克重的照旧「把个当克」= × 1)。
+      // 生产模式的 addWeigh 不乘(厨房数个数)。求值顺序 ((q × 倍数) × 系数),系数 1 时和以前逐位相同
+      grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1);
       if (prodMode) addWeigh(ing, q * multiplier, src);
     });
     (obj.layers || []).forEach(l => collect(l, multiplier, src, path));
@@ -22020,7 +22588,8 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
           if (compIng(ing, qty, src, _hasCompId({ componentId: p.layer.sourceComponentId }) ? new Set([p.layer.sourceComponentId]) : new Set())) return;   // 第 4 批 B4-6:来自组件的行
           if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
           if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
-          if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty;
+          // 第 5 批 2.4(S1,R23):组合产品分支自己的 grams 写入点,同样乘克重系数(采购页审查 M2)
+          if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1);
           if (prodMode) addWeigh(ing, qty, src);
         });
       });
@@ -26044,7 +26613,19 @@ function App() {
     // 第 5 批第 0 步放好的两个空分支(还没有按钮调它们):
     //   H5 一键「按规格估 1 本 ≈ 2.2 g,存进材料百科」(S1:只写克重三个键、不写 updatedAt,撤销)
     //   H6 一键「按每个重算」(S2:recomposeEachLayers 这一部分,写组合产品 updatedAt,撤销)
-    pieceGrams: (item) => {},
+    // 第 5 批 2.4(S1,R49):H5「按规格估」—— 所有 id 相同的材料写克重三个键(pieceAt = 现在,不写 updatedAt),撤销规则同 writeMaterialPieces。
+    // 返回 true = 写了(面板把这一行原位打 ✓);材料已经不在了 → dhStale、false
+    pieceGrams: (item) => {
+      const zh = lang === "zh";
+      const f = item && item.pieceFix;
+      if (!f) return false;
+      const mat = (materials || []).find(x => x && x.id === f.materialId);
+      if (!mat) { dhStale(); return false; }
+      const { undo } = writeMaterialPieces(setMaterials, [{ materialId: f.materialId, grams: f.gramsPerPiece, unit: f.pieceUnit }], new Date().toISOString());
+      const mn = (zh ? (mat.nameZh || mat.nameJa) : (mat.nameJa || mat.nameZh)) || mat.nameFr || "";
+      showToast(zh ? `✓「${mn}」1 ${f.pieceUnit} ≈ ${f.gramsPerPiece} g 存进了材料百科` : `✓「${mn}」1${f.pieceUnit} ≈ ${f.gramsPerPiece} g を事典に保存`, { undo });
+      return true;
+    },
     usedEach: (item) => {},
     // H14:清掉旧价格表 cats。先存一份固定备份;存不上再问一次(同「清除全部」)
     clearCats: async () => {
@@ -28160,6 +28741,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 // 2026-09-29 体检第 2 批:有售价但成本算不出来(配料都没价 / 没填出品数)时,以前显示红色「0.0%」像是亏本 → 改显示灰色「缺成本」;
                 // 有几行没单价时成本偏低、利润率虚高,在下面标「N 项没价·利润率虚高」(和详情页「成本算不全」同一口径;09-29 她选的叫法,原来「偏高」看不懂是什么偏高)
                 const noPriceN = priceN > 0 && unitCost > 0 ? (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length : 0;
+                // 第 5 批 2.4(S1,R21):其中「单位不符」(按个写、没填克重)的行数;没有这种行时文字和以前一样
+                const unitN = noPriceN > 0 ? (r.ingredients || []).filter(ing => ingPriceIssue(ing, materials) === "unit").length : 0;
                 // 第 4 批 B4-1:颜色走 marginInfo(跟目标原料成本率;有原料没价 = 算不全,数字不给绿色 —— 以前「咖啡巴斯克 v2.0」缺 3 项价照样绿色 68.2%)
                 const rowColor = marginColor(priceN > 0 && unitCost > 0 ? margin : null, noPriceN > 0);
                 return (
@@ -28221,7 +28804,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       {noPriceN > 0 && (
                         <div style={{ ...T.fs.label, color: T.muted }} title={lang === "zh" ? "有原料没单价,成本算少了,显示的毛利率比实际高" : "単価のない材料があり、粗利率は実際より高く出ています"}>
                           {/* 分两行:一行放不下时会把左边的名字挤成两行(手机宽度下可丽露实测) */}
-                          {lang === "zh" ? <>{noPriceN} 项没价<br />毛利率虚高</> : <>単価なし {noPriceN}<br />粗利率過大</>}
+                          {unitN === 0 ? (lang === "zh" ? <>{noPriceN} 项没价<br />毛利率虚高</> : <>単価なし {noPriceN}<br />粗利率過大</>)
+                            : noPriceN === unitN ? (lang === "zh" ? <>{unitN} 项单位不符<br />毛利率虚高</> : <>単位不一致 {unitN}<br />粗利率過大</>)
+                            : (lang === "zh" ? <>{noPriceN} 项没价或单位不符<br />毛利率虚高</> : <>単価なし・単位不一致 {noPriceN}<br />粗利率過大</>)}
                         </div>
                       )}
                     </div>
