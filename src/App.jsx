@@ -2067,7 +2067,7 @@ const recomposeEachLayers = (layers, servesNow) => {
 // ─── BEGIN creation-lock helpers ───
 // 第 5 批 E1「🔒 锁定配方」(plan.md「数据」§1 / §4,design_edit §3.4)。紧接在 creation-follow 段后面,那一段一个字不改。
 // 锁定的部分一律写成 follow: false, localVariant: true(和「本产品专用」同一种写法,老读者自动当本产品专用),另记 lockFrom / lockSeen。
-// 第 0 步写成真的:_hash32 / isCreationLocked / layerTakesComponentStock / layerIdentAt;其余是空壳(原样返回 / false),E1 写真的。
+// 第 0 步写成真的:_hash32 / isCreationLocked / layerTakesComponentStock / layerIdentAt;其余 E1 写成真的(spec_e1_lock.md)。
 // 段里不许有 React / setState / localStorage
 const _hash32 = (s) => {   // FNV-1a 32 位 → 8 位十六进制(lockSeen 指纹、草稿基准指纹用)
   const str = String(s === undefined || s === null ? "" : s);
@@ -2075,21 +2075,86 @@ const _hash32 = (s) => {   // FNV-1a 32 位 → 8 位十六进制(lockSeen 指�
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   return (h >>> 0).toString(16).padStart(8, "0");
 };
-// 她最后看过 / 接受的组件库内容指纹(= _hash32(layerContentKey(comp, matIds)))。空壳:""
-const lockSeenKey = (comp, matIds) => "";
+// E1 施工(唯一口径 .claude/batch5/specs/spec_e1_lock.md R1 到 R14):
+//   · 记号:MARK(l) = 部分是对象且 lockFrom 为真(有锁定标记);LK(l) = MARK 且 localVariant 为真(锁着的部分)。
+//     lockFrom 的值("follow" / "differs")只是记录,所有判定只看真假;lockSeen 只用 !== 和指纹比。
+//   · 三个新键都不进 layerContentKey —— 写它们不改内容、不改任何成本;锁定 / 解锁本身一分钱都不变。
+//   · 指纹 / 内容比较读渲染期注入的组件表(_ingContentKey 看「来自组件」行的组件在不在),调用前注入的组件表要和参数 components 是同一份。
+const _lockIsObj = (x) => x !== null && typeof x === "object";
+const _lockMark = (l) => _lockIsObj(l) && !!l.lockFrom;
+const _lockLK = (l) => _lockMark(l) && !!l.localVariant;
+// 部分来自的组件:按 c && c.id === sourceComponentId 找第一个(同 layerLinkState);手搭的 / 不是对象 / 组件已删 → null
+const _lockCompOf = (l, components) => (_lockIsObj(l) && l.sourceComponentId)
+  ? ((Array.isArray(components) ? components : []).find(c => c && c.id === l.sourceComponentId) || null) : null;
+// 她最后看过 / 接受的组件库内容指纹(R2)
+const lockSeenKey = (comp, matIds) => _hash32(layerContentKey(comp, matIds));
 const isCreationLocked = (c) => !!(c && c.lockedAt);
-// 锁定的产品里这一部分:组件库有没有她还没看过的新内容。空壳:false
-const layerNewVersion = (l, comp, matIds) => false;
-// 锁定的产品里被旧版 App 解开的部分(lockFrom 在、localVariant 没了)。空壳:false
-const layerUnlockedByOld = (l) => false;
-// 锁定 / 解锁(纯函数,没东西要改时原样返回同一个对象)。解锁按内容分三种(plan.md「页面」§7),所以要 components / matIds。空壳:原样返回
-const lockCreation = (c, components, matIds, nowIso) => c;
-const unlockCreation = (c, components, matIds) => c;
-// 锁定的产品里「用组件库的」(换成组件库内容,仍锁定)/「保持现在的」(只记下看过了)。空壳:原样返回
-const layerUseLibLocked = (l, comp, matIds) => l;
-const layerKeepLocked = (l, comp, matIds) => l;
-// 显示用:{ locked, at, newVer: [部分下标], byOld: [部分下标] }。空壳:都没有
-const creationLockView = (c, components, matIds) => ({ locked: false, at: null, newVer: [], byOld: [] });
+// 锁定的产品里这一部分:组件库有没有她还没看过的新内容(R7)。内容和组件库一样时永远是 false(不管 lockSeen)
+const layerNewVersion = (l, comp, matIds) => !!(l && l.lockFrom && l.localVariant && comp) && l.lockSeen !== lockSeenKey(comp, matIds) && !sameLayerContent(l, comp, matIds);
+// 锁定的产品里被旧版 App 解开的部分(lockFrom 在、localVariant 没了)(R8)
+const layerUnlockedByOld = (l) => !!(l && l.lockFrom && !l.localVariant);
+// 单个部分上锁(R4;lockCreation、详情页「重新锁上」、锁定产品里「保持现在的」共用)。不碰内容 / customName / usedAmount;不用改时原样返回
+const lockLayerOne = (l, components, matIds) => {
+  if (!_lockIsObj(l) || !l.sourceComponentId) return l;
+  const comp = _lockCompOf(l, components);
+  if (!comp) return l;                              // 组件已删:不锁
+  if (_lockLK(l)) return l;                         // 已经锁着
+  if (_lockMark(l)) return { ...l, follow: false, localVariant: true, lockSeen: lockSeenKey(comp, matIds) };   // 被旧版解开:锁回去,lockFrom 原样
+  const st = layerLinkState(l, components, matIds);
+  if (st === "local") return l;                     // 本产品专用不锁
+  return { ...l, follow: false, localVariant: true, lockFrom: st, lockSeen: lockSeenKey(comp, matIds) };    // follow / differs:锁定那一刻的差异算「看过了」
+};
+// 锁定(R5):已锁的不改 lockedAt;不写 updatedAt(调用方 updateCreation 写);幂等,没东西要改时原样返回同一个对象
+const lockCreation = (c, components, matIds, nowIso) => {
+  if (!_lockIsObj(c)) return c;
+  const layers = Array.isArray(c.layers) ? c.layers : [];
+  const next = layers.map(l => lockLayerOne(l, components, matIds));
+  const changed = next.some((x, i) => x !== layers[i]);
+  if (!changed && isCreationLocked(c)) return c;
+  const lockedAt = c.lockedAt ? c.lockedAt : ((typeof nowIso === "string" && nowIso) ? nowIso : new Date().toISOString());
+  return changed ? { ...c, lockedAt, layers: next } : { ...c, lockedAt };
+};
+// 解锁(R6,按内容分三种,不悄悄换内容):带锁定标记的部分去掉 lockFrom / lockSeen,然后
+//   ① 手搭的 / 组件已删 → follow / localVariant 原样(仍是本产品专用,组件回来也不会被同步换掉);
+//   ② 内容和组件库一样 → 跟组件库走;③ 不一样(含点过「保持现在的」)→ 老数据「和组件库不一样」,详情页照旧问
+const _unlockLayer = (l, components, matIds) => {
+  if (!_lockMark(l)) return l;
+  const { lockFrom, lockSeen, ...rest } = l;
+  const comp = rest.sourceComponentId ? _lockCompOf(rest, components) : null;
+  if (!comp) return rest;
+  return sameLayerContent(rest, comp, matIds) ? { ...rest, follow: true, localVariant: false } : { ...rest, follow: false, localVariant: false };
+};
+const unlockCreation = (c, components, matIds) => {
+  if (!_lockIsObj(c)) return c;
+  const layers = Array.isArray(c.layers) ? c.layers : [];
+  const any = layers.some(_lockMark);
+  if (!any && !Object.prototype.hasOwnProperty.call(c, "lockedAt")) return c;
+  const { lockedAt, ...out } = c;
+  if (any) out.layers = layers.map(l => _unlockLayer(l, components, matIds));
+  return out;
+};
+// 解锁 toast 的 n(R6 第 5 条):有锁定标记、组件在、内容和组件库不一样的部分个数(= 解锁后落到「和组件库不一样」的个数)。
+// 锁定 toast 的 n(R15,Q9 选 B)= 对 lockCreation 的结果数同一个数
+const lockDiffCount = (c, components, matIds) => (_lockIsObj(c) && Array.isArray(c.layers) ? c.layers : [])
+  .filter(l => { if (!_lockMark(l)) return false; const comp = _lockCompOf(l, components); return !!comp && !sameLayerContent(l, comp, matIds); }).length;
+// 锁定日期「9/30」(本地时区,不补零);读不出时间 → ""(R9)
+const lockMdOf = (lockedAt) => { const d = new Date(lockedAt); return isNaN(d.getTime()) ? "" : (d.getMonth() + 1) + "/" + d.getDate(); };
+// 锁定的产品里「用组件库的」(R10:内容换成组件库现在的,仍锁定)/「保持现在的」(R11:只记下这一版看过了)。l 不是对象或没组件 → 原样
+const layerUseLibLocked = (l, comp, matIds) => (!_lockIsObj(l) || !comp) ? l
+  : { ...l, ...layerContentFromComponent(comp), follow: false, localVariant: true, lockFrom: l.lockFrom || "follow", lockSeen: lockSeenKey(comp, matIds) };
+const layerKeepLocked = (l, comp, matIds) => (!_lockIsObj(l) || !comp) ? l : { ...l, lockSeen: lockSeenKey(comp, matIds) };
+// 显示用(R9):{ locked, at, md, newVer: [部分下标], byOld: [部分下标] }。没锁的产品里游离的锁定标记一律不显示
+const creationLockView = (c, components, matIds) => {
+  const locked = isCreationLocked(c);
+  const newVer = [], byOld = [];
+  if (locked && Array.isArray(c.layers)) c.layers.forEach((l, i) => {
+    const comp = _lockCompOf(l, components);
+    if (!comp) return;
+    if (layerNewVersion(l, comp, matIds)) newVer.push(i);
+    if (!l.localVariant) byOld.push(i);            // 「没锁住」:被旧版解开的,和旧版往锁定产品里加的(没有标记)
+  });
+  return { locked, at: locked ? String(c.lockedAt) : "", md: locked ? lockMdOf(c.lockedAt) : "", newVer, byOld };
+};
 // 给备货线用(裁决 6):这一部分算不算「就是组件库的那份」—— 跟组件库走,或者锁定了、内容仍和组件库一样 → 照样从组件的备货里扣。
 // 没有锁定数据(没有 lockFrom)时 = 「layerLinkState 是 follow」,和以前备货线的判断一模一样
 const layerTakesComponentStock = (l, components, matIds) => {
@@ -12347,8 +12412,10 @@ const creationWords = (structure, lang = "zh") => {
     deleteConfirm: stack ? "删除这一层吗？" : "删除这一部分吗？",
     editTitle: stack ? "编辑层：" : "编辑部分：",
     // v17.8: 部分编辑页顶上的说明,按这一部分和组件库的关系(layerLinkState)给
-    linkNote: (state) => {
+    // 第 5 批 E1:locked = 产品锁定、这一部分也锁着(CreationEditForm 传)→ 锁定时的说法;不传 = 和以前一样(只有中文,同以前)
+    linkNote: (state, locked) => {
       const p = stack ? "层" : "部分";
+      if (locked) return `💡 这个产品已锁定：这一${p}是锁定时的内容，组件库改了不会跟着变。在这里改了保存，这一${p}以后就是本产品专用（解锁也不再跟组件库）；点「↻ 同步回组件库」= 用这里的内容更新组件库，其他跟组件库走的产品会跟着变，这个产品仍锁定。`;
       if (state === "local") return `💡 这一${p}是本产品专用：改了只影响这个产品。想让组件库（和跟组件库走的其他产品）也这么改，点「↻ 同步回组件库」，之后这一${p}又跟组件库走。`;
       if (state === "differs") return `💡 这一${p}和组件库现在的内容不一样（老数据）。在这里保存 = 本产品专用；点「↻ 同步回组件库」= 用这里的内容更新组件库。`;
       if (state === "orphan") return `💡 原组件已从组件库删除，这里是当时的内容，只属于这个产品。`;
@@ -12364,6 +12431,74 @@ const LAYER_LINK_TAGS = {
   local:   { zh: "本产品专用",    ja: "この製品専用",    color: T.info,          hint: "在这个产品里单独改过，不再跟组件库" },
   differs: { zh: "和组件库不一样", ja: "部品庫と相違",    color: T.danger,        hint: "老数据：和组件库现在的内容不一样，在详情页选用哪个" },
   orphan:  { zh: "组件已删除",    ja: "部品は削除済み",  color: T.textTertiary,  hint: "原组件已从组件库删除，这里保留当时的内容" },
+  // 第 5 批 E1:锁定的产品里锁着的部分(layerLinkState 是 local、带 lockFrom)。没锁的产品不用这个标签
+  locked:  { zh: "🔒 锁定",       ja: "🔒 ロック",       color: T.textSecondary, hint: "配方已锁定：组件库改了不跟着变" },
+};
+// 锁定产品里部分下面那几行的长按钮(日文「部品庫に合わせる（ロック継続）」):375 宽下允许折行,不撑宽整列
+const LOCK_BTN_WRAP = { whiteSpace: "normal", textAlign: "left" };
+// 详情页 / 编辑页取部分标签的 key:锁定的产品里锁着的部分 → locked,其余照 layerLinkState(R16 第 1 条)
+const layerTagKey = (state, l, locked) => (locked && state === "local" && _lockMark(l)) ? "locked" : state;
+
+// ─── 第 5 批 E1「🔒 锁定配方」的文字(spec_e1_lock.md R24)。structure 决定「层 / 部分」「台 / 個」,叫法从 creationWords 取 ───
+const creationLockTxt = (lang, structure) => {
+  const ja = lang === "ja";
+  const W = creationWords(structure, ja ? "ja" : "zh");
+  const N = (n) => W.partCount(n);                         // 「3 层」/「2 个部分」;日文「3 層」/「2 パーツ」
+  const pj = W.isStack ? "層" : "パーツ";
+  const u = W.isStack ? "台" : "個";
+  const perUnit = creationWords(structure, "zh").perUnitCost;   // 单台成本 / 单个成本
+  if (ja) return {
+    lock: (name, n) => `🔒「${name}」をロックしました。部品庫を変えても変わりません（原価は材料の現在価格）。` + (n >= 1 ? `うち ${n} 件の${pj}は部品庫と異なりますが、今の内容のままロックしました。` : ""),
+    unlock: (n) => n >= 1 ? `ロック解除 · 部品庫と異なる${pj}が ${n} 件あります。下で選んでください` : "ロック解除",
+    noUndo: "その後変更されたため、元に戻しませんでした",
+    useLib1: (part, a, b) => `「${part}」を部品庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
+    useLibN: (n, a, b) => `${n} 件を部品庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
+    keep: (part) => `「${part}」は今のまま（この版はお知らせしません）`,
+    relock1: (part) => `「${part}」をロックし直しました`,
+    relockN: (n) => `${n} 件をロックし直しました`,
+    edited: (nm) => `「${nm}」はロック中の製品で変更されました。今後はこの製品専用で、ロックを解除しても部品庫とは連動しません`,
+    h7: (label) => `「${label}」を部品庫の最新にしました（ロック継続）`,
+    btnLock: "🔒 レシピをロック",
+    btnLockTitle: "ロックすると部品庫を変えてもこの製品は変わらず、「部品庫に新しい版があります」とだけ表示します。原価は材料の現在価格で計算されます",
+    btnUnlock: "🔓 ロック解除",
+    cover: (md) => md ? `🔒 レシピ固定中 · ${md}` : "🔒 レシピ固定中",
+    newVerRow: (d) => `部品庫に新しい版があります（${d}）`,
+    newVerBar: (n) => `${n} 件の${pj}に部品庫の新しい版があります。ロック中のため自動では変わりません。`,
+    byOldFollow: (part) => `「${part}」がロックされていません（更新前の別の端末で変更、現在は部品庫に連動）`,
+    byOldDiffers: (part) => `「${part}」がロックされておらず、部品庫と異なります`,
+    byOldBar: (n) => `${n} 件のロックが外れています（更新前の別の端末で変更）。`,
+    btnUseLib: "部品庫に合わせる", btnKeep: "今のまま", btnUseLibAll: "すべて部品庫に合わせる",
+    btnRelock: "ロックし直す", btnRelockAll: "すべてロックし直す",
+    btnUseLibLocked: "部品庫に合わせる（ロック継続）", btnRevertLocked: "↺ 部品庫に合わせる（ロック継続）",
+    card: (n) => n >= 1 ? `🔒 新しい版 ${n} 件` : "🔒",
+    editorNote: (md) => `🔒 レシピ固定中${md ? `（${md}）` : ""}：部品庫の変更は反映されません。ここでの編集は可能で、追加したパーツも保存時にロックされます。解除は詳細画面で。`,
+  };
+  return {
+    lock: (name, n) => `🔒 已锁定「${name}」：组件库再改不会跟着变，有新版本会提示。成本仍按材料实时价算。` + (n >= 1 ? `其中 ${N(n)}和组件库不一样，已按现在的样子锁上。` : ""),
+    unlock: (n) => n >= 1 ? `已解锁 · ${N(n)}和组件库不一样，在下面选` : "已解锁",
+    noUndo: "这个产品之后又改过，没有撤销",
+    useLib1: (part, a, b) => `「${part}」换成组件库现在的（仍锁定），${perUnit} ¥${a} → ¥${b}`,
+    useLibN: (n, a, b) => `${N(n)}换成组件库现在的（仍锁定），${perUnit} ¥${a} → ¥${b}`,
+    keep: (part) => `「${part}」保持现在的，这一版不再提示`,
+    relock1: (part) => `「${part}」重新锁上了`,
+    relockN: (n) => `${N(n)}重新锁上了`,
+    edited: (nm) => `「${nm}」在锁定的产品里改过了：以后是本产品专用，解锁也不再跟组件库`,
+    h7: (label) => `「${label}」换成组件库现在的内容（产品仍锁定）`,
+    btnLock: "🔒 锁定配方",
+    btnLockTitle: "锁定后，组件库再改这个产品也不跟着变，只提示「组件库有新版本」；价格照样按材料实时算",
+    btnUnlock: "🔓 解锁",
+    cover: (md) => md ? `🔒 配方已锁定 · ${md}` : "🔒 配方已锁定",
+    newVerRow: (d) => `组件库有新版本（差在：${d}）`,
+    newVerBar: (n) => `${N(n)}组件库有新版本。这个产品已锁定，不会自动换。`,
+    byOldFollow: (part) => `「${part}」没锁住（另一台还没刷新的设备改过，现在跟组件库走）`,
+    byOldDiffers: (part) => `「${part}」没锁住，和组件库不一样`,
+    byOldBar: (n) => `${N(n)}没锁住（另一台还没刷新的设备改过）。`,
+    btnUseLib: "用组件库的", btnKeep: "保持现在的", btnUseLibAll: "全部用组件库的",
+    btnRelock: "重新锁上", btnRelockAll: "全部重新锁上",
+    btnUseLibLocked: "用组件库的（仍锁定）", btnRevertLocked: "↺ 用组件库的（仍锁定）",
+    card: (n) => n >= 1 ? `🔒 ${N(n)}有新版本` : "🔒",
+    editorNote: (md) => `🔒 配方已锁定${md ? `（${md}）` : ""}：组件库改了不会跟着变。这里照样能改；新加的部分保存时也锁上。解锁在详情页。`,
+  };
 };
 // 老数据「和组件库不一样」时说清差在哪,按 layerContentKey 的顺序
 const LAYER_DIFF_FIELDS = [
@@ -12385,7 +12520,8 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 // ─── 组合产品 View ───────────────────────────────────────────────
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
   onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel, onOpenKitchen,
-  setMaterials, onKnowledgeCheck }) {   // 第 5 批第 0 步接好(先不用):部分编辑页「存进材料百科」(S1)、保存后检查知识按钮(E3)
+  setMaterials, onKnowledgeCheck,   // 第 5 批第 0 步接好(先不用):部分编辑页「存进材料百科」(S1)、保存后检查知识按钮(E3)
+  onGoComponents }) {   // 第 5 批 E1:选组件弹窗里组件库是空的 →「去组件仓库新建」(App 的 goTab("components"))
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
   const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
@@ -12455,6 +12591,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           setEditTarget(null);
         }}
         onUpdateComponent={onUpdateComponent}
+        onGoComponents={onGoComponents}
       />
     );
   }
@@ -12486,6 +12623,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
     }
   }
 
+  const listMatIds = new Set((materials || []).map(m => m && m.id));   // 第 5 批 E1:卡片上的锁定标记(组件库有没有新版本)用
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
@@ -12628,6 +12766,15 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                   {layers.length > 8 && (
                     <span style={{ fontSize: 10, color: T.textTertiary, padding: "2px 6px" }}>+{layers.length - 8}</span>
                   )}
+                  {/* 第 5 批 E1:锁定的产品「🔒」,组件库有新版本时「🔒 N 层有新版本」(没锁的不加) */}
+                  {isCreationLocked(c) && (() => {
+                    const lv = creationLockView(c, components, listMatIds);
+                    return (
+                      <span data-lock-note="1" style={{ fontSize: 10, padding: "2px 6px", color: lv.newVer.length ? T.warning : T.textSecondary }}>
+                        {creationLockTxt(lang, creationStructureOf(c)).card(lv.newVer.length)}
+                      </span>
+                    );
+                  })()}
                   {/* 2026-09-29 体检第 2 批:用量没填 / 读不准的提醒;没有成本时也要出,所以不放在成本那个 span 里 */}
                   {usedWarnCount > 0 && (
                     <span style={{ marginLeft: "auto", fontSize: 11, color: T.warning }}
@@ -12997,6 +13144,57 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
   };
   const keepLocal = (i) => patchLayers({ [i]: { follow: false, localVariant: true } }, `「${layerTitle(layers[i])}」标成本产品专用，不再跟组件库`);
 
+  // ─── 第 5 批 E1「🔒 锁定配方」(spec_e1_lock.md R15 / R16)。没锁的产品:只多一个锁定按钮,别的和以前一模一样 ───
+  const locked = isCreationLocked(c);
+  const LT = creationLockTxt(lang, creationStructureOf(c));
+  const lockView = creationLockView(c, components, matIds);
+  const tagKeys = linkStates.map((s, i) => layerTagKey(s, layers[i], locked));   // 锁着的部分标「🔒 锁定」,其余照旧
+  const compOfLayer = (l) => (l && l.sourceComponentId) ? (components.find(x => x && x.id === l.sourceComponentId) || null) : null;
+  // 单台 / 单个成本(两位小数给 toast 用;和下面 costPerCake 同一个算式,只算对象部分)
+  const perUnitOf = (ls) => (ls || []).reduce((s, l) => s + ((l && typeof l === "object") ? calcLayerLiveCost(l, materials, brands) : 0), 0) / (parseFloat(c.serves) || 1);
+  const perUnitAfter = (patches) => perUnitOf(layers.map((l, i) => patches[i] ? { ...l, ...patches[i] } : l)).toFixed(2);
+  // 锁定的产品里「用组件库的(仍锁定)」:内容换成组件库现在的,标记照样锁着;一个和几个共用(toast 带单台成本前后)
+  const useLibLocked = (idxs) => {
+    const patches = {};
+    idxs.forEach(i => { const comp = compOfLayer(layers[i]); if (comp) patches[i] = layerUseLibLocked(layers[i], comp, matIds); });
+    const ks = Object.keys(patches);
+    if (!ks.length) return;
+    const a = perUnitOf(layers).toFixed(2), b = perUnitAfter(patches);
+    patchLayers(patches, ks.length === 1 && idxs.length === 1 ? LT.useLib1(layerTitle(layers[idxs[0]]), a, b) : LT.useLibN(ks.length, a, b));
+  };
+  const keepLocked = (i) => { const comp = compOfLayer(layers[i]); if (comp) patchLayers({ [i]: layerKeepLocked(layers[i], comp, matIds) }, LT.keep(layerTitle(layers[i]))); };
+  // 「重新锁上」(被旧版解开的 / 旧版加进来的)和「和组件库不一样」那一行的「保持现在的」:都是单个部分上锁(lockLayerOne)
+  const relock = (idxs, msg) => {
+    const patches = {};
+    idxs.forEach(i => { const nl = lockLayerOne(layers[i], components, matIds); if (nl !== layers[i]) patches[i] = nl; });
+    if (Object.keys(patches).length) patchLayers(patches, msg);
+  };
+  // 锁定 / 解锁:先做 + 撤销(不弹确认框)。n 在渲染时的产品上算(更新函数可能晚跑);撤销按部分的身份序列认,身份变了就不撤
+  const toggleLock = () => {
+    if (!onUpdateCreation) return;
+    const now = new Date().toISOString();   // 在更新函数外面定:StrictMode 跑两遍结果一样
+    const locking = !locked;
+    const n = locking ? lockDiffCount(lockCreation(c, components, matIds, now), components, matIds) : lockDiffCount(c, components, matIds);
+    const crName = pickLang(c, "name", lang) || c.nameFr || "";
+    let pre = null, post = null;
+    onUpdateCreation(c.id, cr => { pre = cr; post = locking ? lockCreation(cr, components, matIds, now) : unlockCreation(cr, components, matIds); return post; });
+    if (!showToast) return;
+    showToast(locking ? LT.lock(crName, n) : LT.unlock(n), { undo: () => {
+      let back = false;
+      const seq = (ls) => (Array.isArray(ls) ? ls.map((_, i) => layerIdentAt(ls, i)) : []);
+      onUpdateCreation(c.id, cur => {
+        if (!pre || !post) return cur;
+        const a = seq(cur.layers), b = seq(post.layers);
+        if (a.length !== b.length || a.some((x, i) => x !== b[i])) return cur;
+        back = true;
+        const r = { ...cur, layers: pre.layers };
+        if (Object.prototype.hasOwnProperty.call(pre, "lockedAt")) r.lockedAt = pre.lockedAt; else delete r.lockedAt;
+        return r;
+      });
+      setTimeout(() => { if (!back) showToast(LT.noUndo); }, 0);   // 更新函数在 React 渲染时才跑,等它跑完再看撤没撤
+    } });
+  };
+
   // 🧮 单层实际成本:按这一层的配料实时算,不读存下来的 totalCost(没有币种,见 getIngsLiveCost)
   const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
 
@@ -13031,6 +13229,12 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {onKitchen && <Btn size="sm" onClick={() => onKitchen()}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
+          {/* 第 5 批 E1:锁定 / 解锁(先做 + 撤销) */}
+          {onUpdateCreation && (
+            <span data-lock-btn="1" style={{ display: "inline-flex" }}>
+              <Btn size="sm" onClick={toggleLock} title={locked ? undefined : LT.btnLockTitle}>{locked ? LT.btnUnlock : LT.btnLock}</Btn>
+            </span>
+          )}
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{backLabel || (lang === "zh" ? "← 返回" : "← 戻る")}</Btn>
         </div>
@@ -13100,6 +13304,10 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                 <div style={{ fontFamily: T.fontSerif, fontSize: 24, fontWeight: 500, color: T.textPrimary, lineHeight: 1.3 }}>
                   {name}
                 </div>
+              )}
+              {/* 第 5 批 E1:锁定的产品名字下面「🔒 配方已锁定 · 9/30」 */}
+              {locked && viewMode === "detail" && (
+                <div data-lock-note="1" style={{ fontSize: 12, color: T.textSecondary, marginTop: 6 }}>{LT.cover(lockView.md)}</div>
               )}
               {c.chef && viewMode !== "menu" && (
                 <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 8, letterSpacing: "0.5px" }}>
@@ -13222,6 +13430,23 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 12 }}>{W.sectionTitle}</div>
         {layers.length === 0 && <div style={{ fontSize: 13, color: "#999999" }}>{W.emptyDetail}</div>}
+        {/* 第 5 批 E1:锁定的产品,列表顶上 ① 组件库有新版本 ② 没锁住(≥ 2 个才出这一条)—— 都在下面今天那条「和组件库不一样」前面 */}
+        {locked && viewMode === "detail" && lockView.newVer.length > 0 && (
+          <div data-lock-row="1" style={{ border: `0.5px solid ${T.warning}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200, color: T.warning }}>{LT.newVerBar(lockView.newVer.length)}</span>
+            {lockView.newVer.length >= 2 && onUpdateCreation && (
+              <Btn size="sm" onClick={() => useLibLocked(lockView.newVer)}>{LT.btnUseLibAll}</Btn>
+            )}
+          </div>
+        )}
+        {locked && viewMode === "detail" && lockView.byOld.length >= 2 && (
+          <div data-lock-row="1" style={{ border: `0.5px solid ${T.warning}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200, color: T.warning }}>{LT.byOldBar(lockView.byOld.length)}</span>
+            {onUpdateCreation && (
+              <Btn size="sm" onClick={() => relock(lockView.byOld, LT.relockN(lockView.byOld.length))}>{LT.btnRelockAll}</Btn>
+            )}
+          </div>
+        )}
         {/* v17.8: 老数据里和组件库现在的内容不一样的部分,先照旧显示产品里存的版本,点了才换 */}
         {viewMode === "detail" && differsIdx.length > 0 && (
           <div style={{ border: `0.5px solid ${T.danger}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -13231,7 +13456,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                 : `${differsIdx.length} 件が部品庫の現在の内容と異なります（旧データ）。下で個別に選択してください。`}
             </span>
             {differsIdx.length >= 2 && onUpdateCreation && (
-              <Btn size="sm" onClick={() => applyLib(differsIdx)}>{lang === "zh" ? "全部用组件库的" : "すべて部品庫に合わせる"}</Btn>
+              <Btn size="sm" onClick={() => (locked ? useLibLocked(differsIdx) : applyLib(differsIdx))}>{lang === "zh" ? "全部用组件库的" : "すべて部品庫に合わせる"}</Btn>
             )}
           </div>
         )}
@@ -13297,9 +13522,9 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                             )}
                             <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
-                            {LAYER_LINK_TAGS[linkStates[i]] && linkStates[i] !== "differs" && (
-                              <span title={LAYER_LINK_TAGS[linkStates[i]].hint} style={{ color: LAYER_LINK_TAGS[linkStates[i]].color }}>
-                                {lang === "zh" ? LAYER_LINK_TAGS[linkStates[i]].zh : LAYER_LINK_TAGS[linkStates[i]].ja}
+                            {LAYER_LINK_TAGS[tagKeys[i]] && tagKeys[i] !== "differs" && (
+                              <span title={LAYER_LINK_TAGS[tagKeys[i]].hint} style={{ color: LAYER_LINK_TAGS[tagKeys[i]].color }}>
+                                {lang === "zh" ? LAYER_LINK_TAGS[tagKeys[i]].zh : LAYER_LINK_TAGS[tagKeys[i]].ja}
                               </span>
                             )}
                           </>
@@ -13313,20 +13538,51 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                       </div>
                     </div>
 
-                    {/* v17.8: 和组件库不一样(老数据)→ 两个按钮;本产品专用 → 可改回跟组件库。都是先做 + 给撤销 */}
+                    {/* 第 5 批 E1:锁定的产品里,这一部分没锁住(被另一台还没刷新的设备解开 / 加进来的)→「重新锁上」 */}
+                    {locked && viewMode === "detail" && onUpdateCreation && lockView.byOld.includes(i) && (
+                      <div data-lock-row="1" style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.warning}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.warning }}>
+                          {linkStates[i] === "follow" ? LT.byOldFollow(layerTitle(l)) : LT.byOldDiffers(layerTitle(l))}
+                        </span>
+                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); relock([i], LT.relock1(layerTitle(l))); }}>{LT.btnRelock}</Btn>
+                      </div>
+                    )}
+                    {/* 第 5 批 E1:锁定的部分,组件库有她没看过的新内容 → 用组件库的(仍锁定)/ 保持现在的 */}
+                    {locked && viewMode === "detail" && onUpdateCreation && lockView.newVer.includes(i) && (
+                      <div data-lock-row="1" style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.warning}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.warning }}>
+                          {LT.newVerRow(layerDiffLabels(l, compOfLayer(l), matIds, lang).join(lang === "zh" ? "、" : "・"))}
+                        </span>
+                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnUseLib}</Btn>
+                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocked(i); }}>{LT.btnKeep}</Btn>
+                      </div>
+                    )}
+                    {/* v17.8: 和组件库不一样(老数据)→ 两个按钮;本产品专用 → 可改回跟组件库。都是先做 + 给撤销
+                        第 5 批 E1:锁定的产品里换成「用组件库的(仍锁定)」/「保持现在的」(保持内容、锁上),没有按钮会改回不锁的跟组件库 */}
                     {viewMode === "detail" && onUpdateCreation && linkStates[i] === "differs" && (
                       <div style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.danger}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <span style={{ flex: 1, minWidth: 160, color: T.danger }}>
                           {lang === "zh" ? "和组件库现在的内容不一样" : "部品庫と相違"}
                           {(() => { const comp = components.find(x => x && x.id === l.sourceComponentId); const d = layerDiffLabels(l, comp, matIds, lang); return d.length ? (lang === "zh" ? `（差在：${d.join("、")}）` : `（${d.join("・")}）`) : ""; })()}
                         </span>
-                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "部品庫に合わせる"}</Btn>
-                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocal(i); }}>{lang === "zh" ? "保留（本产品专用）" : "この製品専用で残す"}</Btn>
+                        {locked ? (
+                          <>
+                            <Btn size="sm" style={LOCK_BTN_WRAP} onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnUseLibLocked}</Btn>
+                            <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); relock([i], LT.keep(layerTitle(l))); }}>{LT.btnKeep}</Btn>
+                          </>
+                        ) : (
+                          <>
+                            <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "部品庫に合わせる"}</Btn>
+                            <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocal(i); }}>{lang === "zh" ? "保留（本产品专用）" : "この製品専用で残す"}</Btn>
+                          </>
+                        )}
                       </div>
                     )}
                     {viewMode === "detail" && onUpdateCreation && linkStates[i] === "local" && isExpanded && (
                       <div style={{ marginTop: 8, marginLeft: 22 }}>
-                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ 部品庫に戻す"}</Btn>
+                        {locked
+                          ? <Btn size="sm" variant="ghost" style={LOCK_BTN_WRAP} onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnRevertLocked}</Btn>
+                          : <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ 部品庫に戻す"}</Btn>}
                       </div>
                     )}
 
@@ -13639,11 +13895,19 @@ function LayerUsedField({ layer, W, cost, onField, serves, lang, idx, onLayer })
     </div>
   );
 }
-// 锁定的产品编辑页顶上那一条「🔒 配方已锁定(9/30):…」(E1;第 0 步空壳)
-function CreationLockNote() { return null; }
+// 锁定的产品编辑页顶上那一条「🔒 配方已锁定(9/30):…」(第 5 批 E1,spec_e1_lock.md R19)。没锁 → 不出
+function CreationLockNote({ form, lang = "zh" }) {
+  if (!isCreationLocked(form)) return null;
+  return (
+    <div data-lock-note="1" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: T.textSecondary, lineHeight: 1.6 }}>
+      {creationLockTxt(lang, creationStructureOf(form)).editorNote(lockMdOf(form.lockedAt))}
+    </div>
+  );
+}
 
 function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], setShopMaterials, onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh",
-  setMaterials }) {   // 第 5 批第 0 步:透传给部分编辑页(S1「存进材料百科」用,先不用)
+  setMaterials,   // 第 5 批第 0 步:透传给部分编辑页(S1「存进材料百科」用,先不用)
+  onGoComponents }) {   // 第 5 批 E1:选组件弹窗「去组件仓库新建」
   const isNew = !creation;
   const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -13705,16 +13969,18 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
   // 添加组件作为一层 —— 内容字段和「跟组件库同步」共用 layerContentFromComponent,默认跟组件库走
   // 第 5 批第 0 步:改成一次加好几个(E1 的多选弹窗用;老弹窗调 addLayersFromComponents([comp]));新部分用量的默认写法走 layerUsedDefaults(S2)
+  // 第 5 批 E1(spec_e1_lock.md R26):按弹窗里勾选的先后,一次 setForm 追加全部;_lid 加上序号 i 两两不同。
+  // 只选一个时和以前的 addLayerFromComponent 逐字节一样。锁定的产品里新加的部分先不锁(follow),保存产品时由 handleSave 锁上。
+  // 新部分用量的默认写法 layerUsedDefaults(加之前的表单)每个部分各展开一份,放在最后(S2)
   const addLayersFromComponents = (list) => {
-    const defaults = layerUsedDefaults(form);
-    const newLayers = (Array.isArray(list) ? list : []).filter(Boolean).map(comp => ({
-      _lid: Date.now() + Math.random(),
+    const newLayers = (Array.isArray(list) ? list : []).filter(Boolean).map((comp, i) => ({
+      _lid: Date.now() + Math.random() + i,
       sourceComponentId: comp.id,
       customName: "", // 自定义层名（例：①顶层饼底）
       usedAmount: "", // 这一批(制作个数)的用量
-      ...defaults,
       ...layerContentFromComponent(comp),
       follow: true,
+      ...layerUsedDefaults(form),
     }));
     if (newLayers.length) setForm(prev => ({ ...prev, layers: [...(prev.layers || []), ...newLayers] }));
     setShowComponentPicker(false);
@@ -13758,9 +14024,25 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 
   // 保存部分时定标记:内容和组件库一样 → 跟组件库;不一样 → 本产品专用。
   // opts.synced = 刚点了「↻ 同步回组件库」(组件库这一刻还没刷新到这里,不能拿来比),直接算跟组件库
+  // 第 5 批 E1(spec_e1_lock.md R17):锁定的产品里、带锁定标记的部分走 ①②③,其余(④)照以前的规则一个字不变:
+  //   ① 刚「↻ 同步回组件库」→ 仍锁定,lockSeen 按同步之后的组件库({...组件, ...syncedComp})算,同步完不冒「新版本」
+  //   ② 内容和打开时一样(打开不改就保存)→ 原样(锁定标记随表单带着)
+  //   ③ 内容改了 → 去掉锁定标记、本产品专用(解锁也不再跟组件库),toast 说一句
   const updateLayer = (idx, updatedLayer, opts = {}) => {
     let next = updatedLayer;
-    if (updatedLayer && updatedLayer.sourceComponentId) {
+    if (isCreationLocked(form) && updatedLayer && typeof updatedLayer === "object" && updatedLayer.sourceComponentId && updatedLayer.lockFrom) {
+      const prev = (form.layers || [])[idx];
+      const comp = components.find(c => c && c.id === updatedLayer.sourceComponentId);
+      if (opts.synced) {
+        next = { ...updatedLayer, follow: false, localVariant: true, lockSeen: lockSeenKey({ ...(comp || {}), ...(opts.syncedComp || {}) }, matIds) };
+      } else if (sameLayerContent(updatedLayer, prev, matIds)) {
+        next = updatedLayer;
+      } else {
+        const { lockFrom, lockSeen, ...rest } = updatedLayer;
+        next = { ...rest, follow: false, localVariant: true };
+        if (showToast) showToast(creationLockTxt(lang, structure).edited(updatedLayer.customName || updatedLayer.nameZh || updatedLayer.nameJa || ""), { ms: 6000 });
+      }
+    } else if (updatedLayer && updatedLayer.sourceComponentId) {
       const comp = components.find(c => c && c.id === updatedLayer.sourceComponentId);
       if (opts.synced) {
         next = { ...updatedLayer, follow: true, localVariant: false };
@@ -13789,11 +14071,14 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
+    // 第 5 批 E1(R18):锁定的产品保存前先过一遍 lockCreation —— 新加的部分、编辑时回到跟组件库的、被旧版解开的都锁上(lockedAt 不变)。
+    // 没锁的不经过它,输出和以前逐字节一样
+    const F = isCreationLocked(form) ? lockCreation(form, components, matIds, new Date().toISOString()) : form;
     onSave({
-      ...form,
+      ...F,
       id: creation ? creation.id : "creation_" + Date.now(),
       structure,
-      layers: (form.layers || []).map(({ _lid, ...rest }) => rest),
+      layers: (F.layers || []).map(({ _lid, ...rest }) => rest),
       updatedAt: new Date().toISOString(),
     });
   };
@@ -13815,6 +14100,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         onBack={() => setEditingLayerIdx(null)}
         onUpdateComponent={onUpdateComponent}
         linkState={layerLinkState(layer, components, matIds)}
+        locked={isCreationLocked(form) && _lockLK(layer)}
         lang={lang}
         setShopMaterials={setShopMaterials}
         setMaterials={setMaterials}
@@ -14057,7 +14343,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                 const cat = getCompCat(layer.componentCategory);
                 const name = layer.nameZh || layer.nameJa || "未命名";
                 const actualCost = calcLayerActualCost(layer);
-                const linkTag = LAYER_LINK_TAGS[layerLinkState(layer, components, matIds)];
+                const linkTag = LAYER_LINK_TAGS[layerTagKey(layerLinkState(layer, components, matIds), layer, isCreationLocked(form))];   // 第 5 批 E1:锁着的部分标「🔒 锁定」
                 const updateLayerField = (field, val) => setForm(prev => ({ ...prev, layers: prev.layers.map((l, i) => i === idx ? { ...l, [field]: val } : l) }));
                 return (
                   <div key={layer._lid || idx} style={{ borderLeft: `4px solid ${cat.color}`, background: cat.bg, padding: "10px 14px", marginBottom: 8, borderRadius: "0 6px 6px 0" }}>
@@ -14130,71 +14416,174 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存" : "保存"}</Btn>
       </div>
 
-      {/* 组件选择弹窗 */}
+      {/* 组件选择弹窗(第 5 批 E1 重写:搜索 / 多选 / 已加 ×n / 锁定提示) */}
       {showComponentPicker && (
         <ComponentPicker
           components={components}
           materials={materials}
           brands={brands}
-          onSelect={(comp) => addLayersFromComponents([comp])}
+          lang={lang}
+          layers={form.layers || []}
+          locked={isCreationLocked(form)}
+          onAdd={(list) => addLayersFromComponents(list)}
           onClose={() => setShowComponentPicker(false)}
+          onGoComponents={onGoComponents}
         />
       )}
     </div>
   );
 }
 
-// ─── 组件选择弹窗 ─────────────────────────────────────────────
-function ComponentPicker({ components, materials = [], brands = [], onSelect, onClose, lang = "zh" }) {
-  const [filterCat, setFilterCat] = useState("all");
-  const filtered = filterCat === "all" ? components : components.filter(c => c.componentCategory === filterCat);
-
+// ─── 组件选择弹窗(第 5 批 E1 重写,spec_e1_lock.md R25;data-picker-v2)─────────────
+// 只给组合产品编辑页用(配料行「来自组件」用的是 PickerComponentList,不动)。搜名字 / 风味 / 原料(走 componentQueryMatch,同组件仓库);
+// 在用的排前(稳定排序);可以多选,按勾选先后标 ①②③;已经加过的标「已加 ×n」,照样能再选;点「加入 N 个」一次加进去(onAdd(list) 后关)。
+// Esc / 点遮罩 / 「关闭」= 关掉,勾了没加的直接丢,不问。手机 375 宽是满宽底部面板,平板以上居中 640 宽(窄屏规则在 PICKER2_CSS,只这一个弹窗用)
+const PICKER2_CSS = ".k-picker2 { align-items: center; justify-content: center; padding: 20px; } .k-picker2-panel { width: 640px; max-width: 100%; max-height: 85vh; border-radius: 12px; } "
+  + "@media (max-width: 599px) { .k-picker2 { align-items: flex-end; padding: 0; } .k-picker2-panel { width: 100%; max-height: 90vh; border-radius: 12px 12px 0 0; } }";   // 不写「>」:服务端渲染会把它转义
+const PICKER2_TXT = {
+  zh: { title: "从组件库选", desc: "点卡片勾选，可以选好几个；同一个组件可以加两次（比如两片海绵）", search: "搜名字、风味或原料",
+    all: (n) => `全部 ${n}`, inuse: (n) => `● 在用 ${n}`, inuseLabel: "● 在用", cat: (name, n) => `${name} ${n}`,
+    added: (n) => n >= 2 ? `已加 ×${n}` : "已加", prep: "备货", nIng: (n) => `${n} 种原料`, inuseTitle: "在用",
+    ingHit: (name, n) => `含「${name}」${n > 1 ? `等 ${n} 行` : ""}`,
+    selected: (n) => `已选 ${n} 个`, clear: "清空", add: (n) => `加入 ${n} 个`, close: "关闭",
+    locked: "🔒 这个产品已锁定：新加的部分保存时也会锁上",
+    empty: "组件库还是空的", goNew: "去组件仓库新建", noMatch: "没有匹配的组件" },
+  ja: { title: "パーツ庫から選ぶ", desc: "カードをタップして複数選択できます。同じパーツを 2 回追加することもできます", search: "名前・フレーバー・材料で検索",
+    all: (n) => `すべて ${n}`, inuse: (n) => `● 使用中 ${n}`, inuseLabel: "● 使用中", cat: (name, n) => `${name} ${n}`,
+    added: (n) => n >= 2 ? `追加済み ×${n}` : "追加済み", prep: "作り置き", nIng: (n) => `材料 ${n} 種`, inuseTitle: "使用中",
+    ingHit: (name, n) => `「${name}」を使用${n > 1 ? `（計 ${n} 行）` : ""}`,
+    selected: (n) => `${n} 件選択`, clear: "クリア", add: (n) => `${n} 件を追加`, close: "閉じる",
+    locked: "🔒 この製品はロック中：追加したパーツも保存時にロックされます",
+    empty: "パーツ庫はまだ空です", goNew: "パーツ庫で新規作成", noMatch: "該当するパーツがありません" },
+};
+// 勾选序号:① 到 ⑳,第 21 个起写 (21)
+const pickerOrdinal = (p) => (p <= 20 ? String.fromCharCode(0x2460 + p - 1) : `(${p})`);
+function ComponentPicker({ components = [], materials = [], brands = [], lang = "zh", layers = [], locked = false, onAdd, onClose, onGoComponents }) {
+  const ja = lang === "ja";
+  const X = PICKER2_TXT[ja ? "ja" : "zh"];
+  const [q, setQ] = useState("");
+  const [chip, setChip] = useState("all");      // "all" / "inuse" / 分类 id
+  const [sel, setSel] = useState([]);           // 按点击先后的组件 id
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && closeRef.current) closeRef.current(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const list = Array.isArray(components) ? components : [];
+  const objs = list.map((c, ci) => ({ c, ci })).filter(x => x.c !== null && typeof x.c === "object");
+  // 胶囊计数不跟搜索走;分类认不出的组件只在「全部」里
+  const inUseN = objs.filter(x => x.c.inUse).length;
+  const chips = [{ id: "all", label: X.all(objs.length) }];
+  if (inUseN > 0) chips.push({ id: "inuse", label: X.inuse(inUseN) });
+  getAllCompCats().forEach(cat => {
+    const n = list.filter(c => c && c.componentCategory === cat.id).length;
+    if (n > 0) chips.push({ id: cat.id, label: X.cat(ja ? cat.ja : cat.zh, n), cat });
+  });
+  const qq = q.trim().toLowerCase();
+  const qk = normSearch(qq);
+  const qctx = { qk, matById: qk ? materialMapOf(materials) : null, brandKeys: qk ? brandKeyMapOf(brands) : null };
+  const matched = [];
+  objs.forEach(x => {
+    const c = x.c;
+    if (chip === "inuse" ? !c.inUse : (chip !== "all" && c.componentCategory !== chip)) return;
+    const hit = componentQueryMatch(c, qq, qctx);
+    if (hit) matched.push({ ...x, hit });
+  });
+  const visible = [...matched.filter(x => x.c.inUse), ...matched.filter(x => !x.c.inUse)];   // 在用的排前,同组保持原顺序
+  const toggle = (id) => setSel(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  const doAdd = () => {
+    if (!sel.length) return;
+    const picked = sel.map(id => list.find(c => c && c.id === id)).filter(Boolean);
+    if (onAdd) onAdd(picked);
+    if (onClose) onClose();
+  };
+  // 筛完没有:搜索词和胶囊做成可摘的 chip(不给新建按钮)
+  const emptyChips = [];
+  if (q.trim()) emptyChips.push({ label: `「${q.trim()}」`, onRemove: () => setQ("") });
+  if (chip !== "all") {
+    const cat = chip === "inuse" ? null : getAllCompCats().find(x => x.id === chip);
+    emptyChips.push({ label: chip === "inuse" ? X.inuseLabel : (cat ? (ja ? cat.ja : cat.zh) : String(chip)), onRemove: () => setChip("all") });
+  }
+  const pillStyle = (active, color) => ({
+    padding: "4px 12px", fontSize: 12, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill, whiteSpace: "nowrap",
+    border: `${active ? 1.5 : 1}px solid ${active ? (color || T.ink) : T.border}`,
+    background: active ? (color ? T.bgCard : T.ink) : T.bgCard, color: active ? (color || T.paper) : T.textPrimary, fontWeight: active ? 500 : 400,
+  });
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#FFFFFF", borderRadius: "12px", padding: "1.5rem", maxWidth: 640, width: "100%", maxHeight: "85vh", overflowY: "auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>从组件库选择</div>
-          <Btn size="sm" onClick={onClose}>关闭</Btn>
-        </div>
-
-        {components.length === 0 ? (
-          <div style={{ padding: "2rem", textAlign: "center", color: "#666666", fontSize: 13 }}>
-            组件库还是空的。<br />请先在「组件仓库」中添加组件。
+    <div data-picker-v2="1" className="k-picker2"
+      onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: T.z.modal, display: "flex" }}>
+      <style>{PICKER2_CSS}</style>
+      <div role="dialog" aria-modal="true" className="k-picker2-panel"
+        style={{ background: "#FFFFFF", display: "flex", flexDirection: "column", overflow: "hidden", boxSizing: "border-box" }}>
+        <div style={{ padding: "1rem 1.25rem 0.5rem", flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 16, fontWeight: 500 }}>{X.title}</div>
+            <Btn size="sm" onClick={() => onClose && onClose()}>{X.close}</Btn>
           </div>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
-              <button onClick={() => setFilterCat("all")} style={{ padding: "4px 12px", fontSize: 12, border: filterCat === "all" ? "1.5px solid #111111" : "1px solid #CCCCCC", borderRadius: 20, background: filterCat === "all" ? "#111111" : "#FFFFFF", color: filterCat === "all" ? "#FFFFFF" : "#111111", cursor: "pointer" }}>{lang === "zh" ? "全部" : "すべて"}</button>
-              {getAllCompCats().map(cat => {
-                const count = components.filter(c => c.componentCategory === cat.id).length;
-                if (count === 0) return null;
-                const active = filterCat === cat.id;
-                return (
-                  <button key={cat.id} onClick={() => setFilterCat(cat.id)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? cat.color : "#CCCCCC"}`, borderRadius: 20, background: active ? cat.bg : "#FFFFFF", color: active ? cat.color : "#111111", cursor: "pointer" }}>
-                    {cat.zh} ({count})
-                  </button>
-                );
-              })}
-            </div>
-
+          <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 4, lineHeight: 1.6 }}>{X.desc}</div>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder={X.search} className="k-input"
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 10, padding: "8px 12px", fontSize: 14, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary }} />
+          {/* 「全部 N」永远在;「● 在用」和各分类只在有的时候出 */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+            {chips.map(ch => (
+              <button key={ch.id} type="button" onClick={() => setChip(ch.id)} style={pillStyle(chip === ch.id, ch.cat && ch.cat.color)}>{ch.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0.5rem 1.25rem", minHeight: 0 }}>
+          {objs.length === 0 ? (
+            <EmptyState variant="first" lang={lang} title={X.empty}
+              actions={onGoComponents ? [{ label: X.goNew, onClick: () => { if (onClose) onClose(); onGoComponents(); } }] : []} />
+          ) : visible.length === 0 ? (
+            <EmptyState variant="filter" lang={lang} title={X.noMatch} chips={emptyChips}
+              onClearAll={() => { setQ(""); setChip("all"); }} />
+          ) : (
             <div style={{ display: "grid", gap: 8 }}>
-              {filtered.map(c => {
+              {visible.map(({ c, ci, hit }) => {
                 const cat = getCompCat(c.componentCategory);
+                const main = pickLang(c, "name", lang);
+                const sub = rawLang(c, "name", lang);
+                const addedN = (Array.isArray(layers) ? layers : []).filter(l => l && l.sourceComponentId === c.id).length;
+                const p = sel.indexOf(c.id) + 1;
+                const r0 = hit.length ? hit[0] : null;
                 return (
-                  <div key={c.id} onClick={() => onSelect(c)} style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderLeft: `4px solid ${cat.color}`, borderRadius: "8px", padding: "10px 14px", cursor: "pointer" }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{c.nameZh || c.nameJa}</div>
-                    {c.nameJa && c.nameZh && <div style={{ fontSize: 12, color: "#666666", marginTop: 2 }}>{c.nameJa}</div>}
-                    <div style={{ fontSize: 11, color: "#666666", marginTop: 4, display: "flex", gap: 10 }}>
-                      <span style={{ background: cat.bg, color: cat.color, padding: "1px 8px", borderRadius: 20 }}>{cat.zh}</span>
-                      <span>{(c.ingredients || []).length} 种原料</span>
-                      <span>¥{getIngsLiveCost(c.ingredients, materials, brands).toFixed(0)}</span>
+                  <div key={ci} data-pk-card={String(c.id)} role="button" tabIndex={0} aria-pressed={p > 0}
+                    onClick={() => toggle(c.id)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(c.id); } }}
+                    style={{ background: "#FFFFFF", borderTop: `${p > 0 ? 1.5 : 0.5}px solid ${p > 0 ? T.ink : T.border}`, borderRight: `${p > 0 ? 1.5 : 0.5}px solid ${p > 0 ? T.ink : T.border}`, borderBottom: `${p > 0 ? 1.5 : 0.5}px solid ${p > 0 ? T.ink : T.border}`, borderLeft: `4px solid ${cat.color}`, borderRadius: "8px", padding: "10px 12px", cursor: "pointer", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <span aria-hidden="true" style={{ width: 22, height: 22, flexShrink: 0, border: `1px solid ${p > 0 ? T.ink : T.border}`, borderRadius: 4, background: p > 0 ? T.ink : "#FFFFFF", color: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: p > 20 ? 9 : 13, marginTop: 1 }}>{p > 0 ? pickerOrdinal(p) : ""}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                        {c.inUse && <span title={X.inuseTitle} style={{ color: T.success, fontSize: 11 }}>●</span>}
+                        <span style={{ fontSize: 14, fontWeight: 500 }}>{main || "—"}</span>
+                        {sub && sub !== main && <span style={{ fontSize: 12, color: T.textTertiary }}>{sub}</span>}
+                        {addedN > 0 && <span style={{ fontSize: 11, color: T.success }}>{X.added(addedN)}</span>}
+                        {isPrepMarked(c) && <span style={{ fontSize: 10, padding: "0 6px", border: `0.5px solid ${T.warning}`, color: T.warning, borderRadius: T.radiusPill }}>{X.prep}</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ background: cat.bg, color: cat.color, padding: "1px 8px", borderRadius: 20 }}>{ja ? cat.ja : cat.zh}</span>
+                        <span>{X.nIng((c.ingredients || []).length)}</span>
+                        <span>¥{getIngsLiveCost(c.ingredients, materials, brands).toFixed(0)}</span>
+                      </div>
+                      {r0 && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{X.ingHit(pickLang(r0, "name", lang) || r0.nameFr || "", hit.length)}</div>}
                     </div>
                   </div>
                 );
               })}
             </div>
-          </>
+          )}
+        </div>
+        {locked && (
+          <div style={{ flexShrink: 0, padding: "6px 1.25rem", fontSize: 12, color: T.textSecondary, borderTop: `0.5px solid ${T.borderSoft}` }}>{X.locked}</div>
         )}
+        <div style={{ flexShrink: 0, background: "#FFFFFF", borderTop: `0.5px solid ${T.border}`, padding: "10px 1.25rem", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ flex: 1, minWidth: 80, fontSize: 13 }}>{X.selected(sel.length)}</span>
+          <Btn size="sm" onClick={() => setSel([])} disabled={sel.length === 0}>{X.clear}</Btn>
+          <Btn size="sm" variant="primary" onClick={doAdd} disabled={sel.length === 0}>{X.add(sel.length)}</Btn>
+        </div>
       </div>
     </div>
   );
@@ -14202,7 +14591,8 @@ function ComponentPicker({ components, materials = [], brands = [], onSelect, on
 
 // ─── 层编辑 Form ──────────────────────────────────────────────
 function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], materials = [], onSave, onBack, onUpdateComponent, linkState = "follow", lang = "zh", onUpdateCats, setShopMaterials, showToast, confirmDialog,
-  setMaterials }) {   // 第 5 批第 0 步:S1「存进材料百科」用(先不用)
+  setMaterials,   // 第 5 批第 0 步:S1「存进材料百科」用(先不用)
+  locked = false }) {   // 第 5 批 E1:产品锁定、这一部分也锁着 → 顶上的说明换成锁定时的说法
   const W = creationWords(structure, lang);  // 叠层 / 拼装的叫法(「层」还是「部分」)
   const [form, setForm] = useState({ ...layer });
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null);
@@ -14323,7 +14713,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
 
       {layer.sourceComponentId && (
         <div style={{ background: "#EFF6FF", border: "1px solid #93C5FD", borderRadius: "8px", padding: "10px 14px", marginBottom: "1rem", fontSize: 12, color: "#1E40AF", lineHeight: 1.6 }}>
-          {W.linkNote(linkState)}
+          {W.linkNote(linkState, locked)}
         </div>
       )}
 
@@ -19630,7 +20020,9 @@ function ProductEditForm({ product, prefill, recipes, creations, components = []
     // 审查 ps1:组合产品里跟组件库走的部分来自备货组件,同样会从账本扣(或按「装烤好的」不扣)—— 以前不给勾选,「泡芙两个装」这种缺省不扣的改不过来
     if (it.linkedType === "creation") {
       const c = (creations || []).find(x => x && String(x.id) === String(it.linkedId));
-      return !!c && (c.layers || []).some(l => l && ((l.follow && !l.localVariant && l.sourceComponentId && (components || []).some(o => o && o.id === l.sourceComponentId && isPrepMarked(o))) || usesMarkedComp(l.ingredients)));
+      // 第 5 批 E1(spec_e1_lock.md R13 d):锁定、内容仍和组件库一样的部分照样从备货扣 → 也给勾选。这里手上没有材料,matIds 传 undefined
+      const lockedTakes = (l) => { if (!_lockLK(l)) return false; const c1 = (components || []).find(o => o && o.id === l.sourceComponentId); return !!c1 && isPrepMarked(c1) && sameLayerContent(l, c1, undefined); };
+      return !!c && (c.layers || []).some(l => l && ((l.follow && !l.localVariant && l.sourceComponentId && (components || []).some(o => o && o.id === l.sourceComponentId && isPrepMarked(o))) || lockedTakes(l) || usesMarkedComp(l.ingredients)));
     }
     const list = it.linkedType === "component" ? components : recipes;
     return (list || []).some(o => o && String(o.id) === String(it.linkedId) && (isPrepMarked(o) || usesMarkedComp(o.ingredients)));
@@ -27177,10 +27569,20 @@ function App() {
       const li = cr0 && Array.isArray(cr0.layers) ? cr0.layers.indexOf(l0) : -1;
       if (!creations.includes(cr0) || li < 0) { dhStale(); return; }
       const key = dhLayerKey(cr0.layers, li);
+      // 第 5 批 E1(spec_e1_lock.md R20):产品锁定了 → 换成组件库现在的内容、仍锁定(layerUseLibLocked,内容立刻换,不靠同步 effect);
+      // 没锁的照以前一个字不变。都不写 updatedAt,撤销同一个写法
+      const lockedCr = isCreationLocked(cr0);
+      let nl = null;
+      if (lockedCr) {
+        const comp = components.find(c => c && c.id === l0.sourceComponentId);
+        if (!comp) { dhStale(); return; }
+        nl = layerUseLibLocked(l0, comp, new Set((materials || []).map(m => m && m.id)));
+      }
       setCreations(prev => prev.map(c => (c && c.id === cr0.id && (c.layers || []).includes(l0))
-        ? { ...c, layers: c.layers.map(l => l === l0 ? { ...l0, follow: true, localVariant: false } : l) } : c));
+        ? { ...c, layers: c.layers.map(l => l === l0 ? (lockedCr ? nl : { ...l0, follow: true, localVariant: false }) : l) } : c));
       const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
-      showToast(zh ? `「${nm}」改成跟组件库走,内容换成组件库现在的` : `「${nm}」を部品庫と連動させました`, { undo: () => {
+      showToast(lockedCr ? creationLockTxt(lang, creationStructureOf(cr0)).h7(nm)
+        : (zh ? `「${nm}」改成跟组件库走,内容换成组件库现在的` : `「${nm}」を部品庫と連動させました`), { undo: () => {
         let back = false;
         setCreations(prev => prev.map(c => {
           if (!c || c.id !== cr0.id) return c;
@@ -29914,6 +30316,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setShopMaterials={setShopMaterials}
           setMaterials={setMaterials}
           onKnowledgeCheck={knowledgeCheckOnSave}
+          onGoComponents={() => goTab("components")}
           lang={lang} setLang={setLang}
           viewId={creationViewId} setViewId={setCreationViewId}
           editTarget={creationEditTarget} setEditTarget={setCreationEditTarget}
