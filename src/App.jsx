@@ -7126,12 +7126,12 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
   const _missingPriceCount = (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).length;
   // 第 4 批 B4-1:颜色走 marginInfo(跟目标原料成本率;有原料没价 = 算不全,不给绿色)
   const _mi = marginInfo({ price: r.price, priceCurrency: priceCurOf(r), cost: liveUnitCost, incomplete: _missingPriceCount > 0 });
-  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的是原配方的量。缩放过就把按倍数算好的副本交给打印(只给打印用,不写回数据)
-  // 第 5 批第 0 步:副本只由 scaledCopyForPrint 生成(和以前这里手写的逐字节一样,b5_step0_tests 钉住);P 线改成只交 scaleInfo(裁决 1)
+  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的是原配方的量。
+  // 第 5 批 P(裁决 1):只交 scaleInfo(没缩放交 null);App 的打印入口存原对象 + scale,打印弹窗里还能改「做多少」,点「打印预览」那一刻才由
+  // printCopyOf → scaledCopyForPrint 生成副本(别拿副本再缩:副本里的用量带千位逗号,再缩会读错)
   const handlePrint = () => {
     if (!onPrint) return;
-    if (scale === 1) { onPrint(); return; }
-    onPrint(scaledCopyForPrint(r, "recipe", info));
+    onPrint(info && info.factor !== 1 ? info : null);
   };
 
   // 反向查找关联知识点(和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
@@ -8125,7 +8125,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(comp); setViewId(null); })}
           onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setViewId(null))}
-          onPrint={onPrintComponent ? (scaled) => onPrintComponent(scaled || comp) : null}
+          onPrint={onPrintComponent ? (s) => onPrintComponent(comp, s) : null}
           materials={materials}
           brands={brands}
           prepStock={prepStock}
@@ -8664,28 +8664,10 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
   const originalYield = parseFloat(c.yield) || 0;
   const info = scaleFactorOf(sc.mode, scaleInputOf(sc), c, "component", scCtx);
   const scale = info ? info.factor : 1;
-  const target = info ? info.to : 0;   // 缩放后做多少(按产出量时 = 目标那一格;下面 scaledForPrint 写进副本的产出量,P 线换成 scaledCopyForPrint)
-  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的还是原配方的量。缩放过就把缩放后的副本交给打印
-  // (第 5 批 P 线删掉这个函数,改交 scaleInfo、名字不再拼说明;第 0 步原样不动)
-  // (ComponentsView 的 onPrint 收到副本就用副本,没收到用原组件);只是打印用的副本,不写回数据。
-  const scaledForPrint = () => {
-    if (scale === 1) return null;
-    const unitTxt = c.unit || "g";
-    const tag = (zh) => zh ? `（按 ${fmtQty(target)}${unitTxt} 缩放，原 ${fmtQty(originalYield)}${unitTxt} ×${fmtQty(scale)}）` : `（${fmtQty(target)}${unitTxt} に換算・元 ${fmtQty(originalYield)}${unitTxt} ×${fmtQty(scale)}）`;
-    const isNum = (v) => v !== undefined && v !== null && /^\s*(\d+(\.\d+)?|\.\d+)\s*$/.test(String(v));
-    return {
-      ...c,
-      nameZh: c.nameZh ? c.nameZh + tag(true) : c.nameZh,
-      nameJa: c.nameJa ? c.nameJa + tag(false) : c.nameJa,
-      yield: String(target),
-      // 用量和屏幕上同一个读法 fmtQty(10 以下两位小数,盐 0.03 g 不再印成 0.0);去掉千位逗号免得下游 parseFloat 读成 1;「适量」这种不是数字的原样
-      ingredients: (c.ingredients || []).map(ing => ({
-        ...ing,
-        qty: isNum(ing.qty) ? fmtQty(parseFloat(ing.qty) * scale).replace(/,/g, "") : ing.qty,
-        cost: isNum(ing.cost) ? String(parseFloat(ing.cost) * scale) : ing.cost,
-      })),
-    };
-  };
+  const target = info ? info.to : 0;   // 缩放后做多少(按产出量时 = 目标那一格;缩放行 ScaleBar 用)
+  // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的还是原配方的量。
+  // 第 5 批 P:不再自己拼缩放副本(以前把「按 X g 缩放…」拼进名字,双语时这段印两遍)—— 只交 scaleInfo(没缩放交 null),
+  // 副本由 App 在点「打印预览」时用 printCopyOf → scaledCopyForPrint 生成,缩放说明印在抬头「做 2,000 g(原 1,345 g ×1.49)」,名字不动
 
   // v11 Task #4: 本店原料优先,实时算总成本
   const liveTotalCost = (c.ingredients || []).reduce((s, ing) => s + getIngLiveCost(ing, materials, brands, []), 0);
@@ -8701,7 +8683,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
           {lang === "zh" ? "组件详情" : "コンポーネント詳細"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", ...(onCopy ? { flexWrap: "wrap", justifyContent: "flex-end" } : {}) }}>
-          {onPrint && <Btn size="sm" onClick={() => onPrint(scaledForPrint())}>{lang === "zh" ? (scale !== 1 ? "🖨 打印（缩放后）" : "🖨 打印") : (scale !== 1 ? "🖨 印刷（換算後）" : "🖨 印刷")}</Btn>}
+          {onPrint && <Btn size="sm" onClick={() => onPrint(info && info.factor !== 1 ? info : null)}>{lang === "zh" ? (scale !== 1 ? "🖨 打印（缩放后）" : "🖨 打印") : (scale !== 1 ? "🖨 印刷（換算後）" : "🖨 印刷")}</Btn>}
           {/* 第 5 批 E2「⧉ 复制为新版本」(放在「编辑」前面) */}
           <CopyVersionButton kind="component" obj={c} lang={lang} onCopy={onCopy} />
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
@@ -8891,7 +8873,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
       })()}
 
       {/* 第 5 批 P:「厨房要点」块(只在有内容时出现;第 0 步空壳),放在「备注」前面 */}
-      <KitchenPointsBlock item={c} lang={lang} />
+      <KitchenPointsBlock item={c} lang={lang} variant="card" />
 
       {notes && (
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -11235,8 +11217,10 @@ const LOGO_DATA_URI = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComp
 // ─── BEGIN print helpers ───
 // 第 5 批 P「打印」(plan.md「定下来的产品决定」1 到 6、「数据」§2 / §3 / §4,design_print §4)。段里不许有 React / setState;
 // localStorage 只在 readPrintPrefs / writePrintPrefs 里碰(都包 try/catch)。
-// 第 0 步写成真的:dropBlankKeys、stripMoneyText;常量照 plan 定稿;其余函数是空壳(返回空 / 原样),P 写真的。
+// 第 0 步写成真的:dropBlankKeys、stripMoneyText;P 线(2026-10-06)把其余的写成真的:偏好读写、语言 / 勾选初值、打印副本 printCopyOf、
+// 去钱 printStripItem、客户版过敏原 / 原料名单 / 品名 / 带牌子的行、厨房要点行数、组合产品部分的模具行、弹窗黄条句数、界面文字 PRINT_TXT。
 const PRINT_PREFS_KEY = "korora_print_prefs_v1";   // 每台设备自己的打印偏好(不进存档 / 导出 / 备份 / IP 包)
+const PRINT_RECORD_ROWS = 4;                        // 打印的「生产记录」表空几行
 // 各模板勾选的推荐值。客户版界面上是「印用量」「印品牌」,默认不勾(内部键仍是 hideQty / hideBrand,取反)
 const PRINT_TPL_DEFAULTS = {
   kitchen: { ingredients: true, steps: false, points: true, record: true },
@@ -11253,15 +11237,128 @@ const PRINT_SEC_REMEMBER = {
 };
 // 第 5 批的新文字字段:保存时空了就删键(dropBlankKeys),老条目打开不改就保存一个键都不多
 const B5_TEXT_KEYS = ["kitchenNotesZh", "kitchenNotesJa", "shelfLifeZh", "shelfLifeJa", "storageCondZh", "storageCondJa"];
-// 打印偏好 { v: 1, tpl, lang: { 模板: { zh, ja } }, sec: { 模板: { 键: 布尔 } }, at }。空壳:读 = 空偏好,写 = 不写
-const readPrintPrefs = () => ({ v: 1, tpl: null, lang: {}, sec: {} });
-const writePrintPrefs = (patch) => false;
-// 打印语言:prefs.lang[模板][App 语言],没有就跟 App 语言。空壳:null
-const printLangDefault = (prefs, tpl, appLang) => null;
-// 某个模板的勾选初值 = 推荐值 ← 记着的可记键。空壳:{ sections: {}, remembered: false }
-const printSectionsInit = (prefs, tplKey) => ({ sections: {}, remembered: false });
-// 打印副本 = scaledCopyForPrint + 家族兜底(模具 / 炉温 / 时间)+ _printAllergen;什么都不用加时返回同一个对象。空壳:原样返回
-const printCopyOf = (kind, obj, opts) => obj;
+// 打印偏好 { v: 1, tpl, lang: { 模板: { zh, ja } }, sec: { 模板: { 键: 布尔 } }, at }(plan.md「数据」§2)。
+//   · tpl = 配方 / 组件上次用的模板(kitchen / showcase / archive;组合产品只有一种版式,不记);
+//   · lang[模板][App 语言] = 上次选的打印语言(按「模板 × App 是中文 / 日文」各记一份:给日本合作方印过日文客户版,下次厨房版照样是中文);
+//   · sec[模板] = 上次的勾选,只记 PRINT_SEC_REMEMBER 列的键、只记布尔;**客户版的勾选一项都不记,hideQty / hideBrand / keepMoney 永远不写**。
+//   · 读不到 / 抛错 / 坏 JSON / 不是对象 / 超过 4 KB → 当空的(按 App 语言 + 推荐值);v > 1(以后的版本写的)只读认得的键,写的时候保留不认识的键和原 v。
+//   · 只在点「打印预览」时写一次;写失败静默跳过。不进存档 / 导出 / 备份 / IP 包;多窗口的 storage 监听不认这个键,写它不会把别的窗口踢成过期。
+const PRINT_TPLS = ["kitchen", "showcase", "archive", "creation"];
+const PRINT_LANGS = ["zh", "ja", "both"];
+const PRINT_NEVER_KEEP = ["hideQty", "hideBrand", "keepMoney"];
+const _isPlainObj = (o) => !!o && typeof o === "object" && !Array.isArray(o);
+const _readPrintPrefsRaw = () => {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return null;
+    const s = ls.getItem(PRINT_PREFS_KEY);
+    if (typeof s !== "string" || !s || s.length > 4096) return null;
+    const o = JSON.parse(s);
+    return _isPlainObj(o) ? o : null;
+  } catch (e) { return null; }
+};
+const readPrintPrefs = () => {
+  const raw = _readPrintPrefsRaw() || {};
+  const lang = {}, sec = {};
+  if (_isPlainObj(raw.lang)) PRINT_TPLS.forEach(t => {
+    const x = raw.lang[t];
+    if (!_isPlainObj(x)) return;
+    const o = {};
+    ["zh", "ja"].forEach(a => { if (PRINT_LANGS.includes(x[a])) o[a] = x[a]; });
+    if (Object.keys(o).length) lang[t] = o;
+  });
+  if (_isPlainObj(raw.sec)) PRINT_TPLS.forEach(t => {
+    const x = raw.sec[t];
+    if (!_isPlainObj(x)) return;
+    const o = {};
+    (PRINT_SEC_REMEMBER[t] || []).forEach(k => { if (typeof x[k] === "boolean") o[k] = x[k]; });
+    if (Object.keys(o).length) sec[t] = o;
+  });
+  return { v: (typeof raw.v === "number" && raw.v > 1) ? raw.v : 1, tpl: ["kitchen", "showcase", "archive"].includes(raw.tpl) ? raw.tpl : null, lang, sec };
+};
+// patch = { tpl?, lang?: { 模板: { zh|ja: 语言 } }, sec?: { 模板: { 键: 布尔 } }, at? };按子键合并进本机已有的那份 → 写成功 true,否则 false
+const writePrintPrefs = (patch) => {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return false;
+    const raw = _readPrintPrefsRaw() || {};
+    const p = _isPlainObj(patch) ? patch : {};
+    const out = { ...raw, v: (typeof raw.v === "number" && raw.v > 1) ? raw.v : 1 };
+    if (["kitchen", "showcase", "archive"].includes(p.tpl)) out.tpl = p.tpl;
+    if (_isPlainObj(p.lang)) {
+      const L = _isPlainObj(raw.lang) ? { ...raw.lang } : {};
+      PRINT_TPLS.forEach(t => {
+        const x = p.lang[t];
+        if (!_isPlainObj(x)) return;
+        const cur = _isPlainObj(L[t]) ? { ...L[t] } : {};
+        ["zh", "ja"].forEach(a => { if (PRINT_LANGS.includes(x[a])) cur[a] = x[a]; });
+        L[t] = cur;
+      });
+      out.lang = L;
+    }
+    if (_isPlainObj(p.sec)) {
+      const S = _isPlainObj(raw.sec) ? { ...raw.sec } : {};
+      PRINT_TPLS.forEach(t => {
+        const x = p.sec[t], keys = PRINT_SEC_REMEMBER[t] || [];
+        if (!_isPlainObj(x) || !keys.length) return;
+        const cur = _isPlainObj(S[t]) ? { ...S[t] } : {};
+        keys.forEach(k => { if (typeof x[k] === "boolean") cur[k] = x[k]; });
+        S[t] = cur;
+      });
+      out.sec = S;
+    }
+    // 客户版的勾选、三个会交出配方 / 价格的开关:永远不写(本机旧的那份里有也去掉)
+    if (_isPlainObj(out.sec)) {
+      const S = { ...out.sec };
+      delete S.showcase;
+      Object.keys(S).forEach(t => { if (_isPlainObj(S[t]) && PRINT_NEVER_KEEP.some(k => k in S[t])) { const c = { ...S[t] }; PRINT_NEVER_KEEP.forEach(k => { delete c[k]; }); S[t] = c; } });
+      out.sec = S;
+    }
+    out.at = (typeof p.at === "string" && p.at) ? p.at : new Date().toISOString();
+    ls.setItem(PRINT_PREFS_KEY, JSON.stringify(out));
+    return true;
+  } catch (e) { return false; }
+};
+// 打印语言初值:prefs.lang[模板][App 语言];没记过(或记的值不认得)就跟 App 语言(中文界面 → 仅中文,日文界面 → 仅日文)
+const printLangDefault = (prefs, tpl, appLang) => {
+  const a = appLang === "ja" ? "ja" : "zh";
+  const x = prefs && _isPlainObj(prefs.lang) && _isPlainObj(prefs.lang[tpl]) ? prefs.lang[tpl][a] : undefined;
+  return PRINT_LANGS.includes(x) ? x : a;
+};
+// 某个模板的勾选初值 = 推荐值 ← 这台设备记着的可记键(只收布尔)。remembered = 至少有一个键是记着的(弹窗写「上次在这台设备上的选择」)
+const printSectionsInit = (prefs, tplKey) => {
+  const sections = { ...(PRINT_TPL_DEFAULTS[tplKey] || {}) };
+  const saved = prefs && _isPlainObj(prefs.sec) ? prefs.sec[tplKey] : undefined;
+  let remembered = false;
+  if (_isPlainObj(saved)) (PRINT_SEC_REMEMBER[tplKey] || []).forEach(k => { if (typeof saved[k] === "boolean") { sections[k] = saved[k]; remembered = true; } });
+  return { sections, remembered };
+};
+// 打印副本 = scaledCopyForPrint(唯一的缩放出口)+ 家族兜底 + 客户版的临时键;什么都不用加时返回同一个对象(没缩放、没家族、没勾过敏原 → 打印逐字节不变)。
+//   opts = { scale: scaleInfo | null, allergen: { contains, mayContain, unknownCount, complete } | null, families: productFamilies, title: { zh, ja }, ingText: 字符串 }
+//   家族兜底(只有配方挂家族):模具 / 炉温 / 时间自己没写 → 用家族通用的,_famFilled 记下是哪几项(模板后面标「(家族通用)」)
+//   副本上的临时键 _printScale / _printAllergen / _famFilled / _printTitle / _printIngText 只给模板读,**不写回数据**;别拿副本再缩(用量带千位逗号,再缩会读错)
+const printCopyOf = (kind, obj, opts) => {
+  if (!obj || typeof obj !== "object") return obj;
+  const o = _isPlainObj(opts) ? opts : {};
+  let out = scaledCopyForPrint(obj, kind, o.scale);
+  if (kind === "recipe" && out.familyId !== undefined && out.familyId !== null && out.familyId !== "" && Array.isArray(o.families)) {
+    const fam = o.families.find(f => f && String(f.id) === String(out.familyId));
+    if (fam) {
+      const patch = {}, filled = [];
+      [["mold", "commonMold"], ["temp", "commonTemp"], ["baketime", "commonTime"]].forEach(([k, fk]) => {
+        if (!_normTxt(out[k]) && _normTxt(fam[fk])) { patch[k] = _normTxt(fam[fk]); filled.push(k); }
+      });
+      if (filled.length) out = { ...out, ...patch, _famFilled: filled };
+    }
+  }
+  if (_isPlainObj(o.allergen)) {
+    const a = o.allergen;
+    out = { ...out, _printAllergen: { contains: allergenCodesOf(a.contains), mayContain: allergenCodesOf(a.mayContain), unknownCount: Number(a.unknownCount) || 0, complete: a.complete === true && !(Number(a.unknownCount) > 0) } };
+  }
+  if (_isPlainObj(o.title)) out = { ...out, _printTitle: { zh: _normTxt(o.title.zh), ja: _normTxt(o.title.ja) } };
+  if (typeof o.ingText === "string") out = { ...out, _printIngText: o.ingText };
+  return out;
+};
 // 整段文字里带钱的句子整句去掉 → { text, n }(n = 去掉了几句)。按 \n 切行,行内按「；;。．」切句(句号跟着它前面那句走);
 // 去掉末尾句号后命中 PROD_MONEY_RE 的句子整句去掉;整行都去掉的行删掉(不留空行),原来就是空行的留着;
 // 一句都没去时 text 和输入逐字节一样。和 prodNote 共用 PROD_MONEY_RE:prodNote 把剩下的拼成一行给生产单,这个保留原来的换行和标点
@@ -11291,159 +11388,786 @@ const dropBlankKeys = (obj, keys) => {
   kill.forEach(k => { delete out[k]; });
   return out;
 };
-// 客户版过敏原那一行(先 allergenTextMismatch 和手写的对照;没核对完绝不写「无」;09-30 拍板:全部核对完一类都没有 → 「不含八大类过敏原」)。空壳:""
-const printAllergenText = (summary, handwritten, lang) => "";
-// 客户版不印用量时的原料名单(labelNameZh 优先,去结尾括号备注,按投料重量从多到少,同名合并)。空壳:[]
-const showcaseIngNames = (ings, lang) => [];
-// 客户版「品名(只改这一次)」的预填:去掉版本号和结尾括号备注。空壳:""
-const showcaseTitleOf = (obj, lang) => "";
-// 名字里还带着牌子的配料行(关联材料的厂家名 / 这一行的 brand 出现在配料名里)。空壳:[]
-const brandWordRows = (ings, ctx) => [];
-// 厨房要点的非空行数(编辑页计数、弹窗提示)。空壳:0
-const kitchenPointsLines = (text) => 0;
-// 组合产品一个部分的模具信息 / 那一行字「模具(组件一批):… · 这次约 k 批 ≈ n 张」。空壳:null / ""
-const partMoldInfo = (p) => null;
-const partMoldText = (p, L) => "";
-// 这一份打印会去掉几句带钱的(弹窗黄条用)。空壳:0
-const printMoneyCount = (kind, obj, tplKey, sections, ctx) => 0;
-// 打印弹窗 / 预览顶栏的界面文字(design_print §2,中 / 日)。第 0 步空表,P 填
-const PRINT_TXT = { zh: {}, ja: {} };
-// ─── END print helpers ───
-// 第 5 批 P 的空壳组件(第 0 步 return null,放在最终的位置上):编辑页「厨房要点」两格 / 配方编辑页「🏷 保质期 · 贮存条件」卡 /
-// 详情页「厨房要点」块 / 配方详情「保质期 · 贮存条件」一行。子组件一律定义在模块顶层(在渲染函数里定义,每敲一个字输入框重挂、光标丢)
-function KitchenPointsFields() { return null; }
-function KeepFields() { return null; }
-function KitchenPointsBlock() { return null; }
-function KeepRow() { return null; }
-
-// ─── 打印设置弹窗 ─────────────
-// 第 5 批第 0 步接好新 props(先不用,P 重写这个弹窗时用):src 原对象 / scale0 详情页当下的 scaleInfo / n0 组合产品「做 N 个」/
-// appLang App 的界面语言 / ctx = { materials, brands, components, recipes, creations, onEdit(kind, id) }
-function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ctx }) {
-  // 每个模板的推荐默认勾选（用户可改）
-  const TEMPLATE_DEFAULTS = {
-    // 2026-09-29 体检第 2 批:以前还有「图片」「关联知识点」两个勾选,三个模板都没读,勾不勾印出来一样 —— 去掉
-    kitchen:  { ingredients: true, steps: false, notes: true }, // 厨房：不要步骤
-    showcase: { ingredients: true, steps: false, notes: true }, // 展示：不要步骤
-    archive:  { ingredients: true, steps: true,  notes: true }, // 归档：全部
-  };
-
-  const [template, setTemplate] = useState("kitchen");
-  const [lang, setLang] = useState("ja");
-  const [sections, setSections] = useState(TEMPLATE_DEFAULTS.kitchen);
-  const [userModified, setUserModified] = useState(false); // 用户是否手动改过
-
-  // 切换模板时，如果用户没手动改过，自动应用推荐默认；否则保留用户设置
-  const handleTemplateChange = (newTemplate) => {
-    setTemplate(newTemplate);
-    if (!userModified) {
-      setSections(TEMPLATE_DEFAULTS[newTemplate]);
+// 打印模板里她手写的文字(整段备注 / 厨房要点 / 步骤 / 配料备注 / 保质期 · 贮存条件 / 旧「保存」)一律先过 stripMoneyText(「钱不上纸」)。
+// 按语言逐个字段去,步骤逐行去(行数不变,stepRows / pickSteps 照旧按行对齐、回退);一句都没去 → 返回同一个对象(没有钱的数据打印逐字节不变)。
+// on = false(归档版勾了「保留价格和成本」)→ 原样。返回 { item, n },n = 一共去掉几句(所有字段;弹窗黄条另用 printMoneyCount 只数会印出来的)
+const PRINT_TEXT_FIELDS = ["notesZh", "notesJa", "notes", "kitchenNotesZh", "kitchenNotesJa", "shelfLifeZh", "shelfLifeJa", "storageCondZh", "storageCondJa", "storage"];
+const printStripItem = (item, on = true) => {
+  if (!on || !item || typeof item !== "object") return { item, n: 0 };
+  let n = 0;
+  const patch = {};
+  PRINT_TEXT_FIELDS.forEach(k => {
+    if (typeof item[k] !== "string" || !item[k]) return;
+    const r = stripMoneyText(item[k]);
+    if (r.n) { n += r.n; patch[k] = r.text; }
+  });
+  ["stepsZh", "stepsJa", "steps"].forEach(k => {
+    if (!Array.isArray(item[k])) return;
+    let hit = 0;
+    const arr = item[k].map(s => { if (typeof s !== "string" || !s) return s; const r = stripMoneyText(s); hit += r.n; return r.n ? r.text : s; });
+    if (hit) { n += hit; patch[k] = arr; }
+  });
+  if (Array.isArray(item.ingredients)) {
+    // 配料备注和配料行的「品牌」(录入包里有人把进价写在品牌里:「…63%(楽天 700 ml 3,630 円…)」)
+    let hit = 0;
+    const ings = item.ingredients.map(ing => {
+      if (!ing || typeof ing !== "object") return ing;
+      let out = ing;
+      ["note", "brand"].forEach(k => {
+        if (typeof ing[k] !== "string" || !ing[k]) return;
+        const r = stripMoneyText(ing[k]);
+        if (!r.n) return;
+        hit += r.n;
+        out = { ...out, [k]: r.text };
+      });
+      return out;
+    });
+    if (hit) { n += hit; patch.ingredients = ings; }
+  }
+  return n ? { item: { ...item, ...patch }, n } : { item, n: 0 };
+};
+// 步骤数组(已经按语言取好的一串)逐条去钱;整条都是钱的那一步不留空行。一条没变 → 同一个数组(厨房视图用)
+const printStepsNoMoney = (steps) => {
+  if (!Array.isArray(steps)) return steps;
+  let hit = false;
+  const out = steps.map(s => { const r = stripMoneyText(s); if (r.n) hit = true; return r.n ? r.text : s; });
+  return hit ? out.filter(s => _normTxt(s)) : steps;
+};
+// 客户版过敏原那一行(plan「定下来的产品决定」5 + 09-30 LuLu 追加拍板 1)。summary = 打印副本的 _printAllergen { contains, mayContain, unknownCount, complete }
+// (或 allergenSummaryOf 的结果);handwritten = 配方上手写的 allergens;lang "zh" | "ja"(双语时模板各调一次)。
+//   · 先 allergenTextMismatch 和手写的比:手写里有、按原料核对出来没有的类别(extra)→ 按「没核对完」处理,另加一句「另:配方上写着 X,请向店员确认」。
+//   · 没核对完(unknownCount > 0 或 complete 不是 true)→「请向店员确认」,**任何语言都绝不出现「无 / なし / 不含」**。
+//   · 全部核对完、手写没多出来、八大类「含有」「可能含有」都是空 →「不含八大类过敏原」;芝麻 / 椰子(自愿标示,不算八大类)含有时这句照印,下面另起一行「含有：芝麻」。
+//   · 其余(核对完、有八大类)→「过敏原：含有 A、B;可能含有 C」。summary 缺 → ""(这一行不印)
+// 日文那句按 ALLERGENS 的日文叫法定稿:写明是 GB 7718 的 8 分類,不用日本法规的「特定原材料等」(那是另一套 8 品目,会被看成含そば・くるみ也查过)
+const ALLERGEN_NONE_ZH = "不含八大类过敏原";
+const ALLERGEN_NONE_JA = "アレルゲン 8 分類(GB 7718)不使用";
+const printAllergenText = (summary, handwritten, lang) => {
+  if (!_isPlainObj(summary)) return "";
+  const ja = lang === "ja";
+  const contains = sortAllergenCodes(allergenCodesOf(summary.contains));
+  const may = sortAllergenCodes(allergenCodesOf(summary.mayContain)).filter(c => !contains.includes(c));
+  const unknownN = typeof summary.unknownCount === "number" && isFinite(summary.unknownCount) ? Math.max(0, summary.unknownCount)
+    : (Array.isArray(summary.unknown) ? summary.unknown.length : 0);
+  const complete = summary.complete === true && unknownN === 0;
+  const extra = allergenTextMismatch({ contains, mayContain: may }, handwritten).extra;
+  const lab = (c) => { const a = allergenByCode(c); return a ? (ja ? a.jaShort : a.label) : String(c); };
+  const sep = ja ? "・" : "、";
+  const isMand = (c) => { const a = allergenByCode(c); return !!(a && a.mandatory); };
+  if (complete && !extra.length && !contains.some(isMand) && !may.some(isMand)) {
+    const lines = [ja ? ALLERGEN_NONE_JA : ALLERGEN_NONE_ZH];
+    if (contains.length) lines.push(ja ? `含む：${contains.map(lab).join(sep)}` : `含有：${contains.map(lab).join(sep)}`);
+    if (may.length) lines.push(ja ? `コンタミ：${may.map(lab).join(sep)}` : `可能含有：${may.map(lab).join(sep)}`);
+    return lines.join("\n");
+  }
+  const nTxt = unknownN > 0 ? unknownN : "";
+  if (ja) {
+    const known = contains.length ? contains.map(lab).join(sep) + (may.length ? `(コンタミ：${may.map(lab).join(sep)})` : "") : (may.length ? `コンタミ：${may.map(lab).join(sep)}` : "");
+    let s = "アレルゲン：";
+    if (!complete) s += known ? `${known} ほか未確認の原料${nTxt ? ` ${nTxt} 件` : ""} —— スタッフにご確認ください` : `確認中${nTxt ? `(未確認の原料 ${nTxt} 件)` : ""}—— スタッフにご確認ください`;
+    else s += known;
+    if (extra.length) s += (s === "アレルゲン：" ? "" : "。ほかに") + `レシピに ${extra.map(lab).join(sep)} の記載があります。スタッフにご確認ください`;
+    return s;
+  }
+  const parts = [];
+  if (contains.length) parts.push(`含有 ${contains.map(lab).join(sep)}`);
+  if (may.length) parts.push(`可能含有 ${may.map(lab).join(sep)}`);
+  const known = parts.join("；");
+  const segs = [];
+  if (!complete) segs.push(known ? `${known}；另有${nTxt ? ` ${nTxt} 项` : ""}原料尚未核对,请向店员确认` : `尚未核对完${nTxt ? `(${nTxt} 项原料)` : ""},请向店员确认`);
+  else if (known) segs.push(known);
+  if (extra.length) segs.push(`${segs.length ? "另：" : ""}配方上写着 ${extra.map(lab).join(sep)},请向店员确认`);
+  return "过敏原：" + segs.join("；");
+};
+// 客户版不印用量时的原料名单 → 字符串数组(模板把它用「、」连起来;弹窗「只改这一次的原料名单」预填的也是它)。
+//   · 名字:zh 用材料百科的「标签用名」labelNameZh,没有就用配料名、去掉结尾的括号备注(不自动从名字里删牌子 ——「ゲランドの塩」删掉「ゲランド」就剩「の塩」);
+//     ja 用日文配料名去括号备注;both = 「中 / 日」(两个一样就一个)。
+//   · 同名的合并;按投料重量从多到少(ingGramsOfRow,S1 合并后计件行有克重也算得出),读不出克数的(按个写、「適量」)按原来的顺序放最后。
+//   · ctx = { materials }(可不给:不给就不认 labelNameZh)
+const _showStrip = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || _normTxt(s);
+const showcaseIngNames = (ings, lang, ctx = {}) => {
+  const mm = materialMapOf(ctx && ctx.materials);
+  const groups = new Map();
+  (Array.isArray(ings) ? ings : []).forEach((ing, i) => {
+    if (!ing || typeof ing !== "object") return;
+    const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? (mm.get(ing.materialId) || null) : null;
+    const zh = (m && _normTxt(m.labelNameZh)) || _showStrip(_normTxt(ing.nameZh) || _normTxt(ing.nameJa) || _normTxt(ing.nameFr));
+    const jaN = _showStrip(_normTxt(ing.nameJa) || _normTxt(ing.nameZh) || _normTxt(ing.nameFr));
+    const name = lang === "ja" ? jaN : lang === "both" ? ((zh && jaN && zh !== jaN) ? `${zh} / ${jaN}` : (zh || jaN)) : zh;
+    if (!name) return;
+    const g = ingGramsOfRow(ing, m);
+    const cur = groups.get(name);
+    if (cur) { if (g !== null) { cur.grams += g; cur.has = true; } }
+    else groups.set(name, { name, i, grams: g !== null ? g : 0, has: g !== null });
+  });
+  const all = [...groups.values()];
+  const w = all.filter(x => x.has).sort((a, b) => (b.grams - a.grams) || (a.i - b.i));
+  const rest = all.filter(x => !x.has).sort((a, b) => a.i - b.i);
+  return [...w, ...rest].map(x => x.name);
+};
+// 客户版「品名(只改这一次)」的预填:去掉版本号(vX.Y / v3C / v0 及其后面的字)和结尾的括号备注
+// (「巧克力布列塔尼蛋糕 v1.0(学习版·未实做)」→「巧克力布列塔尼蛋糕」)。lang "ja" 取日文名,其余取中文名(各自缺了用另一个);全去光了退回原名
+const showcaseTitleOf = (obj, lang) => {
+  if (!obj || typeof obj !== "object") return "";
+  const raw = (lang === "ja" ? (_normTxt(obj.nameJa) || _normTxt(obj.nameZh)) : (_normTxt(obj.nameZh) || _normTxt(obj.nameJa))) || _normTxt(obj.nameFr);
+  const noVer = _normTxt(raw.replace(/(^|[^A-Za-z0-9])[vV]\d+(?:\.\d+)*[A-Za-z]?(?![A-Za-z0-9])[\s\S]*$/, "$1"));
+  const noNote = _normTxt(noVer.replace(/\s*[（(][^（）()]*[)）]\s*$/, ""));
+  return noNote || noVer || raw;
+};
+// 配料名(中文名或日文名)里还带着牌子的行:关联材料的厂家中 / 日 / 法名,或这一行写的 brand,原样出现在名字里(不分大小写、全半角;至少 2 个字)。
+// → [{ ing, name, brand }],给客户版弹窗提示「这 N 行名字里还带着牌子」。ctx = { materials, brands }
+const brandWordRows = (ings, ctx) => {
+  const c = ctx || {};
+  const mm = materialMapOf(c.materials);
+  const bm = new Map((Array.isArray(c.brands) ? c.brands : []).filter(b => b && b.id !== undefined && b.id !== null).map(b => [b.id, b]));
+  const nk = (s) => _normTxt(s).normalize("NFKC").toLowerCase();
+  const out = [];
+  (Array.isArray(ings) ? ings : []).forEach(ing => {
+    if (!ing || typeof ing !== "object") return;
+    const names = [ing.nameZh, ing.nameJa].map(_normTxt).filter(Boolean);
+    if (!names.length) return;
+    const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? mm.get(ing.materialId) : null;
+    const b = m ? bm.get(m.brandId) : null;
+    const words = [...(b ? [b.nameZh, b.nameJa, b.nameFr] : []), ing.brand].map(_normTxt).filter(w => w.length >= 2);
+    const hit = words.find(w => names.some(n => nk(n).includes(nk(w))));
+    if (hit) out.push({ ing, name: names[0], brand: hit });
+  });
+  return out;
+};
+// 厨房要点的非空行数(编辑页计数、弹窗提示)
+const kitchenPointsLines = (text) => String(text === undefined || text === null ? "" : text).split(/\r?\n/).filter(l => l.trim()).length;
+// 组合产品一个部分(creationBatch 的 part)的模具:组件一批用的模具 + 这次约几批 +(能估时)≈ 几张。
+//   · 备货的部分(这次不做那一批)、手搭的 / 组件已删的(没有 p.comp)、组件没写模具 → null;
+//   · k = p.scale(用量 × 个数 ÷ 组件产出量;null = 没产出量 / 没填用量,不写「这次约」);
+//   · 「≈ N 张」只在三条都成立时估:模具文字里正好一个「数字 + 张 / 枚 / 片 / 台 / 个 / 個 / 盘」、没有「或 / または / or」、
+//     这一部分的产出量 = 组件的产出量(本产品专用改过产出量的不估)。N 按 0.1 取整。→ { mold, k, est: { n, unit } | null }
+const partMoldInfo = (p) => {
+  if (!p || p.stock || !p.comp) return null;
+  const mold = _normTxt(p.comp.mold);
+  if (!mold) return null;
+  const k = (typeof p.scale === "number" && isFinite(p.scale) && p.scale > 0) ? p.scale : null;
+  let est = null;
+  if (k !== null && !/或|または|(^|[^A-Za-z])or([^A-Za-z]|$)/i.test(mold) && parseFloat(p.comp.yield) === p.yieldNum) {
+    const hits = [...mold.matchAll(/(\d+(?:\.\d+)?)\s*(张|枚|片|台|个|個|盘)/g)];
+    if (hits.length === 1) est = { n: Math.round(parseFloat(hits[0][1]) * k * 10) / 10, unit: hits[0][2] };
+  }
+  return { mold, k, est };
+};
+const partMoldText = (p, L) => {
+  const info = partMoldInfo(p);
+  if (!info) return "";
+  const ja = L === "ja";
+  const est = info.est ? ` ≈ ${fmtQty(info.est.n)} ${info.est.unit}` : "";
+  const kTxt = info.k !== null ? (info.k < 0.01 ? "<0.01" : fmtQty(info.k)) : "";   // 不到 0.01 批不写成「约 0 批」
+  if (ja) return `型(1 仕込み)：${info.mold}` + (info.k !== null ? `・今回 約 ${kTxt} 仕込み${est}` : "");
+  return `模具(组件一批)：${info.mold}` + (info.k !== null ? ` · 这次约 ${kTxt} 批${est}` : "");
+};
+// 组合产品的模具 / 尺寸一行(整体配方的屏幕和打印):有模具印模具;尺寸不空、而且(不管空格)没写在模具里时再印尺寸
+const creationMoldLine = (c, lang) => {
+  const mold = _normTxt(c && c.mold), size = _normTxt(c && c.size);
+  const sq = (s) => s.replace(/\s+/g, "");
+  const showSize = !!size && !(mold && sq(mold).includes(sq(size)));
+  const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} · ${ja}` : zh;
+  return [mold ? `${lb("模具", "型")} ${mold}` : "", showSize ? `${lb("尺寸", "サイズ")} ${size}` : ""].filter(Boolean).join(" · ");
+};
+// 组合产品部分的用量那一行(整体配方的屏幕和打印共用):usedSpec 有效(usedSpecState,S2)时,
+//   每个 → 「每台 30 g × 18 = 540 g · {说明}」/「1 台 30 g × 18 = 540 g・{説明}」;这一批一共、带说明 → { label: 说明, text: 说明 };没说明 → null。
+// usedSpec 无效 / 没有 → 照旧印「用量原文」(usedAmountNote)。noMoney = true 时说明 / 原文先过 stripMoneyText(打印用;屏幕不去)
+// → null | { kind: "each" | "note" | "raw", text }
+const creationUsedLine = (l, servesNow, unitWord, lang, noMoney) => {
+  if (!l || typeof l !== "object") return null;
+  const clean = (s) => noMoney ? stripMoneyText(s).text : _normTxt(s);
+  const st = usedSpecState(l, servesNow);
+  if (st && st.valid && st.spec) {
+    const sp = st.spec, u = _normTxt(l.unit) || "g", ja = lang === "ja";
+    const note = _normTxt(_normTxt(clean(sp.note)).replace(/[；;]+$/, ""));   // 去钱后留下的句末分号不跟在「· 说明」后面
+    const n = parseFloat(String(sp.n === undefined || sp.n === null ? "" : sp.n).normalize("NFKC").replace(/,/g, ""));
+    if (sp.per === "each" && isFinite(n) && n > 0) {
+      const s = parseFloat(sp.serves) > 0 ? parseFloat(sp.serves) : 1;
+      const head = ja ? `1 ${unitWord} ${fmtQty(n)} ${u} × ${fmtQty(s)} = ${fmtQty(n * s)} ${u}` : `每${unitWord} ${fmtQty(n)} ${u} × ${fmtQty(s)} = ${fmtQty(n * s)} ${u}`;
+      return { kind: "each", text: head + (note ? (ja ? `・${note}` : ` · ${note}`) : "") };
     }
+    return note ? { kind: "note", text: note } : null;
+  }
+  const raw = usedAmountNote(l.usedAmount);
+  const t = raw ? _normTxt(clean(raw)) : "";
+  return t ? { kind: "raw", text: t } : null;
+};
+// 某个模板会印出来的、她手写的文字(去钱之前)的清单 —— 弹窗黄条「这一份去掉 N 句」只数会印出来的(printMoneyCount);
+// 取文字的规则和模板一样:单语按 pickLang(这一语言空着用另一语言),双语中日都印;步骤按 stepRows 的行(单语 = 这一行当前语言、空着用另一语言,双语时另一语言不一样的那行也印)
+// 一个双语字段要印的几段:单语 = pickLang(空着用另一语言);双语 = 中、日两段(dedupe = 一样的只印一次;客户版 / 归档版的整段备注照以前的写法,一样也印两次)
+const _printLangTexts = (o, base, lang, dedupe = false) => {
+  if (!o) return [];
+  if (lang === "both") return [o[base + "Zh"], o[base + "Ja"]].filter(x => typeof x === "string" && x).filter((v, i, a) => !dedupe || a.indexOf(v) === i);
+  const v = pickLang(o, base, lang);
+  return v ? [v] : [];
+};
+// 步骤会印出来的那几段(和各模板的写法一一对应)
+const _printStepTexts = (o, lang, tplKey) => {
+  const rows = stepRows(o);
+  const main = (r) => lang === "ja" ? (r.ja || r.zh) : (r.zh || r.ja);
+  if (lang !== "both") return rows.map(main);
+  if (tplKey === "archive") return (rows.some(r => r.zh) && rows.some(r => r.ja)) ? rows.flatMap(r => [r.zh, r.ja]).filter(Boolean) : rows.map(main);
+  if (tplKey === "creation") return rows.flatMap(r => (r.zh && r.ja) ? [r.zh, r.ja] : [main(r)]);
+  return rows.flatMap(r => { const m = main(r); return (r.ja && r.ja !== m) ? [m, r.ja] : [m]; });   // 厨房 / 客户:双语时这一行日文不一样才在下面印
+};
+const printTextsOf = (kind, obj, tplKey, sections, ctx) => {
+  const o = obj || {}, s = sections || {}, c = ctx || {};
+  const lang = PRINT_LANGS.includes(c.lang) ? c.lang : "zh";
+  const out = [];
+  const ingNotes = (ings) => (Array.isArray(ings) ? ings : []).forEach(i => { if (i && typeof i.note === "string" && i.note) out.push(i.note); });
+  const ingBrands = (ings) => (Array.isArray(ings) ? ings : []).forEach(i => { if (i && typeof i.brand === "string" && i.brand) out.push(i.brand); });
+  if (kind === "creation" || tplKey === "creation") {
+    const L = lang === "ja" ? "ja" : "zh";
+    const W = creationWords(creationStructureOf(o), L);
+    const notesOf = (x) => lang === "both" ? [x.notesZh, x.notesJa].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i) : [pickLang(x, "notes", L) || x.notes || ""].filter(Boolean);
+    (Array.isArray(o.layers) ? o.layers : []).forEach(l0 => {
+      const l = l0 || {};
+      const comp = l.sourceComponentId ? (c.components || []).find(x => x && x.id === l.sourceComponentId) : null;
+      const stock = !!(comp && comp.prepMode === "stock");
+      const ul = creationUsedLine(l, o.serves, W.unit, L, false);
+      if (ul) out.push(ul.text);
+      if (!stock) {
+        ingNotes((l.ingredients || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))));
+        if (s.points && comp) out.push(..._printLangTexts(comp, "kitchenNotes", lang, true));
+        if (s.steps) out.push(..._printStepTexts(l, lang, "creation"));
+      }
+      if (s.notes) out.push(...notesOf(l));
+    });
+    if (s.steps) out.push(..._printStepTexts(o, lang, "creation"));
+    if (s.notes) out.push(...notesOf(o));
+    return out;
+  }
+  if (tplKey === "kitchen") {
+    if (s.ingredients) ingNotes(o.ingredients);
+    if (s.points) out.push(..._printLangTexts(o, "kitchenNotes", lang, true));
+    if (s.steps) out.push(..._printStepTexts(o, lang, "kitchen"));
+  } else if (tplKey === "showcase") {
+    if (s.notes) out.push(..._printLangTexts(o, "notes", lang));
+    if (s.ingredients && !s.hideQty && !s.hideBrand) ingBrands(o.ingredients);
+    if (s.keep) out.push(..._printLangTexts(o, "shelfLife", lang, true), ..._printLangTexts(o, "storageCond", lang, true));
+    if (s.steps) out.push(..._printStepTexts(o, lang, "showcase"));
+  } else if (tplKey === "archive") {
+    if (s.ingredients) { ingNotes(o.ingredients); ingBrands(o.ingredients); }
+    if (typeof o.storage === "string" && o.storage) out.push(o.storage);
+    out.push(..._printLangTexts(o, "shelfLife", lang, true), ..._printLangTexts(o, "storageCond", lang, true));
+    if (s.steps) out.push(..._printStepTexts(o, lang, "archive"));
+    if (s.notes) out.push(..._printLangTexts(o, "notes", lang));
+  }
+  return out;
+};
+// 这一份打印会去掉几句带钱的(弹窗黄条用)。ctx = { lang, components }(组合产品要 components 判断备货);归档版勾了「保留价格和成本」→ 0
+const printMoneyCount = (kind, obj, tplKey, sections, ctx) => {
+  if (tplKey === "archive" && sections && sections.keepMoney) return 0;
+  return printTextsOf(kind, obj, tplKey, sections, ctx).reduce((n, t) => n + stripMoneyText(t).n, 0);
+};
+// 打印弹窗 / 预览顶栏的界面文字(design_print §2,按 plan 的叫法改过:「保质期 · 贮存条件」、客户版「印用量 / 印品牌」默认不勾)
+const PRINT_TXT = {
+  zh: {
+    title: "🖨 打印设置",
+    creationIntro: "📘 整体配方 · A4 生产单:每部分的量和做法,最后是组装。",
+    scaleTitle: "🔢 做多少",
+    scaleMake: "做", scaleFrom: (f, u, k) => `原 ${f} ${u} · ×${k}`,
+    scaleCreation: (label, s, k) => `用量按「${label} ${s}」这一批写,现在 ×${k}`,
+    scaleReset: "↺ 按原量",
+    scaleVia: (label) => `(详情页是按「${label}」算的)`,
+    scaleNoYield: "没填产出量,只能按原量打印",
+    scaleLocked: (main, sub) => `${main} ${sub}`,
+    scaleUnlock: "改成按个数",
+    tplTitle: "📋 选择模板",
+    tpl: {
+      kitchen: ["🍳", "厨房操作台", "大字一页 · 用量和勾选格 · 只印「厨房要点」,不印整段备注 · 底部生产记录栏"],
+      showcase: ["✨", "客户展示版", "给客人 / 商场 / 合作方看:默认不印用量和品牌,印过敏原、保质期 · 贮存条件"],
+      archive: ["📔", "归档笔记版", "详细多页 · 含整段备注 · 自己存档用"],
+    },
+    langTitle: "🌐 打印语言", langs: { zh: "仅中文", ja: "仅日文", both: "中日双语" },
+    secTitle: "📝 显示内容",
+    sec: {
+      ingredients: "原料", steps: "制作流程", points: "厨房要点", record: "生产记录栏(日期 · 批号 · 负责人 · 出品数 · 报废数 · 签名)",
+      showIngredients: "原料名单", showQty: "印用量", showBrand: "印品牌", allergens: "过敏原(按原料核对的结果)", keep: "保质期 · 贮存条件",
+      notesIntro: "备注(整段,当简介印)", notes: "注意事项·备注", keepMoney: "保留备注里的价格和成本(只给自己存档)",
+      cSteps: "做法(每部分的步骤 + 整体组装)", cNotes: "备注", cPoints: "厨房要点(各部分组件里写的)",
+    },
+    hintAuto: "💡 已根据模板自动选择,可以手动调整",
+    hintRemembered: "💡 上次在这台设备上的选择",
+    titleLabel: "品名(只改这一次)",
+    titleZh: "中文", titleJa: "日本語",
+    noPoints: (kind) => `这个${kind === "component" ? "组件" : "配方"}还没写「厨房要点」。厨房版不印整段备注(那是研究笔记,常有价格);要点在编辑页「备注」卡片最上面写,3 到 5 行。`,
+    goWrite: "去写",
+    hasPoints: (n) => `✓ 会印厨房要点(${n} 行)`,
+    stepsQtyWarn: "⚠ 步骤里写的克数、温度照样会印出来",
+    notesWarn: "⚠ 备注多是研究笔记,打印前先在预览里看一遍(带价格的句子会去掉)",
+    allergenPreview: (t) => `过敏原会这样印:${t}`,
+    allergenIncomplete: (n) => `还有 ${n} 项原料没核对过敏原,所以写「请向店员确认」,不会写「无」。去材料百科核对后再印更稳妥。`,
+    allergenNoneChecked: "(材料百科里还没有一条核对过过敏原,所以现在每个配方都印「尚未核对完」。)",
+    allergenPromise: "这是店里对客人的承诺:原料或供货商换了要重新核对过敏原",
+    brandRows: (n, list) => `这 ${n} 行名字里还带着牌子:${list}。可以去材料百科填「标签用名」,或者点下面只改这一次。`,
+    ingEdit: "✎ 只改这一次的原料名单",
+    ingEditHint: "改了只影响这一次打印,不改数据。",
+    ingEditReset: "↺ 恢复算好的名单",
+    keepEmpty: "这个配方没填保质期 · 贮存条件(编辑页「🏷 保质期 · 贮存条件」),这一行不印。",
+    keepLegacy: (s) => `以前写的「保存备忘」:${s}(东京时期写法,只印在归档版)`,
+    money: (n) => `💰 价格不会打印:带 ¥、円、元、成本、毛利、售价的句子整句去掉${n > 0 ? `(这一份去掉 ${n} 句)` : ""}。`,
+    moneyKept: "⚠ 勾了「保留价格和成本」:备注里的价格会印出来,别拿给厨房和客人。",
+    tip: "💡 点「打印预览」后,在预览页顶上点「🖨 打印」打印或存 PDF。",
+    cancel: "取消", go: "🖨 打印预览",
+  },
+  ja: {
+    title: "🖨 印刷設定",
+    creationIntro: "📘 組立レシピ・A4 製造シート:パーツごとの分量と作り方、最後に組立。",
+    scaleTitle: "🔢 仕込み量",
+    scaleMake: "仕込み", scaleFrom: (f, u, k) => `元 ${f} ${u} · ×${k}`,
+    scaleCreation: (label, s, k) => `使用量は${label} ${s} 基準、現在 ×${k}`,
+    scaleReset: "↺ 元の量",
+    scaleVia: (label) => `(詳細ページは「${label}」で計算)`,
+    scaleNoYield: "出来数が未入力のため元の量で印刷します",
+    scaleLocked: (main, sub) => `${main} ${sub}`,
+    scaleUnlock: "個数で指定",
+    tplTitle: "📋 テンプレート",
+    tpl: {
+      kitchen: ["🍳", "キッチン用", "大きな文字で 1 枚・分量とチェック欄・「キッチンのポイント」だけ印刷(メモ全文は出ません)・下に製造記録欄"],
+      showcase: ["✨", "お客様向け", "お客様・取引先向け:分量とブランドは既定で出さず、アレルゲン・賞味期限・保存方法を印刷"],
+      archive: ["📔", "アーカイブ", "詳しく複数ページ・メモ全文・自分の保存用"],
+    },
+    langTitle: "🌐 印刷言語", langs: { zh: "中国語のみ", ja: "日本語のみ", both: "中日併記" },
+    secTitle: "📝 印刷する内容",
+    sec: {
+      ingredients: "材料", steps: "作り方", points: "キッチンのポイント", record: "製造記録欄(日付・ロット・担当・出来数・廃棄数・サイン)",
+      showIngredients: "材料一覧", showQty: "分量を印刷", showBrand: "ブランドを印刷", allergens: "アレルゲン(原料から集計)", keep: "賞味期限・保存方法",
+      notesIntro: "メモ全文(紹介文として)", notes: "注意事項・メモ", keepMoney: "メモ内の価格・原価を残す(自分の保存用のみ)",
+      cSteps: "作り方(パーツごと + 組立)", cNotes: "メモ", cPoints: "キッチンのポイント(各パーツ)",
+    },
+    hintAuto: "💡 テンプレートの既定値です。変更できます",
+    hintRemembered: "💡 この端末で前回選んだ設定",
+    titleLabel: "品名(今回だけ変更)",
+    titleZh: "中文", titleJa: "日本語",
+    noPoints: (kind) => `この${kind === "component" ? "パーツ" : "レシピ"}は「キッチンのポイント」が未入力です。キッチン用にはメモ全文を出しません。編集画面「メモ」欄の一番上に 3〜5 行で書いてください。`,
+    goWrite: "書きに行く",
+    hasPoints: (n) => `✓ キッチンのポイントを印刷(${n} 行)`,
+    stepsQtyWarn: "⚠ 作り方に書いた分量・温度はそのまま印刷されます",
+    notesWarn: "⚠ メモは研究ノートが多いので、プレビューで確認を(価格の文は除きます)",
+    allergenPreview: (t) => `アレルゲンの印刷:${t}`,
+    allergenIncomplete: (n) => `未確認の原料が ${n} 件。「スタッフにご確認ください」と印刷し、「なし」とは書きません。`,
+    allergenNoneChecked: "(材料事典でアレルゲン確認済みの材料はまだありません。今はどのレシピも「確認中」と印刷されます。)",
+    allergenPromise: "お客様への店の約束です。原料や仕入れ先が変わったらアレルゲンを確認し直してください",
+    brandRows: (n, list) => `この ${n} 行は名前にブランドが残っています:${list}。材料事典で「ラベル用名」を入れるか、下で今回だけ変更できます。`,
+    ingEdit: "✎ 今回だけ材料一覧を変更",
+    ingEditHint: "今回の印刷だけに反映され、データは変わりません。",
+    ingEditReset: "↺ 自動の一覧に戻す",
+    keepEmpty: "賞味期限・保存方法が未入力です(編集画面「🏷 賞味期限・保存方法」)。この行は印刷しません。",
+    keepLegacy: (s) => `以前の「保存メモ」:${s}(東京時代の書き方・アーカイブのみ印刷)`,
+    money: (n) => `💰 価格は印刷しません:¥・円・元・原価・粗利・売価を含む文は丸ごと除きます${n > 0 ? `(この印刷では ${n} 文)` : ""}。`,
+    moneyKept: "⚠ 「価格・原価を残す」がオン:メモ内の価格が印刷されます。",
+    tip: "💡「印刷プレビュー」の後、プレビュー上部の「🖨 印刷」を押してください(PDF 保存も可)。",
+    cancel: "キャンセル", go: "🖨 印刷プレビュー",
+  },
+};
+// ─── END print helpers ───
+// 第 5 批 P 的小组件:编辑页「厨房要点」两格 / 配方编辑页「🏷 保质期 · 贮存条件」卡 / 详情页「厨房要点」块 / 配方详情「保质期 · 贮存条件」一行 / 打印的生产记录表。
+// 子组件一律定义在模块顶层(在渲染函数里定义,每敲一个字输入框重挂、光标丢)。新节点带 data-p5* 钩子(探针靠它剔掉后和改前比)
+const KP_TXT = {
+  zh: { title: "厨房要点(厨房版只印这个 · 3 到 5 行)", zh: "中文", ja: "日本語", lines: (n) => `${n} 行`, tooMany: "超过 5 行了,厨房版会挤;细节写在下面的备注里",
+    phZh: "例:\n・黄油降到 45℃ 以下再加\n・面糊冷藏一晚,烤前回温 10 分钟\n・出炉立刻脱模,网架上吹风冷却",
+    phJa: "例:\n・バターは 45℃ 以下に下げてから加える\n・生地は一晩冷蔵、焼く前に 10 分室温に戻す\n・焼き上がりはすぐ型から外し、網の上で風を当てて冷ます",
+    blockTitle: "厨房要点" },
+  ja: { title: "キッチンのポイント(キッチン用はこれだけ印刷・3〜5 行)", zh: "中文", ja: "日本語", lines: (n) => `${n} 行`, tooMany: "5 行を超えています。キッチン用が窮屈になるので、詳しくは下のメモへ",
+    phZh: "例:\n・黄油降到 45℃ 以下再加\n・面糊冷藏一晚,烤前回温 10 分钟\n・出炉立刻脱模,网架上吹风冷却",
+    phJa: "例:\n・バターは 45℃ 以下に下げてから加える\n・生地は一晩冷蔵、焼く前に 10 分室温に戻す\n・焼き上がりはすぐ型から外し、網の上で風を当てて冷ます",
+    blockTitle: "キッチンのポイント" },
+};
+const KEEP_TXT = {
+  zh: { title: "🏷 保质期 · 贮存条件(客户版、标签用)", intro: "客户展示版和标签印这里。和「📦 备货」里的「能放多久」不是一回事:那是面团 / 半成品在冷冻冷藏里放多久,这里是成品交给客人以后。",
+    shelf: "保质期", cond: "贮存条件", zh: "中文", ja: "日本語", phShelfZh: "例:常温 5 天", phShelfJa: "例:常温 5 日", phCondZh: "例:密封,常温避光保存", phCondJa: "例:直射日光・高温多湿を避けて保存",
+    legacy: (s) => `上面「保存备忘」写的是:${s}(东京时期的写法,只印在归档版)。客户版和标签只印这张卡里的两格。`, row: "保质期 · 贮存条件" },
+  ja: { title: "🏷 賞味期限・保存方法(お客様向け・ラベル用)", intro: "お客様向けとラベルに印刷します。「📦 作り置き」の保存日数(生地・半製品を冷凍冷蔵で置ける日数)とは別で、こちらは完成品をお客様に渡した後の目安です。",
+    shelf: "賞味期限", cond: "保存方法", zh: "中文", ja: "日本語", phShelfZh: "例:常温 5 天", phShelfJa: "例:常温 5 日", phCondZh: "例:密封,常温避光保存", phCondJa: "例:直射日光・高温多湿を避けて保存",
+    legacy: (s) => `上の「保存メモ」の内容:${s}(東京時代の書き方・アーカイブ版のみ印刷)。お客様向けとラベルはこのカードの 2 項目だけ印刷します。`, row: "賞味期限・保存方法" },
+};
+const _p5TextArea = { width: "100%", minHeight: 88, padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, resize: "vertical", fontFamily: T.fontSans, boxSizing: "border-box" };
+const _p5Input = { width: "100%", padding: "7px 10px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
+// 编辑页「备注」卡最上面的「厨房要点」(中 / 日各一格,4 行高;右下角行数,超过 5 行黄字,不拦保存)
+function KitchenPointsFields({ form, setForm, lang, inpStyle }) {
+  const X = KP_TXT[lang === "ja" ? "ja" : "zh"];
+  const box = inpStyle ? { ...inpStyle, minHeight: 88, resize: "vertical" } : _p5TextArea;
+  const one = (key, label, ph) => {
+    const v = (form && typeof form[key] === "string") ? form[key] : "";
+    const n = kitchenPointsLines(v);
+    return (
+      <div style={{ minWidth: 0 }}>
+        <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{label}</label>
+        <textarea data-p5-field={key} rows={4} value={v} placeholder={ph} onChange={e => { const t = e.target.value; setForm(prev => ({ ...prev, [key]: t })); }} style={box} />
+        <div data-p5-lines={key} style={{ fontSize: 11, textAlign: "right", marginTop: 2, color: n > 5 ? T.warning : T.textTertiary, overflowWrap: "anywhere" }}>{n > 5 ? X.tooMany : X.lines(n)}</div>
+      </div>
+    );
   };
+  return (
+    <div data-p5-edit="points" style={{ marginBottom: 14, paddingBottom: 12, borderBottom: `0.5px solid ${T.borderSoft}`, minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary, marginBottom: 8, overflowWrap: "anywhere" }}>{X.title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+        {one("kitchenNotesZh", X.zh, X.phZh)}
+        {one("kitchenNotesJa", X.ja, X.phJa)}
+      </div>
+    </div>
+  );
+}
+// 配方编辑页「🏷 保质期 · 贮存条件」卡(备货卡后面、家族卡前面)。旧字段 storage 不为空时多一行说明
+function KeepFields({ form, setForm, lang }) {
+  const X = KEEP_TXT[lang === "ja" ? "ja" : "zh"];
+  const v = (k) => (form && typeof form[k] === "string") ? form[k] : "";
+  const put = (k) => (e) => { const t = e.target.value; setForm(prev => ({ ...prev, [k]: t })); };
+  const cell = (k, label, ph) => (
+    <div style={{ minWidth: 0 }}>
+      <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{label}</label>
+      <input data-p5-field={k} value={v(k)} placeholder={ph} onChange={put(k)} style={_p5Input} />
+    </div>
+  );
+  const legacy = _normTxt(form && form.storage);
+  return (
+    <div data-p5-edit="keep" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", minWidth: 0 }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 8, color: T.textPrimary, overflowWrap: "anywhere" }}>{X.title}</div>
+      <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.6, overflowWrap: "anywhere" }}>{X.intro}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+        {cell("shelfLifeZh", `${X.shelf} · ${X.zh}`, X.phShelfZh)}
+        {cell("shelfLifeJa", `${X.shelf} · ${X.ja}`, X.phShelfJa)}
+        {cell("storageCondZh", `${X.cond} · ${X.zh}`, X.phCondZh)}
+        {cell("storageCondJa", `${X.cond} · ${X.ja}`, X.phCondJa)}
+      </div>
+      {legacy && <div data-p5-legacy="1" style={{ fontSize: 12, color: T.textTertiary, marginTop: 10, lineHeight: 1.6, overflowWrap: "anywhere" }}>{X.legacy(legacy)}</div>}
+    </div>
+  );
+}
+// 详情页「厨房要点」块(只在有内容时出现)。variant "card" = 组件详情的卡片样式,其余 = 配方详情的小标题样式
+function KitchenPointsBlock({ item, lang, variant }) {
+  const X = KP_TXT[lang === "ja" ? "ja" : "zh"];
+  const main = pickLang(item, "kitchenNotes", lang === "ja" ? "ja" : "zh");
+  if (!_normTxt(main)) return null;
+  const other = rawLang(item, "kitchenNotes", lang === "ja" ? "ja" : "zh");
+  const body = (
+    <>
+      <div style={{ fontSize: 14, color: T.ink, whiteSpace: "pre-wrap", lineHeight: 1.7, overflowWrap: "anywhere" }}>{main}</div>
+      {_normTxt(other) && other !== main && <div style={{ fontSize: 12, color: T.textTertiary, whiteSpace: "pre-wrap", lineHeight: 1.6, marginTop: 6, overflowWrap: "anywhere" }}>{other}</div>}
+    </>
+  );
+  if (variant === "card") return (
+    <div data-p5="points" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>{X.blockTitle}</div>
+      {body}
+    </div>
+  );
+  return (
+    <div data-p5="points" style={{ marginBottom: T.sp.gap }}>
+      <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>{X.blockTitle}</div>
+      <div style={{ paddingTop: 12 }}>{body}</div>
+    </div>
+  );
+}
+// 配方详情「保质期 · 贮存条件」一行(有值才出现,放在「备注」块前面)
+function KeepRow({ item, lang }) {
+  const L = lang === "ja" ? "ja" : "zh";
+  const X = KEEP_TXT[L];
+  const shelf = pickLang(item, "shelfLife", L), cond = pickLang(item, "storageCond", L);
+  if (!_normTxt(shelf) && !_normTxt(cond)) return null;
+  return (
+    <div data-p5="keep" style={{ marginBottom: T.sp.gap }}>
+      <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>{X.row}</div>
+      <div style={{ ...T.fs.caption, color: T.body, display: "flex", gap: `${T.sp.s}px ${T.sp.xxl}px`, flexWrap: "wrap", padding: "12px 0", overflowWrap: "anywhere" }}>
+        {_normTxt(shelf) && <span>{X.shelf}：{shelf}</span>}
+        {_normTxt(cond) && <span>{X.cond}：{cond}</span>}
+      </div>
+    </div>
+  );
+}
+// 打印的「生产记录」表(厨房版、组合产品整体配方共用;样式逐项照生产单 ProductionSheetTemplate 的「生产记录」)。只是纸面台账,不写任何数据。
+// 列:日期 / 批号 / 负责人 / 出品数({u})/ 报废数({u})/ 签名;双语时表头每格上面中文、下面日文;4 行空行
+const PRINT_RECORD_COLS = {
+  zh: (u) => ["日期", "批号", "负责人", `出品数(${u})`, `报废数(${u})`, "签名"],
+  ja: (u) => ["日付", "ロット", "担当", `出来数(${u})`, `廃棄数(${u})`, "サイン"],
+};
+function PrintRecordTable({ lang, unit }) {
+  const u = _normTxt(unit) || "g";
+  const zh = PRINT_RECORD_COLS.zh(u), ja = PRINT_RECORD_COLS.ja(u);
+  const title = lang === "ja" ? "製造記録" : lang === "both" ? "生产记录 · 製造記録" : "生产记录";
+  return (
+    <div data-p5="record">
+      <div className="p-row" style={{ marginTop: "22px", fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{title}</div>
+      <table>
+        <thead>
+          <tr>{zh.map((c, i) => (
+            <th key={i} className="p-th" style={{ textAlign: i === 0 ? "left" : "center" }}>
+              {lang === "both" ? <><div style={{ fontSize: "10pt" }}>{c}</div><div style={{ fontSize: "8pt" }}>{ja[i]}</div></> : (lang === "ja" ? ja[i] : c)}
+            </th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: PRINT_RECORD_ROWS }, (_, r) => (
+            <tr key={r}>{zh.map((_, i) => <td key={i} className="p-td" style={{ height: "30px", ...(i > 0 ? { borderLeft: "1px solid #D8D8D8" } : {}) }} />)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-  const handleSectionChange = (k, v) => {
-    setSections(prev => ({ ...prev, [k]: v }));
-    setUserModified(true); // 标记用户改过
-  };
-
-  const inpStyle = { width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box" };
-
-  const templates = [
-    { id: "kitchen",  icon: "🍳", nameZh: "厨房操作台",   desc: "简洁1页·大字号·重点突出温度时间·适合边做边看" },
-    { id: "showcase", icon: "✨", nameZh: "客户展示版",   desc: "精美排版·突出品牌故事·适合展示给客人或合作伙伴" },
-    { id: "archive",  icon: "📔", nameZh: "归档笔记版",   desc: "详细多页·含完整笔记·适合收藏·类食谱书风格" },
-  ];
-  // v17.8: 组合产品的整体配方只有一种版式(A4 生产单),只选语言和印不印做法 / 备注
+// ─── 打印设置弹窗(第 5 批 P 重写,plan.md「每个页面怎么变」§1)─────────────
+// src 原对象(打印入口只存原对象,确认时 App 按 id 取最新的再生成副本)/ scale0 详情页当下的 scaleInfo(没缩放 null)/ n0 组合产品「📘 配方」上填的个数 /
+// appLang App 的界面语言(弹窗文字跟它走)/ ctx = { materials, brands, components, recipes, creations, onEdit(kind, id) }
+// onConfirm({ template, lang, sections, scale, n, allergen, title, ingText }):
+//   · scale:「做多少」和预填一样 → 原样带 scale0(保留缩放方式的 mode / label);改了 → 按个数重算(scaleFactorOf("yield"));等于原量 / 空 / 读不出 → null;
+//     scale0.keepCount(按模具缩放、产出计件,个数不变)→ 这一格锁住,点「改成按个数」才变成普通输入框(预填原量)
+//   · allergen:客户版勾了过敏原时 = 按原料核对的汇总 { contains, mayContain, unknownCount, complete }
+//   · title / ingText:客户版「品名(只改这一次)」和不印用量时的原料名单(只给这一次打印,不写数据)
+// 确认时把能记的写进本机偏好 korora_print_prefs_v1(模板、按「模板 × App 语言」的打印语言、厨房 / 归档 / 组合产品的勾选;客户版的勾选和三个安全开关不记)
+const _plainNumStr = (n) => String(Number((+n).toPrecision(12)));
+function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ctx }) {
+  const ui = appLang === "ja" ? "ja" : "zh";
+  const X = PRINT_TXT[ui];
+  const c = ctx || {};
+  const obj = src || {};
   const isCreation = itemType === "creation";
-  const [cSections, setCSections] = useState({ steps: true, notes: false });
+  const kind = itemType === "component" ? "component" : "recipe";
+  const [prefs] = useState(() => readPrintPrefs());
+  const tpl0 = isCreation ? "creation" : (prefs.tpl || "kitchen");
+  const [template, setTemplate] = useState(tpl0);
+  const [lang, setLang] = useState(() => printLangDefault(prefs, tpl0, ui));
+  const [secState, setSecState] = useState(() => printSectionsInit(prefs, tpl0));
+  const [touched, setTouched] = useState(false);
+  const sections = secState.sections;
+  const setSec = (k, v) => { setTouched(true); setSecState(prev => ({ ...prev, sections: { ...prev.sections, [k]: v } })); };
+  const switchTpl = (t) => {
+    if (t === template) return;
+    setTemplate(t);
+    setSecState(printSectionsInit(prefs, t));
+    setLang(printLangDefault(prefs, t, ui));
+    setTouched(false);
+  };
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && onClose) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // ── 🔢 做多少 ──
+  const yieldNum = (() => { const n = parseFloat(obj.yield); return (isFinite(n) && n > 0) ? n : 0; })();
+  const unit = _normTxt(obj.unit) || (kind === "component" ? "g" : "個");
+  const sc0 = isScaleInfo(scale0) ? scale0 : null;
+  const qty0 = sc0 ? _plainNumStr(sc0.to) : (yieldNum > 0 ? _plainNumStr(yieldNum) : "");
+  const [qtyText, setQtyText] = useState(qty0);
+  const [locked, setLocked] = useState(!!(sc0 && sc0.keepCount));
+  const [byCount, setByCount] = useState(false);   // 点过「改成按个数」/「按原量」:不再原样带 scale0
+  const scaleNow = (() => {
+    if (isCreation || !(yieldNum > 0)) return null;
+    if (sc0 && locked) return sc0;
+    if (sc0 && !byCount && qtyText === qty0) return sc0;
+    const t = parseFloat(String(qtyText).replace(/,/g, ""));
+    if (!(isFinite(t) && t > 0) || t === yieldNum) return null;
+    return scaleFactorOf("yield", { target: String(t) }, obj, kind, { materials: c.materials || [] });
+  })();
+  const serves = parseFloat(obj.serves) > 0 ? parseFloat(obj.serves) : 1;
+  const nPre = parseFloat(n0) > 0 ? parseFloat(n0) : serves;
+  const [nText, setNText] = useState(_plainNumStr(nPre));
+  const nNow = parseFloat(nText) > 0 ? parseFloat(nText) : serves;
+  const W = isCreation ? creationWords(creationStructureOf(obj), ui) : null;
+  const scLabel = (s) => { const l = s && s.label && s.label[ui]; return l ? [l.main, l.sub].filter(Boolean).join(" ") : ""; };
+
+  // ── 客户版 ──
+  const isShow = !isCreation && template === "showcase";
+  const actx = useMemo(() => ({ materials: c.materials || [], brands: c.brands || [], components: c.components || [], recipes: c.recipes || [], creations: c.creations || [] }),
+    [c.materials, c.brands, c.components, c.recipes, c.creations]);
+  const summary = useMemo(() => isShow ? allergenSummaryOf(kind, obj, { ...actx }) : null, [isShow, kind, obj, actx]);
+  const pa = summary ? { contains: summary.contains, mayContain: summary.mayContain, unknownCount: summary.unknown.length, complete: summary.complete } : null;
+  const brandRows = useMemo(() => isShow ? brandWordRows(obj.ingredients, actx) : [], [isShow, obj, actx]);
+  const [title, setTitle] = useState(() => ({ zh: showcaseTitleOf(obj, "zh"), ja: showcaseTitleOf(obj, "ja") }));
+  const [ingText, setIngText] = useState(null);   // null = 没改过(跟打印语言算)
+  const [ingOpen, setIngOpen] = useState(false);
+  const ingAuto = isShow ? showcaseIngNames(obj.ingredients, lang, actx).join("、") : "";
+  const ingShown = ingText === null ? ingAuto : ingText;
+  const allergenTexts = (isShow && sections.allergens && pa) ? (lang === "both" ? [printAllergenText(pa, obj.allergens, "zh"), printAllergenText(pa, obj.allergens, "ja")] : [printAllergenText(pa, obj.allergens, lang)]) : [];
+  const promise = allergenTexts.some(t => t.startsWith(ALLERGEN_NONE_ZH) || t.startsWith(ALLERGEN_NONE_JA));
+  const noneChecked = !(actx.materials || []).some(m => allergenChecked(m));
+  const hasKeep = ["shelfLifeZh", "shelfLifeJa", "storageCondZh", "storageCondJa"].some(k => _normTxt(obj[k]));
+  const pointsLines = kitchenPointsLines(pickLang(obj, "kitchenNotes", lang === "ja" ? "ja" : "zh"));
+  const moneyKept = template === "archive" && !!sections.keepMoney;
+  const moneyN = moneyKept ? 0 : printMoneyCount(isCreation ? "creation" : kind, obj, template, sections, { lang, components: c.components || [] });
+
+  const confirm = () => {
+    const opts = { template, lang, sections: { ...sections } };
+    if (isCreation) opts.n = nNow;
+    else {
+      opts.scale = scaleNow;
+      opts.allergen = (isShow && sections.allergens && pa) ? pa : null;
+      if (isShow) { opts.title = { ...title }; opts.ingText = ingShown; }
+    }
+    if (onConfirm) onConfirm(opts);
+    const rem = {};
+    (PRINT_SEC_REMEMBER[template] || []).forEach(k => { if (typeof sections[k] === "boolean") rem[k] = sections[k]; });
+    writePrintPrefs({ ...(isCreation ? {} : { tpl: template }), lang: { [template]: { [ui]: lang } }, sec: { [template]: rem } });
+  };
+
+  const sectionHead = { fontSize: 13, fontWeight: 500, marginBottom: 8, color: T.textPrimary };
+  const chk = (k, label, extra) => (
+    <label key={k} data-p5-sec={k} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, cursor: "pointer", color: T.textPrimary, overflowWrap: "anywhere", ...(extra || {}) }}>
+      <input type="checkbox" checked={!!sections[k]} onChange={e => setSec(k, e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+      <span>{label}</span>
+    </label>
+  );
+  // 客户版「印用量」「印品牌」:界面上是正着说的,内部键 hideQty / hideBrand 取反
+  const chkInv = (k, label) => (
+    <label key={k} data-p5-sec={k} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, cursor: "pointer", color: T.textPrimary, overflowWrap: "anywhere" }}>
+      <input type="checkbox" checked={!sections[k]} onChange={e => setSec(k, !e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+      <span>{label}</span>
+    </label>
+  );
+  const hint = (txt, color, attr, extra) => <div data-p5-hint={attr} style={{ fontSize: 12, color, lineHeight: 1.6, marginTop: 6, overflowWrap: "anywhere" }}>{txt}{extra}</div>;
+  const linkBtn = (label, onClick, attr) => (
+    <button type="button" data-p5-btn={attr} onClick={onClick} style={{ background: "none", border: "none", padding: 0, marginLeft: 6, cursor: "pointer", fontSize: 12, color: T.info, textDecoration: "underline", fontFamily: T.fontSans }}>{label}</button>
+  );
+  const inp16 = { padding: "6px 8px", fontSize: 16, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
 
   return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }} onClick={onClose}>
-      <div style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>🖨 打印设置</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: T.z.modal, padding: 16, boxSizing: "border-box" }}>
+      <div role="dialog" aria-modal="true" data-p5-modal={itemType} onClick={e => e.stopPropagation()}
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 600, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: T.sh.overlay, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "16px 20px 8px", flexShrink: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 500, color: T.ink }}>{X.title}</div>
+          <button type="button" aria-label={X.cancel} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, lineHeight: 1 }}>×</button>
         </div>
+        <div style={{ overflowY: "auto", padding: "4px 20px 12px", flex: "1 1 auto", minHeight: 0 }}>
+          {isCreation && <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 14, lineHeight: 1.6 }}>{X.creationIntro}</div>}
 
-        {isCreation && (
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 16, lineHeight: 1.6 }}>
-            📘 整体配方 · A4 生产单：每部分的量和做法，最后是组装。个数按详情页里填的算。
-          </div>
-        )}
-
-        {/* 模板选择 */}
-        {!isCreation && <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📋 选择模板</div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {templates.map(t => (
-              <div key={t.id} onClick={() => handleTemplateChange(t.id)} style={{ border: `1.5px solid ${template === t.id ? "#111111" : "#E5E5E5"}`, background: template === t.id ? "#F9FAFB" : "#FFFFFF", borderRadius: 10, padding: "10px 14px", cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ fontSize: 24 }}>{t.icon}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{t.nameZh}</div>
-                    <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{t.desc}</div>
-                  </div>
-                  {template === t.id && <div style={{ fontSize: 18, color: "#111" }}>✓</div>}
-                </div>
+          {/* 🔢 做多少 */}
+          <div data-p5-scale="1" style={{ marginBottom: 16 }}>
+            <div style={sectionHead}>{X.scaleTitle}</div>
+            {isCreation ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+                <span>{X.scaleMake}</span>
+                <input type="text" inputMode="decimal" data-p5-qty="n" value={nText} onChange={e => setNText(e.target.value)} style={{ ...inp16, width: 84, textAlign: "right", ...T.num }} />
+                <span>{W.unit}</span>
+                <span style={{ fontSize: 12, color: T.textTertiary, ...T.num }}>{X.scaleCreation(W.servesLabel, fmtQty(serves), fmtQty(nNow / serves))}</span>
               </div>
-            ))}
+            ) : !(yieldNum > 0) ? (
+              <div data-p5-hint="noyield" style={{ fontSize: 12, color: T.textTertiary }}>{X.scaleNoYield}</div>
+            ) : locked ? (
+              <div data-p5-qty="locked" style={{ fontSize: 13, color: T.ink, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+                {scLabel(sc0) || `${fmtQty(sc0.to)} ${unit}`}
+                {linkBtn(X.scaleUnlock, () => { setLocked(false); setByCount(true); setQtyText(_plainNumStr(yieldNum)); }, "unlock")}
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+                  <span>{X.scaleMake}</span>
+                  <input type="text" inputMode="decimal" data-p5-qty="yield" value={qtyText} onChange={e => setQtyText(e.target.value)} style={{ ...inp16, width: 96, textAlign: "right", ...T.num }} />
+                  <span>{unit}</span>
+                  <span style={{ fontSize: 12, color: T.textTertiary, ...T.num }}>{X.scaleFrom(fmtQty(yieldNum), unit, fmtQty(scaleNow ? scaleNow.factor : 1))}</span>
+                  {linkBtn(X.scaleReset, () => { setByCount(true); setQtyText(_plainNumStr(yieldNum)); }, "reset")}
+                </div>
+                {scaleNow && scaleNow === sc0 && sc0.mode && sc0.mode !== "yield" && scLabel(sc0) && hint(X.scaleVia(scLabel(sc0)), T.textTertiary, "via")}
+              </>
+            )}
           </div>
-        </div>}
 
-        {/* 语言选择 */}
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>🌐 打印语言</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[["zh", "仅中文"], ["ja", "仅日文"], ["both", "中日双语"]].map(([v, label]) => (
-              <button key={v} onClick={() => setLang(v)} style={{ flex: 1, padding: "8px 12px", fontSize: 12, border: `1.5px solid ${lang === v ? "#111111" : "#E5E5E5"}`, background: lang === v ? "#111111" : "#FFFFFF", color: lang === v ? "#FFFFFF" : "#111111", borderRadius: 8, cursor: "pointer", fontWeight: lang === v ? 500 : 400 }}>{label}</button>
-            ))}
-          </div>
-        </div>
+          {/* 📋 选择模板(组合产品只有一种版式) */}
+          {!isCreation && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={sectionHead}>{X.tplTitle}</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {["kitchen", "showcase", "archive"].map(t => {
+                  const [icon, name, desc] = X.tpl[t];
+                  const on = template === t;
+                  return (
+                    <button type="button" key={t} data-p5-tpl={t} aria-pressed={on} onClick={() => switchTpl(t)}
+                      style={{ textAlign: "left", border: `1.5px solid ${on ? T.ink : T.border}`, background: on ? T.surface : T.paper, borderRadius: T.radius, padding: "10px 14px", cursor: "pointer", fontFamily: T.fontSans, color: T.ink, display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                      <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>{name}</span>
+                        <span style={{ display: "block", fontSize: 11, color: T.textSecondary, marginTop: 2, lineHeight: 1.5, overflowWrap: "anywhere" }}>{desc}</span>
+                      </span>
+                      {on && <span style={{ fontSize: 16, flexShrink: 0 }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-        {/* 显示选项 */}
-        {isCreation ? (
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📝 显示内容</div>
-            <div style={{ display: "grid", gap: 6 }}>
-              {[["steps", "做法（每部分的步骤 + 整体组装）"], ["notes", "备注"]].map(([k, label]) => (
-                <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                  <input type="checkbox" checked={!!cSections[k]} onChange={e => setCSections(prev => ({ ...prev, [k]: e.target.checked }))} />
-                  {label}
-                </label>
+          {/* 🌐 打印语言 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionHead}>{X.langTitle}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {PRINT_LANGS.map(v => (
+                <button type="button" key={v} data-p5-lang={v} aria-pressed={lang === v} onClick={() => setLang(v)}
+                  style={{ flex: "1 1 90px", padding: "8px 10px", fontSize: 12, border: `1.5px solid ${lang === v ? T.ink : T.border}`, background: lang === v ? T.ink : T.paper, color: lang === v ? T.paper : T.ink, borderRadius: T.radius, cursor: "pointer", fontWeight: lang === v ? 500 : 400, fontFamily: T.fontSans }}>{X.langs[v]}</button>
               ))}
             </div>
           </div>
-        ) : (
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>📝 显示内容</div>
-          <div style={{ display: "grid", gap: 6 }}>
-            {[
-              ["ingredients", "原料"],
-              ["steps", "制作流程"],
-              ["notes", "注意事项·备注"],
-            ].map(([k, label]) => (
-              <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" checked={sections[k]} onChange={e => handleSectionChange(k, e.target.checked)} />
-                {label}
-              </label>
-            ))}
-          </div>
-          {!userModified && (
-            <div style={{ fontSize: 10, color: "#999", marginTop: 4, fontStyle: "italic" }}>
-              💡 已根据模板自动选择，可以手动调整
+
+          {/* 📝 显示内容 */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={sectionHead}>{X.secTitle}</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              {template === "kitchen" && <>{chk("ingredients", X.sec.ingredients)}{chk("steps", X.sec.steps)}{chk("points", X.sec.points)}{chk("record", X.sec.record)}</>}
+              {template === "archive" && <>{chk("ingredients", X.sec.ingredients)}{chk("steps", X.sec.steps)}{chk("notes", X.sec.notes)}{chk("keepMoney", X.sec.keepMoney)}</>}
+              {template === "creation" && <>{chk("steps", X.sec.cSteps)}{chk("notes", X.sec.cNotes)}{chk("points", X.sec.cPoints)}{chk("record", X.sec.record)}</>}
+              {template === "showcase" && (
+                <>
+                  <div data-p5-title="1" style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{X.titleLabel}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 6 }}>
+                      {lang !== "ja" && <input type="text" data-p5-title-in="zh" aria-label={X.titleZh} value={title.zh} onChange={e => { const v = e.target.value; setTitle(t => ({ ...t, zh: v })); }} style={{ ...inp16, width: "100%" }} />}
+                      {lang !== "zh" && <input type="text" data-p5-title-in="ja" aria-label={X.titleJa} value={title.ja} onChange={e => { const v = e.target.value; setTitle(t => ({ ...t, ja: v })); }} style={{ ...inp16, width: "100%" }} />}
+                    </div>
+                  </div>
+                  {chk("ingredients", X.sec.showIngredients)}
+                  {sections.ingredients && (
+                    <div style={{ display: "flex", gap: "6px 16px", flexWrap: "wrap", paddingLeft: 24 }}>
+                      {chkInv("hideQty", X.sec.showQty)}{chkInv("hideBrand", X.sec.showBrand)}
+                    </div>
+                  )}
+                  {chk("allergens", X.sec.allergens)}
+                  {chk("keep", X.sec.keep)}
+                  {chk("steps", X.sec.steps)}
+                  {chk("notes", X.sec.notesIntro)}
+                </>
+              )}
             </div>
-          )}
-        </div>
-        )}
+            {template !== "showcase" && !touched && hint(secState.remembered ? X.hintRemembered : X.hintAuto, T.textTertiary, "auto")}
 
-        <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontSize: 11, color: "#854F0B", lineHeight: 1.6 }}>
-          💡 点击「打印预览」后，使用浏览器的「打印」(Ctrl+P / ⌘+P) 进行实际打印，或保存为PDF。<br />
-          💰 价格信息不会打印（已隐藏）。
-        </div>
+            {/* 按模板的提示行 */}
+            {template === "kitchen" && sections.points && (pointsLines > 0
+              ? hint(X.hasPoints(pointsLines), T.success, "points")
+              : hint(X.noPoints(kind), T.textTertiary, "nopoints", (c.onEdit && obj.id !== undefined && obj.id !== null) ? linkBtn(X.goWrite, () => c.onEdit(kind, obj.id), "gowrite") : null))}
+            {isShow && allergenTexts.length > 0 && (
+              <div data-p5-hint="allergen" style={{ fontSize: 12, color: pa && pa.complete ? T.textSecondary : T.warning, lineHeight: 1.6, marginTop: 6, overflowWrap: "anywhere", whiteSpace: "pre-line" }}>
+                {X.allergenPreview(allergenTexts.join(" / "))}
+                {pa && !pa.complete && <> {X.allergenIncomplete(pa.unknownCount)}{noneChecked ? X.allergenNoneChecked : ""}</>}
+              </div>
+            )}
+            {isShow && allergenTexts.length > 0 && promise && hint(X.allergenPromise, T.textTertiary, "promise")}
+            {isShow && sections.ingredients && brandRows.length > 0 && hint(X.brandRows(brandRows.length, brandRows.map(r => `「${r.name}」`).join("")), T.textSecondary, "brands")}
+            {isShow && sections.ingredients && sections.hideQty && (
+              <div data-p5-ing="1" style={{ marginTop: 6 }}>
+                {linkBtn(`${ingOpen ? "▼" : "▶"} ${X.ingEdit}`, () => setIngOpen(o => !o), "ingedit")}
+                {ingOpen && (
+                  <div style={{ marginTop: 6 }}>
+                    <textarea data-p5-ing-text="1" rows={4} value={ingShown} onChange={e => setIngText(e.target.value)} style={{ ...inp16, width: "100%", resize: "vertical", lineHeight: 1.6 }} />
+                    <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 2 }}>{X.ingEditHint}{ingText !== null && linkBtn(X.ingEditReset, () => setIngText(null), "ingreset")}</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {isShow && sections.keep && !hasKeep && hint(X.keepEmpty, T.textTertiary, "keepempty", _normTxt(obj.storage) ? <div>{X.keepLegacy(_normTxt(obj.storage))}</div> : null)}
+            {isShow && sections.steps && sections.hideQty && hint(X.stepsQtyWarn, T.warning, "stepsqty")}
+            {(isShow || template === "archive") && sections.notes && !moneyKept && hint(X.notesWarn, T.textTertiary, "notes")}
+          </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Btn onClick={onClose}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-          <Btn variant="primary" onClick={() => onConfirm(isCreation ? { template: "creation", lang, sections: cSections } : { template, lang, sections })}>🖨 打印预览</Btn>
+          <div data-p5-money={moneyKept ? "kept" : String(moneyN)} style={{ border: `0.5px solid ${moneyKept ? T.danger : T.warning}`, borderRadius: T.radius, padding: "8px 12px", fontSize: 12, color: moneyKept ? T.danger : T.body, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+            {moneyKept ? X.moneyKept : X.money(moneyN)}
+            <div style={{ color: T.textTertiary, marginTop: 4 }}>{X.tip}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", padding: "12px 20px 16px", borderTop: `0.5px solid ${T.border}`, flexShrink: 0, background: T.paper, position: "sticky", bottom: 0 }}>
+          <Btn onClick={onClose}>{X.cancel}</Btn>
+          <Btn variant="primary" onClick={confirm}>{X.go}</Btn>
         </div>
       </div>
     </div>
@@ -11451,8 +12175,10 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
 }
 
 // ─── 打印预览视图 ─────────────
-// 第 5 批第 0 步接好 uiLang(App 的界面语言;先不用):P 线让顶栏 / LOGO 设置的文字跟它走,没传时照旧按打印语言 lang
+// 第 5 批:uiLang = App 的界面语言,顶栏 / LOGO 设置的文字跟它走(P 线);没传时照旧按打印语言 lang
 function PrintView({ item, itemType, template, lang, sections, printSettings, onClose, onUpdateSettings, canEditSettings = true, uiLang }) {
+  // 第 5 批 P:顶栏、LOGO 设置弹窗的文字跟 App 语言(uiLang);没传 uiLang 时照旧按打印语言 lang(双语时是日文,和以前一样)。模板分发、@media print、print-overlay 结构都不动
+  const uiZh = (uiLang || lang) === "zh";
   const [showLogoUpload, setShowLogoUpload] = useState(false);
   const [logoUrlInput, setLogoUrlInput] = useState(printSettings.logoUrl || "");
   const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "kororā");
@@ -11551,12 +12277,12 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
       {/* 工具栏（打印时隐藏） */}
       <div className="no-print" style={{ position: "sticky", top: 0, background: T.brand, color: T.bgApp, padding: "12px 20px", zIndex: 100, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontFamily: T.fontSerif, fontSize: 15, fontWeight: 500, letterSpacing: "0.5px" }}>
-          {lang === "zh" ? "🖨 打印预览" : "🖨 印刷プレビュー"}
+          {uiZh ? "🖨 打印预览" : "🖨 印刷プレビュー"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {canEditSettings && <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{lang === "zh" ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>}
-          <Btn size="sm" variant="primary" onClick={doPrint}>{lang === "zh" ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
-          <Btn size="sm" onClick={onClose} style={{ background: T.paper }}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
+          {canEditSettings && <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{uiZh ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>}
+          <Btn size="sm" variant="primary" onClick={doPrint}>{uiZh ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
+          <Btn size="sm" onClick={onClose} style={{ background: T.paper }}>{uiZh ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
 
@@ -11565,28 +12291,28 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
         <div className="no-print" style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(45,27,14,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001, padding: 20 }} onClick={() => setShowLogoUpload(false)}>
           <div style={{ background: T.bgCard, borderRadius: T.radiusLg, padding: "1.5rem 1.75rem", maxWidth: 500, width: "100%", border: `0.5px solid ${T.border}` }} onClick={e => e.stopPropagation()}>
             <div style={{ fontFamily: T.fontSerif, fontSize: 18, fontWeight: 500, marginBottom: "1rem", color: T.brand }}>
-              {lang === "zh" ? "⚙ LOGO 与品牌设置" : "⚙ ロゴ・ブランド設定"}
+              {uiZh ? "⚙ LOGO 与品牌设置" : "⚙ ロゴ・ブランド設定"}
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
-                {lang === "zh" ? "品牌名" : "ブランド名"}
+                {uiZh ? "品牌名" : "ブランド名"}
               </div>
               <input value={brandNameInput} onChange={e => setBrandNameInput(e.target.value)} placeholder="kororā" style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
             </div>
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
-                {lang === "zh" ? "副标题（可选）" : "サブタイトル（任意）"}
+                {uiZh ? "副标题（可选）" : "サブタイトル（任意）"}
               </div>
-              <input value={subtitleInput} onChange={e => setSubtitleInput(e.target.value)} placeholder={lang === "zh" ? "留空 = 不印副标题" : "空欄なら印刷しません"} style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
+              <input value={subtitleInput} onChange={e => setSubtitleInput(e.target.value)} placeholder={uiZh ? "留空 = 不印副标题" : "空欄なら印刷しません"} style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
             </div>
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 5, letterSpacing: "0.3px" }}>
-                {lang === "zh" ? "LOGO 图片 URL（留空用默认）" : "ロゴ画像 URL（空で既定）"}
+                {uiZh ? "LOGO 图片 URL（留空用默认）" : "ロゴ画像 URL（空で既定）"}
               </div>
               <input value={logoUrlInput} onChange={e => setLogoUrlInput(e.target.value)} placeholder="https://i.imgur.com/xxx.png" style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box", fontFamily: T.fontSans }} />
               <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 4, fontStyle: "italic" }}>
-                {lang === "zh" ? "建议正方形透明 PNG，尺寸 200×200 效果最佳" : "正方形の透明 PNG・200×200 推奨"}
+                {uiZh ? "建议正方形透明 PNG，尺寸 200×200 效果最佳" : "正方形の透明 PNG・200×200 推奨"}
               </div>
             </div>
 
@@ -11598,11 +12324,11 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               <Btn size="sm" variant="danger" onClick={resetLogo}>
-                {lang === "zh" ? "恢复默认" : "既定に戻す"}
+                {uiZh ? "恢复默认" : "既定に戻す"}
               </Btn>
               <div style={{ display: "flex", gap: 8 }}>
-                <Btn onClick={() => setShowLogoUpload(false)}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-                <Btn variant="primary" onClick={saveLogo}>{lang === "zh" ? "保存" : "保存"}</Btn>
+                <Btn onClick={() => setShowLogoUpload(false)}>{uiZh ? "取消" : "キャンセル"}</Btn>
+                <Btn variant="primary" onClick={saveLogo}>{uiZh ? "保存" : "保存"}</Btn>
               </div>
             </div>
           </div>
@@ -11651,16 +12377,16 @@ const printTimeText = (t, lang) => {
 // 缩放后打印的抬头 printScaleText 第 5 批第 0 步挪进了缩放 helpers 段(RecipeView 上面)
 
 // ─── 模板1：厨房操作台版（简洁1页，大字号） ─────────────
-function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+// 第 5 批 P:厨房版只印「厨房要点」(不再印整段备注 —— 那是研究笔记,每个配方 453 到 2,030 字,还常有价格);她手写的文字(配料备注、要点、步骤)先去钱;
+// 底部「生产记录」表(sections.record);模具 / 炉温 / 时间是家族通用的标「(家族通用)」;单位缺省:配方「個」、组件「g」。新节点带 data-p5
+const _famMark = (item, k, lang) => (item && Array.isArray(item._famFilled) && item._famFilled.includes(k))
+  ? <span data-p5="fam">{lang === "ja" ? "(ファミリー共通)" : "(家族通用)"}</span> : null;
+function KitchenTemplate({ item: item0, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+  const item = printStripItem(item0, true).item;   // 钱不上纸:厨房版一律去掉带钱的句子
   const getName = (it) => {
     if (lang === "zh") return it.nameZh || it.nameJa;
     if (lang === "ja") return it.nameJa || it.nameZh;
     return `${it.nameZh || ""} / ${it.nameJa || ""}`;
-  };
-  const getText = (zh, ja) => {
-    if (lang === "zh") return zh || ja || "";
-    if (lang === "ja") return ja || zh || "";
-    return `${zh || ""}${zh && ja ? " / " : ""}${ja || ""}`;
   };
 
   const name = getName(item);
@@ -11669,9 +12395,11 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
   // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
   // C11:按行对齐取这一行的日文;这一行中文空着(主行已经回退成日文)或日文空着就不重复印
   const stepsSub = lang === "both" ? stepRows(item).map(r => r.ja) : null;
-  const notesText = getText(item.notesZh, item.notesJa);
+  const points = sections.points ? _printLangTexts(item, "kitchenNotes", lang, true) : [];
   const scaleText = printScaleText(item, lang);
   const ingsSorted = printSortByBowl(item.ingredients);
+  const unitDef = itemType === "component" ? "g" : "個";
+  const famTB = (item._famFilled || []).some(k => k === "temp" || k === "baketime");
 
   return (
     <div style={{ position: "relative", zIndex: 1 }}>
@@ -11686,12 +12414,22 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
         </div>
         {/* 2026-09-29 体检第 2 批:以前右栏不收缩不换行,温度时间写得长时把名字挤成一条、右边超出纸边 —— 限宽 55% 并允许换行 */}
         <div style={{ textAlign: "right", fontSize: "12pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 1, maxWidth: "55%", overflowWrap: "anywhere" }}>
-          {item.yield && <div style={{ fontSize: "20pt", fontWeight: 700 }}>{scaleText ? scaleText.main : `${item.yield} ${item.unit || "個"}`}</div>}
+          {item.yield && <div style={{ fontSize: "20pt", fontWeight: 700 }}>{scaleText ? scaleText.main : `${item.yield} ${item.unit || unitDef}`}</div>}
           {scaleText && <div style={{ fontSize: "10pt" }}>{scaleText.sub}</div>}
-          {item.mold && <div>{item.mold}</div>}
-          {(item.temp || item.baketime) && <div style={{ fontWeight: 700 }}>{[item.temp, item.baketime].filter(Boolean).join(" / ")}</div>}
+          {item.mold && <div>{item.mold}{_famMark(item, "mold", lang)}</div>}
+          {(item.temp || item.baketime) && <div style={{ fontWeight: 700 }}>{famTB
+            ? [["temp", item.temp], ["baketime", item.baketime]].filter(([, v]) => v).map(([k, v], i) => <Fragment key={k}>{i > 0 ? " / " : ""}{v}{_famMark(item, k, lang)}</Fragment>)
+            : [item.temp, item.baketime].filter(Boolean).join(" / ")}</div>}
         </div>
       </div>
+
+      {/* 第 5 批 P:厨房要点(sections.points 且写了才印;13pt 粗体,双语时中文在上、日文在下) */}
+      {points.length > 0 && (
+        <div data-p5="points" style={{ marginTop: "12px", border: "2px solid #000", padding: "8px 12px", fontSize: "13pt", fontWeight: 700, lineHeight: 1.55 }}>
+          <div style={{ fontSize: "10pt", letterSpacing: "0.14em", fontWeight: 400, marginBottom: "2px" }}>{lang === "ja" ? "ポイント" : lang === "both" ? "厨房要点 · ポイント" : "厨房要点"}</div>
+          {points.map((t, i) => <div key={i} style={{ whiteSpace: "pre-wrap", ...(i > 0 ? { fontSize: "11pt", marginTop: "4px" } : {}) }}>{t}</div>)}
+        </div>
+      )}
 
       {/* 原料表：盆用粗体编号(不用颜色) · 用量 17pt 粗 · 每行右侧一个勾选格 */}
       {sections.ingredients && item.ingredients && item.ingredients.length > 0 && (
@@ -11753,13 +12491,9 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
         </div>
       )}
 
-      {/* 注意事项 */}
-      {sections.notes && notesText && (
-        <div style={{ marginTop: "16px", border: "1px solid #000", padding: "10px 14px", fontSize: "10pt", lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: "4px" }}>{lang === "ja" ? "注意" : "注意事项"}</div>
-          <div style={{ whiteSpace: "pre-wrap" }}>{notesText}</div>
-        </div>
-      )}
+      {/* 第 5 批 P:整段备注(「注意事项」框)不再印 —— 厨房版只印上面的「厨房要点」 */}
+      {/* 生产记录(纸面台账,不写数据) */}
+      {sections.record && <PrintRecordTable lang={lang} unit={item.unit || unitDef} />}
 
       {/* 底部 */}
       <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
@@ -11771,7 +12505,13 @@ function KitchenTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 }
 
 // ─── 模板2：客户展示版（精美） ─────────────
-function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+// 第 5 批 P(5.3):给客人 / 商场 / 合作方看。hideQty(界面上「印用量」不勾)→ 不印倍数抬头,原料只列名字(_printIngText,弹窗算好或她只改这一次的;
+// 没有就 showcaseIngNames);hideBrand →不印「(品牌)」;两个都关时原料区和以前一样。品名用弹窗「品名(只改这一次)」那一格(_printTitle)。
+// 过敏原改印按原料核对的(_printAllergen + printAllergenText,和手写的对照;没核对完绝不写「无」),手写的 allergens 不再原样印;
+// 「保质期 · 贮存条件」一行(sections.keep);简介(整段备注)默认不印,勾了也先去钱。新节点带 data-p5
+function ShowcaseTemplate({ item: item0, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+  const item = printStripItem(item0, true).item;   // 钱不上纸
+  const hideQty = !!sections.hideQty, hideBrand = !!sections.hideBrand;
   const getName = (it) => {
     if (lang === "zh") return it.nameZh || it.nameJa;
     if (lang === "ja") return it.nameJa || it.nameZh;
@@ -11783,7 +12523,8 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
     return `${zh || ""}${zh && ja ? "\n" : ""}${ja || ""}`;
   };
 
-  const name = getName(item);
+  const pt = item._printTitle && typeof item._printTitle === "object" ? item._printTitle : null;
+  const name = pt ? getName({ nameZh: pt.zh || item.nameZh, nameJa: pt.ja || item.nameJa }) : getName(item);
   // 某语言是空数组时回退另一语言(以前 stepsJa: [] 是真值,日文版步骤整段空白)
   const steps = pickSteps(item, lang === "ja" ? "ja" : "zh");
   // 2026-09-29 体检第 2 批:以前选「中日双语」只印中文步骤 —— 双语时每步下面加印日文
@@ -11793,7 +12534,16 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
   // 2026-09-29 体检第 2 批:过敏原和总耗时以前从不打印
   const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} / ${ja}` : zh;
   const timeText = printTimeText(item.time, lang === "ja" ? "ja" : "zh");
-  const scaleText = printScaleText(item, lang);   // 缩放后打印:展示版也标出「做多少(原多少 ×倍)」(审查发现只有这一版没标)
+  const scaleText = hideQty ? null : printScaleText(item, lang);   // 缩放后打印:展示版也标出「做多少(原多少 ×倍)」;不印用量时不印
+  const allergenLines = sections.allergens && item._printAllergen
+    ? (lang === "both" ? [printAllergenText(item._printAllergen, item.allergens, "zh"), printAllergenText(item._printAllergen, item.allergens, "ja")] : [printAllergenText(item._printAllergen, item.allergens, lang)]).filter(Boolean)
+    : [];
+  const keepL = lang === "ja" ? "ja" : "zh";
+  const keepItems = !sections.keep ? [] : [
+    ...(lang === "both" ? _printLangTexts(item, "shelfLife", "both", true) : _printLangTexts(item, "shelfLife", keepL)).map(v => ({ k: "shelf", v })),
+    ...(lang === "both" ? _printLangTexts(item, "storageCond", "both", true) : _printLangTexts(item, "storageCond", keepL)).map(v => ({ k: "cond", v })),
+  ];
+  const ingNameText = hideQty ? (typeof item._printIngText === "string" ? item._printIngText : showcaseIngNames(item.ingredients, lang).join("、")) : "";
 
   return (
     <div style={{ position: "relative", zIndex: 1, fontFamily: 'Georgia, "Hiragino Mincho ProN", "游明朝", "PingFang SC", serif', color: "#2D1B0E" }}>
@@ -11824,23 +12574,33 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
       {sections.ingredients && item.ingredients && item.ingredients.length > 0 && (
         <div style={{ marginBottom: "8mm" }}>
           <div style={{ textAlign: "center", fontSize: "10pt", letterSpacing: "4pt", color: "#7A5F4A", marginBottom: "5mm", fontStyle: "italic" }}>— INGREDIENTS · 使用素材 —</div>
+          {hideQty ? (
+            <div data-p5="ingnames" style={{ fontSize: "10.5pt", lineHeight: 1.9, textAlign: "center", maxWidth: "150mm", margin: "0 auto", whiteSpace: "pre-wrap" }}>{ingNameText}</div>
+          ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "3mm 8mm", fontSize: "10.5pt", lineHeight: 1.8 }}>
             {item.ingredients.map((ing, i) => {
               const ingName = getName(ing);
               return (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "0.5px dotted #AAA", paddingBottom: "1mm" }}>
-                  <span>{ingName}{ing.brand && <span style={{ fontSize: "9pt", color: "#888", marginLeft: "2mm" }}>({ing.brand})</span>}</span>
+                  <span>{ingName}{!hideBrand && ing.brand && <span style={{ fontSize: "9pt", color: "#888", marginLeft: "2mm" }}>({ing.brand})</span>}</span>
                   <span style={{ fontStyle: "italic", color: "#555" }}>{ing.qty}{ing.unit || "g"}</span>
                 </div>
               );
             })}
           </div>
+          )}
         </div>
       )}
 
-      {(item.allergens || timeText) && (
+      {/* 第 5 批 P:过敏原按原料核对的结果(和手写的对照)/ 保质期 · 贮存条件 / 制作时间。手写的 allergens 不再原样印 */}
+      {(allergenLines.length > 0 || keepItems.length > 0 || timeText) && (
         <div style={{ marginBottom: "8mm", textAlign: "center", fontSize: "10pt", color: "#444", display: "flex", justifyContent: "center", gap: "8mm", flexWrap: "wrap" }}>
-          {item.allergens && <span>{lb("过敏原", "アレルゲン")}：{item.allergens}</span>}
+          {allergenLines.length > 0 && <span data-p5="allergen" style={{ whiteSpace: "pre-line" }}>{allergenLines.join("\n")}</span>}
+          {keepItems.length > 0 && (
+            <span data-p5="keep" style={{ whiteSpace: "pre-line" }}>
+              {keepItems.map((x, i) => `${x.k === "shelf" ? lb("保质期", "賞味期限") : lb("贮存条件", "保存方法")}：${x.v}`).join("\n")}
+            </span>
+          )}
           {timeText && <span>{lb("制作时间", "所要時間")}：{timeText}</span>}
         </div>
       )}
@@ -11873,7 +12633,11 @@ function ShowcaseTemplate({ item, itemType, lang, sections, logoSrc, brandName, 
 }
 
 // ─── 模板3：归档笔记版（详细多页，类食谱书） ─────────────
-function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+// 第 5 批 P:整段备注、配料备注、步骤默认去掉带钱的句子(勾「保留价格和成本」才原样印,这个勾不记);信息行多「保质期」「贮存条件」(有才印,旧「保存」照印);
+// 模具 / 炉温 / 时间家族兜底标「(家族通用)」;单位缺省:配方「個」、组件「g」
+function ArchiveTemplate({ item: item0, itemType, lang, sections, logoSrc, brandName, brandSubtitle }) {
+  const item = printStripItem(item0, !sections.keepMoney).item;
+  const unitDef = itemType === "component" ? "g" : "個";
   const getName = (it) => {
     if (lang === "zh") return it.nameZh || it.nameJa;
     if (lang === "ja") return it.nameJa || it.nameZh;
@@ -11919,13 +12683,16 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 
         {/* 元信息 */}
         <div style={{ marginTop: "4mm", display: "flex", gap: "6mm", flexWrap: "wrap", fontSize: "9pt", color: "#555" }}>
-          {item.yield && <div><span style={{ color: "#999", letterSpacing: "0.5pt" }}>{lb("产量", "仕上がり")}:</span> <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{scaleText ? `${scaleText.main} ${scaleText.sub}` : `${item.yield}${item.unit || "個"}`}</strong></div>}
-          {item.temp && <div><span style={{ color: "#888" }}>{lb("温度", "温度")}:</span> <strong>{item.temp}</strong></div>}
-          {item.baketime && <div><span style={{ color: "#888" }}>{lb("烘烤时间", "焼成時間")}:</span> <strong>{item.baketime}</strong></div>}
+          {item.yield && <div><span style={{ color: "#999", letterSpacing: "0.5pt" }}>{lb("产量", "仕上がり")}:</span> <strong style={{ fontFamily: "Georgia, serif", color: "#2D1B0E" }}>{scaleText ? `${scaleText.main} ${scaleText.sub}` : `${item.yield}${item.unit || unitDef}`}</strong></div>}
+          {item.temp && <div><span style={{ color: "#888" }}>{lb("温度", "温度")}:</span> <strong>{item.temp}</strong>{_famMark(item, "temp", lang)}</div>}
+          {item.baketime && <div><span style={{ color: "#888" }}>{lb("烘烤时间", "焼成時間")}:</span> <strong>{item.baketime}</strong>{_famMark(item, "baketime", lang)}</div>}
           {timeText && <div><span style={{ color: "#888" }}>{lb("制作时间", "所要時間")}:</span> <strong>{timeText}</strong></div>}
-          {item.mold && <div><span style={{ color: "#888" }}>{lb("模具", "型")}:</span> <strong>{item.mold}</strong></div>}
+          {item.mold && <div><span style={{ color: "#888" }}>{lb("模具", "型")}:</span> <strong>{item.mold}</strong>{_famMark(item, "mold", lang)}</div>}
           {item.difficulty && <div><span style={{ color: "#888" }}>{lb("难度", "難易度")}:</span> <strong>{item.difficulty}</strong></div>}
           {item.storage && <div><span style={{ color: "#888" }}>{lb("保存", "保存")}:</span> <strong>{item.storage}</strong></div>}
+          {/* 第 5 批 P:保质期 / 贮存条件(配方的新字段,有才印;双语时中日都印) */}
+          {_printLangTexts(item, "shelfLife", lang, true).map((v, i) => <div key={`sl${i}`} data-p5="keep"><span style={{ color: "#888" }}>{lb("保质期", "賞味期限")}:</span> <strong>{v}</strong></div>)}
+          {_printLangTexts(item, "storageCond", lang, true).map((v, i) => <div key={`sc${i}`} data-p5="keep"><span style={{ color: "#888" }}>{lb("贮存条件", "保存方法")}:</span> <strong>{v}</strong></div>)}
           {item.allergens && <div><span style={{ color: "#888" }}>{lb("过敏原", "アレルゲン")}:</span> <strong>{item.allergens}</strong></div>}
         </div>
       </div>
@@ -12019,8 +12786,12 @@ function ArchiveTemplate({ item, itemType, lang, sections, logoSrc, brandName, b
 // ─── 模板4：组合产品整体配方（v17.8，A4 生产单，黑白）─────────────
 // data = { creation, batch }:详情页「📘 配方」按个数算好的那一份(creationBatch),打印和屏幕一个数。
 // 沿用上面 PrintView 的 p-* 规范(纯黑白、盆用粗体编号、用量粗体),价格一律不印。
+// 第 5 批 P:抬头印产品「模具 / 尺寸」(data-p5="cmold");每个现做的部分在配料表前印组件一批的模具 + 这次约几批(partMoldText,data-p5="pmold")、
+// 组件写的厨房要点(sections.points,data-p5="ppoints");配料备注 / 部分备注 / 整体备注 / 步骤 / 用量说明一律先去钱;
+// 用量那一行:usedSpec 有效(按每个填的)改印「每台 30 g × 18 = 540 g · 说明」;底部生产记录表(sections.record)。老调用方不传 points / record 就不印这两块
 function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubtitle }) {
-  const c = (data && data.creation) || {};
+  const c0 = (data && data.creation) || {};
+  const c = printStripItem(c0, true).item;   // 整体备注 / 组装步骤去钱
   const batch = (data && data.batch) || { parts: [], N: 1, serves: 1, factor: 1 };
   const L = lang === "ja" ? "ja" : "zh";
   const W = creationWords(creationStructureOf(c), L);
@@ -12078,6 +12849,7 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
           <div style={{ fontSize: "11pt", letterSpacing: "0.26em" }}>{brandName}</div>
           <div style={{ fontSize: "24pt", fontWeight: 700, marginTop: "8px", lineHeight: 1.1 }}>{nameOf(c)}</div>
           {c.nameFr && <div style={{ fontSize: "13pt", marginTop: "4px" }}>{c.nameFr}</div>}
+          {creationMoldLine(c, lang) && <div data-p5="cmold" style={{ fontSize: "11pt", marginTop: "4px" }}>{creationMoldLine(c, lang)}</div>}
         </div>
         <div style={{ textAlign: "right", fontSize: "11pt", lineHeight: 1.7, marginLeft: "8mm", flexShrink: 0 }}>
           <div style={{ fontSize: "20pt", fontWeight: 700 }}>{tx("做", "仕込み")} {fmtQty(batch.N)} {W.unit}</div>
@@ -12114,11 +12886,14 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
       {/* 各部分 */}
       {batch.parts.map(p => {
         const l = p.layer;
+        const lS = printStripItem(l, true).item;   // 部分的步骤 / 备注去钱
         const title = l.customName || nameOf(l);
         const compName = nameOf(l);
-        const note = usedAmountNote(l.usedAmount);
-        const partNotes = sections.notes ? notesOf(l) : "";
+        const used = creationUsedLine(l, c0.serves, W.unit, L, true);
+        const partNotes = sections.notes ? notesOf(lS) : "";
         const rows = p.stock ? [] : rowsOf(p);
+        const pmold = p.stock ? "" : partMoldText(p, L);
+        const pts = (!p.stock && sections.points && p.comp) ? _printLangTexts(printStripItem(p.comp, true).item, "kitchenNotes", lang, true) : [];
         let lastGroup = null;
         return (
           <div key={p.idx} style={{ marginTop: "20px" }}>
@@ -12131,7 +12906,7 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
               </div>
               <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${l.unit || "g"}` : ""}</div>
             </div>
-            {note && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{tx("用量原文", "原文")}：{note}</div>}
+            {used && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{used.kind === "raw" ? tx("用量原文", "原文") : used.kind === "each" ? tx("用量", "使用量") : tx("用量说明", "説明")}：{used.text}</div>}
             {p.noUsed && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx("没填用量：下面是整批配方，没按个数算", "使用量未入力：全量レシピ")}</div>}
             {/* 2026-09-29 体检第 2 批:「500g + 170g」这类用量屏幕上有黄色提醒,打印单上以前没有,员工照大号数字做会少做 */}
             {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(`用量只认开头的数字，按 ${fmtQty(p.used)} ${l.unit || "g"} 一批算，请核对用量原文`, `先頭の数字 ${fmtQty(p.used)} ${l.unit || "g"} で計算。原文を確認`)}</div>}
@@ -12141,6 +12916,13 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
               </div>
             ) : (
               <>
+                {pmold && <div data-p5="pmold" style={{ fontSize: "10pt", marginTop: "4px", overflowWrap: "anywhere" }}>{pmold}{lang === "both" && partMoldText(p, "ja") ? <div style={{ fontSize: "9pt" }}>{partMoldText(p, "ja")}</div> : null}</div>}
+                {pts.length > 0 && (
+                  <div data-p5="ppoints" style={{ marginTop: "4px", border: "1.5px solid #000", padding: "4px 8px", fontSize: "10.5pt", fontWeight: 700, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: "8.5pt", fontWeight: 400, letterSpacing: "0.12em" }}>{tx("厨房要点", "ポイント")}</div>
+                    {pts.map((t, i) => <div key={i} style={{ whiteSpace: "pre-wrap", ...(i > 0 ? { fontSize: "9.5pt", marginTop: "2px" } : {}) }}>{t}</div>)}
+                  </div>
+                )}
                 {rows.length > 0 && (
                   <table style={{ marginTop: "4px" }}>
                     <tbody>
@@ -12150,13 +12932,14 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
                         lastGroup = gk;
                         const zhN = r.ing.nameZh || r.ing.nameJa || "";
                         const jaN = r.ing.nameJa || "";
+                        const ingNote = r.ing.note ? stripMoneyText(r.ing.note).text : "";
                         return (
                           <tr key={i}>
                             <td className="p-td p-bowl" style={{ padding: "6px 0", fontSize: "12pt" }}>{first ? marks[gk] : ""}</td>
                             <td className="p-td" style={{ padding: "6px 0" }}>
                               <div className="p-name" style={{ fontSize: "12pt" }}>{L === "ja" ? (jaN || zhN) : zhN}</div>
                               {lang === "both" && jaN && jaN !== zhN && <div className="p-sub" style={{ fontSize: "9.5pt" }}>{jaN}</div>}
-                              {r.ing.note && <div className="p-note" style={{ fontSize: "9pt" }}>{r.ing.note}</div>}
+                              {ingNote && <div className="p-note" style={{ fontSize: "9pt" }}>{ingNote}</div>}
                             </td>
                             <td className="p-td p-qty" style={{ padding: "6px 0", fontSize: "14pt" }}>{qtyText(r)}</td>
                             <td className="p-td" style={{ padding: "6px 0 6px 14px", width: "40px" }}><span className="p-check" /></td>
@@ -12166,7 +12949,7 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
                     </tbody>
                   </table>
                 )}
-                {sections.steps && stepsBlock(l)}
+                {sections.steps && stepsBlock(lS)}
               </>
             )}
             {partNotes && (
@@ -12189,6 +12972,9 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
           <div style={{ whiteSpace: "pre-wrap" }}>{assemblyNotes}</div>
         </div>
       )}
+
+      {/* 生产记录(纸面台账,不写数据) */}
+      {sections.record && <PrintRecordTable lang={lang} unit={W.unit} />}
 
       {/* 底部 */}
       <div style={{ marginTop: "16px", display: "flex", justifyContent: "space-between", fontSize: "9pt", color: "#444" }}>
@@ -12461,7 +13247,8 @@ const labelDefaultsOf = (kind, e, ctx) => {
   }
   // 审查 r1:配方的 storage 是「保存」那一行,写的是日文的保质期(「常温3日・冷凍1ヶ月」),不能原样填进标签的「贮存条件」。
   // 两格都不从它预填,原文作为提示放在输入框下面,让她拆成保质期和贮存条件、用中文填
-  return { shelfLife: _normTxt(src.shelfLife), storage: "", storageHint: _normTxt(src.storage) };
+  // 第 5 批 P:配方有了「🏷 保质期 · 贮存条件」两格(shelfLifeZh / storageCondZh)就预填它们;贮存条件填了就不再提示旧「保存」。没有新字段时和以前一样
+  return { shelfLife: _normTxt(src.shelfLifeZh) || _normTxt(src.shelfLife), storage: _normTxt(src.storageCondZh), storageHint: _normTxt(src.storageCondZh) ? "" : _normTxt(src.storage) };
 };
 function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], printSettings = {}, onClose, onConfirm, onUpdateSettings }) {
   const zh = lang !== "ja";
@@ -13327,6 +14114,8 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
         <div style={{ marginLeft: "auto" }}>
           {onPrint && <Btn size="sm" onClick={() => onPrint({ creation: c, batch })}>{zh ? "🖨 打印" : "🖨 印刷"}</Btn>}
         </div>
+        {/* 第 5 批 P(1.6):产品的模具 / 尺寸(第一格下面一行灰字) */}
+        {creationMoldLine(c, lang) && <div data-p5="cmold" style={{ flexBasis: "100%", fontSize: 12, color: T.textTertiary, overflowWrap: "anywhere" }}>{creationMoldLine(c, lang)}</div>}
       </div>
 
       {/* 各部分 */}
@@ -13336,10 +14125,13 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
         const cat = getCompCat(l.componentCategory);
         const compName = pickLang(l, "name", lang);
         const title = l.customName || compName || (zh ? "未命名" : "無題");
-        const note = usedAmountNote(l.usedAmount);
+        // 第 5 批 P:用量那一行 —— usedSpec 有效(按每个填的)改写「每台 30 g × 18 = 540 g · 说明」;无效 / 没有照旧「用量原文」(屏幕上不去钱)
+        const used = creationUsedLine(l, c.serves, unit, zh ? "zh" : "ja", false);
         const steps = pickSteps(l, lang);
         const partNotes = pickLang(l, "notes", lang) || l.notes;
         const showBatch = !!open[`${p.idx}:batch`];
+        const pmold = p.stock ? "" : partMoldText(p, zh ? "zh" : "ja");
+        const pts = (!p.stock && p.comp) ? pickLang(p.comp, "kitchenNotes", zh ? "zh" : "ja") : "";
         return (
           <div key={p.idx} style={{ ...box, borderLeft: `4px solid ${cat.color}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
@@ -13365,7 +14157,7 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
                 )}
               </div>
             </div>
-            {note && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{zh ? "用量原文：" : "原文："}{note}</div>}
+            {used && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{used.kind === "raw" ? (zh ? "用量原文：" : "原文：") : used.kind === "each" ? (zh ? "用量：" : "使用量：") : (zh ? "用量说明：" : "説明：")}{used.text}</div>}
 
             {p.noUsed && (
               <div style={{ fontSize: 12, color: T.danger, marginTop: 8 }}>
@@ -13396,6 +14188,9 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
               </div>
             ) : (
               <div style={{ marginTop: 8 }}>
+                {/* 第 5 批 P(1.6):组件一批的模具 · 这次约几批(≈ 几张);组件写了厨房要点也列出来 */}
+                {pmold && <div data-p5="pmold" style={{ fontSize: 12, color: T.textSecondary, marginBottom: 6, overflowWrap: "anywhere" }}>{pmold}</div>}
+                {_normTxt(pts) && <div data-p5="ppoints" style={{ fontSize: 12, color: T.ink, marginBottom: 6, padding: "6px 10px", border: `0.5px solid ${T.ink}`, whiteSpace: "pre-wrap", lineHeight: 1.6, overflowWrap: "anywhere" }}><span style={{ color: T.textTertiary }}>{zh ? "厨房要点 · " : "ポイント · "}</span>{pts}</div>}
                 <SheetIngRows rows={p.noUsed ? unscaledRows(l) : p.ings} lang={lang} />
                 <SheetSteps steps={steps} lang={lang} />
               </div>
@@ -13741,15 +14536,16 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           {/* 规格信息行 */}
           <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12, color: T.textTertiary, alignItems: "center" }}>
             {[
-              c.size,
+              // 第 5 批 P(1.6):尺寸空时显示模具(编辑页那一格显示 size || mold,以前详情页只认 size,热带水果焦糖慕斯的「15cm圆形 4台」看不到)
+              c.size || (c.mold ? { p5: c.mold } : null),
               c.serves ? `${c.serves}${W.unit}` : null,
               c.portions ? `${c.portions}${lang === "zh" ? "等分" : "等分"}` : null,
               c.prepTime,
               c.shelfLife,
               layers.length > 0 ? W.partCount(layers.length) : null,
             ].filter(Boolean).map((t, i, arr) => (
-              <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span>{t}</span>
+              <span key={i} {...(t && t.p5 ? { "data-p5": "spec" } : {})} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span>{t && t.p5 ? t.p5 : t}</span>
                 {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
               </span>
             ))}
@@ -19471,7 +20267,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
         {grid("1fr 1fr", [fld("配方名（Français）", inp("nameFr", "Financier")), fld("分类", sel("category", ["焼き菓子","生菓子","パン・ヴィエノワズリー","ショコラ","アントルメ","タルト","その他"]))])}
         {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "SN1648 25連")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", "個")), fld("制作时间（分）", inp("time", "60", "number"))])}
         {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
-        {grid("1fr 1fr", [fld("保存方法", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
+        {/* 第 5 批 P:「保存方法」改名「保存备忘(归档版印)」—— 客户版和标签印下面「🏷 保质期 · 贮存条件」卡里的两格,这一格(字段仍是 storage)只印在归档版 */}
+        {grid("1fr 1fr", [fld(lang === "ja" ? "保存メモ(アーカイブ版に印刷)" : "保存备忘(归档版印)", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
       </>)}
 
       {/* 📦 备货(prepstock E 线):没勾时只有标题 + 勾选框一行;设置只在这里写,库存数不在编辑页显示也不能改 */}
@@ -24522,7 +25319,10 @@ const prodTxt = (lang) => PROD_TXT[lang === "ja" ? "ja" : "zh"];
 const prodName = (o, lang) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
 // 生产单(和以后的员工视图)不显示钱:配料备注里夹着的价格(09-26 数据:「全换黄油；¥1300/25kg(厨房老虎 2026-09)」)
 // 按「;」/ 换行分段,带钱的那段整段去掉,其余照印
-const PROD_MONEY_RE = /[¥￥円]|\d\s*元|价格|価格|成本|原価|毛利|利润|利益/;
+// 第 5 批 P(第三段):打印模板的 stripMoneyText 也用它(名字不变)。以前是 /[¥￥円]|\d\s*元|价格|価格|成本|原価|毛利|利润|利益/,
+// 会误伤「4 元素骨架」「円やかな酸味」「円形に絞る」;现在「元 / 円」只认跟在数字后面的(「4 元素」除外)和「円/kg」,另加 RMB、日元、单价、
+// コスト、値段、粗利、售价、売価、定价、进价。真数据配料备注新旧去掉的都是那 9 句(生产单 / 厨房视图输出不变),整段备注不再误删 14 句
+const PROD_MONEY_RE = /[¥￥]|RMB|\d[\d,，.]*\s*[万千]?\s*(?:円|日元|元(?!素))|円\s*[/／]|价格|価格|单价|単価|成本|原価|コスト|値段|毛利|粗利|利润|利益|售价|売価|定价|进价/;
 // 审查 r1:也按句号(。．)切 —— 录入包的备注常是一整段「……。价格是……。用不加糖的蛋黄时 = ……」,只按分号切会把做法连着价格一起删掉。
 // 不按逗号切(「5,816 円」的千位逗号、「……，北京待核」这种半句留着没意义)
 const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n。．]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
@@ -24670,8 +25470,12 @@ function ProdBlock({ b, lang, showHead, onKitchen, uid, fromLine, prepView, skip
                   })()}
                 </div>
               ) : (
-                <ProdIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings}
-                  bad={p.noUsed ? [] : _prodBadRows(p.ings)} lang={lang} />
+                <>
+                  {/* 第 5 批 P(1.6):组件一批的模具 · 这次约几批(≈ 几张)。备货的部分、手搭的部分不印 */}
+                  {partMoldText(p, lang === "ja" ? "ja" : "zh") && <div data-p5="pmold" style={{ ...T.fs.caption, color: T.body, marginTop: 4, overflowWrap: "anywhere", ...T.num }}>{partMoldText(p, lang === "ja" ? "ja" : "zh")}</div>}
+                  <ProdIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings}
+                    bad={p.noUsed ? [] : _prodBadRows(p.ings)} lang={lang} />
+                </>
               )}
             </div>
           );
@@ -26253,7 +27057,7 @@ function ProductionSheetTemplate({ data, lang, brandName }) {
                 {p.noUsed && <div style={{ fontSize: "9.5pt", fontWeight: 700 }}>⚠ {X.noUsed}</div>}
                 {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "9.5pt", fontWeight: 700 }}>⚠ {X.ambiguous(fmtQty(p.used), u)}</div>}
                 {p.stock ? <div style={{ fontSize: "11pt" }}>{X.fromStock} <strong>{p.needed !== null ? `${fmtQty(p.needed)} ${u}` : ""}</strong></div>
-                  : ingTable(p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings)}
+                  : <>{partMoldText(p, L) && <div data-p5="pmold" style={{ fontSize: "9.5pt" }}>{partMoldText(p, L)}</div>}{ingTable(p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings)}</>}
               </div>
             );
           })}
@@ -26938,6 +27742,16 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
         <div style={{ fontSize: 30, lineHeight: 1.25, fontWeight: 500, marginTop: 4, overflowWrap: "anywhere" }}>{name}</div>
         {other && other !== name && <div style={{ fontSize: 16, color: T.subtle, marginTop: 2, overflowWrap: "anywhere" }}>{other}</div>}
       </div>
+      {/* 第 5 批 P(第三段):厨房要点(配方的做一批 / 普通视图、组件视图;取出模式不显示,那里有「取出后说明」)。员工也看得到,所以先去钱 */}
+      {!isTake && kind !== "creation" && (() => {
+        const kp = _normTxt(stripMoneyText(pickLang(target, "kitchenNotes", zh ? "zh" : "ja")).text);
+        return kp ? (
+          <div data-p5="kpoints" style={{ marginTop: 12, padding: "10px 14px", border: `2px solid ${T.ink}`, fontSize: 21, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            <div style={{ fontSize: 13, color: T.subtle, letterSpacing: "0.12em", marginBottom: 4 }}>{zh ? "厨房要点" : "キッチンのポイント"}</div>
+            {kp}
+          </div>
+        ) : null;
+      })()}
       {prepRecipe && (
         <div role="group" data-kitchen-mode={mode} style={{ display: "inline-flex", flexWrap: "wrap", marginTop: 12, border: `1px solid ${T.ink}`, borderRadius: T.radius, overflow: "hidden", maxWidth: "100%" }}>
           {["take", "make"].map(m => (
@@ -27016,7 +27830,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
             style={{ display: "block", width: "100%", textAlign: "left", minHeight: 48, padding: "10px 4px", border: "none", borderBottom: `1px solid ${T.ink}`, background: "transparent", color: T.ink, cursor: "pointer", fontFamily: T.fontSerif, fontSize: 19 }}>
             {wholeOpen ? "▼" : "▶"} {PX.kitWhole}
           </button>
-          {wholeOpen && <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />}
+          {wholeOpen && <KitchenSteps steps={printStepsNoMoney(pickSteps(target, lang))} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />}
         </div>
       )}
       {block && kind !== "creation" && (
@@ -27024,7 +27838,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
           <div style={secTitle}>{X.ings}</div>
           <KitchenIngList rows={block.rows} lang={lang} keyPrefix="r:" checked={st.ings} onToggle={toggleIng} />
           <div style={secTitle}>{X.steps}</div>
-          <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />
+          <KitchenSteps steps={printStepsNoMoney(pickSteps(target, lang))} lang={lang} keyPrefix="s:" current={st.step} onPick={pickStep} />
         </>
       )}
       {block && kind === "creation" && (
@@ -27047,11 +27861,13 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
                     checked={!!st.ings[`${pk}stock`]} onToggle={() => toggleIng(`${pk}stock`)} bar="" />
                 ) : (
                   <>
+                    {/* 第 5 批 P(1.6):组件一批的模具 · 这次约几批(≈ 几张) */}
+                    {partMoldText(p, lang === "ja" ? "ja" : "zh") && <div data-p5="pmold" style={{ fontSize: 15, color: T.body, marginTop: 6, overflowWrap: "anywhere", ...T.num }}>{partMoldText(p, lang === "ja" ? "ja" : "zh")}</div>}
                     <KitchenIngList rows={p.noUsed ? _prodIngRows(l.ingredients, 1) : p.ings} lang={lang} keyPrefix={pk} checked={st.ings} onToggle={toggleIng} />
                     {pickSteps(l, lang).length > 0 && (
                       <div style={{ marginTop: 10 }}>
                         <div style={{ fontSize: 15, color: T.subtle, marginBottom: 2 }}>{X.steps}</div>
-                        <KitchenSteps steps={pickSteps(l, lang)} lang={lang} keyPrefix={`${pk}s`} current={st.step} onPick={pickStep} />
+                        <KitchenSteps steps={printStepsNoMoney(pickSteps(l, lang))} lang={lang} keyPrefix={`${pk}s`} current={st.step} onPick={pickStep} />
                       </div>
                     )}
                   </>
@@ -27060,7 +27876,7 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
             );
           })}
           <div style={secTitle}>{X.assembly}</div>
-          <KitchenSteps steps={pickSteps(target, lang)} lang={lang} keyPrefix="a:" current={st.step} onPick={pickStep} />
+          <KitchenSteps steps={printStepsNoMoney(pickSteps(target, lang))} lang={lang} keyPrefix="a:" current={st.step} onPick={pickStep} />
         </>
       )}
       <KitchenAllergens kind={kind} entity={target} lang={lang} ctx={ctx} />
@@ -27436,9 +28252,26 @@ function App() {
     c.id === id ? { ...c, onSale: !c.onSale, updatedAt: new Date().toISOString() } : c));
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
-  const [printTarget, setPrintTarget] = useState(null); // { type: "recipe"|"component", data, template, lang, sections }
+  // 打印:配方 / 组件 / 组合产品 —— 弹窗阶段 { type, src(原对象), scale?(详情页当下的 scaleInfo), n?(组合产品个数), stage: "settings" };
+  // 预览阶段 { type, src, data(打印副本), stage: "preview", template, lang, sections }。标签 / 生产单仍是 { type, data, stage, lang? }
+  const [printTarget, setPrintTarget] = useState(null);
   // 第 3 批 F3:详情页过敏原卡片的「🏷 打印标签」→ 先弹 LabelPrintModal(填净含量 / 经营者信息等),确认后 data 换成算好的标签内容
   const openLabelPrint = (kind, entity) => setPrintTarget({ type: "label", data: { kind, entity }, stage: "settings" });
+  // 第 5 批 P:打印弹窗点「打印预览」。按 src.id 从最新的 recipes / components / creations 里重取一次(弹窗开着时别处改过也印最新的),
+  // 再生成副本:组合产品按弹窗里的个数重算 creationBatch;配方 / 组件走 printCopyOf(缩放 + 家族兜底 + 客户版的过敏原 / 品名 / 原料名单)。
+  // 副本只给打印,不写回数据
+  const confirmPrint = (opts) => {
+    const t = printTarget;
+    if (!t || !opts) return;
+    const list = t.type === "recipe" ? recipes : t.type === "component" ? components : t.type === "creation" ? creations : [];
+    const src = t.src || null;
+    const latest = (src && src.id !== undefined && src.id !== null) ? ((list || []).find(x => x && x.id === src.id) || src) : src;
+    const data = t.type === "creation"
+      ? { creation: latest || {}, batch: creationBatch(latest || {}, opts.n, components, materials, brands) }
+      : printCopyOf(t.type, latest, { scale: opts.scale, allergen: opts.allergen, families: productFamilies,
+          ...(opts.template === "showcase" ? { title: opts.title, ingText: opts.ingText } : {}) });
+    setPrintTarget({ type: t.type, src, data, stage: "preview", template: opts.template, lang: opts.lang, sections: opts.sections });
+  };
   const [tab, setTab] = useState("list");
   const [lang, setLang] = useState("zh"); // v17 中文优先: 默认中文启动 (LuLu 主要国内中文录入)
   const [moreOpen, setMoreOpen] = useState(false); // 手机端「更多」抽屉
@@ -29548,12 +30381,13 @@ function App() {
           onConfirm={(label) => setPrintTarget({ type: "label", data: label, stage: "preview", lang: "zh" })}
         />
       )}
-      {printTarget && printTarget.stage === "settings" && printTarget.type !== "label" && (
+      {/* 员工模式碰不到这个弹窗(员工只印生产单,不经过它;进员工模式时 closeAllForStaff 也会清掉 printTarget) */}
+      {printTarget && printTarget.stage === "settings" && printTarget.type !== "label" && !staffMode && (
         <PrintModal
           itemType={printTarget.type}
           onClose={() => setPrintTarget(null)}
-          onConfirm={(opts) => setPrintTarget({ ...printTarget, stage: "preview", ...opts })}
-          // 第 5 批第 0 步接好(先不用;P 线把打印入口改成只存原对象 src + scale / n,确认时再生成副本):
+          onConfirm={confirmPrint}
+          // 第 5 批 P:打印入口只存原对象 src + 详情页当下的 scale / 组合产品个数 n,确认时 confirmPrint 再生成副本
           src={printTarget.src} scale0={printTarget.scale} n0={printTarget.n} appLang={lang}
           ctx={{ materials, brands, components, recipes, creations, onEdit: (kind, id) => { setPrintTarget(null); jumpToItem({ kind, id }); } }}
         />
@@ -30390,7 +31224,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setTab("list"))} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); })} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setTab("list"))} onPrint={(s) => setPrintTarget({ type: "recipe", src: viewingRecipe, scale: isScaleInfo(s) ? s : null, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); })} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
             prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog}
             // 第 5 批 E2:「⧉ 复制为新版本」→ 预填好的新建编辑页(保存以后才真的出现);「复制自」点了去原版
             onCopy={(src) => confirmLeaveEditor(confirmDialog, lang, () => openRecipeEditor(copyAsNewVersion("recipe", src, { recipes, components, creations }, new Date().toISOString())))}
@@ -30713,7 +31547,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             setKnowledge(prev => [...prev, k]);
             showToast("✓ 知识点已添加并关联");
           }}
-          onPrintComponent={(comp) => setPrintTarget({ type: "component", data: comp, stage: "settings" })}
+          onPrintComponent={(comp, s) => setPrintTarget({ type: "component", src: comp, scale: isScaleInfo(s) ? s : null, stage: "settings" })}
           customCompCats={customCompCats}
           onAddCustomCompCat={(newCat) => {
             setCustomCompCats(prev => [...prev, newCat]);
@@ -30823,7 +31657,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           }}
           knowledge={knowledge}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
-          onPrintCreation={(payload) => setPrintTarget({ type: "creation", data: payload, stage: "settings" })}
+          onPrintCreation={(payload) => setPrintTarget({ type: "creation", src: payload && payload.creation, n: payload && payload.batch ? payload.batch.N : undefined, stage: "settings" })}
           returnToList={creationReturnTo === "list"}
           onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
           onOpenFromList={() => setCreationReturnTo(null)}
