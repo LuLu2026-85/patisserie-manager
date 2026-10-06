@@ -1979,13 +1979,89 @@ const usedAmountAmbiguous = (raw) => {
   if (!r) return /每|[/／]/.test(s) && /\d/.test(s);
   return /^[+＋\-–—~～×xX*到至]/.test(r.rest) || /\d|[+＋×*/／]|每/.test(r.rest);
 };
-// ─── 第 5 批 2.3(S2):组合产品部分的用量 = 「数字 + 说明 + 这一批一共 / 每个」—— 第 0 步只放好签名(plan.md「数据」§1 / §4)───
+// ─── 第 5 批 2.3(S2):组合产品部分的用量 = 「数字 + 说明 + 这一批一共 / 每个」(plan.md「数据」§1,规格 spec_s2_used_and_scale.md §4 A)───
 // layers[].usedSpec = { per: "batch" | "each", n, note, serves? } 只给编辑页用;usedAmount 仍是唯一被计算读的字段、永远是这一批一共,由 usedSpec 拼出来。
-// 空壳:没有任何 usedSpec 的行为(拼不出 → "";拆不出 → null;状态一律无效;制作个数改了原样返回同一个数组)
-const composeUsedAmount = (spec, unit) => "";
-const splitUsedAmount = (raw, unit) => null;
-const usedSpecState = (l, servesNow) => ({ valid: false, stale: false, spec: null, split: null });
-const recomposeEachLayers = (layers, servesNow) => layers;
+//   · usedSpec 有效 = 用这一部分现在的单位拼出来和 usedAmount 逐字节相等;拼不回(旧版 App 改了用量文字 / 单位变了)= 作废,以 usedAmount 为准、按老数据拆开显示。
+//   · each 的 serves = 拼的那一刻的制作个数;和现在的制作个数不一样 = 过期(旧版改了制作个数、一批的量没跟上),编辑页黄条 + 数据体检 H6。
+//   · 老数据只在显示时拆(splitUsedAmount),她不动就一个字节都不写;所有写 usedSpec 的地方都走 withUsedSpec / recomposeEachLayers。
+//   · 没填数时拼成「〔说明〕」(全角括号开头,parseUsedAmount 一定读成 0,和页面「没填用量」一致;只留说明的话「约 410 到 440 g」会被读成 410)。
+// 数字格的读法:NFKC(全角「３０」也认)、逗号一律当千位分隔;制作个数的读法和 creationBatch 完全一样(不去逗号:「1,000」读成 1)
+const _usedNum = (v) => {
+  const n = parseFloat(String(v === undefined || v === null ? "" : v).normalize("NFKC").replace(/,/g, ""));
+  return (isFinite(n) && n > 0) ? n : 0;
+};
+const _servesNum = (v) => { const n = parseFloat(v); return n > 0 ? n : 1; };
+const _plainNum = (x) => String(Number(x.toPrecision(12)));   // 12 位有效数字去浮点尾巴(0.1 × 3 → "0.3")
+const _usedNoteClean = (s) => _normTxt(s).replace(/[(（]/g, "〔").replace(/[)）]/g, "〕");   // 说明里的括号换成〔〕:拼出来的串只有最外一层是圆括号(usedAmountAmbiguous 只剥一层)
+// 拼法(语言中立):batch「540g」/「540g(含损耗)」;each「540g(30g×18)」/「540g(30g×18 · 含损耗)」;没填数「〔说明〕」或 ""
+const composeUsedAmount = (spec, unit) => {
+  if (!spec || typeof spec !== "object") return "";
+  const U = _normTxt(unit) || "g", n = _usedNum(spec.n), note = _usedNoteClean(spec.note);
+  if (!(n > 0)) return note ? "〔" + note + "〕" : "";
+  if (spec.per === "each") {
+    const s = _servesNum(spec.serves);
+    return `${_plainNum(n * s)}${U}(${_plainNum(n)}${U}×${_plainNum(s)}${note ? " · " + note : ""})`;
+  }
+  return `${_plainNum(n)}${U}${note ? `(${note})` : ""}`;
+};
+// 「约45g/个」「每个 45g」这种整串都在说每个多少 → 给「看起来写的是每个的量」链接用的数(s 已去首尾空白)
+const _usedPerHint = (s) => {
+  const m = s.match(/^(?:约|約|~|～)?\s*(\d+(?:\.\d+)?)\s*(?:g|克|ml|毫升)?\s*[/／]\s*(?:个|個|台|只|颗|顆|片|枚|本|块|塊)\s*$/i)
+         || s.match(/^每\s*(?:个|個|台|只|颗|顆|片|枚|本|块|塊)\s*(?:约|約|~|～)?\s*(\d+(?:\.\d+)?)\s*(?:g|克|ml|毫升)?\s*$/i);
+  if (!m) return "";
+  const v = parseFloat(m[1]);
+  return v > 0 ? _plainNum(v) : "";
+};
+// 原文开头那个数(带「约」、千位逗号、单位)的长度 —— 说明从原文上切,不用 _usedAmountLead 的 rest(它把说明里的「1,000」也改成了「1000」)
+const _USED_LEAD_TEXT = /^(?:(?:约|約|~|～)\s*)?(?:\d+(?:,\d{3}(?!\d))*(?:\.\d+)?|\.\d+)\s*(?:kg|千克|公斤|g|克)?\s*/i;
+// 老数据拆成「数字 + 说明」(只显示,不写):empty / plain / note / ambiguous(只认开头的数)/ unreadable(读不出);perHint 只在认出「每个 45 g」时才有
+const splitUsedAmount = (raw, unit) => {
+  const s = _normTxt(raw);
+  if (!s) return { state: "empty", num: "", note: "" };
+  const n = parseUsedAmount(raw, unit);
+  const hint = _usedPerHint(s);
+  const out = (o) => hint ? { ...o, perHint: hint } : o;
+  if (!(n > 0)) return out({ state: "unreadable", num: "", note: s });
+  if (usedAmountAmbiguous(raw)) return out({ state: "ambiguous", num: _plainNum(n), note: s });
+  const m = s.match(_USED_LEAD_TEXT);
+  let rest = m ? s.slice(m[0].length).trim() : "";
+  const U = _normTxt(unit);
+  if (U && rest.startsWith(U)) rest = rest.slice(U.length).trim();
+  const b = rest.match(/^[（(]([^（）()]*)[）)]$/);
+  if (b) rest = b[1].trim();
+  return out({ state: rest ? "note" : "plain", num: _plainNum(n), note: rest });
+};
+// 编辑页怎么显示这一部分:{ spec(有效才有), valid, stale(有效 + each + 有数 + 拼的时候的个数 ≠ 现在的), voided(有 usedSpec 但拼不回), split(无效时的老数据拆法) }。永不抛错
+const usedSpecState = (l, servesNow) => {
+  const spec = (l && l.usedSpec && typeof l.usedSpec === "object" && !Array.isArray(l.usedSpec)) ? l.usedSpec : null;
+  const ua = (!l || l.usedAmount === undefined || l.usedAmount === null) ? "" : String(l.usedAmount);
+  const valid = !!spec && composeUsedAmount(spec, l.unit) === ua;
+  const stale = valid && spec.per === "each" && _usedNum(spec.n) > 0 && _servesNum(spec.serves) !== _servesNum(servesNow);
+  return { spec: valid ? spec : null, valid, stale, voided: !!spec && !valid,
+           split: valid ? null : splitUsedAmount(l ? l.usedAmount : undefined, l ? l.unit : undefined) };
+};
+// 写用量的唯一出口:新的 usedSpec(键顺序 per, n, note[, serves];n / note 存原文)+ 由它拼出的 usedAmount。结果一定有效、一定不过期
+const withUsedSpec = (l, specIn, servesNow) => {
+  const per = specIn && specIn.per === "each" ? "each" : "batch";
+  const str = (v) => (v === undefined || v === null) ? "" : String(v);
+  const spec = per === "each"
+    ? { per, n: str(specIn.n), note: str(specIn.note), serves: _plainNum(_servesNum(servesNow)) }
+    : { per, n: str(specIn && specIn.n), note: str(specIn && specIn.note) };
+  return { ...l, usedSpec: spec, usedAmount: composeUsedAmount(spec, l && l.unit) };
+};
+// 制作个数改了:只重拼过期的(有效的 each)部分;一个都没动 → 原样返回同一个数组,没动的部分保持原对象
+const recomposeEachLayers = (layers, servesNow) => {
+  if (!Array.isArray(layers)) return layers;
+  let ch = false;
+  const next = layers.map(l => {
+    const st = usedSpecState(l, servesNow);
+    if (!st.stale) return l;
+    ch = true;
+    const spec = { ...st.spec, serves: _plainNum(_servesNum(servesNow)) };
+    return { ...l, usedSpec: spec, usedAmount: composeUsedAmount(spec, l.unit) };
+  });
+  return ch ? next : layers;
+};
 // END creation-follow helpers ────────────────────────────────────────────────
 
 // ─── BEGIN creation-lock helpers ───
@@ -5357,13 +5433,28 @@ function computeDataHealth(data) {
         const n = parseUsedAmount(l.usedAmount, l.unit);
         if (!(n > 0)) { zhD = `「${raw}」读不出数字 → 成本算成 0`; jaD = `「${raw}」は数値として読めません → 原価 0`; }
         else if (usedAmountAmbiguous(raw)) { zhD = `「${raw}」只认开头的数 → 按 ${fmtQty(n)} ${unit} 算`; jaD = `「${raw}」は先頭の数だけ読みます → ${fmtQty(n)} ${unit} で計算`; }
-        else return;
+        // 第 5 批 S2:以前这里 else return;改成「没有现有条目就不 push」,下面「按每个填的、制作个数改了」的检查对每个有产出量的部分都跑
       }
-      items.push({
+      if (zhD) items.push({
         key: `H6:${cr.id != null ? cr.id : "#" + i}:${li}`, kind: "creation", id: cr.id, jump: { kind: "creation", id: cr.id },
         labelZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || noName.zh}`, labelJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || noName.ja}`,
         detailZh: zhD, detailJa: jaD,
       });
+      // 第 5 批 S2:按每{台|个}填的部分,另一台还没刷新的设备改了制作个数、一批的量没跟上(usedSpec 过期)→ 一键「按每个重算」(dataHealthFix.usedEach)。
+      // 没产出量的部分上面已经跳过(用量不参与成本,重算什么都不变)。真数据里没有 usedSpec,这一类一条都不出
+      const st = usedSpecState(l, cr.serves);
+      if (st.stale) {
+        const S = creationStructureOf(cr), Wz = creationWords(S, "zh"), Wj = creationWords(S, "ja");
+        const e = _usedNum(st.spec.n), s1 = _servesNum(st.spec.serves), s2 = _servesNum(cr.serves);
+        const n = parseUsedAmount(l.usedAmount, l.unit);
+        items.push({
+          key: `H6:${cr.id != null ? cr.id : "#" + i}:${li}:each`, kind: "creation", id: cr.id, jump: { kind: "creation", id: cr.id },
+          fix: "usedEach", obj: cr, layer: l, layerIndex: li,
+          labelZh: `${zhN(cr) || noName.zh} · ${l.customName || zhN(l) || noName.zh}`, labelJa: `${jaN(cr) || noName.ja} · ${l.customName || jaN(l) || noName.ja}`,
+          detailZh: `按每${Wz.unit} ${fmtQty(e)} ${unit} 填的,${Wz.servesLabel}改成 ${fmtQty(s2)} 后一批的量没跟着改(还是 ${fmtQty(s1)} ${Wz.unit}的 ${fmtQty(n)} ${unit})`,
+          detailJa: `1${Wj.unit} ${fmtQty(e)}${unit} で入力、仕込み数 ${fmtQty(s2)} に変更後もバッチ量が ${fmtQty(s1)} 基準の ${fmtQty(n)}${unit} のまま`,
+        });
+      }
     }));
     checks.push({ id: "H6", audit: "data-6", level: "money",
       titleZh: "组合产品的用量读不出 / 读不准", titleJa: "組み合わせの分量が読めない",
@@ -5724,6 +5815,15 @@ function DataHealthPanel({ recipes, components, creations, knowledge, materials,
         {it.pieceFix && fix.pieceGrams && <Btn size="sm" onClick={() => { if (fix.pieceGrams(it)) markDone(c, it, idx, `✓ 1 ${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g 存进了材料百科`, `✓ 1${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g を事典に保存`); }}>{zh ? `按规格估 1 ${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g,存进材料百科` : `規格から 1${it.pieceFix.pieceUnit} ≈ ${it.pieceFix.gramsPerPiece} g として事典に保存`}</Btn>}
         {jumpBtn(it.jump)}
       </>;
+      // 第 5 批 S2:按每{台|个}填的、制作个数被另一台改了的部分 → 一键按每个重算(现有的 H6 条目没有 fix,和以前一样只有「去改」)
+      case "H6": {
+        if (it.fix !== "usedEach") return jumpBtn(it.jump);
+        const S = creationStructureOf(it.obj), Wz = creationWords(S, "zh"), Wj = creationWords(S, "ja");
+        return <>
+          <Btn size="sm" onClick={() => { if (fix.usedEach(it)) markDone(c, it, idx, `✓ 已按每${Wz.unit}重算`, `✓ 1${Wj.unit}あたりで再計算しました`); }}>{zh ? `按每${Wz.unit}重算` : `1${Wj.unit}あたりで再計算`}</Btn>
+          {jumpBtn(it.jump)}
+        </>;
+      }
       case "H7": return <>
         <Btn size="sm" onClick={() => { fix.layerFollow(it); markDone(c, it, idx, "✓ 已改成跟组件库走", "✓ 部品庫と連動させました"); }}>{zh ? "用组件库的" : "部品庫に合わせる"}</Btn>
         {jumpBtn(it.jump)}
@@ -6418,38 +6518,220 @@ function StickySaveBar({ onSave, label = "保存" }) {
 //   scaleInfo = { mode, factor, from, to, unit, label?, moldText? } —— 只由 scaleFactorOf 出;isScaleInfo 挡住点击事件和坏值。
 //   打印副本只由 scaledCopyForPrint(原对象, kind, scaleInfo) 生成,**别拿缩放副本再缩**(副本里的用量带千位逗号,再缩一次会读错)。
 // 契约(第 0 步写成真的;P / S2 只调用,要改签名先停下来报告):isScaleInfo、scaledCopyForPrint、printScaleText、scaleFactorOf 的「按个数」分支。
-// 其余(另外三种方式、模具解析、能称重的原料合计)归 S2,第 0 步返回 null。
+// S2(规格 spec_s2_used_and_scale.md §4 B):另外三种方式(按模具 / 按某样原料 / 按总重)、模具解析(只预填不猜)、按原料的合并选项、能称重的原料合计。
+//   · 计件产出(個 / 台 / 空单位)按模具缩放时个数不变(to = from,每个变大;keepCount → 详情页「厨房视图」变灰);重量产出 to = from × 倍数。
+//   · 按原料、计件产出时向下取整到整个,倍数按整数个数反算(left = 剩多少)。按总重不取整。
+//   · label = { zh: { main, sub }, ja: { main, sub } }:主行一律先写「做多少」,依据和倍数在副行(lead 2026-10-06 定 B);打印抬头整句用它。
 const SCALE_MODES = ["yield", "mold", "ing", "total"];
 const isScaleInfo = (s) => !!s && typeof s === "object" && typeof s.factor === "number" && isFinite(s.factor) && s.factor > 0
   && typeof s.from === "number" && isFinite(s.from) && typeof s.to === "number" && isFinite(s.to);
-// mode + 输入 → 倍数和说明;输入不全 / 不合理 → null(页面倍数按 1)。
-// "yield"(配方按个数 / 组件按产出量):input = { target }(输入框原文);from = 产出量,to = 目标,factor = to ÷ from,和以前详情页的写法逐个一样
-const scaleFactorOf = (mode, input, obj, kind, ctx) => {
-  if (mode !== "yield") return null;   // 按模具 / 按某样原料 / 按总重:S2
-  const from = parseFloat(obj && obj.yield) || 0;
-  const to = parseFloat(input && input.target) || 0;
-  if (!(from > 0 && to > 0)) return null;
-  return { mode: "yield", factor: to / from, from, to, unit: (obj && obj.unit) || (kind === "component" ? "g" : "個") };
+// 模具文字预填(只预填不猜):一个直径(φ15 / 径 15cm / 15cm セルクル|圆形|圈模 / n 号 = 3n cm)或一个「a × b cm」;
+// 多个模具 / 连模 / 区间 / 带高深厚 / a×b×c / 两个以上尺寸 / 方的尺寸带圆的字 → null。数是厘米(mm ÷ 10)。金标 73 条见规格 E22
+const _MN = String.raw`(\d+(?:\.\d+)?)`, _ML = String.raw`(cm|mm)`;
+const parseMoldSize = (text) => {
+  let s = String(text === undefined || text === null ? "" : text).normalize("NFKC").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  for (let prev = null; prev !== s; ) { prev = s; s = s.replace(/\([^()]*\)/g, " "); }        // ① 括号里的说明由内向外反复去掉
+  s = s.replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  if (/[連连或、+\/]|または/.test(s)) return null;                                                // ② 多个模具 / 连模
+  if (/\d\s*(?:[-–—~〜]|到|至)\s*\d/.test(s)) return null;                                       // ③ 区间
+  if (/[高深厚]|(?:^|[^A-Za-z])[Hh]\s*\d/.test(s)) return null;                                  // ④ 带高 / 深 / 厚
+  if (new RegExp(_MN + String.raw`\s*` + _ML + String.raw`?\s*[×xX*]\s*` + _MN + String.raw`\s*` + _ML + String.raw`?\s*[×xX*]\s*` + _MN + String.raw`\s*` + _ML, "i").test(s)) return null;   // ⑤ a×b×c
+  const cv = (n, u) => (/^mm$/i.test(u || "") ? n / 10 : n);
+  const found = [], used = [];
+  const take = (re, fn) => { re.lastIndex = 0; let m; while ((m = re.exec(s))) { const a = m.index, b = a + m[0].length;
+    if (used.some(([x, y]) => a < y && x < b)) continue; used.push([a, b]); found.push(fn(m)); } };
+  take(new RegExp(_MN + String.raw`\s*` + _ML + String.raw`?\s*[×xX*]\s*` + _MN + String.raw`\s*` + _ML, "gi"),
+       m => ({ kind: "rect", w: cv(+m[1], m[2] || m[4]), l: cv(+m[3], m[4]) }));                 // ⑥ a [单位] × b 单位
+  take(new RegExp(String.raw`(?:φ|Φ|ø|Ø|⌀|直径|口径|径)\s*(?:约|約)?\s*` + _MN + String.raw`\s*` + _ML + "?", "gi"),
+       m => ({ kind: "round", d: cv(+m[1], m[2]) }));                                             // ⑦ 直径记号在前(没单位 = cm)
+  take(new RegExp(_MN + String.raw`\s*` + _ML + String.raw`\s*(?:径|セルクル|圆形|圓形|圆模|圈模|丸型|丸形)`, "gi"),
+       m => ({ kind: "round", d: cv(+m[1], m[2]) }));                                             // ⑧ 圆形词在后
+  take(new RegExp(_MN + String.raw`\s*号`, "g"), m => ({ kind: "round", d: +m[1] * 3 }));          // ⑨ n 号 = 3n cm
+  take(new RegExp(_MN + String.raw`\s*` + _ML + "(?![A-Za-z])", "gi"), m => ({ kind: "bare" }));   // ⑩ 光秃秃的长度
+  if (found.length !== 1) return null;                                                            // ⑪ 正好一个尺寸
+  const k = found[0];
+  if (k.kind === "bare") return null;
+  if (k.kind === "rect") {
+    if (/φ|Φ|ø|Ø|⌀|径|セルクル|圆|圓|丸|圈/.test(s)) return null;                                 // ⑫ 方的尺寸 + 圆的迹象 = 读不准
+    return (k.w > 0 && k.l > 0) ? { shape: "rect", w: k.w, l: k.l } : null;
+  }
+  return k.d > 0 ? { shape: "round", d: k.d } : null;
 };
+// 模具面积(计划的定义:圆的 π/4 约掉,圆圆比直径平方、方方比长 × 宽);圆方混比用真面积
+const moldArea = (m) => m.shape === "rect" ? m.w * m.l : m.d * m.d;
+const _moldTrueArea = (m) => m.shape === "rect" ? m.w * m.l : Math.PI * m.d * m.d / 4;
+// 页面输入 { shape, d, w, l, h }(字符串或数)→ 模具;不合法 → null。高可选,两边都填了才乘高度比
+const _moldIn = (x) => {
+  if (!x || typeof x !== "object") return null;
+  const pos = (v) => { const n = parseFloat(v); return (isFinite(n) && n > 0) ? n : 0; };
+  const h = pos(x.h);
+  if (x.shape === "round") { const d = pos(x.d); return d ? { shape: "round", d, ...(h ? { h } : {}) } : null; }
+  if (x.shape === "rect") { const w = pos(x.w), l = pos(x.l); return (w && l) ? { shape: "rect", w, l, ...(h ? { h } : {}) } : null; }
+  return null;
+};
+const _moldNameZh = (m) => m.shape === "rect" ? `${fmtQty(m.w)}×${fmtQty(m.l)} cm 方模` : `φ${fmtQty(m.d)} cm 圆模`;
+const _moldNameJa = (m) => m.shape === "rect" ? `${fmtQty(m.w)}×${fmtQty(m.l)} cm 角型` : `φ${fmtQty(m.d)} cm 丸型`;
+const _moldText  = (m) => (m.shape === "rect" ? `${fmtQty(m.w)}×${fmtQty(m.l)} cm` : `φ${fmtQty(m.d)} cm`) + (m.h ? ` × H${fmtQty(m.h)} cm` : "");   // 打印副本的模具行(语言中立)
+// 按某样原料的下拉:同一样原料合并(关联了还在的材料 → 材料 id;否则去掉结尾括号备注的名字)+ 单位类(g / ml / 各计件单位;kg、L 折 ×1000 并进来)
+const _ingDisplayNameJa = (ing) => _normTxt(ing && ing.nameJa) || _normTxt(ing && ing.nameZh) || _normTxt(ing && ing.nameFr);
+const _scStripNote = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || s;
+const _scBaseName = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "").replace(/\s+[A-Za-zＡ-Ｚａ-ｚ]$/, "")) || s;
+const _scUnitClass = (u) => {
+  const s = String(u === undefined || u === null ? "" : u).normalize("NFKC").trim();
+  if (/^(?:g|克)?$/i.test(s)) return { k: "g", f: 1, disp: "g" };
+  if (/^(?:kg|千克|公斤)$/i.test(s)) return { k: "g", f: 1000, disp: "g" };
+  if (/^(?:ml|毫升)$/i.test(s)) return { k: "ml", f: 1, disp: "ml" };
+  if (/^(?:l|升)$/i.test(s)) return { k: "ml", f: 1000, disp: "ml" };
+  return { k: "#" + _normCountUnit(u), f: 1, disp: _normTxt(u) };
+};
+// → [{ key, nameZh, nameJa, base, unit, rows, ok, labelZh, labelJa }],顺序 = 每组第一行出现的顺序。组里有一行用量不是 ≥ 0 的数 → 整项 ok: false(不能选)
+// 页面的下拉和 scaleFactorOf("ing") 必须用同一个 ctx(key 取决于材料还在不在)
+const scaleIngOptions = (obj, ctx) => {
+  const ings = (obj && Array.isArray(obj.ingredients)) ? obj.ingredients : [];
+  const mm = materialMapOf(ctx && ctx.materials);
+  const groups = new Map();
+  ings.forEach(ing => {
+    if (!ing || typeof ing !== "object") return;
+    const nz = _ingDisplayName(ing);
+    if (!nz) return;                                                     // 没名字的行不进选项
+    const nj = _ingDisplayNameJa(ing);
+    const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? mm.get(ing.materialId) : undefined;
+    const uc = _scUnitClass(ing.unit);
+    const key = (m ? "m:" + m.id : "n:" + _scStripNote(nz)) + "\u0001" + uc.k;
+    const q = parseFloat(ing.qty);
+    const v = (isFinite(q) && q >= 0) ? q * uc.f : NaN;
+    const g = groups.get(key);
+    if (g) { g.rows++; g.base += v; if (g._z !== nz) g._mz = true; if (g._j !== nj) g._mj = true; }
+    else groups.set(key, { key, _z: nz, _j: nj, unit: uc.disp, rows: 1, base: v });
+  });
+  return [...groups.values()].map(g => {
+    const shorten = g.key.startsWith("m:") ? _scBaseName : _scStripNote;
+    const nameZh = g._mz ? shorten(g._z) : g._z, nameJa = g._mj ? shorten(g._j) : g._j;
+    const ok = isFinite(g.base) && g.base > 0;
+    const tail = (ja) => g.rows > 1 ? (ja ? `(${g.rows} 行の合計)` : `(${g.rows} 行合计)`) : "";
+    return { key: g.key, nameZh, nameJa, base: ok ? g.base : 0, unit: g.unit, rows: g.rows, ok,
+      labelZh: ok ? `${nameZh} · ${fmtQty(g.base)} ${g.unit}${tail(false)}` : `${nameZh} · (用量不是数字)`,
+      labelJa: ok ? `${nameJa} · ${fmtQty(g.base)} ${g.unit}${tail(true)}` : `${nameJa} · (分量が数値ではありません)` };
+  });
+};
+// 能按重量算的原料合计 + 算不进去的行(按个写又没填克重的、用量不是数字的「適量」)。克数走 ingGramsOfRow(S1 填了克重的计件行算得进去)
+const weighableGramsOf = (obj, materials) => {
+  const ings = (obj && Array.isArray(obj.ingredients)) ? obj.ingredients : [];
+  const mm = materialMapOf(materials);
+  let grams = 0; const excluded = [];
+  ings.forEach(ing => {
+    if (!ing || typeof ing !== "object") return;
+    const nz = _ingDisplayName(ing);
+    if (!nz) return;
+    const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? (mm.get(ing.materialId) || null) : null;
+    const g = ingGramsOfRow(ing, m);
+    if (g !== null) { grams += g; return; }
+    excluded.push({ name: nz, nameJa: _ingDisplayNameJa(ing), qty: _normTxt(ing.qty), unit: _normTxt(ing.unit) });
+  });
+  return { grams, excluded };
+};
+// 产出单位:显示文字 U(不 trim,同以前 r.unit || "個" / c.unit || "g")+ 是不是计件(個 / 台 / 片 / 空的配方单位 = 计件;g / kg / ml = 重量)
+const _scYieldUnit = (obj, kind) => {
+  const def = kind === "component" ? "g" : "個";
+  return { U: (obj && obj.unit) ? String(obj.unit) : def, countYield: !(ingWeightFactor(_normTxt(obj && obj.unit) || def) > 0) };
+};
+const _scPos = (v) => { const n = parseFloat(v); return (isFinite(n) && n > 0) ? n : 0; };   // 输入框里的数(不去逗号;框都是 type="number")
+// mode + 输入 → 倍数和说明(唯一的倍数出口);输入不全 / 不合理 → null(页面倍数按 1)。每次返回新对象,不改 obj / input / ctx
+//   "yield":{ target }(配方按个数 / 组件按产出量,from = 产出量,to = 目标,和以前详情页「目标 ÷ 产出量」逐个一样)
+//   "mold":{ from: 原模具, to: 新模具 }(_moldIn 的输入);"ing":{ key, have }(key 来自 scaleIngOptions);"total":{ target }(克)
+const scaleFactorOf = (mode, input, obj, kind, ctx) => {
+  if (!obj || typeof obj !== "object") return null;
+  const from = parseFloat(obj.yield) || 0;
+  if (!(from > 0) || !isFinite(from)) return null;
+  if (!SCALE_MODES.includes(mode)) return null;
+  const inp = (input && typeof input === "object") ? input : {};
+  const { U, countYield } = _scYieldUnit(obj, kind);
+  const F = fmtQty;
+  if (mode === "yield") {
+    const to = _scPos(inp.target);
+    if (!to) return null;
+    const factor = to / from;
+    return { mode: "yield", factor, from, to, unit: U,
+      label: { zh: { main: `做 ${F(to)} ${U}`, sub: `(原 ${F(from)} ${U} ×${F(factor)})` },
+               ja: { main: `${F(to)} ${U} 仕込み`, sub: `(元 ${F(from)} ${U} ×${F(factor)})` } } };
+  }
+  if (mode === "mold") {
+    const m1 = _moldIn(inp.from), m2 = _moldIn(inp.to);
+    if (!m1 || !m2) return null;
+    const r = m1.shape === m2.shape ? moldArea(m2) / moldArea(m1) : _moldTrueArea(m2) / _moldTrueArea(m1);
+    const hr = (m1.h && m2.h) ? m2.h / m1.h : 0;
+    const factor = hr ? r * hr : r;
+    const to = countYield ? from : from * factor;
+    const hz = hr ? " · 高 ×" + F(hr) : "", hj = hr ? "・高さ ×" + F(hr) : "";
+    return { mode: "mold", factor, from, to, unit: U,
+      label: { zh: { main: `做 ${F(to)} ${U} · ${_moldNameZh(m2)}`, sub: `(原 ${_moldNameZh(m1)},面积 ×${F(r)}${hz})` },
+               ja: { main: `${F(to)} ${U} 仕込み・${_moldNameJa(m2)}`, sub: `(元 ${_moldNameJa(m1)}・面積 ×${F(r)}${hj})` } },
+      moldText: _moldText(m2), keepCount: countYield };
+  }
+  if (mode === "ing") {
+    const opt = scaleIngOptions(obj, ctx).find(o => o.key === inp.key);
+    if (!opt || !opt.ok) return null;
+    const have = _scPos(inp.have);
+    if (!have) return null;
+    const label = (factor, to) => ({
+      zh: { main: `做 ${F(to)} ${U}`, sub: `(按${opt.nameZh} ${F(have)} ${opt.unit},原 ${F(opt.base)} ${opt.unit} ×${F(factor)})` },
+      ja: { main: `${F(to)} ${U} 仕込み`, sub: `(${opt.nameJa} ${F(have)}${opt.unit} 基準・元 ${F(opt.base)}${opt.unit} ×${F(factor)})` } });
+    if (countYield) {
+      const to = Math.floor(from * have / opt.base + 1e-9);
+      if (to < 1) return null;
+      const factor = to / from;
+      return { mode: "ing", factor, from, to, unit: U, label: label(factor, to), floor: true, left: have - opt.base * factor };
+    }
+    const factor = have / opt.base, to = from * factor;
+    return { mode: "ing", factor, from, to, unit: U, label: label(factor, to) };
+  }
+  const target = _scPos(inp.target);   // total
+  if (!target) return null;
+  const wg = weighableGramsOf(obj, ctx && ctx.materials);
+  if (!(wg.grams > 0)) return null;
+  const factor = target / wg.grams, to = from * factor;   // 不取整(「做 68.5 個」)
+  return { mode: "total", factor, from, to, unit: U,
+    label: { zh: { main: `做 ${F(to)} ${U}`, sub: `(总重 ${F(target)} g,原料合计 ${F(wg.grams)} g ×${F(factor)})` },
+             ja: { main: `${F(to)} ${U} 仕込み`, sub: `(総重量 ${F(target)} g・材料合計 ${F(wg.grams)} g ×${F(factor)})` } },
+    excluded: wg.excluded };
+};
+// 详情页缩放行的初值(状态按条目 id 认、不存本机):按个数、空着;原模具按模具文字预填(读不出就空着),新模具同形状空着;
+// moldFrom / moldTo 永远五个键 shape, d, w, l, h(切圆 / 方时输入框始终受控);按原料默认第一个能选的
+const scaleInitState = (obj, ctx) => {
+  const pm = parseMoldSize(obj && obj.mold);
+  const moldFrom = pm
+    ? (pm.shape === "rect" ? { shape: "rect", d: "", w: String(pm.w), l: String(pm.l), h: "" } : { shape: "round", d: String(pm.d), w: "", l: "", h: "" })
+    : { shape: "round", d: "", w: "", l: "", h: "" };
+  const firstOk = scaleIngOptions(obj, ctx).find(o => o.ok);
+  return { mode: "yield", target: "", moldFrom, moldTo: { shape: moldFrom.shape, d: "", w: "", l: "", h: "" },
+    ingKey: firstOk ? firstOk.key : "", have: "", total: "" };
+};
+// 缩放状态 → scaleFactorOf 的输入
+const scaleInputOf = (sc) => !sc ? {} : sc.mode === "mold" ? { from: sc.moldFrom, to: sc.moldTo }
+  : sc.mode === "ing" ? { key: sc.ingKey, have: sc.have } : sc.mode === "total" ? { target: sc.total } : { target: sc.target };
 // 打印副本(只给打印,不写回数据)。没缩放 / 不是 scaleInfo → 原对象本身。
 //   配方:yield 去千位逗号;用量 parseFloat 读得出就 fmtQty(q × 倍数)(保留千位逗号);_printScale = { from, to, factor } —— 和以前 RecipeView.handlePrint 逐字节一样
 //   组件:yield 写字符串;用量是严格数字才缩放(去千位逗号),cost 跟着乘;_printScale 多 unit;**不改名字**(以前把说明拼进名字,双语时印两遍)
 //   不是按个数时 _printScale 多 mode / label;按模具且带 moldText 时模具行换成新模具「φ18 cm(← 原来的)」
+//   S2 按规格 R22 改齐边角(真数据副本逐字节不变):obj 不是对象原样返回;ingredients 不是数组当空;不是对象的行原样放过(以前会抛错)
+const _strictNumText = (v) => v !== undefined && v !== null && /^\s*(\d+(\.\d+)?|\.\d+)\s*$/.test(String(v));
 const scaledCopyForPrint = (obj, kind, info) => {
-  if (!obj || !isScaleInfo(info) || info.factor === 1) return obj;
+  if (!obj || typeof obj !== "object" || !isScaleInfo(info) || info.factor === 1) return obj;
   const f = info.factor;
   const extra = (info.mode && info.mode !== "yield") ? { mode: info.mode, label: info.label || null } : {};
   const mold = (info.mode === "mold" && info.moldText) ? { mold: info.moldText + (obj.mold ? `(← ${obj.mold})` : "") } : {};
+  const rows = Array.isArray(obj.ingredients) ? obj.ingredients : [];
   if (kind === "component") {
-    const isNum = (v) => v !== undefined && v !== null && /^\s*(\d+(\.\d+)?|\.\d+)\s*$/.test(String(v));
     return {
       ...obj,
       yield: String(info.to),
-      ingredients: (obj.ingredients || []).map(ing => ({
+      ingredients: rows.map(ing => (ing && typeof ing === "object") ? {
         ...ing,
-        qty: isNum(ing.qty) ? fmtQty(parseFloat(ing.qty) * f).replace(/,/g, "") : ing.qty,
-        cost: isNum(ing.cost) ? String(parseFloat(ing.cost) * f) : ing.cost,
-      })),
+        qty: _strictNumText(ing.qty) ? fmtQty(parseFloat(ing.qty) * f).replace(/,/g, "") : ing.qty,
+        cost: _strictNumText(ing.cost) ? String(parseFloat(ing.cost) * f) : ing.cost,
+      } : ing),
       ...mold,
       _printScale: { from: info.from, to: info.to, factor: f, unit: obj.unit || "g", ...extra },
     };
@@ -6457,7 +6739,8 @@ const scaledCopyForPrint = (obj, kind, info) => {
   return {
     ...obj,
     yield: fmtQty(info.to).replace(/,/g, ""),
-    ingredients: (obj.ingredients || []).map(ing => {
+    ingredients: rows.map(ing => {
+      if (!ing || typeof ing !== "object") return ing;
       const q = parseFloat(ing.qty);
       return isFinite(q) ? { ...ing, qty: fmtQty(q * f) } : ing;   // 「适量」这类读不出数字的原样印
     }),
@@ -6466,32 +6749,113 @@ const scaledCopyForPrint = (obj, kind, info) => {
   };
 };
 // 打印抬头「做 100 個(原 25 個 ×4)」;没缩放 → null(第 5 批第 0 步从模板旁边挪到这里)。
-// 有 label(按模具 / 原料 / 总重)整句用它;没有走老写法,单位取 _printScale.unit → item.unit → 個(组件不再缺省印成「個」)
+// 有 label(按模具 / 原料 / 总重)整句用它(缺那种语言 → null,模板退回印产量;规格 R23);没有走老写法,单位取 _printScale.unit → item.unit → 個(组件不再缺省印成「個」)
 const printScaleText = (item, lang) => {
   const p = item && item._printScale;
   if (!p) return null;
-  if (p.label && typeof p.label === "object") { const L = p.label[lang === "ja" ? "ja" : "zh"]; if (L) return L; }
+  if (p.label && typeof p.label === "object") return p.label[lang === "ja" ? "ja" : "zh"] || null;
   const u = p.unit || item.unit || "個";
   return lang === "ja"
     ? { main: `${fmtQty(p.to)} ${u} 仕込み`, sub: `(元 ${fmtQty(p.from)} ${u} ×${fmtQty(p.factor)})` }
     : { main: `做 ${fmtQty(p.to)} ${u}`, sub: `(原 ${fmtQty(p.from)} ${u} ×${fmtQty(p.factor)})` };
 };
-// S2(第 0 步空壳 → null):模具文字预填(只预填不猜,读不准返回 null)/ 模具面积 / 能按重量算的原料合计 + 算不进去的行
-const parseMoldSize = (text) => null;
-const moldArea = (m) => null;
-const weighableGramsOf = (obj, materials) => null;
 // ─── END scale helpers ───
 
-// 配方详情 / 组件详情的「缩放计算」那一行(第 5 批第 0 步从两个详情页抽出来,DOM 和以前一样;S2 在这里加缩放方式的下拉)。
-// variant "recipe" = 配方页压成一行的样式,"component" = 组件页 RURU 框的样式
-function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, setTargetYield, target, scale }) {
-  if (variant === "component") {
-    return (
-        <div style={{ background: T.bgMuted, border: `0.5px solid ${T.borderSoft}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: "1rem" }}>
+// 配方详情 / 组件详情的「缩放计算」那一行(第 5 批第 0 步从两个详情页抽出来;S2 加缩放方式:按个数 / 按模具 / 按某样原料 / 按总重)。
+// variant "recipe" = 配方页压成一行的样式,"component" = 组件页 RURU 框的样式。
+// 状态 sc 在详情页里(useScaleState,按条目 id 认、不存本机),倍数只从 scaleFactorOf 出(info);下拉选项和 info 用同一个 ctx。
+// 按个数时 DOM = 以前那一行 + 标题后面一个下拉(data-scale-mode),c11 SSR 的「只差本意」靠这一条(scale/scale_ssr_cmp.cjs)。
+const SCALE_TXT = {
+  zh: {
+    title: "缩放计算", modeAria: "缩放方式", reset: "重置",
+    modes: { yieldCount: "按个数", yieldWeight: "按产出量", mold: "按模具", ing: "按某样原料", total: "按总重" },
+    moldFrom: "原模具", moldTo: "新模具", round: "圆", rect: "方", diam: "直径", wl: "长 × 宽", h: "高", hPh: "可选", common: "常用",
+    moldFilled: (t) => `模具写的是「${t}」,按它填好了,不对就改`,
+    moldUnread: (t) => `模具写的是「${t}」,没认出尺寸,请填原模具`,
+    ingPick: "用哪样", have: "手上有", noOpt: "没有能选的原料",
+    ingBad: "这一行用量不是数字,换一样",
+    ingShort: (U) => `不够做 1 ${U}`,
+    ingCan: (to, U) => `能做 ${to} ${U}`,
+    ingCanFloor: (to, U, name, left, iu) => `能做 ${to} ${U}(按整个算,${name}剩约 ${left} ${iu})`,
+    totalTarget: "目标总重", totalSum: (g) => `原料合计 ${g} g`,
+    excl: (list) => `不含:${list}`,
+    compYield: (y, U) => `组件产出量写的是 ${y} ${U},这里按原料合计算`,
+  },
+  ja: {
+    title: "スケール計算", modeAria: "スケール方法", reset: "リセット",
+    modes: { yieldCount: "個数で", yieldWeight: "出来高で", mold: "型で", ing: "材料で", total: "総重量で" },
+    moldFrom: "元の型", moldTo: "新しい型", round: "丸", rect: "角", diam: "直径", wl: "縦 × 横", h: "高さ", hPh: "任意", common: "よく使う",
+    moldFilled: (t) => `型の記載「${t}」から入力済み。違えば修正`,
+    moldUnread: (t) => `型の記載「${t}」から寸法を読めません。元の型を入力`,
+    ingPick: "基準の材料", have: "手持ち", noOpt: "選べる材料がありません",
+    ingBad: "この行は分量が数値ではありません",
+    ingShort: (U) => `1${U} 分に足りません`,
+    ingCan: (to, U) => `${to}${U} 作れます`,
+    ingCanFloor: (to, U, name, left, iu) => `${to}${U} 作れます(整数個、${name} 約 ${left}${iu} 余り)`,
+    totalTarget: "目標総重量", totalSum: (g) => `材料合計 ${g} g`,
+    excl: (list) => `含まない:${list}`,
+    compYield: (y, U) => `出来高は ${y} ${U}、ここでは材料合計で計算`,
+  },
+};
+const SCALE_MOLD_COMMON = [12, 15, 18, 21];   // 常用尺寸胶囊(点了把新模具设成圆、直径填这个数)
+// 一个模具的输入:圆 φ[d] / 方 [w] × [l],cm;高可选。值永远是 { shape, d, w, l, h } 五个键(受控输入)
+function ScaleMoldInput({ which, label, value, onChange, X, inStyle, labStyle }) {
+  const v = value || { shape: "round", d: "", w: "", l: "", h: "" };
+  const set = (k, x) => onChange({ ...v, [k]: x });
+  const num = (k, aria, w) => (
+    <input type="number" inputMode="decimal" className="k-input" value={v[k] === undefined || v[k] === null ? "" : v[k]} aria-label={aria}
+      onChange={e => set(k, e.target.value)} style={{ ...inStyle, width: w || 56 }} />
+  );
+  return (
+    <span data-scale-mold={which} style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap", minWidth: 0 }}>
+      <span style={labStyle}>{label}</span>
+      <select value={v.shape === "rect" ? "rect" : "round"} onChange={e => set("shape", e.target.value)} className="k-input" aria-label={label} style={{ ...inStyle, width: "auto" }}>
+        <option value="round">{X.round}</option>
+        <option value="rect">{X.rect}</option>
+      </select>
+      {v.shape === "rect"
+        ? <>{num("w", `${label} ${X.wl}`)}<span>×</span>{num("l", `${label} ${X.wl}`)}</>
+        : <><span>φ</span>{num("d", `${label} ${X.diam}`)}</>}
+      <span style={labStyle}>cm</span>
+      <span style={labStyle}>{X.h}</span>
+      <input type="number" inputMode="decimal" className="k-input" value={v.h === undefined || v.h === null ? "" : v.h} placeholder={X.hPh} aria-label={`${label} ${X.h}`}
+        onChange={e => set("h", e.target.value)} style={{ ...inStyle, width: 52 }} />
+    </span>
+  );
+}
+function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, setTargetYield, target, scale,
+  sc, setSc, info, obj, kind = "recipe", ctx }) {   // S2:sc / setSc / info / obj / kind / ctx(没给 sc 时只有按个数,和第 0 步一样)
+  const X = SCALE_TXT[lang === "ja" ? "ja" : "zh"];
+  const F = fmtQty;
+  const mode = (sc && SCALE_MODES.includes(sc.mode)) ? sc.mode : "yield";
+  const { U, countYield } = _scYieldUnit(obj, kind);
+  const set = (patch) => { if (setSc) setSc(s => ({ ...s, ...patch })); };
+  const reset = () => { if (setSc) setSc(() => scaleInitState(obj, ctx)); else setTargetYield(""); };
+  const isComp = variant === "component";
+  // 两套样式(配方页压成一行 / 组件页 RURU 框)
+  const inStyle = isComp
+    ? { padding: "5px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, minWidth: 0 }
+    : { padding: "5px 8px", ...T.fs.small, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: "inherit", ...T.num, minWidth: 0 };
+  const labStyle = isComp ? { fontSize: 12, color: T.textSecondary } : { ...T.fs.label, color: T.subtle };
+  const modeSel = setSc ? (
+    <select data-scale-mode={mode} value={mode} onChange={e => set({ mode: e.target.value })} aria-label={X.modeAria} className="k-input"
+      style={{ ...inStyle, width: "auto", maxWidth: "100%" }}>
+      {SCALE_MODES.map(m => (
+        <option key={m} value={m}>{m === "yield" ? (countYield ? X.modes.yieldCount : X.modes.yieldWeight) : X.modes[m]}</option>
+      ))}
+    </select>
+  ) : null;
+
+  // ── 按个数:和以前那一行一模一样,只在标题后面多了下拉 ──
+  if (mode === "yield") {
+    if (isComp) {
+      return (
+        <div data-scale-bar="component" style={{ background: T.bgMuted, border: `0.5px solid ${T.borderSoft}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: "1rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <div style={{ fontSize: 11, color: T.accent, fontWeight: 500, letterSpacing: "1px", textTransform: "uppercase" }}>
               {lang === "zh" ? "✦ 缩放计算" : "✦ スケール計算"}
             </div>
+            {modeSel}
             <div style={{ fontSize: 12, color: T.textSecondary }}>
               {lang === "zh" ? "原" : "原"}：<span style={{ fontFamily: T.fontSerif, fontWeight: 500 }}>{originalYield}{unit}</span>
             </div>
@@ -6512,7 +6876,7 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
               </div>
             )}
             {target > 0 && (
-              <button onClick={() => setTargetYield("")} style={{ fontSize: 11, color: T.textTertiary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans }}>
+              <button onClick={reset} style={{ fontSize: 11, color: T.textTertiary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans }}>
                 {lang === "zh" ? "重置" : "リセット"}
               </button>
             )}
@@ -6523,13 +6887,14 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
             </div>
           )}
         </div>
-    );
-  }
-  return (
-        <div style={{ display: "flex", alignItems: "center", gap: 14, padding: `${T.sp.l}px 0`, borderBottom: `1px solid ${T.line}`, flexWrap: "wrap", ...T.fs.caption, color: T.body }}>
+      );
+    }
+    return (
+        <div data-scale-bar="recipe" style={{ display: "flex", alignItems: "center", gap: 14, padding: `${T.sp.l}px 0`, borderBottom: `1px solid ${T.line}`, flexWrap: "wrap", ...T.fs.caption, color: T.body }}>
           <span style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
             {lang === "zh" ? "缩放计算" : "スケール計算"}
           </span>
+          {modeSel}
           <span>{lang === "zh" ? "原" : "原"} {originalYield}{unit}</span>
           <span style={{ color: T.disabled }}>→</span>
           <div style={{ display: "flex", alignItems: "center", border: `1px solid ${T.border}`, background: T.surface, borderRadius: T.radius }}>
@@ -6546,12 +6911,114 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
             <span style={{ fontFamily: T.fontSerif, ...T.num, color: T.accent }}>× {scale.toFixed(3)}</span>
           )}
           {target > 0 && (
-            <button onClick={() => setTargetYield("")} className="k-btn k-btn-ghost" style={{ ...T.fs.label, color: T.secondary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, padding: "4px 8px" }}>
+            <button onClick={reset} className="k-btn k-btn-ghost" style={{ ...T.fs.label, color: T.secondary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, padding: "4px 8px" }}>
               {lang === "zh" ? "重置" : "リセット"}
             </button>
           )}
         </div>
+    );
+  }
+
+  // ── 按模具 / 按某样原料 / 按总重 ──
+  const inline = [];   // 和下拉同一行(手机上自动折行)
+  const notes = [];    // 下面的灰字 / 提示,一行一条
+  const note = (key, text, color) => notes.push(<div key={key} data-scale-note={key} style={{ color: color || (isComp ? T.textTertiary : T.subtle), overflowWrap: "anywhere" }}>{text}</div>);
+  const labelLine = () => { if (info && info.label) { const L = info.label[lang === "ja" ? "ja" : "zh"]; if (L) note("label", `${L.main} ${L.sub}`, isComp ? T.textSecondary : T.body); } };
+  if (mode === "mold") {
+    inline.push(<ScaleMoldInput key="from" which="from" label={X.moldFrom} value={sc.moldFrom} onChange={v => set({ moldFrom: v })} X={X} inStyle={inStyle} labStyle={labStyle} />);
+    inline.push(<span key="arrow" style={{ color: isComp ? T.textTertiary : T.disabled }}>→</span>);
+    inline.push(<ScaleMoldInput key="to" which="to" label={X.moldTo} value={sc.moldTo} onChange={v => set({ moldTo: v })} X={X} inStyle={inStyle} labStyle={labStyle} />);
+    const txt = _normTxt(obj && obj.mold);
+    if (txt) note("moldHint", parseMoldSize(txt) ? X.moldFilled(txt) : X.moldUnread(txt));
+    notes.push(
+      <div key="common" data-scale-note="common" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={labStyle}>{X.common}</span>
+        {SCALE_MOLD_COMMON.map(d => (
+          <button key={d} data-scale-chip={d} onClick={() => set({ moldTo: { ...(sc.moldTo || {}), shape: "round", d: String(d) } })}
+            style={{ ...labStyle, background: isComp ? T.bgCard : T.surface, border: `1px solid ${T.border}`, borderRadius: T.radiusPill, padding: "2px 8px", cursor: "pointer", fontFamily: T.fontSans }}>φ{d}</button>
+        ))}
+      </div>
+    );
+    labelLine();
+  } else if (mode === "ing") {
+    const opts = scaleIngOptions(obj, ctx);
+    const opt = opts.find(o => o.key === sc.ingKey) || null;
+    if (!opts.length) inline.push(<span key="none" style={labStyle}>{X.noOpt}</span>);
+    else {
+      inline.push(<span key="pickL" style={labStyle}>{X.ingPick}</span>);
+      inline.push(
+        <select key="pick" data-scale-ing="1" value={opt ? opt.key : ""} onChange={e => set({ ingKey: e.target.value })} className="k-input" aria-label={X.ingPick}
+          style={{ ...inStyle, width: "auto", maxWidth: "100%" }}>
+          {!opt && <option value="" disabled>—</option>}
+          {opts.map(o => <option key={o.key} value={o.key}>{lang === "ja" ? o.labelJa : o.labelZh}</option>)}
+        </select>
+      );
+      inline.push(<span key="haveL" style={labStyle}>{X.have}</span>);
+      inline.push(<input key="have" type="number" inputMode="decimal" className="k-input" value={sc.have} onChange={e => set({ have: e.target.value })} aria-label={X.have} style={{ ...inStyle, width: 72 }} />);
+      if (opt) inline.push(<span key="haveU" style={labStyle}>{opt.unit}</span>);
+      // 结果:选了用量不是数字的一样 / 不够做 1 个 / 能做几个(计件按整个算,写剩多少)
+      const have = _scPos(sc.have);
+      let res = null, bad = false;
+      if (opt && !opt.ok) { res = X.ingBad; bad = true; }
+      else if (opt && have > 0 && countYield && (parseFloat(obj && obj.yield) || 0) * have / opt.base + 1e-9 < 1) { res = X.ingShort(U); bad = true; }
+      else if (opt && info) {
+        const nm = lang === "ja" ? opt.nameJa : opt.nameZh;
+        res = info.floor ? X.ingCanFloor(F(info.to), U, nm, F(info.left), opt.unit) : X.ingCan(F(info.to), U);
+      }
+      if (res) inline.push(<span key="res" data-scale-result={bad ? "bad" : "ok"} style={{ color: bad ? T.danger : (isComp ? T.textPrimary : T.ink), overflowWrap: "anywhere", minWidth: 0 }}>→ {res}</span>);
+    }
+    labelLine();
+  } else {   // total
+    const wg = weighableGramsOf(obj, ctx && ctx.materials);
+    inline.push(<span key="tL" style={labStyle}>{X.totalTarget}</span>);
+    inline.push(<input key="t" type="number" inputMode="decimal" className="k-input" value={sc.total} onChange={e => set({ total: e.target.value })} aria-label={X.totalTarget} style={{ ...inStyle, width: 80 }} />);
+    inline.push(<span key="tU" style={labStyle}>g</span>);
+    inline.push(<span key="sum" data-scale-result="sum" style={{ overflowWrap: "anywhere", minWidth: 0 }}>{X.totalSum(F(wg.grams))}</span>);
+    if (wg.excluded.length) note("excl", X.excl(wg.excluded.map(x => [lang === "ja" ? x.nameJa : x.name, x.qty, x.unit].filter(Boolean).join(" ")).join("、")));
+    if (kind === "component" && !countYield) note("compYield", X.compYield(F(parseFloat(obj && obj.yield) || 0), U));
+    labelLine();
+  }
+  const pill = info ? (isComp
+    ? <div key="pill" style={{ fontSize: 12, color: T.accent, fontWeight: 500, background: T.bgCard, padding: "4px 14px", borderRadius: T.radiusPill, fontFamily: T.fontSerif, fontStyle: "italic", border: `0.5px solid ${T.accentSoft}` }}>× {info.factor.toFixed(3)}</div>
+    : <span key="pill" style={{ fontFamily: T.fontSerif, ...T.num, color: T.accent }}>× {info.factor.toFixed(3)}</span>) : null;
+  const resetBtn = isComp
+    ? <button key="reset" onClick={reset} style={{ fontSize: 11, color: T.textTertiary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans }}>{X.reset}</button>
+    : <button key="reset" onClick={reset} className="k-btn k-btn-ghost" style={{ ...T.fs.label, color: T.secondary, background: "none", border: "none", cursor: "pointer", fontFamily: T.fontSans, padding: "4px 8px" }}>{X.reset}</button>;
+  if (isComp) {
+    return (
+      <div data-scale-bar="component" style={{ background: T.bgMuted, border: `0.5px solid ${T.borderSoft}`, borderRadius: T.radius, padding: "12px 16px", marginBottom: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 11, color: T.accent, fontWeight: 500, letterSpacing: "1px", textTransform: "uppercase" }}>{lang === "zh" ? "✦ 缩放计算" : "✦ スケール計算"}</div>
+          {modeSel}
+          {inline}
+          {pill}
+          {resetBtn}
+        </div>
+        {notes.length > 0 && <div style={{ marginTop: 8, fontSize: 11, display: "flex", flexDirection: "column", gap: 4 }}>{notes}</div>}
+      </div>
+    );
+  }
+  return (
+    <div data-scale-bar="recipe" style={{ display: "flex", alignItems: "center", gap: 14, padding: `${T.sp.l}px 0`, borderBottom: `1px solid ${T.line}`, flexWrap: "wrap", ...T.fs.caption, color: T.body }}>
+      <span style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "zh" ? "缩放计算" : "スケール計算"}</span>
+      {modeSel}
+      {inline}
+      {pill}
+      {resetBtn}
+      {notes.length > 0 && <div style={{ flexBasis: "100%", display: "flex", flexDirection: "column", gap: 4, ...T.fs.label, letterSpacing: 0 }}>{notes}</div>}
+    </div>
   );
+}
+// 详情页的缩放状态 sc(规格 R35):按条目 id 认,换了条目就回到初值(scaleInitState);不存本机。setSc(fn | 值)
+function useScaleState(obj, ctx) {
+  const id = obj ? obj.id : undefined;
+  const [st, setSt] = useState(() => ({ id, sc: scaleInitState(obj, ctx) }));
+  const sc = st.id === id ? st.sc : scaleInitState(obj, ctx);
+  const setSc = (fn) => setSt(prev => {
+    const base = prev.id === id ? prev.sc : scaleInitState(obj, ctx);
+    return { id, sc: typeof fn === "function" ? fn(base) : fn };
+  });
+  return [sc, setSc];
 }
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
@@ -6563,13 +7030,16 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
   const _prepItem = prepStock && !prepStock.readOnly && prepStock.items ? (prepStock.items[prepKeyOf("recipe", r.id)] || null) : null;
   const _prepOh = prepOnHand(_prepItem, _prepCfg, today || localDateStr());
 
-  // 🔢 缩放计算器
-  const [targetYield, setTargetYield] = useState("");
+  // 🔢 缩放计算器(第 5 批 S2:按个数 / 按模具 / 按某样原料 / 按总重;状态 sc 按配方 id 认,不存本机)
+  // 倍数只从 scaleFactorOf 出(没缩放 → null → 1);按个数和以前「目标 ÷ 产出量」的写法逐个一样。下拉选项和 info 用同一个 ctx
+  const scCtx = { materials };
+  const [sc, setSc] = useScaleState(r, scCtx);
   const originalYield = parseFloat(r.yield) || 0;
-  const target = parseFloat(targetYield) || 0;
-  // 第 5 批第 0 步:倍数只从 scaleFactorOf 出(没缩放 → null → 1),和以前「目标 ÷ 产出量」的写法逐个一样
-  const info = scaleFactorOf("yield", { target: targetYield }, r, "recipe", { materials });
+  const info = scaleFactorOf(sc.mode, scaleInputOf(sc), r, "recipe", scCtx);
   const scale = info ? info.factor : 1;
+  const target = (info && info.mode === "yield") ? info.to : 0;   // 按个数那一格的数(缩放行判断「× 倍数 / 重置」用)
+  // 按模具、产出是计件(個 / 台)时个数不变、每个变大:厨房视图只会按个数缩放,算不对 → 按钮变灰,请打印厨房版
+  const kitchenLocked = !!(info && info.mode === "mold" && info.keepCount);
 
   const grouped = {};
   GROUP_ORDER.forEach(g => grouped[g] = []);
@@ -6652,7 +7122,9 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             );
           })()}
           {/* 第 3 批 F4:厨房视图(大字、打勾、常亮;不显示钱)。缩放过就带着缩放后的个数 */}
-          {onKitchen && <Btn size="sm" onClick={() => onKitchen(scale !== 1 ? target : undefined)}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
+          {onKitchen && <Btn size="sm" disabled={kitchenLocked}
+            title={kitchenLocked ? (lang === "ja" ? "型で換算中はキッチン表示が合わないため、キッチン用を印刷してください" : "按模具缩放时厨房视图算不对,请打印厨房版") : undefined}
+            onClick={() => onKitchen(scale !== 1 ? info.to : undefined)}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
           {onPrint && <Btn size="sm" onClick={handlePrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
           {/* 第 5 批 E2「⧉ 复制为新版本」(第 0 步空壳,放在「编辑」前面) */}
           <CopyVersionButton kind="recipe" obj={r} lang={lang} />
@@ -6718,9 +7190,10 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         )}
       </div>
 
-      {/* 🔢 缩放计算 —— 压成一行，底部一条发丝线(第 5 批第 0 步抽成 ScaleBar,DOM 不变;S2 在这一行加缩放方式) */}
+      {/* 🔢 缩放计算 —— 压成一行，底部一条发丝线(第 5 批第 0 步抽成 ScaleBar;S2 加缩放方式的下拉) */}
       {originalYield > 0 && (r.ingredients || []).length > 0 && (
-        <ScaleBar variant="recipe" lang={lang} originalYield={originalYield} unit={r.unit || "個"} targetYield={targetYield} setTargetYield={setTargetYield} target={target} scale={scale} />
+        <ScaleBar variant="recipe" lang={lang} originalYield={originalYield} unit={r.unit || "個"} targetYield={sc.target} setTargetYield={(v) => setSc(s => ({ ...s, target: v }))} target={target} scale={scale}
+          sc={sc} setSc={setSc} info={info} obj={r} kind="recipe" ctx={scCtx} />
       )}
 
       {/* 备货卡(prepstock E 线,紧凑:最早 3 批 +「看全部备货 →」)。没标、账上也没有时不渲染 */}
@@ -7734,13 +8207,14 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
   const nameOther = rawLang(c, "name", lang);
   const notes = pickLang(c, "notes", lang) || c.notes;
 
-  // 🔢 缩放计算器
-  const [targetYield, setTargetYield] = useState("");
+  // 🔢 缩放计算器(第 5 批 S2:按产出量 / 按模具 / 按某样原料 / 按总重;状态 sc 按组件 id 认,不存本机)
+  // 倍数只从 scaleFactorOf 出(没缩放 → null → 1);按产出量和以前「目标 ÷ 产出量」的写法逐个一样。下拉选项和 info 用同一个 ctx
+  const scCtx = { materials };
+  const [sc, setSc] = useScaleState(c, scCtx);
   const originalYield = parseFloat(c.yield) || 0;
-  const target = parseFloat(targetYield) || 0;
-  // 第 5 批第 0 步:倍数只从 scaleFactorOf 出(没缩放 → null → 1),和以前「目标 ÷ 产出量」的写法逐个一样
-  const info = scaleFactorOf("yield", { target: targetYield }, c, "component", { materials });
+  const info = scaleFactorOf(sc.mode, scaleInputOf(sc), c, "component", scCtx);
   const scale = info ? info.factor : 1;
+  const target = info ? info.to : 0;   // 缩放后做多少(按产出量时 = 目标那一格;下面 scaledForPrint 写进副本的产出量,P 线换成 scaledCopyForPrint)
   // 2026-09-29 体检第 2 批:以前缩放后点「打印」印的还是原配方的量。缩放过就把缩放后的副本交给打印
   // (第 5 批 P 线删掉这个函数,改交 scaleInfo、名字不再拼说明;第 0 步原样不动)
   // (ComponentsView 的 onPrint 收到副本就用副本,没收到用原组件);只是打印用的副本,不写回数据。
@@ -7878,7 +8352,8 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
 
       {/* 🔢 缩放计算器 - RURU 风格(第 5 批第 0 步抽成 ScaleBar,DOM 不变;S2 在这一行加缩放方式) */}
       {originalYield > 0 && (c.ingredients || []).length > 0 && (
-        <ScaleBar variant="component" lang={lang} originalYield={originalYield} unit={c.unit || "g"} targetYield={targetYield} setTargetYield={setTargetYield} target={target} scale={scale} />
+        <ScaleBar variant="component" lang={lang} originalYield={originalYield} unit={c.unit || "g"} targetYield={sc.target} setTargetYield={(v) => setSc(s => ({ ...s, target: v }))} target={target} scale={scale}
+          sc={sc} setSc={setSc} info={info} obj={c} kind="component" ctx={scCtx} />
       )}
 
       {/* 过敏原汇总 + 配料表草稿(第 3 批 F3)。组件不单卖,不给打印标签 */}
@@ -13006,54 +13481,162 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
 
 // ─── 组合产品编辑 Form ───────────────────────────────────────────
 // ─── 第 5 批第 0 步:组合产品编辑页的接缝 ───
-// 新加部分的用量默认写法(S2:全新产品按「每个」,已经有部分的跟最后一个部分一样;老部分没有 usedSpec 算「这一批一共」)。
-// 返回要并进新部分的字段(例如 { usedSpec })。第 0 步空壳:{}
-const layerUsedDefaults = (form) => ({});
-// 每个部分「快速填写」那一块:部分名 + 用量 + 本层成本 + 两句提示(第 5 批第 0 步从 CreationEditForm 抽出来,DOM 和以前一样;
-// S2 整块换成「这一批一共 / 每个」胶囊 + 数字格 + 说明格 + 回显行)。onField(字段, 值) 改这一部分;cost = 这一部分按用量折算的成本
-function LayerUsedField({ layer, W, cost, onField, serves, lang }) {
-  const componentYield = parseFloat(layer.yield) || 0;
-  const usedAmount = parseUsedAmount(layer.usedAmount, layer.unit);  // 2026-09-29 体检第 2 批:和成本同一个读法(以前 parseFloat)
-  const usedUnit = layer.unit || "g";  // 2026-09-29 体检第 2 批:以前提示和占位字写死 g
-  const usedNote = usedAmountNote(layer.usedAmount);
+// 新加部分的用量默认写法(S2,默认值 4):一个部分都没有 → 按「每个」;已经有部分 → 跟最后一个部分(它有效且是每个 → 每个,
+// 其余 → 这一批一共;老部分没有 usedSpec 算「这一批一共」,所以 Grand Gâteau 里新加一片还是「这一批一共」,不会一个产品两种写法混着)。
+// 返回要并进新部分的 { usedSpec, usedAmount }(每次新对象;放进部分后对 form.serves 一定有效)。只调段里的纯函数,不许有 React / setState / localStorage
+const layerUsedDefaults = (form) => {
+  const layers = (form && Array.isArray(form.layers)) ? form.layers : [];
+  let per = "each";
+  if (layers.length) {
+    const st = usedSpecState(layers[layers.length - 1], form.serves);
+    per = (st.valid && st.spec.per === "each") ? "each" : "batch";
+  }
+  return { usedSpec: per === "each" ? { per: "each", n: "", note: "", serves: _plainNum(_servesNum(form && form.serves)) }
+                                    : { per: "batch", n: "", note: "" },
+           usedAmount: "" };
+};
+// 用量格的文字(中 / 日;U = 台 / 个 / 個,u = 这一部分的单位,数字已 fmtQty)
+const USED_TXT = {
+  zh: {
+    used: null,   // 用 W.usedLabel(本层用量 / 用量)
+    perBatch: "这一批一共", perEach: (U) => `每${U}`,
+    numPhBatch: "一批一共多少", numPhEach: (U) => `每${U}多少`, notePh: "说明(选填)",
+    cost: null, costNone: "填用量→算成本",
+    echoBatch: (n, u) => `→ 按 ${n} ${u} 算`,
+    echoEach: (U, n, u, s, t) => `→ 每${U} ${n} ${u} × ${s} = ${t} ${u}`,
+    servesBlank: "(制作个数没填,按 1 算)",
+    stale: (U, e, u, label, s2, s1, n) => `按每${U} ${e} ${u} 填的,${label}现在是 ${s2},一批还是按 ${s1} ${U}算的 ${n} ${u}(多半是另一台还没刷新的设备改的)。`,
+    staleRecompose: (U, n2, u) => `按每${U}重算 → ${n2} ${u}`,
+    staleBatch: (n, u) => `改成这一批一共 ${n} ${u}`,
+    ambiguous: (raw, n, u, U) => `原来写的是「${raw}」,只认开头的数,现在按 ${n} ${u} 算。在数字格填这一批一共多少(或切到「每${U}」),说明写在右边。`,
+    unreadable: (raw) => `原来写的是「${raw}」,读不出数字,这一部分成本按 0 算。在数字格填一个数。`,
+    empty: "没填用量,这一部分成本按 0 算",
+    hint: (U, n, u) => `看起来写的是每${U}的量 → 按每${U} ${n} ${u} 算`,
+    noYield: "没填产出量,成本按整批算,用量不参与",
+  },
+  ja: {
+    used: "使用量",
+    perBatch: "バッチ合計", perEach: (U) => `1${U}あたり`,
+    numPhBatch: "バッチ合計", numPhEach: (U) => `1${U}あたり`, notePh: "補足(任意)",
+    cost: "原価", costNone: "使用量を入れると原価を計算",
+    echoBatch: (n, u) => `→ ${n}${u} で計算`,
+    echoEach: (U, n, u, s, t) => `→ 1${U} ${n}${u} × ${s} = ${t}${u}`,
+    servesBlank: "(仕込み数未入力のため 1 で計算)",
+    stale: (U, e, u, label, s2, s1, n) => `1${U} ${e}${u} で入力済みですが仕込み数は ${s2}、バッチは ${s1} 基準の ${n}${u} のまま(更新前の別の端末で変更された可能性があります)。`,
+    staleRecompose: (U, n2, u) => `1${U}あたりで再計算 → ${n2}${u}`,
+    staleBatch: (n, u) => `バッチ合計 ${n}${u} にする`,
+    ambiguous: (raw, n, u, U) => `元の記載「${raw}」は先頭の数だけ読み、${n}${u} で計算中。数値欄にバッチ合計(または 1${U}あたり)を入れ、補足は右へ。`,
+    unreadable: (raw) => `元の記載「${raw}」は数値として読めず原価 0 で計算中。数値を入力してください。`,
+    empty: "使用量未入力(原価 0 で計算)",
+    hint: (U, n, u) => `1${U}あたりの量のようです → 1${U} ${n}${u} で計算`,
+    noYield: "出来高が未入力のため、原価はバッチ全体で計算され、使用量は使われません",
+  },
+};
+// 每个部分「快速填写」那一块(第 5 批第 0 步抽出来,S2 整块换掉):部分名 / 用量「这一批一共 | 每{台|个}」胶囊 + 数字格 + 说明格 + 本层成本 / 回显行 / 提示。
+//   显示:usedSpec 有效 → 按它;没有 / 作废 → 按 usedAmount 拆开(splitUsedAmount),她不动一个字节都不写。
+//   写:onLayer(fn) → 表单里这一部分换成 fn(这一部分, 当时的制作个数);写用量一律经 withUsedSpec / recomposeEachLayers(规格 R11)。
+//   onField(字段, 值) 只改部分名;cost = 这一部分按用量折算的成本;serves = 表单的制作个数;idx = 第几个部分(data-used-field)
+function LayerUsedField({ layer, W, cost, onField, serves, lang, idx, onLayer }) {
+  const X = USED_TXT[lang === "ja" ? "ja" : "zh"];
+  const F = fmtQty;
+  const st = usedSpecState(layer, serves);
+  const per = st.valid ? (st.spec.per === "each" ? "each" : "batch") : "batch";
+  const num = st.valid ? String(st.spec.n === undefined || st.spec.n === null ? "" : st.spec.n) : st.split.num;
+  const note = st.valid ? String(st.spec.note === undefined || st.spec.note === null ? "" : st.spec.note) : st.split.note;
+  const cur = { per, n: num, note };   // 改一格时的种子(无效时就是老数据拆开的那两格,per = 这一批一共)
+  const y = parseFloat(layer && layer.yield) > 0;
+  const u = _normTxt(layer && layer.unit) || "g";
+  const U = W.unit;
+  const put = (spec) => { if (onLayer) onLayer((l, s) => withUsedSpec(l, spec, s)); };
+  const n = _usedNum(num);
+  const s = _servesNum(serves);
+  // 回显行(数字格有数时)
+  let echo = null;
+  if (n > 0) echo = per === "each"
+    ? X.echoEach(U, F(n), u, F(s), F(n * s)) + (!(parseFloat(serves) > 0) ? X.servesBlank : "")
+    : X.echoBatch(F(n), u);
+  // 警示(同一时刻最多一条):过期 > 老数据读不准 / 读不出 / 没填 > 新写法没填数;没产出量的部分不出「成本按 0 算」
+  let warn = null;
+  if (st.stale) warn = "stale";
+  else if (!st.valid && y) warn = ({ ambiguous: "ambiguous", unreadable: "unreadable", empty: "empty" })[st.split.state] || null;
+  else if (st.valid && y && n === 0) warn = "empty";
+  const raw = _normTxt(layer && layer.usedAmount);
+  const hint = (!st.valid && st.split && st.split.perHint) ? st.split.perHint : "";
+  const inp = { padding: "5px 8px", ...T.fs.label, letterSpacing: 0, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, minWidth: 0 };
+  const warnBox = (color) => ({ ...T.fs.label, letterSpacing: 0, color, marginTop: 4, overflowWrap: "anywhere" });
+  const capBtn = (p, label) => (
+    <button key={p} type="button" aria-pressed={per === p} onClick={() => { if (p !== per) put({ ...cur, per: p }); }}
+      style={{ ...T.fs.label, letterSpacing: 0, padding: "4px 8px", border: 0, cursor: "pointer", fontFamily: T.fontSans,
+        background: per === p ? T.ink : T.surface, color: per === p ? T.paper : T.body }}>{label}</button>
+  );
   return (
-    <>
-                    {/* 快速填写：自定义名 + 实际用量 */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 6 }}>
-                      <input
-                        value={layer.customName || ""}
-                        onChange={e => onField("customName", e.target.value)}
-                        placeholder={W.customNamePh}
-                        style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #CCCCCC", borderRadius: 4, background: "#FFFFFF", color: "#111", fontFamily: "system-ui, sans-serif" }}
-                      />
-                      {/* v17.8: 文字框 —— 老数据里有「約 60–80g(φ15 1 片)」这种带说明的用量,数字框会显示成空白;
-                          计算只认开头的数字(parseFloat),读不出数字时下面提示 */}
+    <div data-used-field={idx === undefined ? "" : idx}>
+                    {/* 部分名 */}
+                    <input
+                      value={layer.customName || ""}
+                      onChange={e => onField("customName", e.target.value)}
+                      placeholder={W.customNamePh}
+                      style={{ ...inp, width: "100%", boxSizing: "border-box", marginBottom: 6 }}
+                    />
+                    {/* 用量:这一批一共 / 每个 + 数字 + 单位 + 说明 + 本层成本 */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span style={{ ...T.fs.label, letterSpacing: 0, color: T.subtle }}>{X.used || W.usedLabel}</span>
+                      <span data-used-per={per} style={{ display: "inline-flex", border: `1px solid ${T.border}`, borderRadius: T.radius, overflow: "hidden" }}>
+                        {capBtn("batch", X.perBatch)}
+                        {capBtn("each", X.perEach(U))}
+                      </span>
                       <input
                         type="text"
                         inputMode="decimal"
-                        value={layer.usedAmount || ""}
-                        onChange={e => onField("usedAmount", e.target.value)}
-                        placeholder={componentYield > 0 ? `这一批的用量 ${usedUnit}（组件整批 ${componentYield}${usedUnit}）` : `这一批的用量 ${usedUnit}`}
-                        title={`用量 = 做「${W.servesLabel}」那么多${W.isStack ? "台" : "个"}时，这一部分一共要多少`}
-                        style={{ padding: "5px 8px", fontSize: 11, border: "0.5px solid #F59E0B", borderRadius: 4, background: "#FFFBEB", color: "#111", fontFamily: "system-ui, sans-serif" }}
+                        data-used-num="1"
+                        value={num}
+                        onChange={e => put({ ...cur, n: e.target.value })}
+                        placeholder={per === "each" ? X.numPhEach(U) : X.numPhBatch}
+                        style={{ ...inp, width: 96 }}
                       />
-                      <div style={{ padding: "5px 8px", fontSize: 11, color: "#666", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-                        {cost > 0 ? <span>{W.costLabel} <strong style={{ color: "#059669" }}>{fmtCost(cost)}</strong></span> : <span style={{ color: "#999" }}>填用量→算成本</span>}
-                      </div>
+                      <span style={{ ...T.fs.label, letterSpacing: 0, color: T.subtle }}>{u}</span>
+                      <input
+                        data-used-note="1"
+                        value={note}
+                        onChange={e => put({ ...cur, note: e.target.value })}
+                        placeholder={X.notePh}
+                        style={{ ...inp, flex: "1 1 140px" }}
+                      />
+                      <span style={{ ...T.fs.label, letterSpacing: 0, color: T.secondary, marginLeft: "auto" }}>
+                        {cost > 0 ? <span>{X.cost || W.costLabel} <strong style={{ color: T.success }}>{fmtCost(cost)}</strong></span> : <span style={{ color: T.muted }}>{X.costNone}</span>}
+                      </span>
                     </div>
+                    {echo && <div data-used-echo="1" style={{ ...T.fs.label, letterSpacing: 0, color: T.body, marginTop: 4, ...T.num, overflowWrap: "anywhere" }}>{echo}</div>}
 
-                    {/* 提示用量未填 / 带说明的用量只认开头的数字 */}
-                    {componentYield > 0 && !usedAmount && (
-                      <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
-                        {usedNote ? `⚠ 用量读不出数字，成本和整体配方都按 0 算。改成这一批一共多少的纯数字（${usedUnit}）` : "⚠ 未填写用量，成本计算不准确"}
+                    {/* 另一台还没刷新的设备改了制作个数、一批的量没跟上 */}
+                    {warn === "stale" && (() => {
+                      const e = _usedNum(st.spec.n), s1 = _servesNum(st.spec.serves), s2 = _servesNum(serves);
+                      const cur1 = parseUsedAmount(layer.usedAmount, layer.unit);
+                      return (
+                        <div data-used-warn="stale" style={{ ...warnBox(T.ink), border: `1px solid ${T.warning}`, borderRadius: T.radius, padding: "6px 8px" }}>
+                          <div style={{ color: T.warning }}>⚠ {X.stale(U, F(e), u, W.servesLabel, F(s2), F(s1), F(cur1))}</div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                            <Btn size="sm" onClick={() => { if (onLayer) onLayer((l, sv) => recomposeEachLayers([l], sv)[0]); }}>{X.staleRecompose(U, F(e * s2), u)}</Btn>
+                            <Btn size="sm" onClick={() => put({ per: "batch", n: _plainNum(e * s1), note: st.spec.note })}>{X.staleBatch(F(e * s1), u)}</Btn>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {warn === "ambiguous" && <div data-used-warn="ambiguous" style={warnBox(T.warning)}>⚠ {X.ambiguous(raw, F(st.split.num), u, U)}</div>}
+                    {warn === "unreadable" && <div data-used-warn="unreadable" style={warnBox(T.danger)}>⚠ {X.unreadable(raw)}</div>}
+                    {warn === "empty" && <div data-used-warn="empty" style={warnBox(T.danger)}>⚠ {X.empty}</div>}
+                    {/* 「约45g/个」「每个 45g」:看起来写的是每个的量 → 一点切成按每个 */}
+                    {hint && (
+                      <div style={warnBox(T.info)}>
+                        <button type="button" data-used-hint="1" onClick={() => put({ per: "each", n: hint, note: "" })}
+                          style={{ ...T.fs.label, letterSpacing: 0, color: T.info, background: "none", border: 0, padding: 0, cursor: "pointer", textDecoration: "underline", fontFamily: T.fontSans, textAlign: "left" }}>
+                          {X.hint(U, hint, u)}
+                        </button>
                       </div>
                     )}
-                    {usedAmount > 0 && usedAmountAmbiguous(layer.usedAmount) && (
-                      <div style={{ fontSize: 10, color: "#CA8A04", marginTop: 4 }}>
-                        ⚠ 只认开头的数字：按 {fmtQty(usedAmount)} {usedUnit} 算（是这一批一共的量，不是每个的量）。不对的话改成纯数字（{usedUnit}）
-                      </div>
-                    )}
-    </>
+                    {/* 没填产出量:成本按整批算,用量只决定整体配方的需要量 */}
+                    {!y && <div data-used-warn="noyield" style={warnBox(T.subtle)}>{X.noYield}</div>}
+    </div>
   );
 }
 // 锁定的产品编辑页顶上那一条「🔒 配方已锁定(9/30):…」(E1;第 0 步空壳)
@@ -13493,8 +14076,9 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                       </div>
                     </div>
 
-                    {/* 快速填写：自定义名 + 实际用量 + 两句提示(第 5 批第 0 步抽成 LayerUsedField,DOM 不变;S2 整块换成新的用量格) */}
-                    <LayerUsedField layer={layer} W={W} cost={actualCost} onField={updateLayerField} serves={form.serves} lang={lang} />
+                    {/* 快速填写:部分名 + 用量「这一批一共 / 每个」+ 数字 + 说明 + 回显 + 提示(第 5 批 S2,LayerUsedField);写用量经 withUsedSpec,用当时的制作个数 */}
+                    <LayerUsedField layer={layer} W={W} cost={actualCost} onField={updateLayerField} serves={form.serves} lang={lang} idx={idx}
+                      onLayer={(fn) => setForm(prev => ({ ...prev, layers: prev.layers.map((l, i) => i === idx ? fn(l, prev.serves) : l) }))} />
                   </div>
                 );
               })}
@@ -26610,7 +27194,7 @@ function App() {
         setTimeout(() => { if (!back) dhNoUndo(); }, 0);
       } });
     },
-    // 第 5 批第 0 步放好的两个空分支(还没有按钮调它们):
+    // 第 5 批第 0 步放好的两个分支(S1 / S2 合并后都写成真的,数据体检面板 H5 / H6 的按钮调它们):
     //   H5 一键「按规格估 1 本 ≈ 2.2 g,存进材料百科」(S1:只写克重三个键、不写 updatedAt,撤销)
     //   H6 一键「按每个重算」(S2:recomposeEachLayers 这一部分,写组合产品 updatedAt,撤销)
     // 第 5 批 2.4(S1,R49):H5「按规格估」—— 所有 id 相同的材料写克重三个键(pieceAt = 现在,不写 updatedAt),撤销规则同 writeMaterialPieces。
@@ -26626,7 +27210,31 @@ function App() {
       showToast(zh ? `✓「${mn}」1 ${f.pieceUnit} ≈ ${f.gramsPerPiece} g 存进了材料百科` : `✓「${mn}」1${f.pieceUnit} ≈ ${f.gramsPerPiece} g を事典に保存`, { undo });
       return true;
     },
-    usedEach: (item) => {},
+    // H6(第 5 批 S2):按每{台|个}填的部分,制作个数被另一台改了、一批的量没跟上 → 这一部分按现在的个数重拼(同编辑页黄条「按每台重算」)。
+    // 只换这一部分;撤销只在这一部分还是写进去的那个对象时换回(updatedAt 不回退)。返回 true = 改了(面板打 ✓)
+    usedEach: (item) => {
+      const zh = lang === "zh";
+      const cr0 = item && item.obj, l0 = item && item.layer;
+      if (!creations.includes(cr0) || !Array.isArray(cr0.layers) || cr0.layers.indexOf(l0) < 0 || !usedSpecState(l0, cr0.serves).stale) { dhStale(); return false; }
+      const l1 = recomposeEachLayers([l0], cr0.serves)[0];
+      setCreations(prev => prev.map(c => (c && c.id === cr0.id && (c.layers || []).includes(l0))
+        ? { ...c, layers: c.layers.map(l => l === l0 ? l1 : l), updatedAt: new Date().toISOString() } : c));
+      const S = creationStructureOf(cr0), Wz = creationWords(S, "zh"), Wj = creationWords(S, "ja");
+      const total = fmtQty(_usedNum(l1.usedSpec && l1.usedSpec.n) * _servesNum(cr0.serves)), u = _normTxt(l0.unit) || "g";
+      showToast(zh ? `「${item.labelZh}」按每${Wz.unit}重算,一批 ${total} ${u}` : `「${item.labelJa || item.labelZh}」を 1${Wj.unit}あたりで再計算しました(バッチ ${total}${u})`, { undo: () => {
+        let back = false;
+        setCreations(prev => prev.map(c => {
+          if (!c || c.id !== cr0.id) return c;
+          const k = (c.layers || []).indexOf(l1);
+          if (k < 0) return c;
+          back = true;
+          const next = c.layers.slice(); next[k] = l0;
+          return { ...c, layers: next };
+        }));
+        setTimeout(() => { if (!back) dhNoUndo(); }, 0);
+      } });
+      return true;
+    },
     // H14:清掉旧价格表 cats。先存一份固定备份;存不上再问一次(同「清除全部」)
     clearCats: async () => {
       const zh = lang === "zh";
