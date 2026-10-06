@@ -7088,7 +7088,8 @@ function useScaleState(obj, ctx) {
 
 // ─── Recipe View (read-only) ──────────────────────────────────────
 function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel, onKitchen,
-  prepStock = null, onPrepOp, onOpenPrep, today, products = [], onGoTab, confirmDialog }) {   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡 + 标签;都没有时 DOM 不变
+  prepStock = null, onPrepOp, onOpenPrep, today, products = [], onGoTab, confirmDialog,   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡 + 标签;都没有时 DOM 不变
+  onCopy, onOpenSource }) {   // 第 5 批 E2:「⧉ 复制为新版本」/ 名字下「复制自」点了去原版(App 传了才出现)
   const name = pickLang(r, "name", lang);
   const nameOther = rawLang(r, "name", lang);
   const _prepCfg = prepCfgOf("recipe", r);
@@ -7191,8 +7192,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             title={kitchenLocked ? (lang === "ja" ? "型で換算中はキッチン表示が合わないため、キッチン用を印刷してください" : "按模具缩放时厨房视图算不对,请打印厨房版") : undefined}
             onClick={() => onKitchen(scale !== 1 ? info.to : undefined)}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
           {onPrint && <Btn size="sm" onClick={handlePrint}>{lang === "zh" ? "打印" : "印刷"}</Btn>}
-          {/* 第 5 批 E2「⧉ 复制为新版本」(第 0 步空壳,放在「编辑」前面) */}
-          <CopyVersionButton kind="recipe" obj={r} lang={lang} />
+          {/* 第 5 批 E2「⧉ 复制为新版本」(放在「编辑」前面;没传 onCopy 不出) */}
+          <CopyVersionButton kind="recipe" obj={r} lang={lang} onCopy={onCopy} />
           <Btn size="sm" variant="primary" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn size="sm" variant="ghost" onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -7220,8 +7221,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               )}
             </>
           )}
-          {/* 第 5 批 E2:名字下面「⧉ 复制自「…」」(第 0 步空壳) */}
-          <CopiedFromNote obj={r} lang={lang} />
+          {/* 第 5 批 E2:名字下面「⧉ 复制自「…」」(只有复制出来的新版本有;原版还在就能点过去) */}
+          <CopiedFromNote obj={r} lang={lang} list={recipes} onOpen={onOpenSource} />
           <div style={{ ...T.fs.label, color: T.subtle, marginTop: T.sp.l }}>
             {[r.mold, r.yield ? `${r.yield}${r.unit || "個"}` : null, r.temp, r.baketime, r.category].filter(Boolean).join("  ·  ")}
           </div>
@@ -7574,31 +7575,391 @@ const componentQueryMatch = (c, q, ctx) => {
   return hits.length ? hits : null;
 };
 
-// ─── 第 5 批 E2「改组件的影响」「复制成新版本」(design_edit §3.1 / §3.2 / §4,plan.md 裁决 / 「页面」§4 / §6)—— 第 0 步全是空壳 ───
-// 组件 compId 用在哪些组合产品里,按部分状态分四组(同一个产品只算一次,取最会被影响的:follow > locked > differs > local)。空壳:都空
-const creationUsersOfComponent = (compId, creations, components, matIds) => ({ follow: [], local: [], locked: [], differs: [] });
-// 改组件前后哪些成本变了(改前快照 / 改后比较两半,多一个可选 pending: { materials, shopMaterials })。空壳:没有变化
-const componentChangeImpact = (opts) => ({ rows: [], lockedNew: [] });
-// 临时换渲染期注入的组件库 / 本店原料算一遍,finally 换回(E2 写真的)。空壳:直接调 fn
-const withComponentsLookup = (list, fn) => fn();
-const withShopLookup = (list, fn) => fn();
-// 复制成新版本的预填对象(不含 id;formState = 组件编辑页「存成新版本」时当前表单的 { form, ings, steps })/ 起名(只保证本机不撞名)。空壳:null
-const copyAsNewVersion = (kind, obj, all, nowIso, formState) => null;
-const copyNamesFor = (obj, all, label = "北京") => null;
-// 空壳组件(第 0 步 return null,放在最终的位置上):详情页「⧉ 复制为新版本」按钮 / 名字下「⧉ 复制自「…」」/
-// 组件详情顶上「改前 → 改后」卡 / 组件编辑页「🔗 这个组件用在哪」(含「⧉ 这次的改动存成新版本」)
-function CopyVersionButton() { return null; }
-function CopiedFromNote() { return null; }
-function CompImpactCard() { return null; }
-function CompUsersBlock() { return null; }
+// ─── 第 5 批 E2「改组件的影响」「复制成新版本」(design_edit §3.1 / §3.2 / §3.3 / §4,plan.md 「页面」§4 / §6、决定 12 / 14)───
+// 上半段是纯函数(不许有 React / setState / localStorage),下半段「页面上的几块」是子组件。成本全走现成的成本链
+// (getIngsLiveCost / recipeCostInfo / calcLayerLiveCost,S1 合并后的),只在 withComponentsLookup / withShopLookup 里临时换渲染期注入的组件库 / 本店原料,finally 换回。
+
+// 组件 compId 用在哪些组合产品里,按部分状态分四组(同一个产品只算一次,取最会被影响的:follow > locked > differs > local)。
+// 部分状态 = layerLinkState;锁定的产品里锁着的部分(和详情页 / 编辑页的标签同一个判定 layerTagKey)= locked。组件已删 / 手搭的不算。返回四个产品数组
+const _E2_USER_RANK = { follow: 4, locked: 3, differs: 2, local: 1 };
+const creationUsersOfComponent = (compId, creations, components, matIds) => {
+  const out = { follow: [], local: [], locked: [], differs: [] };
+  if (compId === undefined || compId === null || compId === "") return out;
+  (Array.isArray(creations) ? creations : []).forEach(cr => {
+    if (!cr || !Array.isArray(cr.layers)) return;
+    const locked = isCreationLocked(cr);
+    let best = null;
+    cr.layers.forEach(l => {
+      if (!l || typeof l !== "object" || l.sourceComponentId !== compId) return;
+      const k = layerTagKey(layerLinkState(l, components, matIds), l, locked);
+      if (_E2_USER_RANK[k] && (!best || _E2_USER_RANK[k] > _E2_USER_RANK[best])) best = k;
+    });
+    if (best) out[best].push(cr);
+  });
+  return out;
+};
+// 商品里直接挂着这个组件的(items[].linkedType === "component",同删组件时的引用方写法)
+const componentProductUsers = (compId, products) => (Array.isArray(products) ? products : [])
+  .filter(p => p && (p.items || []).some(it => it && it.linkedType === "component" && String(it.linkedId) === String(compId)));
+
+// 临时换渲染期注入的组件库 / 本店原料算一遍,finally 换回(异常也换回)。list 不是数组 → 不换,直接调 fn
+const withComponentsLookup = (list, fn) => {
+  if (!Array.isArray(list)) return fn();
+  const saved = _componentsLookup;
+  setComponentsForLookup(list);
+  try { return fn(); } finally { setComponentsForLookup(saved); }
+};
+const withShopLookup = (list, fn) => {
+  if (!Array.isArray(list)) return fn();
+  const saved = _shopMaterials;
+  setShopMaterialsForLookup(list);
+  try { return fn(); } finally { setShopMaterialsForLookup(saved); }
+};
+
+// 全量成本快照(人民币,读调用那一刻注入的本店原料 / 组件库):组件 = 整批成本(同组件详情);配方 = 单个成本(recipeCostInfo,没产出量按整批);
+// 组合产品 = Σ calcLayerLiveCost ÷ 制作个数(同组合产品详情的单台 / 单个成本、creationCostInfo.perUnit)
+const _e2CostsOf = (components, recipes, creations, materials, brands) => {
+  const comp = new Map(), rec = new Map(), cre = new Map();
+  (Array.isArray(components) ? components : []).forEach(c => { if (c && c.id !== undefined && c.id !== null && !comp.has(c.id)) comp.set(c.id, getIngsLiveCost(c.ingredients, materials, brands)); });
+  (Array.isArray(recipes) ? recipes : []).forEach(r => {
+    if (!r || r.id === undefined || r.id === null || rec.has(r.id)) return;
+    const ci = recipeCostInfo(r, materials, brands);
+    rec.set(r.id, ci.yieldN > 0 ? ci.unitCost : ci.total);
+  });
+  (Array.isArray(creations) ? creations : []).forEach(cr => {
+    if (!cr || cr.id === undefined || cr.id === null || cre.has(cr.id)) return;
+    const total = (Array.isArray(cr.layers) ? cr.layers : []).reduce((s, l) => s + (l && typeof l === "object" ? calcLayerLiveCost(l, materials, brands) : 0), 0);
+    cre.set(cr.id, total / (parseFloat(cr.serves) || 1));
+  });
+  return { comp, rec, cre };
+};
+const _e2LayerKey = (cr, i) => String(cr.id) + "\u0001" + i;
+// 「改前」那一半:全量成本 + 锁定的产品里这个组件的部分哪些已经是「组件库有新版本」。组件编辑页点保存那一刻(ComponentsView.onSave)用保存前的组件库算
+const componentImpactSnapshot = ({ compId, components, recipes, creations, materials, brands, matIds } = {}) => {
+  const mids = matIds || new Set((Array.isArray(materials) ? materials : []).map(m => m && m.id));
+  return withComponentsLookup(Array.isArray(components) ? components : [], () => {
+    const costs = _e2CostsOf(components, recipes, creations, materials, brands);
+    const newVer = new Set();
+    const comp = (Array.isArray(components) ? components : []).find(c => c && c.id === compId) || null;
+    if (comp) (Array.isArray(creations) ? creations : []).forEach(cr => {
+      if (!cr || !isCreationLocked(cr) || !Array.isArray(cr.layers)) return;
+      cr.layers.forEach((l, i) => { if (l && l.sourceComponentId === compId && layerNewVersion(l, comp, mids)) newVer.add(_e2LayerKey(cr, i)); });
+    });
+    return { compId, costs, newVer };
+  });
+};
+// 改组件前后哪些成本变了(design_edit §3.2):opts = { compId, prevComponents, nextComponents, recipes, creations, materials, brands, matIds?,
+//   before?(componentImpactSnapshot 的结果;给了就不再用 prevComponents 算「改前」), pending?: { materials, shopMaterials }(这次保存会顺手写进去的材料克重 / 本店原料价,先叠上去算「改后」) }。
+// 「改后」= 组件库换成 nextComponents、跟组件库走的部分按 syncFollowingLayers 换成新内容以后的全量成本。
+// → { rows: [{ type, id, obj, label: "unit" | "batch", before, after }](|改后 − 改前| ≥ 0.005;顺序:这个组件 → 组合产品 → 配方 → 其他组件),
+//     lockedNew: [{ id, obj, parts: [部分名] }](锁定的产品里因为这次改动「组件库有新版本」由假变真的部分) }
+const componentChangeImpact = (opts) => {
+  const o = opts || {};
+  const { compId, nextComponents, pending } = o;
+  const recipes = Array.isArray(o.recipes) ? o.recipes : [], creations = Array.isArray(o.creations) ? o.creations : [];
+  const materials = Array.isArray(o.materials) ? o.materials : [], brands = o.brands || [];
+  if (compId === undefined || compId === null || compId === "" || !Array.isArray(nextComponents)) return { rows: [], lockedNew: [] };
+  const mids0 = o.matIds || new Set(materials.map(m => m && m.id));
+  const before = o.before || componentImpactSnapshot({ compId, components: Array.isArray(o.prevComponents) ? o.prevComponents : [], recipes, creations, materials, brands, matIds: mids0 });
+  const pm = pending && Array.isArray(pending.materials) ? pending.materials : materials;
+  const ps = pending && Array.isArray(pending.shopMaterials) ? pending.shopMaterials : null;
+  const mids = pm === materials ? mids0 : new Set(pm.map(m => m && m.id));
+  const nextCreations = withComponentsLookup(nextComponents, () => syncFollowingLayers(creations, nextComponents, mids)) || creations;
+  const after = withShopLookup(ps, () => componentImpactSnapshot({ compId, components: nextComponents, recipes, creations: nextCreations, materials: pm, brands, matIds: mids }));
+  const rows = [];
+  const push = (type, id, obj, label, b, a) => {
+    if (typeof b !== "number" || typeof a !== "number" || !isFinite(b) || !isFinite(a)) return;
+    if (Math.abs(a - b) >= 0.005) rows.push({ type, id, obj, label, before: b, after: a });
+  };
+  const self = nextComponents.find(c => c && c.id === compId);
+  if (self) push("component", compId, self, "batch", before.costs.comp.get(compId), after.costs.comp.get(compId));
+  nextCreations.forEach(cr => { if (cr && cr.id !== undefined && cr.id !== null) push("creation", cr.id, cr, "unit", before.costs.cre.get(cr.id), after.costs.cre.get(cr.id)); });
+  recipes.forEach(r => { if (r && r.id !== undefined && r.id !== null) push("recipe", r.id, r, (parseFloat(r.yield) || 0) > 0 ? "unit" : "batch", before.costs.rec.get(r.id), after.costs.rec.get(r.id)); });
+  nextComponents.forEach(c => { if (c && c.id !== compId && c.id !== undefined && c.id !== null) push("component", c.id, c, "batch", before.costs.comp.get(c.id), after.costs.comp.get(c.id)); });
+  const lockedNew = [];
+  nextCreations.forEach(cr => {
+    if (!cr || !isCreationLocked(cr) || !Array.isArray(cr.layers)) return;
+    const parts = [];
+    cr.layers.forEach((l, i) => {
+      if (!l || l.sourceComponentId !== compId) return;
+      const k = _e2LayerKey(cr, i);
+      if (!before.newVer.has(k) && after.newVer.has(k)) parts.push(_normTxt(l.customName) || _normTxt(l.nameZh) || _normTxt(l.nameJa) || "");
+    });
+    if (parts.length) lockedNew.push({ id: cr.id, obj: cr, parts });
+  });
+  return { rows, lockedNew };
+};
+// 「↻ 同步回组件库」确认之后 doSave 会顺手写进去的本店原料价(勾着「保存到本店原料」)/ 材料克重(勾着「存进百科」),先叠到现在的表上 —— 只算不写
+// (saveIngPricesToShop / writeMaterialPieces 交一个只记下更新函数的 setter;它们本来就是「定好新 id / 时间,再交 updater」的写法)。
+// rows = 保存时刷新过的行(refreshIngForSave 之后)。→ { materials, shopMaterials }
+const componentSavePending = (rows, saveToShop, materials, shopMaterials) => {
+  const mats0 = Array.isArray(materials) ? materials : [], shop0 = Array.isArray(shopMaterials) ? shopMaterials : [];
+  const list = Array.isArray(rows) ? rows : [];
+  let shop = shop0;
+  if (saveToShop) { let fn = null; saveIngPricesToShop(list, (f) => { fn = f; }, mats0); if (typeof fn === "function") shop = fn(shop0); }
+  let mats = mats0;
+  const pieced = pieceRowsForSave(list, mats0);
+  if (pieced.writes.length) { let fn = null; writeMaterialPieces((f) => { fn = f; }, pieced.writes, new Date().toISOString()); if (typeof fn === "function") mats = fn(mats0); }
+  return { materials: mats, shopMaterials: shop };
+};
+
+// ── 7.5 复制成新版本(design_edit §4.2 / §4.3,plan 决定 14)──
+// 起名:名字里有 vX.Y → vX.(Y+1);有 vX / vXA → vX.1 / vXA.1;没有版本号 → v1.1。原来的版本号从原位置拿掉,末尾接「 {新版本} 北京」。
+// 复制副本时先去掉末尾上一次加的「北京 / 北京 2」。拼好后和全部配方 / 组件 / 组合产品的中日法名按知识按钮的 linkKeys 前三档(全名 / 去版本号 / 再去括号)比,
+// 撞了就把「北京」换成「北京 2」「北京 3」…。只看这台设备上的数据(两台电脑各自复制同一条会起出同一个名字,见 CLAUDE.md)
+const _COPY_VER_RE = /(^|[^A-Za-z0-9])v(\d+)(?:\.(\d+))?([A-Za-z])?(?![A-Za-z0-9.])/;
+const _copyBump = (name, label) => {
+  const s = String(name === undefined || name === null ? "" : name).trim();
+  if (!s) return { base: "", ver: null };
+  const m = s.match(_COPY_VER_RE);
+  let base = s, ver = "v1.1";
+  if (m) {
+    ver = m[3] !== undefined ? `v${m[2]}.${Number(m[3]) + 1}` : `v${m[2]}${m[4] || ""}.1`;
+    base = (s.slice(0, m.index) + m[1] + s.slice(m.index + m[0].length)).replace(/\s{2,}/g, " ").trim();
+  }
+  const lab = String(label || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (lab) base = base.replace(new RegExp("\\s*" + lab + "(?:\\s*\\d+)?$"), "").trim();
+  return { base, ver };
+};
+const _copyAllItems = (all) => Array.isArray(all) ? all
+  : (all && typeof all === "object") ? [...(Array.isArray(all.recipes) ? all.recipes : []), ...(Array.isArray(all.components) ? all.components : []), ...(Array.isArray(all.creations) ? all.creations : [])] : [];
+// → { nameZh, nameJa, nameFr: "", label: "v1.1 北京" } | null(obj 不是对象)。all = { recipes, components, creations } 或一个数组
+const copyNamesFor = (obj, all, label = "北京") => {
+  if (!obj || typeof obj !== "object") return null;
+  const lab0 = String(label || "北京");
+  const zh0 = _copyBump(obj.nameZh, lab0), ja0 = _copyBump(obj.nameJa, lab0);
+  const existing = _copyAllItems(all).flatMap(x => (x && typeof x === "object") ? [x.nameZh, x.nameJa, x.nameFr].filter(Boolean).map(linkKeys) : []);
+  for (let n = 1; n < 1000; n++) {
+    const lab = n === 1 ? lab0 : `${lab0} ${n}`;
+    const mk = (b) => b.base ? `${b.base} ${b.ver} ${lab}` : "";
+    const nameZh = mk(zh0), nameJa = mk(ja0);
+    const mine = [nameZh, nameJa].filter(Boolean).map(linkKeys);
+    if (!mine.some(a => existing.some(b => a.full === b.full || a.noVer === b.noVer || (!!a.core && a.core === b.core))))
+      return { nameZh, nameJa, nameFr: "", label: `${zh0.ver || ja0.ver || "v1.1"} ${lab}` };
+  }
+  return null;
+};
+// 复制成新版本的预填对象(design_edit §4.2 字段表):不带 id(保存时照新建生成);中日文名按 copyNamesFor 加版本号;法文名空着;
+// 不带在售 onSale / 在用 inUse / 备货开关 prepMode(其余备货设置留着)/ 本机图片库里的照片(有 imageId 的;网址图留着);
+// 配方挂着家族时 variantLabel 写成版本标签;带 copiedFrom = { kind, id, nameZh, at }。其余(配料 / 步骤 / 备注 / 模具 / 售价 / 过敏原 …)原样。
+// formState = 组件编辑页「⧉ 这次的改动存成新版本」时当前表单的 { form, ings, steps }:内容换成表单里的(名字照样加版本号;改过价的关联行留着 _priceModified,
+// 新编辑页照样出「改了单价」提示条),copiedFrom 仍指向存着的那一条(obj)。
+// 返回值上挂一个**不可枚举**的 _copyMeta = { label, droppedImages, srcName }(复制顶条用;编辑页 {...prefill} 展开时自然丢掉,不会存进数据)
+const copyAsNewVersion = (kind, obj, all, nowIso, formState) => {
+  if (!obj || typeof obj !== "object" || (kind !== "recipe" && kind !== "component")) return null;
+  const at = (typeof nowIso === "string" && nowIso) ? nowIso : new Date().toISOString();
+  let src = obj;
+  if (formState && typeof formState === "object" && formState.form && typeof formState.form === "object") {
+    const ingsIn = Array.isArray(formState.ings) ? formState.ings : (Array.isArray(formState.form.ingredients) ? formState.form.ingredients : []);
+    const rows = ingsIn.filter(ingHasName).map(i => {
+      const { _id, _preNoCost, ...rest } = i;
+      if (rest._priceModified) return rest;
+      const { _priceModified, _originalPrice, ...plain } = rest;
+      return plain;
+    });
+    // 步骤取编辑页里的两栏(stepsForSave 中日按行对齐);老字段 steps 不带(编辑页打开时已经读进日文栏了,带着两栏都删空时会被 pickSteps 读回来)
+    const { steps: _oldSteps, ...f } = formState.form;
+    src = { ...f, ingredients: rows, ...(Array.isArray(formState.steps) ? stepsForSave(formState.steps) : {}) };
+  }
+  const names = copyNamesFor(src, all) || { nameZh: _normTxt(src.nameZh), nameJa: _normTxt(src.nameJa), nameFr: "", label: "" };
+  const { id: _i, onSale: _s, inUse: _u, prepMode: _p, copiedFrom: _c, updatedAt: _t, ...rest } = src;
+  const imgs = Array.isArray(rest.imageUrls) ? rest.imageUrls : null;
+  const kept = imgs ? imgs.filter(img => !(img && typeof img === "object" && img.imageId)) : null;
+  const out = { ...rest, nameZh: names.nameZh, nameJa: names.nameJa, nameFr: "" };
+  // 配料 / 步骤是数组,和原版不共用同一个数组(编辑页不会原地改它,这里图个放心)
+  ["ingredients", "stepsZh", "stepsJa", "steps"].forEach(k => { if (Array.isArray(out[k])) out[k] = JSON.parse(JSON.stringify(out[k])); });
+  if (imgs) out.imageUrls = kept;
+  if (kind === "recipe" && rest.familyId) out.variantLabel = names.label;
+  out.copiedFrom = { kind, id: obj.id, nameZh: _normTxt(obj.nameZh) || _normTxt(obj.nameJa) || _normTxt(obj.nameFr), at };
+  Object.defineProperty(out, "_copyMeta", { value: { label: names.label, droppedImages: imgs ? imgs.length - kept.length : 0, srcName: out.copiedFrom.nameZh }, enumerable: false });
+  return out;
+};
+
+// ── 页面上的几块(子组件定义在模块顶层)──
+const _e2Money = (v) => { const n = Math.round((Number(v) || 0) * 100) / 100; const [i, d] = Math.abs(n).toFixed(2).split("."); return (n < 0 ? "−" : "") + "¥" + i.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + d; };
+const _e2Delta = (d) => (d >= 0 ? "+" : "−") + _e2Money(Math.abs(d));
+const _e2Names = (names, zh) => {
+  const list = names.filter(Boolean);
+  if (list.length <= 4) return list.join("、");
+  return list.slice(0, 4).join("、") + (zh ? ` 等 ${list.length} 个` : ` ほか ${list.length - 4} 件`);
+};
+const _e2NameOf = (o, lang) => (o && (pickLang(o, "name", lang) || o.nameFr)) || "";
+const E2_TXT = {
+  zh: {
+    copyBtn: "⧉ 复制为新版本",
+    copyTitle: (kind) => kind === "component" ? "复制一份新组件来改(名字加「v1.1 北京」),原版和用到它的组合产品都不动" : "复制一份新配方来改(名字加「v1.1 北京」),原版和用到它的组合产品都不动",
+    copiedFrom: (n, md) => `⧉ 复制自「${n}」${md ? `(${md})` : ""}`,
+    banner: (kind, src, label) => `⧉ 从「${src}」复制的新版本 —— 保存以后才会出现在${kind === "component" ? "组件仓库" : "配方一览"};原版、用到原版的组合产品都不动。` +
+      (label ? `名字已经加了「${label}」,可以改。` : "") + "法文名先空着(和原版同名会让知识按钮分不清)。",
+    bannerImg: (n) => `原版的 ${n} 张照片没有复制(照片存在这台设备的图片库里,复制过来会和原版共用,删一边另一边也没了)。`,
+    usersTitle: "🔗 这个组件用在哪",
+    uFollow: "保存后跟着变:", uLocked: "已锁定,不跟着变:", uLockedTail: "(会提示「组件库有新版本」)",
+    uLocal: "不跟着变:", uLocalTail: "(本产品专用,或和组件库本来就不一样)",
+    uIng: "当原料用在:", uIngTail: "(来自组件,成本跟着变)", uProd: "商品里直接用:",
+    ingRef: (type, n) => `${type === "recipe" ? "配方" : type === "component" ? "组件" : "组合产品"}「${n}」`,
+    saveAsNew: "⧉ 这次的改动存成新版本(上面这些产品不变)",
+    impTitle: "刚才保存后,这些成本变了", impClose: "知道了",
+    impType: { component: "组件", creation: "组合产品", recipe: "配方" },
+    impLabel: (row) => row.type === "component" ? "整批成本" : row.type === "creation" ? creationWords(creationStructureOf(row.obj), "zh").perUnitCost : row.label === "batch" ? "整批成本" : "单个成本",
+    impMore: (n) => `还有 ${n} 个`,
+    impLocked: (n) => `🔒 ${n}:已锁定,没跟着变`, impLockedGo: "去看新版本 →",
+  },
+  ja: {
+    copyBtn: "⧉ 新バージョンとして複製",
+    copyTitle: (kind) => kind === "component" ? "コピーして別パーツとして編集(名前に「v1.1 北京」)。元のパーツと組み合わせはそのまま" : "コピーして別レシピとして編集(名前に「v1.1 北京」)。元のレシピと組み合わせはそのまま",
+    copiedFrom: (n, md) => `⧉「${n}」から複製${md ? `(${md})` : ""}`,
+    banner: (kind, src, label) => `⧉「${src}」から複製した新バージョンです。保存するまで${kind === "component" ? "部品庫" : "レシピ一覧"}には追加されません。元の${kind === "component" ? "パーツ" : "レシピ"}と組み合わせは変わりません。` +
+      (label ? `名前に「${label}」を付けました(変更可)。` : "") + "フランス語名は空欄です(元と同名だとナレッジのボタンが区別できません)。",
+    bannerImg: (n) => `元の写真 ${n} 枚は複製していません(写真はこの端末の画像ライブラリにあり、共有すると片方を消したときにもう片方も消えるため)。`,
+    usersTitle: "🔗 このパーツの使用先",
+    uFollow: "保存すると連動して変わる:", uLocked: "ロック中で変わらない:", uLockedTail: "(「部品庫に新しい版があります」と表示)",
+    uLocal: "変わらない:", uLocalTail: "(この製品専用、または部品庫と相違)",
+    uIng: "材料として使用:", uIngTail: "(原価が連動)", uProd: "商品に直接使用:",
+    ingRef: (type, n) => `${type === "recipe" ? "レシピ" : type === "component" ? "パーツ" : "組み合わせ"}「${n}」`,
+    saveAsNew: "⧉ 今回の変更を新バージョンとして保存(上の製品は変わりません)",
+    impTitle: "保存で原価が変わったもの", impClose: "閉じる",
+    impType: { component: "パーツ", creation: "組み合わせ", recipe: "レシピ" },
+    impLabel: (row) => row.type === "component" ? "全量原価" : row.type === "creation" ? (creationStructureOf(row.obj) === "stack" ? "1 台の原価" : "1 個の原価") : row.label === "batch" ? "全量原価" : "1 個の原価",
+    impMore: (n) => `ほか ${n} 件`,
+    impLocked: (n) => `🔒 ${n}:ロック中のため変わっていません`, impLockedGo: "新しい版を見る →",
+  },
+};
+const e2Txt = (lang) => lang === "ja" ? E2_TXT.ja : E2_TXT.zh;
+
+// 详情页头部「⧉ 复制为新版本」(放在「编辑」前面)。没传 onCopy(单独挂的测试 / 员工界面)→ 不出
+function CopyVersionButton({ kind, obj, lang, onCopy }) {
+  if (typeof onCopy !== "function" || !obj) return null;
+  const X = e2Txt(lang);
+  return (
+    <span data-copy-btn={kind === "component" ? "component" : "recipe"} style={{ display: "inline-flex" }}>
+      <Btn size="sm" onClick={() => onCopy(obj)} title={X.copyTitle(kind)}>{X.copyBtn}</Btn>
+    </span>
+  );
+}
+// 名字下面「⧉ 复制自「基础卡仕达 v1.0」(9/30)」:原版还在 + 给了 onOpen → 点了去原版;原版删了只显示记下的名字
+function CopiedFromNote({ obj, lang, list, onOpen }) {
+  const cf = obj && obj.copiedFrom;
+  if (!cf || typeof cf !== "object") return null;
+  const X = e2Txt(lang);
+  const src = (Array.isArray(list) && cf.id !== undefined && cf.id !== null) ? list.find(x => x && x.id === cf.id) : null;
+  const text = X.copiedFrom(src ? (_e2NameOf(src, lang) || cf.nameZh || "") : (cf.nameZh || ""), lockMdOf(cf.at));
+  const can = !!src && typeof onOpen === "function";
+  return (
+    <div data-copied-from="1" style={{ ...T.fs.caption, color: T.secondary, marginTop: T.sp.xs, overflowWrap: "anywhere" }}>
+      {can ? <button type="button" className="k-btn" onClick={() => onOpen(src.id)}
+        style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", color: T.info, font: "inherit", textAlign: "left" }}>{text} →</button> : text}
+    </div>
+  );
+}
+// 编辑页顶上的复制顶条(配方 / 组件的复制预填页才有)。src = 预填对象(读 copiedFrom 和不可枚举的 _copyMeta)
+function CopyBanner({ kind, src, lang }) {
+  const cf = src && src.copiedFrom;
+  if (!cf || typeof cf !== "object") return null;
+  const X = e2Txt(lang);
+  const meta = src._copyMeta || {};
+  return (
+    <div data-copy-banner="1" style={{ background: T.surface, border: `1px solid ${T.info}`, borderRadius: T.radius, padding: `${T.sp.s}px ${T.sp.m}px`, marginBottom: "1rem", ...T.fs.caption, color: T.body, overflowWrap: "anywhere" }}>
+      {X.banner(kind, cf.nameZh || "", meta.label || "")}
+      {meta.droppedImages > 0 && <div style={{ marginTop: T.sp.xs, color: T.warning }}>{X.bannerImg(meta.droppedImages)}</div>}
+    </div>
+  );
+}
+// 组件编辑页顶上「🔗 这个组件用在哪」(design_edit §3.1,plan「页面」§4)+「⧉ 这次的改动存成新版本」。新建的 / 哪儿都没用到的不出
+function CompUsersBlock({ comp, isNew, form, ings, steps, creations = [], recipes = [], products = [], components = [], materials = [], lang, onSaveAsCopy }) {
+  if (isNew || !comp || comp.id === undefined || comp.id === null || comp.id === "") return null;
+  const X = e2Txt(lang), zh = lang !== "ja";
+  const matIds = new Set((Array.isArray(materials) ? materials : []).map(m => m && m.id));
+  const users = creationUsersOfComponent(comp.id, creations, components, matIds);
+  const asIng = componentIngredientUses(comp.id, { recipes, components, creations });
+  const prods = componentProductUsers(comp.id, products);
+  const notFollow = [...users.local, ...users.differs];
+  const ingNames = [];
+  asIng.forEach(u => { const s = X.ingRef(u.type, _e2NameOf(u.obj, lang)); if (!ingNames.includes(s)) ingNames.push(s); });
+  if (!users.follow.length && !users.locked.length && !notFollow.length && !ingNames.length && !prods.length) return null;
+  const line = (key, head, names, tail) => names.length ? (
+    <div data-sync-row={key} style={{ marginTop: T.sp.xs }}>
+      <span style={{ color: T.secondary }}>{head}</span>{_e2Names(names, zh)}{tail ? <span style={{ color: T.secondary }}>{tail}</span> : null}
+    </div>
+  ) : null;
+  const nm = (o) => _e2NameOf(o, lang);
+  const canCopy = typeof onSaveAsCopy === "function" && (users.follow.length > 0 || ingNames.length > 0);
+  return (
+    <div data-sync-impact="1" style={{ background: T.surface, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${T.info}`, borderRadius: T.radius, padding: `${T.sp.m}px ${T.sp.l}px`, marginBottom: "1rem", ...T.fs.caption, color: T.body, overflowWrap: "anywhere", minWidth: 0 }}>
+      <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>{X.usersTitle}</div>
+      {line("follow", X.uFollow, users.follow.map(nm), "")}
+      {line("locked", X.uLocked, users.locked.map(nm), X.uLockedTail)}
+      {line("local", X.uLocal, notFollow.map(nm), X.uLocalTail)}
+      {line("ing", X.uIng, ingNames, X.uIngTail)}
+      {line("product", X.uProd, prods.map(nm), "")}
+      {canCopy && (
+        <div style={{ marginTop: T.sp.s }}>
+          <Btn size="sm" onClick={() => onSaveAsCopy({ form, ings, steps })} style={{ whiteSpace: "normal", textAlign: "left" }}>{X.saveAsNew}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+// 组件详情顶上「刚才保存后,这些成本变了」(design_edit §3.2,plan「页面」§6)。impact = ComponentsView 保存时存的 { compId, before, seq };
+// 「改后」在这张卡第一次画出来时按 props 里最新的组件库 / 组合产品 / 配方 / 材料算(保存时顺手写进去的本店原料价、材料克重这时才生效),算一次就冻结
+function CompImpactCard({ comp, impact, ...rest }) {
+  if (!comp || !impact || !impact.before || impact.compId !== comp.id) return null;
+  return <CompImpactCardBody key={impact.seq} comp={comp} impact={impact} {...rest} />;
+}
+function CompImpactCardBody({ impact, components, creations, recipes, materials, brands, lang, onClose, onJump }) {
+  const [res] = useState(() => {
+    try { return componentChangeImpact({ compId: impact.compId, before: impact.before, nextComponents: components || [], recipes: recipes || [], creations: creations || [], materials: materials || [], brands: brands || [] }); }
+    catch (e) { return { rows: [], lockedNew: [] }; }
+  });
+  if (!res.rows.length && !res.lockedNew.length) return null;
+  const X = e2Txt(lang);
+  const shown = res.rows.slice(0, 8);
+  return (
+    <div data-comp-impact="1" style={{ background: T.surface, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${T.warning}`, borderRadius: T.radius, padding: `${T.sp.m}px ${T.sp.l}px`, marginBottom: "1rem", ...T.fs.caption, color: T.body, minWidth: 0, overflowWrap: "anywhere" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: T.sp.s, flexWrap: "wrap" }}>
+        <span style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>{X.impTitle}</span>
+        {typeof onClose === "function" && <Btn size="sm" variant="ghost" onClick={onClose}>{X.impClose}</Btn>}
+      </div>
+      {shown.map(row => (
+        <div key={row.type + ":" + String(row.id)} data-imp-row={row.type} style={{ marginTop: T.sp.xs, ...T.num }}>
+          {X.impType[row.type]} · {_e2NameOf(row.obj, lang)} {X.impLabel(row)} {_e2Money(row.before)} → {_e2Money(row.after)}({_e2Delta(row.after - row.before)})
+        </div>
+      ))}
+      {res.rows.length > shown.length && <div style={{ marginTop: T.sp.xs, color: T.secondary }}>{X.impMore(res.rows.length - shown.length)}</div>}
+      {res.lockedNew.map(e => (
+        <div key={"lk:" + String(e.id)} data-imp-locked="1" style={{ marginTop: T.sp.xs }}>
+          {X.impLocked(_e2NameOf(e.obj, lang))}
+          {typeof onJump === "function" && <> · <button type="button" className="k-btn" onClick={() => onJump({ kind: "creationView", id: e.id })}
+            style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", color: T.info, font: "inherit" }}>{X.impLockedGo}</button></>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [], setRecipes = null, setCreations = null,
   prepStock = null, onPrepOp, onOpenPrep, today, onPrepDrop,   // 备货第 0 步:新 prop 只透传给详情 / 编辑页;onPrepDrop(key) / 删除时的库存由 G 线接
-  onKnowledgeCheck }) {   // 第 5 批第 0 步(E3):组件保存后检查知识按钮(App 的 knowledgeCheckOnSave,第 0 步空壳不做事)
+  onKnowledgeCheck,   // 第 5 批第 0 步(E3):组件保存后检查知识按钮(App 的 knowledgeCheckOnSave)
+  onJump }) {   // 第 5 批 E2:「改前 → 改后」卡里锁定产品那一行「去看新版本 →」(App 的 jumpToItem;没传就不给链接)
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
   const [compSearch, setCompSearch] = useState("");
+  // 第 5 批 E2:保存后的「改前 → 改后」卡(只存「改前」快照 + 组件 id;「改后」在详情页卡片第一次画出来时算)。看别的组件 / 离开组件 tab 就没了,不写数据
+  const [impact, setImpact] = useState(null);
+  const impactSeq = useRef(0);
+  useEffect(() => { if (impact && viewId !== impact.compId) setImpact(null); }, [viewId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // 第 5 批 E2:编辑页带 key(plan「页面」§4 / 决定 11 最后一条):已有的 "c:" + id,新建 / 复制预填 "c:new:" + compNewSeq(每次打开 +1)。
+  // 以前没有 key,开着 A 的编辑页换成 B(数据体检「去改」、复制预填)不重新挂载,表单还是 A 的、保存却写到 B 的 id 上
+  const [compNewSeq, setCompNewSeq] = useState(0);
+  const openCompEditor = (target) => { setCompNewSeq(s => s + 1); setEditTarget(target); };
+  const copyAll = () => ({ recipes, components, creations });
+  // 「⧉ 复制为新版本」(详情页)/「⧉ 这次的改动存成新版本」(编辑页,formState = 当前表单):打开预填好的新建编辑页,保存以后才真的出现
+  const openCopy = (src, formState) => {
+    const pre = copyAsNewVersion("component", src, copyAll(), new Date().toISOString(), formState);
+    if (!pre) return;
+    openCompEditor(pre);
+    setViewId(null);
+  };
   // 「在用」标记(2026-09-26):和配方的 onSale 同一套思路 —— 组件上一个布尔,标了的排到最前 + 「在用中」筛选。
   // 缺省 = 不在用,老数据不用迁移。跟组合蛋糕 layers 里存的组件快照无关,不联动。
   const toggleInUse = (id) => setComponents(prev => prev.map(x =>
@@ -7607,6 +7968,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
   if (editTarget !== null) {
     return (
       <ComponentEditForm
+        key={(editTarget && editTarget !== "new" && editTarget.id) ? "c:" + String(editTarget.id) : "c:new:" + compNewSeq}
         component={editTarget === "new" ? null : editTarget}
         cats={cats}
         brands={brands}
@@ -7618,17 +7980,32 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         products={products}
         creations={creations}
         recipes={recipes}
+        components={components}
         setMaterials={setMaterials}
         onKnowledgeCheck={onKnowledgeCheck}
-        onSave={(c) => {
+        // 第 5 批 E2「⧉ 这次的改动存成新版本」:拿当前表单生成复制的预填,关掉这一页(按「不保存」处理,不问),打开预填好的新建编辑页
+        onSaveAsCopy={(formState) => openCopy((editTarget && editTarget.id && components.find(x => x && x.id === editTarget.id)) || editTarget, formState)}
+        onSave={(c, meta) => {
+          // 第 5 批 E2:保存这一刻只算「改前」(保存前的组件库、当时的本店原料 / 材料;这次顺手写的本店原料价 / 材料克重还没生效),存进 impact。
+          // 新建的(含复制出来的新版本)没人用,不算。算出错不拦保存
+          const existed = components.some(x => x && x.id === c.id);
+          let before = null;
+          if (existed) { try { before = componentImpactSnapshot({ compId: c.id, components, recipes, creations, materials, brands }); } catch (e) { before = null; } }
           setComponents(prev => {
             const found = prev.find(x => x.id === c.id);
             return found ? prev.map(x => x.id === c.id ? c : x) : [...prev, c];
           });
-          showToast("✓ 组件已保存");
+          // toast 照旧「✓ 组件已保存」(成本变化看详情页的卡);复制出来的新版本写明原版没动。备货线「改单位请盘点」那句拼进同一条(meta.prepMsg,ComponentEditForm 交过来)
+          const isCopy = !existed && !!c.copiedFrom && typeof c.copiedFrom === "object";
+          const head = isCopy
+            ? (lang === "ja" ? `✓ 新バージョン「${pickLang(c, "name", lang) || c.nameFr || ""}」を保存しました(元はそのまま)` : `✓ 新版本「${pickLang(c, "name", lang) || c.nameFr || ""}」已保存,原版没动`)
+            : "✓ 组件已保存";
+          showToast(meta && meta.prepMsg ? `${head} · ${meta.prepMsg}` : head);
+          impactSeq.current += 1;
+          setImpact(before ? { compId: c.id, before, seq: impactSeq.current } : null);
           setViewId(c.id);
           setEditTarget(null);
-          if (onKnowledgeCheck) onKnowledgeCheck("component", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮(第 0 步空壳)
+          if (onKnowledgeCheck) onKnowledgeCheck("component", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮(复制的新版本也走这里)
         }}
         onDelete={() => {
           // 2026-09-29 体检第 2 批:以前只问「删除这个组件吗？」,不说哪些组合产品 / 商品在用它,删了也不能撤销。
@@ -7718,7 +8095,9 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         }}
         onBack={() => {
           // [B4 修复] 有 id 跳详情(从详情进编辑则回详情),无 id 回列表(新建则回列表)
+          // 第 5 批 E2:复制出来的新版本(还没保存)回原版的详情(原版删了回列表)
           if (editTarget && editTarget.id) setViewId(editTarget.id);
+          else if (editTarget && editTarget.copiedFrom && components.some(x => x && x.id === editTarget.copiedFrom.id)) setViewId(editTarget.copiedFrom.id);
           setEditTarget(null);
         }}
         onQuickAddKnowledge={onQuickAddKnowledge}
@@ -7754,6 +8133,11 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           onOpenPrep={onOpenPrep}
           today={today}
           confirmDialog={confirmDialog}
+          onCopy={(src) => confirmLeaveEditor(confirmDialog, lang, () => openCopy(src))}
+          onOpenSource={(id) => setViewId(id)}
+          impact={impact}
+          onCloseImpact={() => setImpact(null)}
+          onJump={onJump}
         />
       );
     }
@@ -7930,7 +8314,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新增组件" : "+ コンポーネント追加"}</Btn>
+          <Btn variant="primary" onClick={() => openCompEditor("new")}>{lang === "zh" ? "+ 新增组件" : "+ コンポーネント追加"}</Btn>
         </div>
       </div>
 
@@ -8074,7 +8458,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
                                     lang={lang}
                                     onViewComponent={(id) => setViewId(id)}
                                     onCreateNew={() => {
-                                      setEditTarget({
+                                      openCompEditor({
                                         ...{ nameZh: "", nameJa: "", nameFr: "", componentCategory: ct.id, flavorFamily: fam.id, flavorName: "", mold: "", yield: "", unit: "g", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [] }
                                       });
                                     }}
@@ -8263,7 +8647,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
 // ─── 组件详情 View ───────────────────────────────────────────────
 function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [],
-  prepStock = null, onPrepOp, onOpenPrep, today, confirmDialog }) {   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡,「备货」标签带现有多少;都没有时 DOM 不变
+  prepStock = null, onPrepOp, onOpenPrep, today, confirmDialog,   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡,「备货」标签带现有多少;都没有时 DOM 不变
+  onCopy, onOpenSource, impact = null, onCloseImpact, onJump }) {   // 第 5 批 E2:「⧉ 复制为新版本」/「复制自」去原版 / 保存后的「改前 → 改后」卡(都只在 ComponentsView 传了时出现)
   const cat = getCompCat(c.componentCategory);
   const _prepCfg = prepCfgOf("component", c);
   const _prepItem = prepStock && !prepStock.readOnly && prepStock.items ? (prepStock.items[prepKeyOf("component", c.id)] || null) : null;
@@ -8310,14 +8695,15 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+      {/* 第 5 批 E2:头部多了「⧉ 复制为新版本」,375 宽放不下一行 → 有这个按钮时(onCopy)外层和按钮组才允许折行;没有时样式和以前一字不差 */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", ...(onCopy ? { flexWrap: "wrap", gap: 8 } : {}) }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
           {lang === "zh" ? "组件详情" : "コンポーネント詳細"}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", ...(onCopy ? { flexWrap: "wrap", justifyContent: "flex-end" } : {}) }}>
           {onPrint && <Btn size="sm" onClick={() => onPrint(scaledForPrint())}>{lang === "zh" ? (scale !== 1 ? "🖨 打印（缩放后）" : "🖨 打印") : (scale !== 1 ? "🖨 印刷（換算後）" : "🖨 印刷")}</Btn>}
-          {/* 第 5 批 E2「⧉ 复制为新版本」(第 0 步空壳,放在「编辑」前面) */}
-          <CopyVersionButton kind="component" obj={c} lang={lang} />
+          {/* 第 5 批 E2「⧉ 复制为新版本」(放在「编辑」前面) */}
+          <CopyVersionButton kind="component" obj={c} lang={lang} onCopy={onCopy} />
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -8365,8 +8751,8 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
               )}
             </>
           )}
-          {/* 第 5 批 E2:名字下面「⧉ 复制自「…」」(第 0 步空壳) */}
-          <CopiedFromNote obj={c} lang={lang} />
+          {/* 第 5 批 E2:名字下面「⧉ 复制自「…」」(只有复制出来的新版本有;原版还在就能点过去) */}
+          <CopiedFromNote obj={c} lang={lang} list={components} onOpen={onOpenSource} />
 
           <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span style={{ background: cat.bg, color: cat.color, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
@@ -8404,8 +8790,9 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
         </div>
       </div>
 
-      {/* 第 5 批 E2:保存后「改前 → 改后」卡(第 0 步空壳),放在头部下面、备货卡上面 */}
-      <CompImpactCard comp={c} components={components} creations={creations} recipes={recipes} materials={materials} brands={brands} lang={lang} />
+      {/* 第 5 批 E2:保存后「改前 → 改后」卡,放在头部下面、备货卡上面(impact 是 ComponentsView 保存时存的「改前」;「改后」卡片第一次画出来时算) */}
+      <CompImpactCard comp={c} components={components} creations={creations} recipes={recipes} materials={materials} brands={brands} lang={lang}
+        impact={impact} onClose={onCloseImpact} onJump={onJump} />
 
       {/* 备货卡(prepstock E 线,紧凑)。没标、账上也没有时不渲染 */}
       {(_prepCfg || _prepItem) && (
@@ -9774,7 +10161,8 @@ function IngredientLinkModals({ variant, ings, setIngs, materials, brands, lang,
 // ─── 组件编辑 Form ────────────────────────────────────────────────
 function ComponentEditForm({ component, cats, brands = [], materials = [], onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", setLang, customCompCats = [], onAddCustomCompCat, onUpdateCats, setShopMaterials, showToast, confirmDialog,
   prepStock = null, products = [],   // 备货(E 线):勾上「备货」后展开的几项(PrepCfgFields)/ 提醒线 placeholder / 改单位 toast
-  creations = [], recipes = [], setMaterials, onKnowledgeCheck }) {   // 第 5 批第 0 步接好(先不用):E2「这个组件用在哪」、S1「存进材料百科」、E3 知识按钮检查
+  creations = [], recipes = [], setMaterials, onKnowledgeCheck,   // 第 5 批第 0 步接好:E2「这个组件用在哪」、S1「存进材料百科」、E3 知识按钮检查
+  components = [], onSaveAsCopy }) {   // 第 5 批 E2:「用在哪」要组件库(部分和组件库的关系 / 当原料用);「⧉ 这次的改动存成新版本」交给 ComponentsView
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 材料选择弹窗
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联
   const [errorMsg, setErrorMsg] = useState("");
@@ -9797,8 +10185,10 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   const empty = { nameZh: "", nameJa: "", nameFr: "", componentCategory: "mousse", flavorFamily: "", flavorName: "", mold: "", yield: "", unit: "g", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [] };
   const [form, setForm] = useState(component ? { flavorFamily: "", flavorName: "", ...component } : empty);
   // 打开时每一行按材料百科最新价刷新(第 5 批第 0 步:三个编辑页共用 openIngRow,写法和以前一样)
+  // 第 5 批 E2:「⧉ 这次的改动存成新版本」带过来的预填里,改过价的关联行留着 _priceModified(存盘数据里永远没有这个临时键)—— 原样留下、不刷价,
+  // 新编辑页照样出「改了单价」提示条;别的行照旧 openIngRow
   const [ings, setIngs] = useState(component && (component.ingredients || []).length > 0
-    ? component.ingredients.map((i, idx) => openIngRow(i, idx, cats, materials))
+    ? component.ingredients.map((i, idx) => (i && i._priceModified) ? { ...i, _id: idx } : openIngRow(i, idx, cats, materials))
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", catId: null, brandIdx: null }]);
   const [saveToShop, setSaveToShop] = useState(true);   // C6:改了关联材料的价 → 保存时同时写本店原料(默认勾上)
 
@@ -9853,9 +10243,11 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       totalCost: total,
       updatedAt: new Date().toISOString(),
     }, "component"), ["kitchenNotesZh", "kitchenNotesJa"]);
-    prepUnitChangeToast("component", component && component.id ? component : null, payload, prepStock, lang, showToast);
+    // 第 5 批 E2(plan「页面」§6):备货线「改单位请盘点」那句不再单独弹,交给 onSave 拼进「✓ 组件已保存」同一条 toast;没有这句时照旧只传一个参数
+    let prepMsg = "";
+    prepUnitChangeToast("component", component && component.id ? component : null, payload, prepStock, lang, typeof showToast === "function" ? (m) => { prepMsg = m; } : undefined);
     draft.markSaved();   // 第 5 批 E4:保存这一刻先把草稿写一次、排队等主存档写成功再删(第 0 步空壳)
-    onSave(payload);
+    if (prepMsg) onSave(payload, { prepMsg }); else onSave(payload);
   };
 
   const handleSave = () => {
@@ -9898,12 +10290,15 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         </div>
       </div>
 
+      {/* 第 5 批 E2:复制出来的新版本(预填的新建页)顶上一条说明 */}
+      {isNew && component && component.copiedFrom && <CopyBanner kind="component" src={component} lang={lang} />}
+
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
         💡 提示：中文名必填，日文可以不填。备注、步骤中日文任一填写即可。
       </div>
-      {/* 第 5 批 E2「🔗 这个组件用在哪」+「⧉ 这次的改动存成新版本」(第 0 步空壳;只在不是新建、而且有内容时出现) */}
-      <CompUsersBlock comp={component} isNew={isNew} form={form} ings={ings} steps={steps} creations={creations} recipes={recipes} products={products} materials={materials} lang={lang} />
+      {/* 第 5 批 E2「🔗 这个组件用在哪」+「⧉ 这次的改动存成新版本」(只在不是新建、而且有内容时出现) */}
+      <CompUsersBlock comp={component} isNew={isNew} form={form} ings={ings} steps={steps} creations={creations} recipes={recipes} products={products} components={components} materials={materials} lang={lang} onSaveAsCopy={onSaveAsCopy} />
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", borderLeft: `4px solid ${cat.color}` }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -14683,6 +15078,10 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     // 挂成**不可枚举**的属性:onSave 收到的 opts 序列化出来还是 { synced: true } —— 编辑页行为快照(editor_probe)记的是回调参数的 JSON,
     // 第 0 步要逐字节一样。读的时候直接 opts.syncedComp;**别把 opts 展开({...opts})再往下传**,展开会把它丢掉
     const syncOpts = Object.defineProperty({ synced: true }, "syncedComp", { value: updated, enumerable: false });
+    // 第 5 批 E2(plan「页面」§6):确认框每行的成本要叠上「确认后 doSave 会顺手写进去的本店原料价 / 材料克重」—— 同样挂成不可枚举的属性
+    // (App 那边 {...c, ...updated} 合并、编辑页探针记的回调参数 JSON 都不会带上它),App 的 onUpdateComponent 读 updated._syncPending(materials, shopMaterials)
+    Object.defineProperty(updated, "_syncPending", { enumerable: false,
+      value: (mats, shops) => componentSavePending(ings.filter(ingHasName).map(i => refreshIngForSave(i, materials)), saveToShop, mats, shops) });
     onUpdateComponent(updated, () => doSave(ings, syncOpts));
   };
 
@@ -18916,26 +19315,28 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 // ─── Edit Form ────────────────────────────────────────────────────
 function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, shopMaterials = [], setShopMaterials, onSave, onDelete, onBack, onQuickAddKnowledge, lang = "zh", productFamilies = [], onUpdateCats, showToast, confirmDialog,
   prepStock = null, products = [], onGoTab,   // 备货(E 线):「📦 备货」卡 / 没挂商品提示 / 改单位 toast;onGoTab 给「去新建商品 →」(App 的 goTab,有没保存的改动先问)
-  prefill = null }) {   // 第 5 批第 0 步(E2「复制成新版本」的预填表单;recipe 为 null、prefill 有值时仍按新建处理)—— 第 0 步先不用
+  prefill = null }) {   // 第 5 批 E2「复制成新版本」的预填表单(copyAsNewVersion 的结果):recipe 为 null、prefill 有值时仍按新建处理,表单 / 配料 / 步骤从 prefill 初始化
   const isNew = !recipe;
+  // 表单的来源:编辑已有的 = recipe;复制的预填 = prefill(不带 id,保存时照新建生成 Date.now());都没有 = 空白新建
+  const src0 = recipe || ((prefill && typeof prefill === "object") ? prefill : null);
   const [errorMsg, setErrorMsg] = useState("");
   const [nameZhMissing, setNameZhMissing] = useState(false);   // 2026-09-29 体检第 2 批:点保存时中文名空 → 名字框旁边标红
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 当前要选材料的 ing._id
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联弹窗
   const empty = { nameZh: "", nameJa: "", nameFr: "", category: "焼き菓子", mold: "", yield: "", unit: "個", time: "", temp: "", baketime: "", price: "", priceCurrency: "CNY", difficulty: "★★ 普通", storage: "", allergens: "", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [], familyId: "", variantLabel: "", variantNotes: "" };
-  const [form, setForm] = useState(recipe ? { familyId: "", variantLabel: "", variantNotes: "", ...recipe } : empty);
+  const [form, setForm] = useState(src0 ? { familyId: "", variantLabel: "", variantNotes: "", ...src0 } : empty);
   // 🔗 打开时有 materialId 的行按材料百科最新价刷新,同时记 _originalPrice(改价 → 保存到本店原料的判定用)
   // 第 5 批第 0 步:三个编辑页共用 openIngRow(写法和以前一样)
-  const [ings, setIngs] = useState(recipe && recipe.ingredients && recipe.ingredients.length > 0
-    ? recipe.ingredients.map((i, idx) => openIngRow(i, idx, cats, materials))
+  const [ings, setIngs] = useState(src0 && src0.ingredients && src0.ingredients.length > 0
+    ? src0.ingredients.map((i, idx) => openIngRow(i, idx, cats, materials))
     : [{ _id: 0, nameZh: "", nameJa: "", nameFr: "", qty: "", unit: "g", brand: "", unitPrice: "", currency: "CNY", cost: "", group: "none", note: "", catId: null, brandIdx: null, _originalPrice: "" }]);
   // v11: 勾选"保存到本店原料"状态,用户改价后底部提示条里显示。C6:默认勾上(改了关联材料的价,多半就是本店进价)
   const [saveToShop, setSaveToShop] = useState(true);
 
   // 兼容老数据：老 recipes 可能只有单一 steps 字段
-  const initStepsZh = recipe?.stepsZh || [];
-  const initStepsJa = recipe?.stepsJa || recipe?.steps || [];
+  const initStepsZh = src0?.stepsZh || [];
+  const initStepsJa = src0?.stepsJa || src0?.steps || [];
   const maxStepLen = Math.max(initStepsZh.length, initStepsJa.length, 1);
   const [steps, setSteps] = useState(
     Array.from({ length: maxStepLen }, (_, i) => ({
@@ -19056,6 +19457,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
           <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
+
+      {/* 第 5 批 E2:复制出来的新版本(预填的新建页)顶上一条说明 */}
+      {isNew && src0 && src0.copiedFrom && <CopyBanner kind="recipe" src={src0} lang={lang} />}
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
@@ -27045,6 +27449,9 @@ function App() {
   }, [lang]);
   const [viewId, setViewId] = useState(null);
   const [editTarget, setEditTarget] = useState(null); // null=new, recipe obj=edit
+  // 第 5 批 E2:「⧉ 复制为新版本」的预填(editTarget 为 null 时交给 EditForm 的 prefill;离开编辑页就清掉)+ 新建 / 复制预填编辑页的 key 序号
+  const [copyTarget, setCopyTarget] = useState(null);
+  const [recipeNewSeq, setRecipeNewSeq] = useState(0);
   // 组件库 & 组合蛋糕 & 知识库 状态
   const [compViewId, setCompViewId] = useState(null);
   const [compEditTarget, setCompEditTarget] = useState(null);
@@ -27717,9 +28124,23 @@ function App() {
     offerKnowledgeRepairs(before, after, { type, id: saved.id });
   };
 
+  // 第 5 批 E2:打开配方编辑页的新建 / 复制预填(prefill = copyAsNewVersion 的结果;null = 空白新建)。key 序号 +1,编辑页一定重新挂载
+  const openRecipeEditor = (prefill) => {
+    setEditTarget(null);
+    setCopyTarget(prefill || null);
+    setRecipeNewSeq(s => s + 1);
+    setTab("edit");
+  };
+  // 离开配方编辑页(保存 / 返回 / 切 tab)就清掉复制的预填,下次「＋ 新建配方」是空白的
+  useEffect(() => { if (tab !== "edit") setCopyTarget(null); }, [tab]);
+
   const handleSaveRecipe = (r) => {
+    // 第 5 批 E2:复制出来的新版本(新 id + copiedFrom)保存时写明原版没动
+    const isCopy = !recipes.some(x => x && x.id === r.id) && !!r.copiedFrom && typeof r.copiedFrom === "object";
     setRecipes(prev => prev.find(x => x.id === r.id) ? prev.map(x => x.id === r.id ? r : x) : [...prev, r]);
-    showToast("✓ 配方已保存");
+    showToast(isCopy
+      ? (lang === "ja" ? `✓ 新バージョン「${pickLang(r, "name", lang) || r.nameFr || ""}」を保存しました(元はそのまま)` : `✓ 新版本「${pickLang(r, "name", lang) || r.nameFr || ""}」已保存,原版没动`)
+      : "✓ 配方已保存");
     // 保存后跳到该配方详情页 (LuLu UX: 不要跳回列表)
     setViewId(r.id);
     setTab("view");
@@ -29591,7 +30012,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               </div>
             </div>
             <div style={{ display: "flex", gap: T.sp.s, alignItems: "center" }}>
-              <Btn variant="primary" onClick={() => { setEditTarget(null); setTab("edit"); }}>{lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規"}</Btn>
+              <Btn variant="primary" onClick={() => openRecipeEditor(null)}>{lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規"}</Btn>
             </div>
           </div>
 
@@ -29625,7 +30046,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               title={lang === "zh" ? "还没有配方" : "まだレシピがありません"}
               hint={lang === "zh" ? "新建一条，或去「数据」页导入已有的配方包" : "新規作成するか、データ画面からインポートできます"}
               actions={[
-                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => { setEditTarget(null); setTab("edit"); } },
+                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => openRecipeEditor(null) },
                 { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
               ]}
             />
@@ -29952,7 +30373,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               productFamilies={productFamilies} shopMaterials={shopMaterials} appSettings={appSettings} setAppSettings={setAppSettings} lang={lang}
               ui={marginUi} setUi={setMarginUi}
               emptyActions={[
-                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => { setEditTarget(null); setTab("edit"); } },
+                { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => openRecipeEditor(null) },
                 { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
               ]}
               onOpen={(kind, id) => {
@@ -29970,15 +30391,21 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
           <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setTab("list"))} onPrint={(scaled) => setPrintTarget({ type: "recipe", data: (scaled && scaled._printScale) ? scaled : viewingRecipe, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); })} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
-            prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog} />
+            prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog}
+            // 第 5 批 E2:「⧉ 复制为新版本」→ 预填好的新建编辑页(保存以后才真的出现);「复制自」点了去原版
+            onCopy={(src) => confirmLeaveEditor(confirmDialog, lang, () => openRecipeEditor(copyAsNewVersion("recipe", src, { recipes, components, creations }, new Date().toISOString())))}
+            onOpenSource={(id) => setViewId(id)} />
         </div>
       )}
 
       {/* EDIT */}
       {tab === "edit" && (
-        <EditForm recipe={editTarget} cats={cats} materials={materials} brands={brands} setMaterials={setMaterials} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} lang={lang} onSave={handleSaveRecipe} onDelete={handleDeleteRecipe} onBack={() => {
-          // [B4 修复] 有 id 跳详情,无 id 回列表
+        // 第 5 批 E2:编辑页带 key(已有的 "r:" + id,新建 / 复制预填 "r:new:" + recipeNewSeq),换编辑对象一定重新挂载;复制的预填走 prefill
+        <EditForm key={editTarget ? "r:" + String(editTarget.id) : "r:new:" + recipeNewSeq} recipe={editTarget} prefill={editTarget ? null : copyTarget}
+          cats={cats} materials={materials} brands={brands} setMaterials={setMaterials} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} lang={lang} onSave={handleSaveRecipe} onDelete={handleDeleteRecipe} onBack={() => {
+          // [B4 修复] 有 id 跳详情,无 id 回列表;第 5 批 E2:复制出来的新版本(还没保存)回原版的详情(原版删了回列表)
           if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
+          else if (!editTarget && copyTarget && copyTarget.copiedFrom && recipes.some(x => x && x.id === copyTarget.copiedFrom.id)) { setViewId(copyTarget.copiedFrom.id); setTab("view"); }
           else { setTab("list"); }
         }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog}
           prepStock={prepStock} products={products} onGoTab={goTab} />
@@ -30298,6 +30725,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           today={today}
           onPrepDrop={onPrepDrop}
           onKnowledgeCheck={knowledgeCheckOnSave}
+          onJump={jumpToItem}
         />
       )}
 
@@ -30337,7 +30765,41 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             // v17.8: 组件一改,「跟组件库走」的组合产品跟着变 —— 按 2a §09 把受影响的产品列出来
             const matIds = new Set((materials || []).map(m => m && m.id));
             const followers = creations.filter(cr => (cr.layers || []).some(l => l && l.sourceComponentId === updated.id && layerLinkState(l, components, matIds) === "follow"));
-            const refs = followers.map(cr => `${lang === "zh" ? "会跟着变" : "連動して変わる"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}`);
+            // 第 5 批 E2(design_edit §3.3,plan「页面」§6):每一行带上成本(改前 → 改后)。「改后」叠上这次确认后 doSave 会顺手写进去的
+            // 本店原料价 / 材料克重(updated 上不可枚举的 _syncPending,LayerEditForm 挂的;没有就不叠)。顺序:会跟着变 → 已锁定 → 当原料用 → 备货那一行放最后
+            const zhL = lang !== "ja";
+            const nextComps = components.map(c => (c && c.id === updated.id) ? { ...c, ...updated } : c);
+            let pending = null;
+            if (typeof updated._syncPending === "function") { try { pending = updated._syncPending(materials, shopMaterials); } catch (e) { pending = null; } }
+            let imp = null;
+            try { imp = componentChangeImpact({ compId: updated.id, prevComponents: components, nextComponents: nextComps, recipes, creations, materials, brands, matIds, pending }); } catch (e) { imp = null; }
+            const impRow = (type, id) => (imp ? imp.rows.find(r => r.type === type && r.id === id) : null) || null;
+            const impTxt = (type, id, label) => { if (!imp) return ""; const r = impRow(type, id); return r ? ` · ${label} ${_e2Money(r.before)} → ${_e2Money(r.after)}` : (zhL ? " · 成本不变" : " · 原価は変わらない"); };
+            const unitLbl = (cr) => zhL ? creationWords(creationStructureOf(cr), "zh").perUnitCost : (creationStructureOf(cr) === "stack" ? "1 台の原価" : "1 個の原価");
+            const refs = followers.map(cr => `${lang === "zh" ? "会跟着变" : "連動して変わる"}：${pickLang(cr, "name", lang) || cr.nameFr || ""}${impTxt("creation", cr.id, unitLbl(cr))}`);
+            {
+              const users = creationUsersOfComponent(updated.id, creations, components, matIds);
+              if (users.locked.length) refs.push(`${zhL ? "已锁定、不跟着变" : "ロック中で変わらない"}：${users.locked.map(cr => pickLang(cr, "name", lang) || cr.nameFr || "").join("、")}`);
+              const followIds = new Set(followers.map(cr => cr.id)), seenUse = new Set();
+              componentIngredientUses(updated.id, { recipes, components, creations }).forEach(u => {
+                if (u.type === "creation" && followIds.has(u.obj.id)) return;
+                const key = u.type + ":" + String(u.obj.id);
+                if (seenUse.has(key)) return;
+                seenUse.add(key);
+                const kind = u.type === "recipe" ? (zhL ? "配方" : "レシピ") : u.type === "component" ? (zhL ? "组件" : "パーツ") : (zhL ? "组合产品" : "組み合わせ");
+                const r = impRow(u.type, u.obj.id);
+                const tail = !imp ? "" : r ? `${_e2Money(r.before)} → ${_e2Money(r.after)}` : (zhL ? "(成本不变)" : "(原価は変わらない)");
+                refs.push(`${zhL ? "当原料用、成本跟着变" : "材料として使用・原価が連動"}：${kind}「${pickLang(u.obj, "name", lang) || u.obj.nameFr || ""}」${tail}`);
+              });
+            }
+            // 同步后 toast「· 另外 N 个组合产品跟着变了」:正在编辑的这个产品不算;内容真会被换掉的才算(组件库换成这一版以后和它不一样)
+            const curCrId = creationEditTarget && creationEditTarget !== "new" ? creationEditTarget.id : undefined;
+            let othersN = 0;
+            try {
+              const nextComp = nextComps.find(c => c && c.id === updated.id);
+              othersN = withComponentsLookup(nextComps, () => followers.filter(cr => cr.id !== curCrId && (cr.layers || []).some(l => l && l.sourceComponentId === updated.id
+                && layerLinkState(l, components, matIds) === "follow" && !sameLayerContent(l, nextComp, matIds)))).length;
+            } catch (e) { othersN = 0; }
             // 备货(prepstock E 线):这个组件已经开始记库存,同步后的单位和账上的对不上(prepSameUnit)→ 多一行提醒去盘点(同步后这一样停止自动加减)
             {
               const orig = components.find(c => c && c.id === updated.id);
@@ -30347,11 +30809,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 if (!prepSameUnit(pItem, pCfg)) refs.push(prepTxt(lang).syncUnitRef(pItem.unit || "", fmtQty(_r3(prepLotsView(pItem, null, today).reduce((x, l) => x + l.left, 0))) || "0", pCfg.unit));
               }
             }
-            confirmDialog("确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变。这一部分之后也跟组件库走。", () => {
+            // 第 5 批 E2:确认文字补「锁定了配方的也不变,只提示有新版本」(design_edit §3.3);日文界面给日文(以前永远中文)
+            confirmDialog(zhL ? "确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变，锁定了配方的也不变，只提示有新版本。这一部分之后也跟组件库走。"
+              : "この変更を部品庫に反映しますか？\n\nコンポーネントの中国語名・日本語名・分類・出来高・単位・材料（各行のメモ・フランス語名を含む）・工程を更新します。コンポーネント自身の風味・型・画像・全体メモ・フランス語名は変わりません。\n\nこのコンポーネントを使っていて「部品庫と連動」している組み合わせも一緒に変わります。「この製品専用」のものは変わらず、レシピをロックした製品も変わらず、新しい版をお知らせします。このパーツも今後は部品庫と連動します。", () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-              showToast("✓ 已更新回组件库");
+              showToast((zhL ? "✓ 已更新回组件库" : "✓ 部品庫を更新しました") + (othersN > 0 ? (zhL ? ` · 另外 ${othersN} 个组合产品跟着变了` : ` · ほかに ${othersN} 件の組み合わせも変わりました`) : ""));
               if (onDone) onDone();
               // 第 5 批(E3):部分里改了中 / 日文名再同步回组件库 → 检查知识按钮(第 0 步空壳)
               { const orig = components.find(c => c && c.id === updated.id); if (orig) knowledgeCheckOnSave("component", { ...orig, ...updated }); }
