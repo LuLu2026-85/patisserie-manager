@@ -3996,14 +3996,20 @@ function backupSummary(src) {
   BACKUP_SUMMARY_KEYS.forEach(k => { o[k] = Array.isArray(src && src[k]) ? src[k].length : 0; });
   return o;
 }
+// big-2 第 −1 步(规格 R116a / R89):程序自己存的固定备份(旧版窗口存的 / 旧版窗口存的预置数据 / 关页时没存完的 / 数据库被清掉时抢救的)
+// 每种各留最新 AUTO_PIN_KEEP 份,不占「其余固定备份」那 10 份 —— 不然它们会把「搬家之前」「覆盖导入之前」挤掉。
+// 备份库里没有这几种原因时,结果和改之前逐项一样
+const AUTO_PIN_REASONS = ["oldapp", "oldapp-seed", "journal", "rescue"];
+const AUTO_PIN_KEEP = 3;
 // 轮换:返回要删掉的备份 id。固定备份只按「最多 BACKUP_PINNED_MAX 份」删最旧的,不和自动备份一起轮换
 function pickBackupsToDelete(metas, now) {
   const sorted = [...(metas || [])].sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""));   // 新 → 旧
   const keep = new Set();
   // 恢复前的固定备份单独算名额(审查发现:连着恢复 10 次找版本,覆盖导入前那份唯一的原数据就被挤掉了)
   const pins = sorted.filter(m => m.pinned);
-  pins.filter(m => m.reason !== "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  pins.filter(m => m.reason !== "restore" && !AUTO_PIN_REASONS.includes(m.reason)).slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
   pins.filter(m => m.reason === "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  AUTO_PIN_REASONS.forEach(r => pins.filter(m => m.reason === r).slice(0, AUTO_PIN_KEEP).forEach(m => keep.add(m.id)));   // 超出的直接删(规格 §9.1 S14)
   const auto = sorted.filter(m => !m.pinned);
   auto.slice(0, BACKUP_RECENT).forEach(m => keep.add(m.id));
   // 最近 BACKUP_HOURS 小时每小时留一份(那一小时最早那份):卖货时每点一次 +/- 都存一份,
@@ -4298,6 +4304,17 @@ let _suspendSaves = false;
 function storageBodyOf(raw) {
   try { if (!raw) return null; const o = JSON.parse(raw); delete o.savedAt; return JSON.stringify(o); } catch (e) { return null; }
 }
+// big-2 第 −1 步(规格 R19 / R112 / R16):下一版把主数据搬进新库(IndexedDB)以后,localStorage 里留下的是带 movedTo 的旧副本或小标记。
+// 这一版的窗口认得它:读到就停止保存(_movedAway,见 App 的 lastBodyRef / storage 监听),也不让恢复备份(BackupRestoreDialog)。
+// 长串只看串尾 400 字(JSON 字符串里的引号都转义成 \",',"movedTo":' 只可能是真键),短串整串解析
+let _movedAway = false;
+function lsHasMovedTo(raw) {
+  if (typeof raw !== "string") return false;
+  if (raw.length > 2000) return raw.slice(-400).includes(',"movedTo":');
+  const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  try { const d = JSON.parse(raw); return isObj(d) && isObj(d.movedTo); } catch (e) { return false; }
+}
+function unfreeze(raw) { const o = JSON.parse(raw); delete o.movedTo; return JSON.stringify(o); }   // 去掉 movedTo,键顺序不变
 function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, opts = {}) {
   if (_suspendSaves) return { ok: true, skipped: true };
   try {
@@ -4923,18 +4940,29 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     clear: lang === "zh" ? "清除全部之前" : "全削除前",
     restore: lang === "zh" ? "恢复备份之前" : "復元前",
     "clear-cats": lang === "zh" ? "清掉旧价格表之前" : "旧価格表の削除前",   // 数据体检 H14(2026-09-29 第 2 批 2c)
+    // big-2 第 −1 步(规格 R91 / R116):下一版存的固定备份,这一版的恢复列表也认得
+    move: lang === "zh" ? "搬家之前" : "移行前",
+    oldapp: lang === "zh" ? "旧版窗口存的" : "旧版の保存",
+    "oldapp-seed": lang === "zh" ? "旧版窗口存的(预置数据)" : "旧版の保存(初期データ)",
+    journal: lang === "zh" ? "关页时没存完的" : "未保存の変更",
+    rescue: lang === "zh" ? "数据库被清掉时抢救的" : "復旧時の保存",
   }[r] || "");
 
+  // big-2 第 −1 步(规格 R115):数据已经搬进新库的旧窗口不恢复 —— 写进 localStorage 的东西新版不读,恢复了等于没恢复
+  const movedAwayToast = () => showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再恢复" : "このウィンドウは古いバージョンです。再読み込みしてから復元してください");
   const handleRestore = (snap) => {
+    if (_movedAway) { movedAwayToast(); return; }
     confirmDialog(
       lang === "zh"
         ? `恢复到 ${formatTime(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态存一份「固定」备份，不会被轮换掉，所以可以反悔）。\n\n刷新页面后生效。`
         : `${formatTime(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で固定バックアップとして保存されます。`,
       async () => {
         // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
-        const payload = await getBackupPayload(snap);
+        let payload = await getBackupPayload(snap);
+        if (lsHasMovedTo(payload)) { try { payload = unfreeze(payload); } catch (e) { payload = null; } }   // 第 −1 步(R115):写回前去掉 movedTo
         if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
         const doRestore = () => {
+          if (_movedAway) { movedAwayToast(); return; }   // 确认框开着的时候数据被搬走了
           try {
             _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
             localStorage.setItem(STORAGE_KEY, payload);
@@ -29002,14 +29030,32 @@ function App() {
   const staleRef = useRef(false);
   const lastBodyRef = useRef(undefined);
   if (lastBodyRef.current === undefined) {
-    try { lastBodyRef.current = storageBodyOf(localStorage.getItem(STORAGE_KEY)); } catch (e) { lastBodyRef.current = null; }
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      lastBodyRef.current = storageBodyOf(raw);
+      // big-2 第 −1 步(规格 R113):数据已经搬进新库 → 一打开就停止保存、出红条(数据照样显示,任何保存都不写)
+      if (lsHasMovedTo(raw)) { _movedAway = true; staleRef.current = true; }
+    } catch (e) { lastBodyRef.current = null; }
   }
-  const [staleWindow, setStaleWindow] = useState(false);
+  // staleWindow:false / true(别的窗口改过)/ "moved"(数据搬进新库了,红条换说法)
+  const [staleWindow, setStaleWindow] = useState(() => staleRef.current ? "moved" : false);
+  // 每次渲染更新的 16 个值(第 −1 步 R114:被搬走那一刻把还没存的改动存成固定备份用)
+  const valuesRef = useRef(null);
+  valuesRef.current = { recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings };
   useEffect(() => {
     const onStorage = (e) => {
+      // big-2 第 −1 步(规格 R114):别的窗口(新版)把数据搬进新库了。手里有还没存的改动 → 先存成固定备份「旧版窗口存的」(不等),再停止保存
+      if (e.key === STORAGE_KEY && lsHasMovedTo(e.newValue)) {
+        if (pendingRef.current) {
+          const body = JSON.stringify({ ...valuesRef.current, version: 17 });   // 和 saveData 同一个写法
+          addBackupSnapshot(body.slice(0, -1) + ',"savedAt":' + JSON.stringify(new Date().toISOString()) + "}", valuesRef.current, { pinned: true, reason: "oldapp" });
+        }
+        _movedAway = true; staleRef.current = true; setStaleWindow("moved");
+        return;
+      }
       if (e.key !== STORAGE_KEY && e.key !== null) return;
       if (e.key === STORAGE_KEY && storageBodyOf(e.newValue) === lastBodyRef.current) return;
-      staleRef.current = true; setStaleWindow(true);
+      staleRef.current = true; setStaleWindow(s => s === "moved" ? s : true);   // 已经是「搬走了」就不换回「别的窗口改过」
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -31012,7 +31058,11 @@ function App() {
       {staleWindow && (
         <div role="alert" data-app-banner="" style={{ position: "sticky", top: 0, zIndex: T.z.toast, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
           <span style={{ flex: 1, minWidth: 220 }}>
-            {lang === "zh"
+            {staleWindow === "moved"   // big-2 第 −1 步(规格 R113 / R114):数据搬进新库了,这个窗口是旧版本
+              ? (lang === "zh"
+                ? "数据已经搬到新版本的数据库里了,这个窗口还是旧版本,改的东西存不进去。请刷新;刷新后还是这句,等一分钟再刷新。"
+                : "データは新しいバージョンのデータベースに移りました。このウィンドウは古いバージョンのため保存できません。再読み込みしてください(同じ表示が出たら 1 分待ってから再読み込み)。")
+              : lang === "zh"
               ? "这份数据在别的窗口或标签页里改过了。这个窗口已经停止保存,免得把那边的修改冲掉。请刷新载入最新数据(这个窗口里刚改、还没存的内容会丢)。"
               : "別のウィンドウでデータが変更されました。このウィンドウは保存を停止しています。再読み込みしてください。"}
           </span>
