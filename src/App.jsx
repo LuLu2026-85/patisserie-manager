@@ -2040,6 +2040,16 @@ const usedSpecState = (l, servesNow) => {
   return { spec: valid ? spec : null, valid, stale, voided: !!spec && !valid,
            split: valid ? null : splitUsedAmount(l ? l.usedAmount : undefined, l ? l.unit : undefined) };
 };
+// 复查第 2 轮修(r2-ui-06):只写了说明、没填数(composeUsedAmount 存成「〔说明〕」)→ 说明原文(可能是 "");别的 → null。
+// 详情页 / 数据体检 H6 按「没填用量」说,不再把内部的〔〕当原文报「读不出数字」(编辑页 / 📘 配方本来就说没填用量)。
+// usedSpec 有效时取 spec.note(她自己写的括号原样);没有就认整串「〔…〕」(说明里的括号也被换成〔〕,所以可以套着)
+const noteOnlyUsed = (l, servesNow) => {
+  if (!l || typeof l !== "object") return null;
+  const st = usedSpecState(l, servesNow);
+  if (st.valid && !(_usedNum(st.spec.n) > 0)) return _normTxt(st.spec.note);
+  const m = _normTxt(l.usedAmount).match(/^〔([\s\S]*)〕$/);
+  return m ? m[1] : null;
+};
 // 写用量的唯一出口:新的 usedSpec(键顺序 per, n, note[, serves];n / note 存原文)+ 由它拼出的 usedAmount。结果一定有效、一定不过期
 const withUsedSpec = (l, specIn, servesNow) => {
   const per = specIn && specIn.per === "each" ? "each" : "batch";
@@ -2086,8 +2096,10 @@ const _lockLK = (l) => _lockMark(l) && !!l.localVariant;
 // 部分来自的组件:按 c && c.id === sourceComponentId 找第一个(同 layerLinkState);手搭的 / 不是对象 / 组件已删 → null
 const _lockCompOf = (l, components) => (_lockIsObj(l) && l.sourceComponentId)
   ? ((Array.isArray(components) ? components : []).find(c => c && c.id === l.sourceComponentId) || null) : null;
-// 她最后看过 / 接受的组件库内容指纹(R2)
-const lockSeenKey = (comp, matIds) => _hash32(layerContentKey(comp, matIds));
+// 她最后看过 / 接受的组件库内容指纹(R2)。
+// 第 5 批复查修(R2-DATA-3):指纹不看材料还在不在(matIds 传 null:关联行留着材料 id、不加价快照)—— 以前删掉组件用到的任何一个材料,
+// 指纹就变,锁定时已经不一样 / 点过「保持现在的」的部分又冒「组件库有新版本」,还把她接受过的旧差异再列一遍。matIds 参数留着(调用方不用改)
+const lockSeenKey = (comp, matIds) => _hash32(layerContentKey(comp, null));
 const isCreationLocked = (c) => !!(c && c.lockedAt);
 // 锁定的产品里这一部分:组件库有没有她还没看过的新内容(R7)。内容和组件库一样时永远是 false(不管 lockSeen)
 const layerNewVersion = (l, comp, matIds) => !!(l && l.lockFrom && l.localVariant && comp) && l.lockSeen !== lockSeenKey(comp, matIds) && !sameLayerContent(l, comp, matIds);
@@ -5495,7 +5507,8 @@ function computeDataHealth(data) {
       const raw = _normTxt(l.usedAmount);
       const unit = _normTxt(l.unit) || "g";
       let zhD, jaD;
-      if (!raw) { zhD = "没填用量 → 这一部分成本算成 0"; jaD = "分量未入力 → このパーツの原価は 0"; }
+      // 复查第 2 轮修(r2-ui-06):只写了说明、没填数(「〔说明〕」)的和没填用量一样说(以前报「「〔…〕」读不出数字」,编辑页却说没填用量)
+      if (!raw || noteOnlyUsed(l, cr.serves) !== null) { zhD = "没填用量 → 这一部分成本算成 0"; jaD = "分量未入力 → このパーツの原価は 0"; }
       else {
         const n = parseUsedAmount(l.usedAmount, l.unit);
         if (!(n > 0)) { zhD = `「${raw}」读不出数字 → 成本算成 0`; jaD = `「${raw}」は数値として読めません → 原価 0`; }
@@ -6410,7 +6423,8 @@ function Wordmark({ size = 22, inverse = false, sub = true }) {
 // Toast · 左下角固定，最宽 420，5 秒消失，hover 暂停计时。
 // 破坏性操作一律「先做 + 给撤销」，不拦确认框 —— 只有不可撤销且影响别的数据才用 ConfirmDialog。
 // 第 5 批第 0 步:按钮文字可换(t.actionLabel,缺省「撤销」)—— 草稿「查看」、知识「改好」用;没传时 DOM 和以前一样
-function ToastItem({ t, onDone }) {
+// 复查第 2 轮修(r2-ui-04):撤销按钮的默认字跟界面语言(日文界面「元に戻す」);不传 lang 和以前一样「撤销」
+function ToastItem({ t, onDone, lang }) {
   const [paused, setPaused] = useState(false);
   useEffect(() => {
     if (paused) return;
@@ -6430,7 +6444,7 @@ function ToastItem({ t, onDone }) {
         <button onClick={() => { t.undo(); onDone(); }}
           style={{ ...T.fs.caption, letterSpacing: "0.1em", color: T.paper, background: "none", border: "none",
             borderBottom: `1px solid ${T.paper}`, paddingBottom: 1, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 }}>
-          {t.actionLabel || "撤销"}
+          {t.actionLabel || (lang === "ja" ? "元に戻す" : "撤销")}
         </button>
       )}
     </div>
@@ -7034,7 +7048,8 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
       else if (opt && have > 0 && countYield && (parseFloat(obj && obj.yield) || 0) * have / opt.base + 1e-9 < 1) { res = X.ingShort(U); bad = true; }
       else if (opt && info) {
         const nm = lang === "ja" ? opt.nameJa : opt.nameZh;
-        res = info.floor ? X.ingCanFloor(F(info.to), U, nm, F(info.left), opt.unit) : X.ingCan(F(info.to), U);
+        // 复查第 2 轮修(r2-ui-03):正好用完时 left 是 -2.8e-14 这种浮点尾巴,fmtQty 印成「-0」—— 显示时按 0 起算(scaleFactorOf 的 left 不动)
+        res = info.floor ? X.ingCanFloor(F(info.to), U, nm, F(Math.max(0, info.left)), opt.unit) : X.ingCan(F(info.to), U);
       }
       if (res) inline.push(<span key="res" data-scale-result={bad ? "bad" : "ok"} style={{ color: bad ? T.danger : (isComp ? T.textPrimary : T.ink), overflowWrap: "anywhere", minWidth: 0 }}>→ {res}</span>);
     }
@@ -7424,9 +7439,12 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               {lang === "zh" ? "原料总成本" : "材料原価合計"}
               {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
             </div>
-            <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 ? _mi.color : T.muted, ...T.num }}>
-              {_priceNum > 0 && liveUnitCost > 0 ? `${liveMargin.toFixed(1)}%` : "—"}
-              {_priceNum > 0 && liveUnitCost > 0 && _missingPriceCount > 0 && (
+            {/* 第 5 批复查修(R2-MONEY-2 / r2-ui-01):按模具、个数不变每个变大时,单个成本 = 原单个成本 × 倍数(写明新模具);
+                售价是原模具的,这一格的毛利率不对 → 「—」+ 说明(顶上售价那块的毛利率照旧是按原尺寸卖的) */}
+            <div style={{ textAlign: "right", ...T.fs.caption, color: _priceNum > 0 && liveUnitCost > 0 && !kitchenLocked ? _mi.color : T.muted, ...T.num }}>
+              {_priceNum > 0 && liveUnitCost > 0 && !kitchenLocked ? `${liveMargin.toFixed(1)}%` : "—"}
+              {kitchenLocked && _priceNum > 0 && liveUnitCost > 0 && <div data-mold-margin="" style={{ ...T.fs.label, color: T.secondary, whiteSpace: "normal" }}>{lang === "zh" ? "售价是原模具的" : "売価は元の型"}</div>}
+              {_priceNum > 0 && liveUnitCost > 0 && !kitchenLocked && _missingPriceCount > 0 && (
                 <div style={{ ...T.fs.label, color: T.warning, whiteSpace: "normal" }}>{lang === "zh" ? "成本不全·毛利率虚高" : "原価不完全・粗利率は過大"}</div>
               )}
             </div>
@@ -7435,8 +7453,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             <div style={{ textAlign: "right", fontSize: 22, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
               ¥{(liveTotalCost * scale).toLocaleString(undefined, { maximumFractionDigits: 0 })}
               {liveUnitCost > 0 && (
-                <div style={{ ...T.fs.label, fontFamily: T.fontSans, color: T.secondary, whiteSpace: "nowrap" }}>
-                  {lang === "zh" ? "单个成本" : "単個原価"} {fmtCost(liveUnitCost)}
+                <div style={{ ...T.fs.label, fontFamily: T.fontSans, color: T.secondary, whiteSpace: kitchenLocked ? "normal" : "nowrap" }}>
+                  {kitchenLocked ? (lang === "zh" ? `单个成本(${info.moldText})` : `単個原価(${info.moldText})`) : (lang === "zh" ? "单个成本" : "単個原価")} {fmtCost(kitchenLocked ? liveUnitCost * scale : liveUnitCost)}
                 </div>
               )}
             </div>
@@ -7788,7 +7806,7 @@ const copyAsNewVersion = (kind, obj, all, nowIso, formState) => {
   if (kind === "recipe" && rest.familyId) out.variantLabel = names.label;
   out.copiedFrom = { kind, id: obj.id, nameZh: _normTxt(obj.nameZh) || _normTxt(obj.nameJa) || _normTxt(obj.nameFr), at };
   // fromForm(复查修 ui-r1-01):带着编辑页里没保存的改动来的 → 新编辑页一打开就算有改动,离开先问
-  Object.defineProperty(out, "_copyMeta", { value: { label: names.label, droppedImages: imgs ? imgs.length - kept.length : 0, srcName: out.copiedFrom.nameZh, fromForm: !!(formState && formState.dirty) }, enumerable: false });
+  Object.defineProperty(out, "_copyMeta", { value: { label: names.label, droppedImages: imgs ? imgs.length - kept.length : 0, srcName: out.copiedFrom.nameZh, srcNameJa: _normTxt(obj.nameJa), fromForm: !!(formState && formState.dirty) }, enumerable: false });   // 复查第 2 轮修(r2-ui-07):srcNameJa 给日文界面的复制顶条
   return out;
 };
 
@@ -7876,7 +7894,8 @@ function CopyBanner({ kind, src, lang }) {
   const meta = src._copyMeta || {};
   return (
     <div data-copy-banner="1" style={{ background: T.surface, border: `1px solid ${T.info}`, borderRadius: T.radius, padding: `${T.sp.s}px ${T.sp.m}px`, marginBottom: "1rem", ...T.fs.caption, color: T.body, overflowWrap: "anywhere" }}>
-      {X.banner(kind, cf.nameZh || "", meta.label || "")}
+      {/* 复查第 2 轮修(r2-ui-07):日文界面写原版的日文名(同详情页「复制自」CopiedFromNote);没有 _copyMeta / 没日文名 → 中文名 */}
+      {X.banner(kind, (lang === "ja" && meta.srcNameJa) || cf.nameZh || "", meta.label || "")}
       {meta.droppedImages > 0 && <div style={{ marginTop: T.sp.xs, color: T.warning }}>{X.bannerImg(meta.droppedImages)}</div>}
     </div>
   );
@@ -9634,7 +9653,8 @@ const _ugpApply = (prev, ids, materials, fn) => prev.map(r => {
   if (n === r) return r;
   const fB = ingGramFactor(r, m), fA = ingGramFactor(n, m);
   if (fB !== fA) {
-    if (n._priceModified) n = revertIngRow(n, materials);
+    // 第 5 批复查修(R2-MONEY-1):材料没价时她手填的是「每 本」价,克重不改变它的意思(面板也写「只影响配料表排序和采购克数」)→ 不撤销改价
+    if (n._priceModified) { if (m && getMaterialEffectivePrice(m) > 0) n = revertIngRow(n, materials); }
     else if (!n.noCost && m) {
       const snap = linkedRowSnapshotPrice(n, m);
       if (snap !== "") { const q = parseFloat(n.qty) || 0; n = { ...n, unitPrice: snap, currency: "CNY", _originalPrice: snap, cost: q > 0 ? (q * parseFloat(snap)).toFixed(1) : n.cost }; }
@@ -11429,7 +11449,8 @@ const dropBlankKeys = (obj, keys) => {
 // 打印模板里她手写的文字(整段备注 / 厨房要点 / 步骤 / 配料备注 / 保质期 · 贮存条件 / 旧「保存」)一律先过 stripMoneyText(「钱不上纸」)。
 // 按语言逐个字段去,步骤逐行去(行数不变,stepRows / pickSteps 照旧按行对齐、回退);一句都没去 → 返回同一个对象(没有钱的数据打印逐字节不变)。
 // on = false(归档版勾了「保留价格和成本」)→ 原样。返回 { item, n },n = 一共去掉几句(所有字段;弹窗黄条另用 printMoneyCount 只数会印出来的)
-const PRINT_TEXT_FIELDS = ["notesZh", "notesJa", "notes", "kitchenNotesZh", "kitchenNotesJa", "shelfLifeZh", "shelfLifeJa", "storageCondZh", "storageCondJa", "storage"];
+// 复查第 2 轮修(R2-regress-01):模具 / 炉温 / 烘烤时间也是手写的(厨房版、归档版都印),一样去钱
+const PRINT_TEXT_FIELDS = ["notesZh", "notesJa", "notes", "kitchenNotesZh", "kitchenNotesJa", "shelfLifeZh", "shelfLifeJa", "storageCondZh", "storageCondJa", "storage", "mold", "temp", "baketime"];
 const printStripItem = (item, on = true) => {
   if (!on || !item || typeof item !== "object") return { item, n: 0 };
   let n = 0;
@@ -11524,19 +11545,26 @@ const printAllergenText = (summary, handwritten, lang) => {
 //   · ctx = { materials }(可不给:不给就不认 labelNameZh)
 // 复查修(PS-4):再去掉结尾的内部版本号(「基础卡仕达 v1.0」→「基础卡仕达」;只认带点的 vX.Y,免得把「v60」这种型号当版本号)
 const _showStrip = (s) => { const a = _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || _normTxt(s); return _normTxt(a.replace(/\s+[vV]\d+(?:\.\d+)+[A-Za-z]?$/, "")) || a; };
+// 复查第 2 轮修(R2-PS-2):客户版原料名单上这一行印成什么(showcaseIngNames 和 brandWordRows 共用,以前 brandWordRows 看原始中日文名)。
+// 材料的标签用名 → 组件品名 → 去掉结尾括号备注的配料名;中文 / 日文 / 双语。→ { m, name }
+const _showcaseCompMap = (ctx) => (ctx && Array.isArray(ctx.components)) ? new Map(ctx.components.filter(c => c && c.id !== undefined && c.id !== null && c.id !== "").map(c => [c.id, c])) : _componentsById;
+const _showcaseRowName = (ing, lang, mm, cm) => {
+  const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? (mm.get(ing.materialId) || null) : null;
+  const comp = (!m && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "") ? (cm.get(ing.componentId) || null) : null;
+  const zh = (m && _normTxt(m.labelNameZh)) || (comp && showcaseTitleOf(comp, "zh")) || _showStrip(_normTxt(ing.nameZh) || _normTxt(ing.nameJa) || _normTxt(ing.nameFr));
+  const jaN = (comp && showcaseTitleOf(comp, "ja")) || _showStrip(_normTxt(ing.nameJa) || _normTxt(ing.nameZh) || _normTxt(ing.nameFr));
+  const name = lang === "ja" ? jaN : lang === "both" ? ((zh && jaN && zh !== jaN) ? `${zh} / ${jaN}` : (zh || jaN)) : zh;
+  return { m, name };
+};
 const showcaseIngNames = (ings, lang, ctx = {}) => {
   const mm = materialMapOf(ctx && ctx.materials);
   // 复查修(PS-4):「来自组件」的行用组件的品名(同 showcaseTitleOf:去版本号和括号备注)—— 以前印配料名,客户看到「基础卡仕达 v1.0」、
   // 日文「クレーム・パティシエール(当店 v1.0)半量 / 残り半量」两条。材料优先(同算价顺序);组件表没给就用渲染期注入的
-  const cm = (ctx && Array.isArray(ctx.components)) ? new Map(ctx.components.filter(c => c && c.id !== undefined && c.id !== null && c.id !== "").map(c => [c.id, c])) : _componentsById;
+  const cm = _showcaseCompMap(ctx);
   const groups = new Map();
   (Array.isArray(ings) ? ings : []).forEach((ing, i) => {
     if (!ing || typeof ing !== "object") return;
-    const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? (mm.get(ing.materialId) || null) : null;
-    const comp = (!m && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "") ? (cm.get(ing.componentId) || null) : null;
-    const zh = (m && _normTxt(m.labelNameZh)) || (comp && showcaseTitleOf(comp, "zh")) || _showStrip(_normTxt(ing.nameZh) || _normTxt(ing.nameJa) || _normTxt(ing.nameFr));
-    const jaN = (comp && showcaseTitleOf(comp, "ja")) || _showStrip(_normTxt(ing.nameJa) || _normTxt(ing.nameZh) || _normTxt(ing.nameFr));
-    const name = lang === "ja" ? jaN : lang === "both" ? ((zh && jaN && zh !== jaN) ? `${zh} / ${jaN}` : (zh || jaN)) : zh;
+    const { m, name } = _showcaseRowName(ing, lang, mm, cm);
     if (!name) return;
     const g = ingGramsOfRow(ing, m);
     const cur = groups.get(name);
@@ -11557,23 +11585,47 @@ const showcaseTitleOf = (obj, lang) => {
   const noNote = _normTxt(noVer.replace(/\s*[（(][^（）()]*[)）]\s*$/, ""));
   return noNote || noVer || raw;
 };
-// 配料名(中文名或日文名)里还带着牌子的行:关联材料的厂家中 / 日 / 法名,或这一行写的 brand,原样出现在名字里(不分大小写、全半角;至少 2 个字)。
-// → [{ ing, name, brand }],给客户版弹窗提示「这 N 行名字里还带着牌子」。ctx = { materials, brands }
-const brandWordRows = (ings, ctx) => {
+// 客户版会印出来的配料名里还带着牌子的行:关联材料的厂家中 / 日 / 法名,或这一行写的 brand,原样出现在名字里(不分大小写、全半角;至少 2 个字)。
+// → [{ ing, name, brand }],给客户版弹窗提示「这 N 行名字里还带着牌子」。ctx = { materials, brands, components }
+// 复查第 2 轮修(R2-PS-2):拿「这一份会印的名字」去比(以前比原始中日文名,两种语言都比):opts = { lang, hideQty }(缺省 zh、不印用量 = 客户版默认)——
+//   不印用量 → 原料名单那一行(showcaseIngNames 的同一个写法:标签用名 → 组件品名 → 去掉结尾括号备注);印用量 → 模板的 getName(中 / 日 / 双语)。
+//   name 报的就是会印的那串字。厂家名再按括号拆开(「Guérande(盖朗德)」→ 也认 Guérande、盖朗德;空格隔开的取 4 个字以上的那几段)
+const brandWordRows = (ings, ctx, opts) => {
   const c = ctx || {};
+  const o = opts || {};
+  const lang = o.lang === "ja" || o.lang === "both" ? o.lang : "zh";
+  const hideQty = o.hideQty === undefined ? true : !!o.hideQty;
   const mm = materialMapOf(c.materials);
+  const cm = _showcaseCompMap(c);
   const bm = new Map((Array.isArray(c.brands) ? c.brands : []).filter(b => b && b.id !== undefined && b.id !== null).map(b => [b.id, b]));
   const nk = (s) => _normTxt(s).normalize("NFKC").toLowerCase();
+  // 拆厂家名:括号 / 斜杠里和括号前不同文字的那几段(「Guérande(盖朗德)」→ 盖朗德;「Valrhona(华洛纳/法芙娜)」→ 华洛纳、法芙娜;「高梨(Takanashi)」→ Takanashi),
+  // 括号前是拉丁字母的整段(「Marcona(…)」→ Marcona)和其中 4 个字母以上的词(「Rhum Dillon」→ Dillon)。同种文字的括号(「太古(赤砂糖)」「四叶乳业(黄油)」)
+  // 多半是写的品类,不拆;中文开头(「粉糖(13.62 kg 袋)」)不取括号前那段
+  const latinN = (x) => (x.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+  const scriptOf = (x) => /[぀-ヿ㐀-鿿豈-﫿]/.test(x) ? (latinN(x) ? "mixed" : "cjk") : (latinN(x) ? "latin" : "none");
+  const split = (w) => {
+    const segs = w.split(/[（()）/／]/).map(_normTxt).filter(Boolean);
+    const head = segs[0] || "", hs = scriptOf(head), out = [w];
+    if (segs.length > 1) {
+      if (hs === "latin" && latinN(head) >= 3) out.push(head);
+      segs.slice(1).forEach(x => { const sx = scriptOf(x); if ((sx === "cjk" && hs === "latin" && x.length >= 2) || (sx === "latin" && hs === "cjk" && latinN(x) >= 3)) out.push(x); });
+    }
+    [w, ...(segs.length > 1 && hs === "latin" ? [head] : [])].forEach(t => t.split(/\s+/).map(_normTxt).forEach(x => { if (x.length >= 4 && !/[（()）/／]/.test(x) && scriptOf(x) === "latin") out.push(x); }));
+    return out;
+  };
   const out = [];
   (Array.isArray(ings) ? ings : []).forEach(ing => {
     if (!ing || typeof ing !== "object") return;
-    const names = [ing.nameZh, ing.nameJa].map(_normTxt).filter(Boolean);
-    if (!names.length) return;
+    const printed = hideQty ? _showcaseRowName(ing, lang, mm, cm).name
+      : lang === "zh" ? (ing.nameZh || ing.nameJa) : lang === "ja" ? (ing.nameJa || ing.nameZh) : `${ing.nameZh || ""} / ${ing.nameJa || ""}`;
+    const name = _normTxt(printed);
+    if (!name || name === "/") return;
     const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? mm.get(ing.materialId) : null;
     const b = m ? bm.get(m.brandId) : null;
-    const words = [...(b ? [b.nameZh, b.nameJa, b.nameFr] : []), ing.brand].map(_normTxt).filter(w => w.length >= 2);
-    const hit = words.find(w => names.some(n => nk(n).includes(nk(w))));
-    if (hit) out.push({ ing, name: names[0], brand: hit });
+    const words = [...new Set([...(b ? [b.nameZh, b.nameJa, b.nameFr] : []), ing.brand].map(_normTxt).filter(w => w.length >= 2).flatMap(split))];
+    const hit = words.find(w => nk(name).includes(nk(w)));
+    if (hit) out.push({ ing, name, brand: hit });
   });
   return out;
 };
@@ -11586,7 +11638,8 @@ const kitchenPointsLines = (text) => String(text === undefined || text === null 
 //     这一部分的产出量 = 组件的产出量(本产品专用改过产出量的不估)。N 按 0.1 取整。→ { mold, k, est: { n, unit } | null }
 const partMoldInfo = (p) => {
   if (!p || p.stock || !p.comp) return null;
-  const mold = _normTxt(p.comp.mold);
+  // 复查第 2 轮修(R2-regress-01):组件的模具是她手写的,会印上纸、员工的生产单 / 厨房视图也看 —— 带钱的句子去掉(同备注;整句是钱就不出这一行)
+  const mold = _normTxt(stripMoneyText(p.comp.mold).text);
   if (!mold) return null;
   const k = (typeof p.scale === "number" && isFinite(p.scale) && p.scale > 0) ? p.scale : null;
   let est = null;
@@ -11607,7 +11660,8 @@ const partMoldText = (p, L) => {
 };
 // 组合产品的模具 / 尺寸一行(整体配方的屏幕和打印):有模具印模具;尺寸不空、而且(不管空格)没写在模具里时再印尺寸
 const creationMoldLine = (c, lang) => {
-  const mold = _normTxt(c && c.mold), size = _normTxt(c && c.size);
+  // 复查第 2 轮修(R2-regress-01):模具 / 尺寸是手写的,整体配方的屏幕和打印都用这一行 —— 带钱的句子去掉(详情页规格行是老板的屏幕,不走这里)
+  const mold = _normTxt(stripMoneyText(c && c.mold).text), size = _normTxt(stripMoneyText(c && c.size).text);
   const sq = (s) => s.replace(/\s+/g, "");
   const showSize = !!size && !(mold && sq(mold).includes(sq(size)));
   const lb = (zh, ja) => lang === "ja" ? ja : lang === "both" ? `${zh} · ${ja}` : zh;
@@ -11692,7 +11746,10 @@ const printTextsOf = (kind, obj, tplKey, sections, ctx) => {
     if (s.notes) out.push(...notesOf(o));
     return out;
   }
+  // 复查第 2 轮修(R2-regress-01):厨房版 / 归档版抬头印模具 / 炉温 / 烘烤时间(手写,去钱后再印),黄条的句数也数它们
+  const specTexts = () => ["mold", "temp", "baketime"].forEach(k => { if (typeof o[k] === "string" && o[k]) out.push(o[k]); });
   if (tplKey === "kitchen") {
+    specTexts();
     if (s.ingredients) ingNotes(o.ingredients);
     if (s.points) out.push(..._printLangTexts(o, "kitchenNotes", lang, true));
     if (s.steps) out.push(..._printStepTexts(o, lang, "kitchen"));
@@ -11702,6 +11759,7 @@ const printTextsOf = (kind, obj, tplKey, sections, ctx) => {
     if (s.keep) out.push(..._printLangTexts(o, "shelfLife", lang, true), ..._printLangTexts(o, "storageCond", lang, true));
     if (s.steps) out.push(..._printStepTexts(o, lang, "showcase"));
   } else if (tplKey === "archive") {
+    specTexts();
     if (s.ingredients) { ingNotes(o.ingredients); ingBrands(o.ingredients); }
     if (typeof o.storage === "string" && o.storage) out.push(o.storage);
     out.push(..._printLangTexts(o, "shelfLife", lang, true), ..._printLangTexts(o, "storageCond", lang, true));
@@ -11755,7 +11813,8 @@ const PRINT_TXT = {
     allergenIncomplete: (n) => `还有 ${n} 项原料没核对过敏原,所以写「请向店员确认」,不会写「无」。去材料百科核对后再印更稳妥。`,
     allergenNoneChecked: "(材料百科里还没有一条核对过过敏原,所以现在每个配方都印「尚未核对完」。)",
     allergenPromise: "这是店里对客人的承诺:原料或供货商换了要重新核对过敏原",
-    brandRows: (n, list) => `这 ${n} 行名字里还带着牌子:${list}。可以去材料百科填「标签用名」,或者点下面只改这一次。`,
+    // 复查第 2 轮修(R2-PS-2):「标签用名」只管中文的原料名单(印用量 / 日文印的是配料名本身),那两种情况不提它
+    brandRows: (n, list, how = "label") => `这 ${n} 行名字里还带着牌子:${list}。` + (how === "label" ? "可以去材料百科填「标签用名」,或者点下面只改这一次。" : how === "edit" ? "可以点下面只改这一次。" : ""),
     ingEdit: "✎ 只改这一次的原料名单",
     ingEditHint: "改了只影响这一次打印,不改数据。",
     ingEditReset: "↺ 恢复算好的名单",
@@ -11804,7 +11863,7 @@ const PRINT_TXT = {
     allergenIncomplete: (n) => `未確認の原料が ${n} 件。「スタッフにご確認ください」と印刷し、「なし」とは書きません。`,
     allergenNoneChecked: "(材料事典でアレルゲン確認済みの材料はまだありません。今はどのレシピも「確認中」と印刷されます。)",
     allergenPromise: "お客様への店の約束です。原料や仕入れ先が変わったらアレルゲンを確認し直してください",
-    brandRows: (n, list) => `この ${n} 行は名前にブランドが残っています:${list}。材料事典で「ラベル用名」を入れるか、下で今回だけ変更できます。`,
+    brandRows: (n, list, how = "label") => `この ${n} 行は名前にブランドが残っています:${list}。` + (how === "label" ? "材料事典で「ラベル用名」を入れるか、下で今回だけ変更できます。" : how === "edit" ? "下で今回だけ変更できます。" : ""),
     ingEdit: "✎ 今回だけ材料一覧を変更",
     ingEditHint: "今回の印刷だけに反映され、データは変わりません。",
     ingEditReset: "↺ 自動の一覧に戻す",
@@ -12030,7 +12089,8 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
     [c.materials, c.brands, c.components, c.recipes, c.creations]);
   const summary = useMemo(() => isShow ? allergenSummaryOf(kind, obj, { ...actx }) : null, [isShow, kind, obj, actx]);
   const pa = summary ? { contains: summary.contains, mayContain: summary.mayContain, unknownCount: summary.unknown.length, complete: summary.complete } : null;
-  const brandRows = useMemo(() => isShow ? brandWordRows(obj.ingredients, actx) : [], [isShow, obj, actx]);
+  // 复查第 2 轮修(R2-PS-2):按这一份会印的名字(打印语言、印不印用量)认;原料名单手改过就不提示(她已经在改这串字)
+  const brandRows = useMemo(() => isShow ? brandWordRows(obj.ingredients, actx, { lang, hideQty: !!sections.hideQty }) : [], [isShow, obj, actx, lang, sections.hideQty]);
   const [title, setTitle] = useState(() => ({ zh: showcaseTitleOf(obj, "zh"), ja: showcaseTitleOf(obj, "ja") }));
   const [ingText, setIngText] = useState(null);   // null = 没改过(跟打印语言算)
   const [ingOpen, setIngOpen] = useState(false);
@@ -12175,7 +12235,8 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
                   {chk("ingredients", X.sec.showIngredients)}
                   {sections.ingredients && (
                     <div style={{ display: "flex", gap: "6px 16px", flexWrap: "wrap", paddingLeft: 24 }}>
-                      {chkInv("hideQty", X.sec.showQty)}{chkInv("hideBrand", X.sec.showBrand)}
+                      {/* 复查第 2 轮修(R2-PS-3):「印品牌」只在勾了「印用量」时有用(不印用量时原料只印名单,名单里没有品牌)—— 那时才给这个勾选 */}
+                      {chkInv("hideQty", X.sec.showQty)}{!sections.hideQty && chkInv("hideBrand", X.sec.showBrand)}
                     </div>
                   )}
                   {chk("allergens", X.sec.allergens)}
@@ -12198,7 +12259,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
               </div>
             )}
             {isShow && allergenTexts.length > 0 && promise && hint(X.allergenPromise, T.textTertiary, "promise")}
-            {isShow && sections.ingredients && brandRows.length > 0 && hint(X.brandRows(brandRows.length, brandRows.map(r => `「${r.name}」`).join("")), T.textSecondary, "brands")}
+            {isShow && sections.ingredients && brandRows.length > 0 && !(sections.hideQty && ingText !== null) && hint(X.brandRows(brandRows.length, brandRows.map(r => `「${r.name}」`).join(""), !sections.hideQty ? "none" : lang === "ja" ? "edit" : "label"), T.textSecondary, "brands")}
             {isShow && sections.ingredients && sections.hideQty && (
               <div data-p5-ing="1" style={{ marginTop: 6 }}>
                 {linkBtn(`${ingOpen ? "▼" : "▶"} ${X.ingEdit}`, () => setIngOpen(o => !o), "ingedit")}
@@ -14767,7 +14828,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                             {usedAmount > 0 ? (
                               <span>📏 {W.usedLabel} <strong>{usedAmountNote(l.usedAmount) ? l.usedAmount : `${usedAmount}${usedUnit}`}</strong>{usedAmountAmbiguous(l.usedAmount) && <span style={{ color: "#CA8A04" }}>（按 {fmtQty(usedAmount)} {usedUnit} 算）</span>}</span>
                             ) : (
-                              <span style={{ color: "#CA8A04" }}>⚠ {usedAmountNote(l.usedAmount) ? `用量读不出数字（${l.usedAmount}）` : "未填用量"}</span>
+                              // 复查第 2 轮修(r2-ui-06):只写了说明没填数的(「〔说明〕」)按「未填用量」说,带上她写的说明(同 📘 配方那一行),不露〔〕
+                              <span style={{ color: "#CA8A04" }}>⚠ {noteOnlyUsed(l, c.serves) !== null ? `未填用量${noteOnlyUsed(l, c.serves) ? `（说明：${noteOnlyUsed(l, c.serves)}）` : ""}` : usedAmountNote(l.usedAmount) ? `用量读不出数字（${l.usedAmount}）` : "未填用量"}</span>
                             )}
                             <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {(l.ingredients || []).length}种原料</span>
@@ -15006,7 +15068,7 @@ const USED_TXT = {
     used: null,   // 用 W.usedLabel(本层用量 / 用量)
     perBatch: "这一批一共", perEach: (U) => `每${U}`,
     numPhBatch: "一批一共多少", numPhEach: (U) => `每${U}多少`, notePh: "说明(选填)",
-    cost: null, costNone: "填用量→算成本",
+    cost: null, costNone: "填用量→算成本", costNA: "还算不出成本",
     echoBatch: (n, u) => `→ 按 ${n} ${u} 算`,
     echoEach: (U, n, u, s, t) => `→ 每${U} ${n} ${u} × ${s} = ${t} ${u}`,
     servesBlank: (label) => `(${label}没填,按 1 算)`,   // 复查修(ui-r1-07):叫法跟 creationWords(叠层「制作台数」/ 拼装「制作个数」)
@@ -15023,7 +15085,7 @@ const USED_TXT = {
     used: "使用量",
     perBatch: "バッチ合計", perEach: (U) => `1${U}あたり`,
     numPhBatch: "バッチ合計", numPhEach: (U) => `1${U}あたり`, notePh: "補足(任意)",
-    cost: "原価", costNone: "使用量を入れると原価を計算",
+    cost: "原価", costNone: "使用量を入れると原価を計算", costNA: "原価を計算できません",
     echoBatch: (n, u) => `→ ${n}${u} で計算`,
     echoEach: (U, n, u, s, t) => `→ 1${U} ${n}${u} × ${s} = ${t}${u}`,
     servesBlank: () => "(仕込み数未入力のため 1 で計算)",
@@ -15108,7 +15170,8 @@ function LayerUsedField({ layer, W, cost, onField, serves, lang, idx, onLayer })
                         style={{ ...inp, flex: "1 1 140px" }}
                       />
                       <span style={{ ...T.fs.label, letterSpacing: 0, color: T.secondary, marginLeft: "auto" }}>
-                        {cost > 0 ? <span>{X.cost || W.costLabel} <strong style={{ color: T.success }}>{fmtCost(cost)}</strong></span> : <span style={{ color: T.muted }}>{X.costNone}</span>}
+                        {/* 复查第 2 轮修(r2-ui-02):成本 0 时,填了用量(或没产出量、用量不参与)就不再叫她「填用量」—— 多半是原料没价 / 部分是空的 */}
+                        {cost > 0 ? <span>{X.cost || W.costLabel} <strong style={{ color: T.success }}>{fmtCost(cost)}</strong></span> : <span style={{ color: T.muted }}>{(n > 0 || !y) ? X.costNA : X.costNone}</span>}
                       </span>
                     </div>
                     {echo && <div data-used-echo="1" style={{ ...T.fs.label, letterSpacing: 0, color: T.body, marginTop: 4, ...T.num, overflowWrap: "anywhere" }}>{echo}</div>}
@@ -15696,14 +15759,16 @@ const PICKER2_TXT = {
     ingHit: (name, n) => `含「${name}」${n > 1 ? `等 ${n} 行` : ""}`,
     selected: (n) => `已选 ${n} 个`, clear: "清空", add: (n) => `加入 ${n} 个`, close: "关闭",
     locked: "🔒 这个产品已锁定：新加的部分保存时也会锁上",
-    empty: "组件库还是空的", goNew: "去组件仓库新建", noMatch: "没有匹配的组件" },
+    empty: "组件库还是空的", goNew: "去组件仓库新建", noMatch: "没有匹配的组件",
+    noPrice: "没价", partNoPrice: "(有原料没价)" },
   ja: { title: "パーツ庫から選ぶ", desc: "カードをタップして複数選択できます。同じパーツを 2 回使うときは、追加したあともう一度開いて選んでください", search: "名前・フレーバー・材料で検索",
     all: (n) => `すべて ${n}`, inuse: (n) => `● 使用中 ${n}`, inuseLabel: "● 使用中", cat: (name, n) => `${name} ${n}`,
     added: (n) => n >= 2 ? `追加済み ×${n}` : "追加済み", prep: "作り置き", nIng: (n) => `材料 ${n} 種`, inuseTitle: "使用中",
     ingHit: (name, n) => `「${name}」を使用${n > 1 ? `（計 ${n} 行）` : ""}`,
     selected: (n) => `${n} 件選択`, clear: "クリア", add: (n) => `${n} 件を追加`, close: "閉じる",
     locked: "🔒 この製品はロック中：追加したパーツも保存時にロックされます",
-    empty: "パーツ庫はまだ空です", goNew: "パーツ庫で新規作成", noMatch: "該当するパーツがありません" },
+    empty: "パーツ庫はまだ空です", goNew: "パーツ庫で新規作成", noMatch: "該当するパーツがありません",
+    noPrice: "価格なし", partNoPrice: "(一部価格なし)" },
 };
 // 勾选序号:① 到 ⑳,第 21 个起写 (21)
 const pickerOrdinal = (p) => (p <= 20 ? String.fromCharCode(0x2460 + p - 1) : `(${p})`);
@@ -15815,7 +15880,9 @@ function ComponentPicker({ components = [], materials = [], brands = [], lang = 
                       <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                         <span style={{ background: cat.bg, color: cat.color, padding: "1px 8px", borderRadius: 20 }}>{ja ? cat.ja : cat.zh}</span>
                         <span>{X.nIng((c.ingredients || []).length)}</span>
-                        <span>¥{getIngsLiveCost(c.ingredients, materials, brands).toFixed(0)}</span>
+                        {/* 复查第 2 轮修(r2-ui-08):以前 ¥ + toFixed(0),没价 / 便宜的都印「¥0」像不要钱。改走 fmtCost;一样价都没有写「没价」,有原料没价的数后面标出来(同「来自组件」弹窗) */}
+                        {(() => { const tot = getIngsLiveCost(c.ingredients, materials, brands), inc = componentCostInfo(c, materials).incomplete;
+                          return <span data-picker-cost={tot > 0 ? (inc ? "part" : "ok") : (inc ? "none" : "zero")}>{tot > 0 ? fmtCost(tot) + (inc ? X.partNoPrice : "") : (inc ? X.noPrice : "¥0")}</span>; })()}
                       </div>
                       {r0 && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{X.ingHit(pickLang(r0, "name", lang) || r0.nameFr || "", hit.length)}</div>}
                     </div>
@@ -25504,6 +25571,8 @@ const _prodBadRows = (rows) => rows.filter(r => !(r.qty !== null && r.qty > 0));
 //   "make" 做一批:原块多一个 prep: "make";"packed" 装烤好的(商品按组成判断不扣):只带 unit / store;undefined / 组合产品:和以前一样。
 //   ux2:"packed" 也给没标备货的配方 / 组件和组合产品 → { type, target, need, prep, plain: true, unit }(组合产品不带 unit,页面按结构取「个 / 台」),不列配料。
 //   prodBlockOf 永远不读账本(现有多少由页面另算)
+// 复查第 2 轮修(R2-regress-01):生产单 / 厨房视图(员工也看、生产单还会打印)上的模具 / 炉温 / 时间 / 尺寸是手写的,带钱的句子去掉(同配料备注 prodNote;没钱时原样)
+const _prodNoMoney = (s) => _normTxt(stripMoneyText(s).text);
 const prodBlockOf = (type, target, need, ctx, prep) => {
   if (!target) return { type, missing: true, need };
   if (prep === "packed" && (type === "creation" || !isPrepMarked(target))) return { type, target, need, prep, plain: true, ...(type === "creation" ? {} : { unit: prepCfgOf(type, { ...target, prepMode: "stock" }).unit }) };
@@ -25511,7 +25580,7 @@ const prodBlockOf = (type, target, need, ctx, prep) => {
     const cfg = prepCfgOf(type, target) || prepCfgOf(type, { ...target, prepMode: "stock" });
     if (prep === "packed") return { type, target, need, prep, unit: cfg.unit, store: cfg.store };
     const fam = type === "recipe" && target.familyId ? _prodFind(ctx.productFamilies, target.familyId) : null;
-    const pickP = (own, famv) => _normTxt(own) ? { v: _normTxt(own), fam: false } : (fam && _normTxt(famv) ? { v: _normTxt(famv), fam: true } : { v: "", fam: false });
+    const pickP = (own, famv) => _prodNoMoney(own) ? { v: _prodNoMoney(own), fam: false } : (fam && _prodNoMoney(famv) ? { v: _prodNoMoney(famv), fam: true } : { v: "", fam: false });
     return {
       type, target, need, prep, unit: cfg.unit, store: cfg.store, thawZh: cfg.thawZh, thawJa: cfg.thawJa,
       mold: pickP(target.mold, fam && fam.commonMold),
@@ -25524,13 +25593,13 @@ const prodBlockOf = (type, target, need, ctx, prep) => {
     const batch = creationBatch(target, need, ctx.components || [], ctx.materials || [], ctx.brands || []);
     const bad = [];
     batch.parts.forEach(p => { if (!p.stock && !p.noUsed) _prodBadRows(p.ings).forEach(r => bad.push(r)); });
-    return { type, target, need, batch, bad, mold: { v: _normTxt(target.mold), fam: false }, size: _normTxt(target.size) };
+    return { type, target, need, batch, bad, mold: { v: _prodNoMoney(target.mold), fam: false }, size: _prodNoMoney(target.size) };
   }
   const yieldNum = parseFloat(target.yield) || 0;
   const scale = need / Math.max(1, yieldNum || 1);
   const rows = _prodIngRows(target.ingredients, scale);
   const fam = type === "recipe" && target.familyId ? _prodFind(ctx.productFamilies, target.familyId) : null;
-  const pickP = (own, famv) => _normTxt(own) ? { v: _normTxt(own), fam: false } : (fam && _normTxt(famv) ? { v: _normTxt(famv), fam: true } : { v: "", fam: false });
+  const pickP = (own, famv) => _prodNoMoney(own) ? { v: _prodNoMoney(own), fam: false } : (fam && _prodNoMoney(famv) ? { v: _prodNoMoney(famv), fam: true } : { v: "", fam: false });
   return {
     // 审查 r1:noYield = 没填产出量,need 其实是「几批」(不是几个 / 几克),页面不再写「一批 1 個」
     type, target, need, scale, yieldNum, noYield: !(yieldNum > 0), unit: _normTxt(target.unit) || (type === "component" ? "g" : ""), rows, bad: _prodBadRows(rows),
@@ -25896,7 +25965,9 @@ const prodName = (o, lang) => o ? (pickLang(o, "name", lang) || o.nameFr || "") 
 // 10-03 / 合并 RURU 包的数据里另有「单价待填 / 单价没填 / 单价按…暂填」这类记账备注,新正则认「单价」,生产单 / 厨房视图不再印(本意,同 design_print §4 的「已写单价」)。
 // 复查修(PS-2 / R1-regress-01):数字也认全角(日文输入法默认打出「４５０円」「１，２００円」)和汉数字 + 円(「千円」「五百円」「三千円」)——
 // 以前的 /[¥￥円]/ 任何「円」都算钱,改成「跟在数字后面」时 \d 只认半角,这几种价格漏到员工的生产单 / 厨房视图和打印上
-const PROD_MONEY_RE = /[¥￥]|RMB|(?:[\d０-９][\d０-９,，.．]*\s*[万千]?\s*(?:円|日元|元(?!素))|[〇一二三四五六七八九十百千万]+円)|円\s*[/／]|价格|価格|单价|単価|成本|原価|コスト|値段|毛利|粗利|利润|利益|售价|売価|定价|进价/;
+// 复查第 2 轮修(R2-PS-1):硬币大小不是钱 ——「100円玉大に絞る」「十円玉大」「挤出 1 元硬币大小」「100 日元硬币大小」(日本书挤裱花 / 马卡龙常用),
+// 以前整句当价格去掉,厨房视图的步骤悄悄少一步还重新编号。円 后面是 玉 / 形 / 盤 / 柱 / 周 / 錐、元 / 日元 后面是 硬币 / 硬幣 都不算
+const PROD_MONEY_RE = /[¥￥]|RMB|(?:[\d０-９][\d０-９,，.．]*\s*[万千]?\s*(?:円(?!玉|形|盤|柱|周|錐)|日元(?!硬币|硬幣)|元(?!素|硬币|硬幣))|[〇一二三四五六七八九十百千万]+円(?!玉|形|盤|柱|周|錐))|円\s*[/／]|价格|価格|单价|単価|成本|原価|コスト|値段|毛利|粗利|利润|利益|售价|売価|定价|进价/;
 // 审查 r1:也按句号(。．)切 —— 录入包的备注常是一整段「……。价格是……。用不加糖的蛋黄时 = ……」,只按分号切会把做法连着价格一起删掉。
 // 不按逗号切(「5,816 円」的千位逗号、「……，北京待核」这种半句留着没意义)
 const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n。．]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
@@ -30982,7 +31053,7 @@ function App() {
       {/* Toast 队列 · 左下角，最多堆 3 条 */}
       {toasts.length > 0 && (
         <div style={{ position: "fixed", bottom: 24, left: 24, right: 24, maxWidth: 420, zIndex: T.z.toast, display: "flex", flexDirection: "column", gap: T.sp.s, pointerEvents: "none" }}>
-          {toasts.map(t => <ToastItem key={t.id} t={t} onDone={() => dismissToast(t.id)} />)}
+          {toasts.map(t => <ToastItem key={t.id} t={t} lang={lang} onDone={() => dismissToast(t.id)} />)}
         </div>
       )}
 
