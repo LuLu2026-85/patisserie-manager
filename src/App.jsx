@@ -976,16 +976,16 @@ function MatrixCell({ cellComps, fam, ct, lang, onViewComponent, onCreateNew }) 
           minHeight: 36,
           transition: "all 0.15s",
         }}
-        onMouseEnter={(e) => {
+        onMouseEnter={hoverOnly((e) => {
           e.currentTarget.style.borderColor = "#AC6B3A";
           e.currentTarget.style.color = "#AC6B3A";
           e.currentTarget.style.background = "#FBF0E0";
-        }}
-        onMouseLeave={(e) => {
+        })}
+        onMouseLeave={hoverOnly((e) => {
           e.currentTarget.style.borderColor = "#B8A38B";
           e.currentTarget.style.color = "#B8A38B";
           e.currentTarget.style.background = "transparent";
-        }}
+        })}
       >
         +
       </button>
@@ -1021,8 +1021,8 @@ function MatrixCell({ cellComps, fam, ct, lang, onViewComponent, onCreateNew }) 
           fontFamily: "Georgia, serif",
           transition: "transform 0.12s",
         }}
-        onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.05)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+        onMouseEnter={hoverOnly((e) => { e.currentTarget.style.transform = "scale(1.05)"; })}
+        onMouseLeave={hoverOnly((e) => { e.currentTarget.style.transform = "scale(1)"; })}
       >
         {shortName}
       </button>
@@ -1048,8 +1048,8 @@ function MatrixCell({ cellComps, fam, ct, lang, onViewComponent, onCreateNew }) 
           fontFamily: "Georgia, serif",
           transition: "transform 0.12s",
         }}
-        onMouseEnter={(e) => { if (!expanded) e.currentTarget.style.transform = "scale(1.05)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+        onMouseEnter={hoverOnly((e) => { if (!expanded) e.currentTarget.style.transform = "scale(1.05)"; })}
+        onMouseLeave={hoverOnly((e) => { e.currentTarget.style.transform = "scale(1)"; })}
       >
         {count} ↓
       </button>
@@ -1093,8 +1093,8 @@ function MatrixCell({ cellComps, fam, ct, lang, onViewComponent, onCreateNew }) 
                 cursor: "pointer",
                 fontFamily: "system-ui, sans-serif",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = "#F5ECD8"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              onMouseEnter={hoverOnly((e) => { e.currentTarget.style.background = "#F5ECD8"; })}
+              onMouseLeave={hoverOnly((e) => { e.currentTarget.style.background = "transparent"; })}
             >
               <span style={{ fontFamily: "Georgia, serif", fontWeight: 500 }}>
                 {lang === "zh" ? (c.nameZh || c.nameJa) : (c.nameJa || c.nameZh)}
@@ -5273,6 +5273,15 @@ const toastQueuePush = (prev, t, max = 3) => {
   out.push(t);
   return out;
 };
+// showToast 推进去的对象(spec_toast_hold R2):键序 id, msg, undo, ms,然后 actionLabel(真值才有),然后 heldAction(opts.held 合格才有)。
+// 不写 held(那是停住标记,只由 toastHold 加)。没有合格的 held 时和 pre_b6 的对象逐键一样(BI-1)。
+// 合格 = 是对象(不是 null;函数不算、数组算)、onClick 是函数、label 是去掉空白后不空的字符串;存的 label 原样(不 trim),heldAction 是只有这两个键的新对象
+const toastHeldOk = (h) => h !== null && typeof h === "object" && typeof h.onClick === "function" && typeof h.label === "string" && h.label.trim() !== "";
+const toastObjectOf = (id, msg, opts = {}) => ({
+  id, msg, undo: opts.undo, ms: opts.ms || (opts.undo ? 5000 : 2500),
+  ...(opts.actionLabel ? { actionLabel: opts.actionLabel } : {}),
+  ...(toastHeldOk(opts.held) ? { heldAction: { label: opts.held.label, onClick: opts.held.onClick } } : {}),
+});
 // 停住一条(spec_toast_hold R4):找不到 / 已经停住 → 原样返回 prev 这个数组本身;否则那一条换成 { ...原对象, held: true }
 const toastHold = (prev, id) => {
   const i = Array.isArray(prev) ? prev.findIndex(x => !!x && typeof x === "object" && x.id === id) : -1;
@@ -5318,30 +5327,30 @@ const GLOBAL_CSS = `
 .k-ease { transition: background .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1), color .15s cubic-bezier(.2,0,.2,1), opacity .15s cubic-bezier(.2,0,.2,1); }
 
 /* ── 按钮四型三态 ── */
+/* 第 6 批 T1:悬停效果只给能悬停的设备 —— 每条 :hover 规则原地包一层 @media (hover: hover)(位置不挪,同等优先级下的先后和以前一样,
+   电脑上一个像素不变);iPad 上点过的按钮不再「粘」在悬停色(厂家管理「合并为一家」白字配浅灰底)。:active / :focus-visible / :disabled 留在外面 */
 .k-btn { transition: background .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1), color .15s cubic-bezier(.2,0,.2,1), opacity .15s cubic-bezier(.2,0,.2,1); }
 .k-btn:focus { outline: none; }
 .k-btn:focus-visible { outline: 2px solid ${T.info}; outline-offset: 2px; }
-.k-btn-default:hover:not(:disabled) { border-color: ${T.ink} !important; background: ${T.sunken} !important; }
+@media (hover: hover) { .k-btn-default:hover:not(:disabled) { border-color: ${T.ink} !important; background: ${T.sunken} !important; } }
 .k-btn-default:active:not(:disabled) { background: ${T.line} !important; }
-.k-btn-primary:hover:not(:disabled) { background: ${T.strong} !important; border-color: ${T.strong} !important; }
+@media (hover: hover) { .k-btn-primary:hover:not(:disabled) { background: ${T.strong} !important; border-color: ${T.strong} !important; } }
 .k-btn-primary:active:not(:disabled) { background: #000000 !important; border-color: #000000 !important; }
-.k-btn-ghost:hover:not(:disabled) { background: ${T.sunken} !important; color: ${T.ink} !important; }
-.k-btn-danger:hover:not(:disabled) { background: ${T.danger} !important; color: #FFFFFF !important; }
+@media (hover: hover) { .k-btn-ghost:hover:not(:disabled) { background: ${T.sunken} !important; color: ${T.ink} !important; } }
+@media (hover: hover) { .k-btn-danger:hover:not(:disabled) { background: ${T.danger} !important; color: #FFFFFF !important; } }
 .k-btn-danger:focus-visible { outline-color: ${T.danger}; }
-.k-btn-success:hover:not(:disabled) { background: ${T.success} !important; color: #FFFFFF !important; }
+@media (hover: hover) { .k-btn-success:hover:not(:disabled) { background: ${T.success} !important; color: #FFFFFF !important; } }
 .k-btn:disabled { background: transparent !important; border-color: ${T.line} !important; color: ${T.disabled} !important; cursor: not-allowed; }
 .k-btn-primary:disabled { background: ${T.disabled} !important; border-color: ${T.disabled} !important; color: ${T.paper} !important; }
 
 /* ── 表格 / 列表行 ── */
 .k-row { transition: background .12s cubic-bezier(.2,0,.2,1); }
-.k-row:hover { background: ${T.sunken}; }
-/* 行内操作默认隐藏，hover 时在行尾淡入 —— 静止时一行只剩四个落点 */
-.k-row .k-rowact { opacity: 0; transition: opacity .15s cubic-bezier(.2,0,.2,1); }
-.k-row:hover .k-rowact, .k-row:focus-within .k-rowact { opacity: 1; }
+@media (hover: hover) { .k-row:hover { background: ${T.sunken}; } }
+/* 第 6 批 T1:删了「行内操作默认藏起来、悬停才淡入」那两条死规则(全文件没有元素用;iPad 上点不出来,以后别用这种做法) */
 
 /* ── 表单：标签在上方，focus 是描边转黑 + 3px 群青光晕，不做位移 ── */
 .k-input { transition: border-color .15s cubic-bezier(.2,0,.2,1), box-shadow .15s cubic-bezier(.2,0,.2,1); }
-.k-input:hover:not(:disabled) { border-color: ${T.muted}; }
+@media (hover: hover) { .k-input:hover:not(:disabled) { border-color: ${T.muted}; } }
 .k-input:focus, .k-input:focus-visible { outline: none; border-color: ${T.ink}; box-shadow: 0 0 0 3px rgba(59,78,140,0.14); }
 .k-input:disabled { background: ${T.sunken}; color: ${T.disabled}; }
 .k-input::placeholder { color: ${T.muted}; opacity: 1; }
@@ -5349,14 +5358,15 @@ input, textarea, select, button { font-family: inherit; }
 
 /* ── 顶部 tab：下划线式 ── */
 .k-tab { transition: color .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1); }
-.k-tab:hover { color: ${T.ink}; }
+@media (hover: hover) { .k-tab:hover { color: ${T.ink}; } }
 .k-tab:focus-visible { outline: 2px solid ${T.info}; outline-offset: 2px; }
 
 /* ── 折叠标签「+N」的悬浮展开 ── */
 .k-more { position: relative; }
 .k-more > .k-more-pop { display: none; position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: ${T.z.popover};
   background: ${T.surface}; border: 1px solid ${T.border}; box-shadow: ${T.sh.popover}; padding: 8px; white-space: nowrap; }
-.k-more:hover > .k-more-pop, .k-more:focus-within > .k-more-pop { display: flex; gap: 6px; }
+.k-more:focus-within > .k-more-pop { display: flex; gap: 6px; }
+@media (hover: hover) { .k-more:hover > .k-more-pop { display: flex; gap: 6px; } }
 
 /* ── 容器与断点 ── */
 .rc-container { max-width: 1180px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
@@ -5414,6 +5424,47 @@ input, textarea, select, button { font-family: inherit; }
   .k-kitchen-name { font-size: 19px !important; }
   .k-kitchen-qty { font-size: 24px !important; }
 }
+
+/* ── 第 6 批 T1 触控底子(design_touch-lang §4.2;class 名单见 .claude/batch6/api.md 第 5 节)──
+   触屏判断只用 (pointer: coarse):iPad / 手机上放大「点的范围」,电脑(鼠标)上这一整块不生效,样子一个像素不变。
+   点的范围最小 40 px;员工页 / 厨房视图 / 提示条按钮 / 弹窗关闭 44 px(戴手套、手上有面粉)。
+   别的线的新界面直接挂这些 class,不另写 :hover、不改这里(plan 裁决 1);以后改这里要同时更新判官 probe_b6_regress_diff 的说明 */
+@media (pointer: coarse) {
+  .k-btn { min-height: 40px; }
+  .k-tab { min-height: 44px; }
+  .k-tap { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+  .k-tap-l { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  /* 在售 / 在用圆点:看起来大小不变,只把点的范围放到 40 × 40(负边距压回原来的占位,行排版不动) */
+  .k-dot { width: 40px !important; height: 40px !important; margin: -11px !important; }
+  /* 「ⓘ」18 px,点的范围靠 ::after 往外扩 11 px = 40 × 40(TapTip 都是单独出现,不会盖住别的按钮) */
+  .k-tip { position: relative; }
+  .k-tip::after { content: ""; position: absolute; inset: -11px; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
+  input:not([type=checkbox]):not([type=radio]):not([type=range]), select { min-height: 36px; }
+  .k-staffbar .k-btn, .k-staffmain .k-btn, [data-owner-kitchen] .k-btn { min-height: 44px; }
+  /* 名字联想 / 厂家选择器的每一项 */
+  .k-opt { min-height: 44px; }
+}
+/* 手机(375 宽)上 3 / 4 / 5 列的编辑页表单变两列(fgClass(cols) 生成 k-fg k-fg-N);iPad 和电脑不变 */
+@media (max-width: 599px) {
+  .k-fg-3, .k-fg-4, .k-fg-5 { grid-template-columns: 1fr 1fr !important; }
+}
+/* 平板宽度顶栏 tab 间距 28 → 18(iPad 竖屏日文界面放得下;手机宽度顶栏本来就藏着) */
+@media (max-width: 1023px) {
+  .k-topnav { gap: 18px !important; }
+}
+/* 提示条外层(App 里的 .k-toasts,行内 bottom: 24 照旧):手机上让出底栏(52 + 留白),编辑页让出底部保存栏(.k-savebar);
+   :has() 不支持的旧浏览器照今天。spec_toast_hold R16 */
+@media (max-width: 599px) { .k-toasts { bottom: 76px !important; } }
+body:has(.k-savebar) .k-toasts { bottom: 84px !important; }
+/* TapTip 的「ⓘ」:颜色只用 T;开着时、键盘聚焦时描黑(气泡 .k-tip-pop 和 .k-why 的样子在组件的行内样式里,照 .k-more-pop) */
+.k-tip { transition: color .15s cubic-bezier(.2,0,.2,1), border-color .15s cubic-bezier(.2,0,.2,1); -webkit-tap-highlight-color: transparent; }
+.k-tip:focus { outline: none; }
+.k-tip:focus-visible { outline: 2px solid ${T.info}; outline-offset: 2px; }
+.k-tip[aria-expanded=true] { color: ${T.ink} !important; border-color: ${T.ink} !important; }
+@media (hover: hover) { .k-tip:hover { color: ${T.ink} !important; border-color: ${T.ink} !important; } }
+/* 配料表删除列固定在表格最右边(所有宽度):中间几列横划时删除「×」一直看得见;阴影 = T.ink 加透明度(同 T.sh) */
+.k-ing-del { position: sticky; right: 0; background: ${T.bgCard}; box-shadow: -6px 0 6px -6px rgba(22,22,15,0.18); }
 `;
 
 // 按钮四型三态。hover / focus-visible / disabled 由全局 <style> 里的 .k-btn 规则接管
@@ -7220,29 +7271,63 @@ function Wordmark({ size = 22, inverse = false, sub = true }) {
 // Toast · 左下角固定，最宽 420，5 秒消失，hover 暂停计时。
 // 破坏性操作一律「先做 + 给撤销」，不拦确认框 —— 只有不可撤销且影响别的数据才用 ConfirmDialog。
 // 第 5 批第 0 步:按钮文字可换(t.actionLabel,缺省「撤销」)—— 草稿「查看」、知识「改好」用;没传时 DOM 和以前一样
-function ToastItem({ t, onDone }) {
+// 第 6 批 T1(唯一口径 .claude/batch6/specs/spec_toast_hold.md):
+//   · 电脑上照旧:鼠标移上去暂停、移开从头再计满一个时长(悬停处理只经 hoverOnly,iPad 上没有「鼠标暂停」);
+//   · 触屏上手指点一下正文停住(t.held,由 App 的 onHold → toastHold 标):不再计时、多一个「✕」,停住以后才出现可选按钮 t.heldAction
+//     (删除类是「去回收站」);停住的不被新来的挤掉(toastQueuePush)。没有「取消停住」,只有 ✕。
+//   · 停住在 click 时才定(pointerdown 只记 pointerType,不重绘):手指直接点「撤销」和以前一样不先停住;点在任何按钮上都不停住;
+//     最近一次按下是鼠标的不停住(电脑上点正文不停住)。不传 onHold(老测试直接渲染)时点哪里都不停住。
+//   · 按钮文字跟语言:t.actionLabel 优先,否则 uiTxt(lang).undo(中文 / 不传「撤销」,日文「元に戻す」);✕ 的 aria-label 同理。
+//   · 没停住时 DOM 和以前一样,只多撤销按钮上的 class="k-tap-l"(触屏 44 高,GLOBAL_CSS)。计时的依赖只看 paused / t.held / t.ms / t.id
+const TOAST_NO_DOWN = { none: "还没收到过 pointerdown" };   // 和任何 pointerType(含 undefined / "")都不相等的标记
+function ToastItem({ t, onDone, lang, onHold }) {
   const [paused, setPaused] = useState(false);
+  const downRef = useRef(TOAST_NO_DOWN);
   useEffect(() => {
-    if (paused) return;
+    if (paused || t.held) return;
     const id = setTimeout(onDone, t.ms);
     return () => clearTimeout(id);
-  }, [paused, t.ms, t.id]);
+  }, [paused, t.held, t.ms, t.id]);
+  const ui = uiTxt(lang);
+  const held = !!t.held;
+  const linkBtn = { ...T.fs.caption, letterSpacing: "0.1em", color: T.paper, background: "none", border: "none",
+    borderBottom: `1px solid ${T.paper}`, paddingBottom: 1, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 };
   return (
     <div
-      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
+      onMouseEnter={hoverOnly(() => setPaused(true))} onMouseLeave={hoverOnly(() => setPaused(false))}
+      onPointerDown={(e) => { downRef.current = e.pointerType; }}
+      onClick={(e) => {
+        if (held || typeof onHold !== "function") return;
+        const d = downRef.current;
+        if (d === TOAST_NO_DOWN || d === "mouse") return;
+        for (let n = e.target; n && n !== e.currentTarget; n = n.parentNode) if (n.nodeName === "BUTTON") return;   // 点在按钮上:按钮做它自己的事
+        onHold(t.id);
+      }}
       style={{
         background: T.ink, color: T.paper, padding: "12px 16px", maxWidth: 420,
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: T.sp.xl,
         boxShadow: T.sh.overlay, borderRadius: T.radius, pointerEvents: "auto",
+        ...(held ? { flexWrap: "wrap", rowGap: T.sp.s } : {}),
       }}>
       <span style={{ ...T.fs.small, fontFamily: T.fontSans }}>{t.msg}</span>
       {t.undo && (
-        <button onClick={() => { t.undo(); onDone(); }}
+        <button className="k-tap-l" onClick={() => { t.undo(); onDone(); }}
           style={{ ...T.fs.caption, letterSpacing: "0.1em", color: T.paper, background: "none", border: "none",
             borderBottom: `1px solid ${T.paper}`, paddingBottom: 1, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 }}>
-          {t.actionLabel || "撤销"}
+          {t.actionLabel || ui.undo}
         </button>
       )}
+      {held && t.heldAction ? (
+        <button type="button" className="k-tap-l" data-tl-toast-held="1" onClick={() => { t.heldAction.onClick(); onDone(); }} style={linkBtn}>
+          {t.heldAction.label}
+        </button>
+      ) : null}
+      {held ? (
+        <button type="button" className="k-tap-l" data-tl-toast-close="1" aria-label={ui.close} onClick={() => { onDone(); }}
+          style={{ ...T.fs.small, lineHeight: 1, color: T.paper, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: T.fontSans, flexShrink: 0 }}>
+          ✕
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -7260,7 +7345,7 @@ function SaveStatus({ state, lang, onRetry }) {
     return wrap(T.success, <>{dot(T.success)}{lang === "zh" ? "已保存" : "保存済み"} {hh}</>);
   }
   return wrap(T.danger, <>{dot(T.danger)}{state.msg || (lang === "zh" ? "保存失败" : "保存失敗")}
-    <button onClick={onRetry} style={{ background: "none", border: "none", borderBottom: `1px solid ${T.danger}`, color: T.danger, cursor: "pointer", padding: 0, font: "inherit" }}>
+    <button className="k-tap" onClick={onRetry} style={{ background: "none", border: "none", borderBottom: `1px solid ${T.danger}`, color: T.danger, cursor: "pointer", padding: 0, font: "inherit" }}>
       {lang === "zh" ? "重试" : "再試行"}
     </button></>);
 }
@@ -9120,8 +9205,8 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           alignItems: "center",
         }}
         // 悬停只换上右下三边,左边分类色条保持不变(原来整圈换色,移开后色条会变灰)
-        onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(-1px)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(0)"; }}
+        onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(-1px)"; })}
+        onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(0)"; })}
       >
         {/* 在用圆点(和配方「在售中」同款);点它不进详情 */}
         <button
@@ -14769,8 +14854,8 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                 borderLeft: `3px solid ${statusInfo.color}`,
                 transition: "border-color 0.15s, transform 0.12s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
+              onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; })}
+              onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; })}
             >
               {/* 第一行：徽章 + 标题 + 状态 + 价格 */}
               <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
@@ -17281,8 +17366,8 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
                 gap: 14,
                 alignItems: "flex-start",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
+              onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; })}
+              onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; })}
             >
               {/* 首字母徽章 */}
               <div style={{
@@ -18839,8 +18924,8 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
                 textAlign: "center",
                 transition: "transform 0.12s, border-color 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
+              onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; })}
+              onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; })}
             >
               <div style={{ fontSize: 28, marginBottom: 6 }}>{cat.icon}</div>
               <div style={{ fontFamily: T.fontSerif, fontSize: 15, fontWeight: 500, color: cat.color, marginBottom: 4 }}>{lang === "zh" ? cat.zh : cat.ja}</div>
@@ -19673,8 +19758,8 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
                   background: isCurrent ? T.bgSoft : T.bgCard,
                   borderLeft: `3px solid ${m.isBest ? "#059669" : (cat ? cat.color : "transparent")}`,
                 }}
-                onMouseEnter={(e) => { if (!isCurrent) e.currentTarget.style.background = T.bgMuted; }}
-                onMouseLeave={(e) => { if (!isCurrent) e.currentTarget.style.background = T.bgCard; }}
+                onMouseEnter={hoverOnly((e) => { if (!isCurrent) e.currentTarget.style.background = T.bgMuted; })}
+                onMouseLeave={hoverOnly((e) => { if (!isCurrent) e.currentTarget.style.background = T.bgCard; })}
               >
                 <div style={{ fontSize: 18 }}>{cat ? cat.icon : "📦"}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -20175,8 +20260,8 @@ function CategoryDetailView({
                 display: "flex", flexDirection: "column", gap: 6,
                 transition: "transform 0.12s, border-color 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
+              onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; })}
+              onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; })}
             >
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 {firstImg && (
@@ -20426,8 +20511,8 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
                   border: `0.5px solid ${T.borderSoft}`,
                   transition: "border-color 0.15s",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.borderSoft; }}
+                onMouseEnter={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderHover; })}
+                onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.borderSoft; })}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                   {firstImg && (
@@ -20824,8 +20909,8 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
                     key={m.id}
                     onClick={() => { if (onNavigateToMaterial) onNavigateToMaterial(m.id); }}
                     style={{ borderTop: "0.5px solid #E5E5E5", cursor: onNavigateToMaterial ? "pointer" : "default", transition: "background 0.15s" }}
-                    onMouseEnter={e => { if (onNavigateToMaterial) e.currentTarget.style.background = "#F5F5F5"; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                    onMouseEnter={hoverOnly(e => { if (onNavigateToMaterial) e.currentTarget.style.background = "#F5F5F5"; })}
+                    onMouseLeave={hoverOnly(e => { e.currentTarget.style.background = "transparent"; })}
                     title={onNavigateToMaterial ? (lang === "zh" ? "点击查看详情" : "クリックで詳細") : ""}
                   >
                     <td style={{ padding: "6px 10px" }}>
@@ -30090,10 +30175,14 @@ function App() {
 
   // showToast(msg) 保持旧签名可用；第二个参数可给 { undo, ms } 走「先做 + 给撤销」
   // 第 5 批第 0 步:还可以给 actionLabel(按钮文字,缺省「撤销」;草稿「查看」、知识「改好」用),没给时 toast 对象和以前一样
+  // 第 6 批 T1:还可以给 held: { label, onClick } —— 只在提示条停住以后多出来的一个按钮(删除类是「去回收站」;员工模式里不许传);
+  //   对象存成 heldAction(held 是停住标记)。队列走 toastQueuePush:最多 3 条,满了先挤最早一条没停住的(没有停住的时候 = 以前的 slice(-2))
   const showToast = (msg, opts = {}) => {
     const id = ++toastSeq.current;
-    setToasts(prev => [...prev.slice(-2), { id, msg, undo: opts.undo, ms: opts.ms || (opts.undo ? 5000 : 2500), ...(opts.actionLabel ? { actionLabel: opts.actionLabel } : {}) }]);
+    const t = toastObjectOf(id, msg, opts);
+    setToasts(prev => toastQueuePush(prev, t));
   };
+  const holdToast = (id) => setToasts(prev => toastHold(prev, id));
   const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
 
   // 🔄 cats → materials 迁移
@@ -31745,10 +31834,10 @@ function App() {
       {/* 第 5 批 E4:「没保存的修改」草稿列表浮层(第 0 步空壳;员工模式不出) */}
       {!staffMode && <DraftList lang={lang} />}
 
-      {/* Toast 队列 · 左下角，最多堆 3 条 */}
+      {/* Toast 队列 · 左下角，最多堆 3 条(第 6 批 T1:k-toasts 让 GLOBAL_CSS 在手机上挪到底栏上面、编辑页挪到保存栏上面;手指点一下停住) */}
       {toasts.length > 0 && (
-        <div style={{ position: "fixed", bottom: 24, left: 24, right: 24, maxWidth: 420, zIndex: T.z.toast, display: "flex", flexDirection: "column", gap: T.sp.s, pointerEvents: "none" }}>
-          {toasts.map(t => <ToastItem key={t.id} t={t} onDone={() => dismissToast(t.id)} />)}
+        <div className="k-toasts" style={{ position: "fixed", bottom: 24, left: 24, right: 24, maxWidth: 420, zIndex: T.z.toast, display: "flex", flexDirection: "column", gap: T.sp.s, pointerEvents: "none" }}>
+          {toasts.map(t => <ToastItem key={t.id} t={t} lang={lang} onHold={holdToast} onDone={() => dismissToast(t.id)} />)}
         </div>
       )}
 
