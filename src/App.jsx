@@ -4257,8 +4257,9 @@ async function deleteBackupSnapshot(snap) {
 
 // ─── BEGIN recycle-bin helpers ───
 // 第 6 批 R 线(6.7 删除统一「先删 + 撤销」+ 30 天回收站,spec_bin.md):IndexedDB 新库 korora_safety 的表 bin(I 线的 reports 表同库)。
-// 第 0 步:常量写成真的(spec_bin 2.1 / 2.2);binCanon 是一行(importCanon 第 0 步就是真的,见 import-preview 段);其余空壳,返回值写在旁边;
-// IndexedDB 函数什么都不做,**第 0 步不打开新库**(plan 裁决 17)。段里不许有 React / setState;indexedDB 只在段尾点名的读写函数里。
+// R 线(2026-10-07):A 组纯函数(R1 到 R15)、R22 / R31 的「写什么」、界面上的字;段尾是本窗口的状态和 IndexedDB 读写(只有点名的几个碰库)。
+// 段里不许有 React / setState;indexedDB 只在 openSafetyDB 里出现。删除 / 撤销 / 还原的流程(要调 setter、推提示条)在段外,紧跟在 END 后面。
+// 库用不了(没有 indexedDB / 打开出错)时 _binAvail = "off":删除和撤销对主数据的结果和库能用时一样,只是不写库(spec_bin R67)。
 const BIN_DB = "korora_safety";
 const BIN_STORE = "bin";
 const BIN_DAYS = 30;
@@ -4281,48 +4282,1079 @@ const BIN_KINDS = {
   family:       { list: "productFamilies", zh: "家族",     ja: "ファミリー", view: null,            clash: "N" },
   compCat:      { list: "customCompCats",  zh: "组件分类", ja: "パーツ分類", view: null,            clash: "" },
 };
-SAFETY_TXT.bin = { zh: {}, ja: {} };   // R 线往这里加回收站的字(SAFETY_TXT 在 device-safety 段)
+// R 线的字(spec_bin R21 到 R71;中日键一一对应;{x} 是填进去的值,由 _binF 填)。中文老句(删除提示条)一字不改,新句中日成对
+SAFETY_TXT.bin = {
+  zh: {
+    tail: "删掉的{kind}在「数据 → 回收站」里留 30 天,可以还原。",
+    recipeBody: "删除后下面这些地方会缺东西。",
+    deleted: "已删除「{name}」",
+    deletedShop: "已删除本店原料",
+    heldBin: "去回收站",
+    heldView: "去看看",
+    delBtn: "仍然删除",
+    delTitle: "删除「{name}」？",
+    kickerProduct: "删除商品",
+    kickerSupplier: "删除供货商",
+    kickerFamily: "删除家族",
+    kickerMaterial: "删除材料",
+    productBody: "下面这些记录挂着这个商品。",
+    productLogs: "销售记录 {n} 条、生产记录 {m} 条:留着,商品页看不到了(还原商品就回来)",
+    productPlan: "今天的生产单里有这一行",
+    supplierBody: "下面这些本店原料挂着这个供货商。",
+    supplierRef: "本店原料「{first}」等 {n} 条挂着这个供货商,删除后解除关联",
+    familyBody: "家族里的配方和组合产品不会被删除，只会变成「未归属」状态。",
+    familyRefR: "配方：{name}",
+    familyRefC: "组合产品：{name}",
+    compCatBody: "有 {n} 个组件正在使用「{name}」，确认删除？删除后这些组件的分类会变为「其他」。",
+    noName: "(无名)",
+    undoOther: "「{name}」已经有另一个版本在了,没有放回(回收站里那条还在)",
+    undoName: "现在有同名的「{name}」,没有放回(回收站里那条还在)",
+    undoShopDup: "这个材料现在已经有本店原料了,没有放回(回收站里那条还在)",
+    restoreSame: "「{name}」已经在了",
+    stale: "这个窗口已经停止保存,先刷新再导入(不然导进来的东西刷新就没了)",
+    brandUndoK: "{k} 家厂家已经有另一个版本在了,没有放回",
+    brandUndoJ: "{j} 条材料之后改过,没挪回来",
+    brandUndoSep: ";",
+    undoRestoreChanged: "还原以后改过了,没有撤回",
+    undoRestoreBrand: "还原以后有材料挂到了这家厂家,没有撤回",
+    undoRestoreBatch: "{k} 家还原以后改过了,没有撤回",
+    batchRestored: "已还原 {n} 家厂家",
+    batchMoved: "(原来名下的 {m} 条材料留在「{to}」,没挪回来)",
+    batchK: ";{k} 家没有放回",
+    batchNone: "{k} 家没有放回",
+    permDeleted: "已从回收站删掉「{name}」",
+    cleared: "回收站已清空({n} 条)",
+    saveFail: "还原了但没存进去(存储满了),回收站里那条先留着",
+    otherBrand: "别的厂家",
+    restored: "已还原「{name}」",
+    restoredFamily: "已还原家族「{name}」",
+    restoredCat: "已还原分类「{name}」",
+    famBack: ",{x}挂回来了",
+    famR: "{n} 个配方",
+    famC: "{n} 个组合产品",
+    famRC: "{r} 个配方、{c} 个组合产品",
+    famSkip: "(之后换了家族的 {n} 个没动)",
+    supBack: ",{n} 条本店原料挂回来了",
+    catBack: ",{n} 个组件的分类换回来了",
+    catSkip: "(之后改过的没动)",
+    prepBack: ",备货库存 {q} {u} 也放回了(是删的时候的数,去盘点核对一下)",
+    prepHas: ",备货库存没放回(账上已经有这一样了)",
+    prepRO: ",备货库存没放回(账本是更新版本的 App 写的)",
+    stockNote: "(库存是删的时候的数:{s})",
+    brandMoved: "(原来名下的 {n} 条材料留在「{to}」,没挪回来)",
+    cardTitle: "🗑 回收站(30 天)",
+    cardLoading: "读取中…",
+    cardOff: "这台设备的浏览器数据库用不了,回收站不可用",
+    cardOk: "删掉的配方、组件、组合产品、知识、材料、厂家、本店原料、商品、供货商、家族、组件分类,在这台设备上留 30 天,可以一键还原。现在有 {n} 条。",
+    cardBtn: "打开回收站",
+    dlgTitle: "🗑 回收站",
+    dlgNote: "删掉的东西在这台设备上留 30 天,可以还原。覆盖导入、清除全部换掉的数据不在这里,去「🛟 恢复备份」找。",
+    chipAll: "全部 {n}",
+    clearBtn: "清空回收站",
+    today: "今天",
+    rowDel: "{kind} · {name} · {t} 删",
+    rowRefs: " · 当时 {refs} 在用",
+    refSep: "、",
+    refProducts: "{n} 个商品",
+    refCreations: "{n} 个组合产品",
+    refRecipes: "{n} 个配方",
+    refComponents: "{n} 个组件",
+    refIngRows: "{n} 处当原料",
+    refShopMaterials: "{n} 条本店原料",
+    refLogs: "{n} 条记录",
+    refPlan: "今天的生产单",
+    daysLeft: "还剩 {d} 天",
+    restoreBtn: "还原",
+    permBtn: "永久删除",
+    batchBtn: "全部还原",
+    batchRow: "厂家 · 一次删了 {n} 家:{names}",
+    batchNameSep: "、",
+    batchMovedRow: " · 名下 {m} 条材料当时挪到了「{to}」",
+    noteOther: "现在有另一个版本;要换回:先删掉现在那条(也会进回收站),再还原这条",
+    noteShopDupP: "这个材料现在已经有本店进价了({p}),还原会变成两条",
+    noteShopDup: "这个材料现在已经有一条本店原料了,还原会变成两条",
+    emptyFirst: "回收站是空的 · 删掉的东西会在这里留 30 天",
+    emptyFilter: "这一类里没有删掉的东西了",
+    close: "关闭",
+    expand: "展开这一组",
+    collapse: "收起这一组",
+  },
+  ja: {
+    tail: "削除した{kind}は「データ → ゴミ箱」に 30 日間残り、元に戻せます。",
+    recipeBody: "削除すると以下に影響します。",
+    deleted: "「{name}」を削除しました",
+    deletedShop: "仕入れ原料を削除しました",
+    heldBin: "ゴミ箱へ",
+    heldView: "見に行く",
+    delBtn: "削除する",
+    delTitle: "「{name}」を削除？",
+    kickerProduct: "商品を削除",
+    kickerSupplier: "仕入先を削除",
+    kickerFamily: "ファミリーを削除",
+    kickerMaterial: "材料を削除",
+    productBody: "以下がこの商品を参照しています。",
+    productLogs: "売上記録 {n} 件・生産記録 {m} 件:残りますが商品画面には出ません(商品を戻すと戻ります)",
+    productPlan: "今日の生産表にあります",
+    supplierBody: "以下の仕入れ原料がこの仕入先に紐付いています。",
+    supplierRef: "仕入れ原料「{first}」など {n} 件の紐付けが外れます",
+    familyBody: "ファミリー内のレシピと組み合わせは削除されず、「未分類」になります。",
+    familyRefR: "レシピ：{name}",
+    familyRefC: "組み合わせ：{name}",
+    compCatBody: "{n} 個のパーツが「{name}」を使っています。削除するとこれらの分類は「その他」になります。",
+    noName: "(名前なし)",
+    undoOther: "「{name}」は別の版が既にあるため戻していません(ゴミ箱に残っています)",
+    undoName: "同じ名前の「{name}」があるため戻していません(ゴミ箱に残っています)",
+    undoShopDup: "この材料には既に仕入れ原料があるため戻していません(ゴミ箱に残っています)",
+    restoreSame: "「{name}」は既にあります",
+    stale: "このウィンドウは保存を停止しています。再読み込みしてからインポートしてください",
+    brandUndoK: "メーカー {k} 社は別の版が既にあるため戻していません",
+    brandUndoJ: "材料 {j} 件はその後変更されたため戻していません",
+    brandUndoSep: "。",
+    undoRestoreChanged: "元に戻した後に変更されたため、取り消していません",
+    undoRestoreBrand: "元に戻した後に材料が紐付いたため、取り消していません",
+    undoRestoreBatch: "メーカー {k} 社は元に戻した後に変更されたため、取り消していません",
+    batchRestored: "メーカー {n} 社を元に戻しました",
+    batchMoved: "。材料 {m} 件は「{to}」のまま(戻していません)",
+    batchK: "。{k} 社は戻していません",
+    batchNone: "{k} 社は戻していません",
+    permDeleted: "ゴミ箱から「{name}」を削除しました",
+    cleared: "ゴミ箱を空にしました({n} 件)",
+    saveFail: "元に戻しましたが保存できていません(容量不足)。ゴミ箱の項目は残しておきます",
+    otherBrand: "別のメーカー",
+    restored: "「{name}」を元に戻しました",
+    restoredFamily: "ファミリー「{name}」を元に戻しました",
+    restoredCat: "パーツ分類「{name}」を元に戻しました",
+    famBack: "。{x}を戻しました",
+    famR: "レシピ {n} 件",
+    famC: "組み合わせ {n} 件",
+    famRC: "レシピ {r} 件・組み合わせ {c} 件",
+    famSkip: "(その後ファミリーを変えた {n} 件はそのまま)",
+    supBack: "。仕入れ原料 {n} 件の紐付けを戻しました",
+    catBack: "。パーツ {n} 件の分類を戻しました",
+    catSkip: "(その後変えたものはそのまま)",
+    prepBack: "。作り置き在庫 {q}{u} も戻しました(削除時点の数。棚卸しで確認を)",
+    prepHas: "。作り置き在庫は戻していません(既にあります)",
+    prepRO: "。作り置き在庫は戻していません(新しいバージョンの記録です)",
+    stockNote: "(在庫は削除時点の数:{s})",
+    brandMoved: "。材料 {n} 件は「{to}」のまま(戻していません)",
+    cardTitle: "🗑 ゴミ箱(30 日)",
+    cardLoading: "読み込み中…",
+    cardOff: "この端末のブラウザのデータベースが使えないため、ゴミ箱は使えません",
+    cardOk: "削除したレシピ・パーツ・組み合わせなどはこの端末に 30 日間残り、ワンタップで元に戻せます。現在 {n} 件。",
+    cardBtn: "ゴミ箱を開く",
+    dlgTitle: "🗑 ゴミ箱",
+    dlgNote: "削除したものはこの端末に 30 日間残ります。上書きインポートや全削除で消えたデータはここではなく「🛟 バックアップ復元」にあります。",
+    chipAll: "すべて {n}",
+    clearBtn: "ゴミ箱を空にする",
+    today: "今日",
+    rowDel: "{kind} · {name} · {t} 削除",
+    rowRefs: " · 当時 {refs} で使用",
+    refSep: "・",
+    refProducts: "商品 {n} 件",
+    refCreations: "組み合わせ {n} 件",
+    refRecipes: "レシピ {n} 件",
+    refComponents: "パーツ {n} 件",
+    refIngRows: "材料として {n} か所",
+    refShopMaterials: "仕入れ原料 {n} 件",
+    refLogs: "記録 {n} 件",
+    refPlan: "今日の製造リスト",
+    daysLeft: "残り {d} 日",
+    restoreBtn: "元に戻す",
+    permBtn: "完全に削除",
+    batchBtn: "すべて戻す",
+    batchRow: "メーカー · {n} 社をまとめて削除:{names}",
+    batchNameSep: "・",
+    batchMovedRow: " · 材料 {m} 件を「{to}」へ移動済み",
+    noteOther: "別の版が現在あります。戻すには、今ある方を削除(ゴミ箱へ)してからこれを元に戻してください",
+    noteShopDupP: "この材料には既に仕入れ価格({p})があり、戻すと 2 件になります",
+    noteShopDup: "この材料には既に仕入れ原料があり、戻すと 2 件になります",
+    emptyFirst: "ゴミ箱は空です · 削除したものは 30 日間ここに残ります",
+    emptyFilter: "この種類の削除済みはもうありません",
+    close: "閉じる",
+    expand: "まとめを開く",
+    collapse: "まとめをたたむ",
+  },
+};
+const _binT = (lang) => SAFETY_TXT.bin[lang === "ja" ? "ja" : "zh"];
+const _binF = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v && Object.prototype.hasOwnProperty.call(v, k) ? String(v[k]) : m));
 const _binZeroRefN = () => ({ products: 0, creations: 0, recipes: 0, components: 0, ingRows: 0, shopMaterials: 0, logs: 0, plan: 0 });
 const _binEmptySides = () => ({ familyOf: { recipes: [], creations: [] }, supplierOf: [], compCatOf: [], rowSnaps: [] });
 const _binEmptySkipped = () => ({ familyOf: 0, supplierOf: 0, compCatOf: 0, rowSnaps: 0 });
 const _binZeroCounts = () => ({ famR: 0, famC: 0, famSkip: 0, sup: 0, supSkip: 0, cat: 0, catSkip: 0, rows: 0, rowSkip: 0 });
-const binSameId = (a, b) => false;                                   // 空壳:R1
-const binCanon = (kind, x) => importCanon(BIN_KINDS[kind] ? BIN_KINDS[kind].list : kind, x);   // R2 那一行(importCanon 是真的)
-const binNameOf = (kind, item, materials) => ({ zh: "", ja: "" });  // 空壳:R3
-const binShowName = (entry, lang) => "";                             // 空壳:R3
-const binEntryOk = (e) => false;                                     // 空壳:R4
-const binPending = (e) => false;                                     // 空壳:R4
-const binKnown = (e) => false;                                       // 空壳:R4
-const binRefCounts = (kind, item, cur, ctx) => _binZeroRefN();       // 空壳:R5
-const binEntryOf = (kind, item, meta, nowIso) => null;               // 空壳:R6
-const binDaysLeft = (e, nowMs) => 0;                                 // 空壳:R7
-const binExistsSame = (e, cur) => false;                             // 空壳:R8
-const binVisible = (entries, cur) => [];                             // 空壳:R9
-const binPrune = (entries, nowMs, opts) => ({ keep: Array.isArray(entries) ? entries : [], drop: [], rewrite: [] });   // 空壳:R10(什么都不删)
-const binRestorePlan = (entry, cur, ctx) => ({ status: "blocked", why: "bad", list: null, index: -1, item: null, conflict: null,
-  sides: _binEmptySides(), skipped: _binEmptySkipped(), prep: null });   // 空壳:R11(一律还原不了;还原 / 每个撤销都先过它,R 线写成真的)
-const applyBinSides = (cur, entry, plan, nowIso) => ({ patches: {}, counts: _binZeroCounts() });   // 空壳:R12(挂回供货商时只调 smReattachSupplier)
-const binApplyRestore = (cur, entry, plan, nowIso) => ({ next: {}, counts: _binZeroCounts() });    // 空壳:R13
-const binSettle = (entries, pending, res, cur) => ({ drop: [], unhide: [], pending, toast: false });   // 空壳:R14(看到保存成功才真删 restoredAt 的条目)
-const binIndexOf = (entries) => null;                                // 空壳:R15(第 0 步 null = 合并导入当回收站是空的)
-const binMatchIncoming = (idx, kind, inc) => null;                   // 空壳:R15(认法必须等于 spec_merge_plan R16)
-// ── 本窗口的状态(不进存档、刷新就没了;spec_bin 2.6)
-let _binAvail = "loading";      // "loading" | "ok" | "off":库打开成功 → ok;没有 indexedDB / 打开出错 → off(第 0 步不打开,一直 loading)
-let _binCache = new Map();      // bid → entry
+const BIN_REF_KEYS = ["products", "creations", "recipes", "components", "ingRows", "shopMaterials", "logs", "plan"];
+const _BIN_SNAP_KEYS = ["unitPrice", "cost", "currency"];
+const _BIN_SNAP_TABLES = ["recipes", "components", "creations"];
+const _binIsObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+const _binOwn = (o, k) => !!o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k);
+const _binArr = (x) => (Array.isArray(x) ? x : x instanceof Map ? [...x.values()] : (x && typeof x === "object" && typeof x[Symbol.iterator] === "function") ? [...x] : []);
+const _binTab = (cur, t) => (cur && Array.isArray(cur[t]) ? cur[t] : []);
+// R1 同编号:1001 和 "1001" 同编号;undefined / null / "" 永远不同编号。只给回收站自己的判断用(删除时过滤仍用严格的 x.id !== snap.id)
+const _binHas = (v) => v !== undefined && v !== null && v !== "";
+const binSameId = (a, b) => _binHas(a) && _binHas(b) && String(a) === String(b);
+const binCanon = (kind, x) => importCanon(BIN_KINDS[kind] ? BIN_KINDS[kind].list : kind, x);   // R2(importCanon = spec_merge_plan R13,在 import-preview 段)
+// R3 名字(只给显示和提示条用):第一个不是空白的原值(不 trim);供货商只有 name;本店原料取它挂的材料
+const _BIN_NAME_KINDS = ["recipe", "component", "creation", "product", "family", "material", "brand"];
+const _binFirst = (...vs) => { for (const v of vs) if (typeof v === "string" && v.trim() !== "") return v; return ""; };
+const binNameOf = (kind, item, materials) => {
+  if (_BIN_NAME_KINDS.includes(kind)) return { zh: _binFirst(item.nameZh, item.nameJa, item.nameFr), ja: _binFirst(item.nameJa, item.nameZh, item.nameFr) };
+  if (kind === "supplier") { const n = _binFirst(item.name, item.nameZh, item.nameJa); return { zh: n, ja: n }; }
+  if (kind === "knowledge") return { zh: _binFirst(item.titleZh, item.titleJa, item.title), ja: _binFirst(item.titleJa, item.titleZh, item.title) };
+  if (kind === "compCat") return { zh: _binFirst(item.zh, item.ja), ja: _binFirst(item.ja, item.zh) };
+  if (kind === "shopMaterial") {
+    const m = (item.materialId && Array.isArray(materials)) ? materials.find(x => x && x.id === item.materialId) : undefined;
+    return m ? binNameOf("material", m) : { zh: "", ja: "" };
+  }
+  return { zh: "", ja: "" };
+};
+const _binShow = (nm, lang) => { const k = lang === "ja" ? "ja" : "zh"; const v = nm ? nm[k] : undefined; return v === "" ? _binT(k).noName : v; };
+const binShowName = (entry, lang) => _binShow(entry && entry.name, lang);
+// R4 有效 / 待确认 / 认得
+const binEntryOk = (e) => _binIsObj(e) && typeof e.bid === "string" && e.bid !== "" && typeof e.kind === "string" && e.kind !== ""
+  && typeof e.at === "string" && isFinite(Date.parse(e.at)) && _binIsObj(e.item)
+  && ((typeof e.id === "number" && isFinite(e.id)) || (typeof e.id === "string" && e.id !== ""));
+const binPending = (e) => !!e && typeof e === "object" && typeof e.restoredAt === "string" && e.restoredAt !== "";
+const binKnown = (e) => binEntryOk(e) && Object.prototype.hasOwnProperty.call(BIN_KINDS, e.kind);
+// R5 删的那一刻有谁在用(和确认框列出来的引用方同一套算法;只给回收站行「当时 … 在用」显示)
+const binRefCounts = (kind, item, cur, ctx) => {
+  const r = _binZeroRefN();
+  const id = item.id;
+  const S = (x) => String(x);
+  const L = (it, Ty) => !!it && it.linkedType === Ty && S(it.linkedId) === S(id);
+  const prodN = (Ty) => _binTab(cur, "products").filter(p => p && (p.items || []).some(it => L(it, Ty))).length;
+  const matRows = (mid) => {
+    const lk = (ings) => (ings || []).some(i => i && i.materialId === mid);
+    r.recipes = _binTab(cur, "recipes").filter(x => x && lk(x.ingredients)).length;
+    r.components = _binTab(cur, "components").filter(x => x && lk(x.ingredients)).length;
+    r.creations = _binTab(cur, "creations").filter(cr => cr && (cr.layers || []).some(l => l && lk(l.ingredients))).length;
+  };
+  if (kind === "recipe" || kind === "creation") r.products = prodN(kind);
+  else if (kind === "component") {
+    r.products = prodN("component");
+    r.creations = _binTab(cur, "creations").filter(cr => cr && (cr.layers || []).some(l => l && l.sourceComponentId === id)).length;
+    r.ingRows = componentIngredientUses(id, { recipes: _binTab(cur, "recipes"), components: _binTab(cur, "components"), creations: _binTab(cur, "creations") }).length;
+  } else if (kind === "material") {
+    matRows(id);
+    r.shopMaterials = _binTab(cur, "shopMaterials").filter(s => s && s.materialId === id).length;
+  } else if (kind === "shopMaterial") {
+    const mid = item.materialId;
+    const stillPriced = _binTab(cur, "shopMaterials").some(x => x && x.id !== item.id && x.materialId === mid && x.pricePerG);
+    if (mid && !stillPriced && _binTab(cur, "materials").some(m => m && m.id === mid)) matRows(mid);
+  } else if (kind === "product") {
+    r.logs = _binTab(cur, "salesLog").filter(s => s && s.productId === id).length + _binTab(cur, "productionLog").filter(s => s && s.productId === id).length;
+    r.plan = prodPlanForToday(ctx ? ctx.prodPlan : undefined, ctx ? ctx.today : undefined).lines.filter(l => l.kind === "product" && S(l.id) === S(id)).length;
+  } else if (kind === "supplier") r.shopMaterials = _binTab(cur, "shopMaterials").filter(sm => sm && Array.isArray(sm.supplierIds) && sm.supplierIds.includes(id)).length;
+  else if (kind === "family") {
+    r.recipes = _binTab(cur, "recipes").filter(x => x && x.familyId === id).length;
+    r.creations = _binTab(cur, "creations").filter(c => c && c.familyId === id).length;
+  } else if (kind === "compCat") r.components = _binTab(cur, "components").filter(x => x && x.componentCategory === id).length;
+  return r;
+};
+// R6 一条回收站条目(item / side 原样放进去,不拷贝;条目里不许多别的键)
+const binEntryOf = (kind, item, meta, nowIso) => {
+  const m = meta || {};
+  const ms = Date.parse(nowIso);
+  const salt = (typeof m.salt === "string" && m.salt !== "") ? m.salt : Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  const rn = m.refN, refN = {};
+  BIN_REF_KEYS.forEach(k => { const v = rn === null || rn === undefined ? undefined : rn[k]; refN[k] = (Number.isInteger(v) && v >= 0) ? v : 0; });
+  const entry = {
+    bid: kind + ":" + String(item.id) + ":" + ms + ":" + salt,
+    kind, id: item.id,
+    name: (_binIsObj(m.name) && typeof m.name.zh === "string" && typeof m.name.ja === "string") ? { zh: m.name.zh, ja: m.name.ja } : binNameOf(kind, item, null),
+    at: nowIso,
+    index: (Number.isInteger(m.index) && m.index >= 0) ? m.index : -1,
+    item,
+    reason: m.reason === "brandMerge" ? "brandMerge" : "delete",
+    refN,
+    side: _binIsObj(m.side) ? m.side : {},
+  };
+  if (typeof m.batch === "string" && m.batch !== "") entry.batch = m.batch;
+  return entry;
+};
+// R7 还剩几天(读不出 → 0;时钟往回拨时可以大于 30)
+const binDaysLeft = (e, nowMs) => {
+  const t = Date.parse(e && e.at);
+  if (!isFinite(t)) return 0;
+  return Math.max(0, Math.ceil((t + BIN_TTL_MS - nowMs) / BIN_DAY_MS));
+};
+// R8 表里第一条同编号的,内容和条目里的一样
+const binExistsSame = (e, cur) => {
+  if (!binKnown(e)) return false;
+  const list = cur ? cur[BIN_KINDS[e.kind].list] : undefined;
+  if (!Array.isArray(list)) return false;
+  const x = list.find(y => y && binSameId(y.id, e.id));
+  return !!x && binCanon(e.kind, x) === binCanon(e.kind, e.item);
+};
+// 新到旧:at 大的在前;同一毫秒 bid 字符串大的在前
+const _binNewFirst = (a, b) => { const ta = Date.parse(a.at), tb = Date.parse(b.at); if (ta !== tb) return tb - ta; return a.bid < b.bid ? 1 : a.bid > b.bid ? -1 : 0; };
+// R9 列表里显示的:认得、不是待确认、不是「已经在了(一样)」(只是不显示,不从库里删 —— spec_bin §8 Q1)
+const binVisible = (entries, cur) => _binArr(entries).filter(e => binKnown(e) && !binPending(e) && !binExistsSame(e, cur)).sort(_binNewFirst);
+// R10 修剪:坏条目 → 开机清标记 → 同内容去重 → 过期 → 条数 / 字数上限。返回 { keep, drop(主键), rewrite(要重写的新对象) }
+const binPrune = (entries, nowMs, opts) => {
+  const o = opts || {};
+  const startup = o.startup === undefined ? false : o.startup;
+  const loaded = o.loaded === undefined ? null : o.loaded;
+  const ttlMs = o.ttlMs === undefined ? BIN_TTL_MS : o.ttlMs;
+  const maxItems = o.maxItems === undefined ? BIN_MAX_ITEMS : o.maxItems;
+  const maxChars = o.maxChars === undefined ? BIN_MAX_CHARS : o.maxChars;
+  const drop = [];
+  let keep = [];
+  _binArr(entries).forEach(e => {
+    if (binEntryOk(e)) { keep.push(e); return; }
+    if (e !== null && typeof e === "object" && e.bid !== undefined) drop.push(e.bid);   // 没有 bid 的放不了主键,只从 keep 里去掉
+  });
+  const rewritten = new Set();
+  if (startup && loaded) {
+    keep = keep.flatMap(e => {
+      if (!binPending(e)) return [e];
+      if (binKnown(e)) {
+        const L = loaded[BIN_KINDS[e.kind].list];
+        if (Array.isArray(L) && L.some(x => x && binSameId(x.id, e.id))) { drop.push(e.bid); return []; }
+      }
+      const c = { ...e }; delete c.restoredAt; rewritten.add(c); return [c];
+    });
+  }
+  const best = new Map(), keyOf = new Map();
+  keep.forEach(e => {
+    if (!binKnown(e)) return;
+    const k = e.kind + "\u0000" + String(e.id) + "\u0000" + binCanon(e.kind, e.item);
+    keyOf.set(e, k);
+    const b = best.get(k);
+    if (!b || _binNewFirst(e, b) < 0) best.set(k, e);
+  });
+  keep = keep.filter(e => { const k = keyOf.get(e); if (k === undefined || best.get(k) === e) return true; drop.push(e.bid); return false; });
+  keep = keep.filter(e => { if (!binPending(e) && nowMs - Date.parse(e.at) >= ttlMs) { drop.push(e.bid); return false; } return true; });
+  const len = new Map(keep.map(e => [e, JSON.stringify(e).length]));
+  let count = keep.length, chars = 0;
+  keep.forEach(e => { chars += len.get(e); });
+  if (count > maxItems || chars > maxChars) {
+    const gone = new Set();
+    const cands = keep.filter(e => !binPending(e)).sort((a, b) => -_binNewFirst(a, b));   // 最旧的在前
+    for (const e of cands) {
+      if (!(count > maxItems || chars > maxChars)) break;
+      gone.add(e); count--; chars -= len.get(e); drop.push(e.bid);
+    }
+    keep = keep.filter(e => !gone.has(e));
+  }
+  return { keep, drop, rewrite: keep.filter(e => rewritten.has(e)) };
+};
+// R11 放得回去吗(还原和每一个撤销都先过它):bad / 同编号(一样 / 另一个版本)/ 同名 / 同材料的本店原料 / ok;ok 或「已经在了(一样)」时再挑出没人动过的关联
+const _binNormT = (s) => (typeof s === "string" ? s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() : "");
+const _binSameT = (a, b) => { const na = _binNormT(a); return na !== "" && na === _binNormT(b); };
+const _binClash = (kind, x, it) => {
+  const c = BIN_KINDS[kind].clash;
+  if (c === "N") return !!((it.nameZh && x.nameZh && it.nameZh === x.nameZh) || (it.nameJa && x.nameJa && it.nameJa === x.nameJa));
+  if (c === "T") return _binSameT(x.titleZh, it.titleZh) || _binSameT(x.titleJa, it.titleJa) || _binSameT(x.title, it.title);
+  if (c === "S") { const n = normSupName(it.name); return n !== "" && n === normSupName(x.name); }
+  return false;
+};
+const binCtxOf = (prepRaw) => ({ prepReadOnly: prepStockRead(prepRaw).readOnly, prepHas: (key) => !!prepRaw && _binIsObj(prepRaw.items) && Object.prototype.hasOwnProperty.call(prepRaw.items, key) });
+const binRestorePlan = (entry, cur, ctx) => {
+  const known = binKnown(entry);
+  const list = known ? BIN_KINDS[entry.kind].list : null;
+  const L = known && cur ? cur[list] : undefined;
+  const base = { list, index: -1, item: entry ? entry.item : undefined, conflict: null, sides: _binEmptySides(), skipped: _binEmptySkipped(), prep: null };
+  if (!known || !Array.isArray(L)) return { status: "blocked", why: "bad", ...base, item: (entry && entry.item !== undefined && entry.item !== null) ? entry.item : null };
+  const kind = entry.kind;
+  let plan;
+  const same = L.find(x => x && binSameId(x.id, entry.id));
+  if (same) plan = { status: "exists", why: binCanon(kind, same) === binCanon(kind, entry.item) ? "same" : "other", ...base, conflict: same };
+  else {
+    const nm = L.find(x => x && !binSameId(x.id, entry.id) && _binClash(kind, x, entry.item));
+    if (nm) plan = { status: "blocked", why: "name", ...base, conflict: nm };
+    else {
+      const mid = kind === "shopMaterial" ? entry.item.materialId : undefined;
+      const sd = mid ? L.find(x => x && x.materialId === mid) : undefined;
+      if (sd) plan = { status: "blocked", why: "shopDup", ...base, conflict: sd };
+      else plan = { status: "ok", why: "", ...base, index: (Number.isInteger(entry.index) && entry.index >= 0) ? Math.min(entry.index, L.length) : L.length };
+    }
+  }
+  if (!(plan.status === "ok" || (plan.status === "exists" && plan.why === "same"))) return plan;
+  const F = entry.id, sd = _binIsObj(entry.side) ? entry.side : {};
+  const sides = _binEmptySides(), skipped = _binEmptySkipped();
+  const first = (t, id) => (Array.isArray(cur[t]) ? cur[t].find(x => x && binSameId(x.id, id)) : undefined);
+  const arrOf = (v) => (Array.isArray(v) ? v : []);
+  const fo = _binIsObj(sd.familyOf) ? sd.familyOf : {};
+  arrOf(fo.recipes).forEach(k => { const r = first("recipes", k); if (r && r.familyId === "") sides.familyOf.recipes.push(k); else skipped.familyOf++; });
+  arrOf(fo.creations).forEach(k => { const r = first("creations", k); if (r && r.familyId === "") sides.familyOf.creations.push(k); else skipped.familyOf++; });
+  arrOf(sd.supplierOf).forEach(it => {
+    const sm = it ? first("shopMaterials", it.id) : undefined;
+    if (sm && !(Array.isArray(sm.supplierIds) && sm.supplierIds.includes(F))) sides.supplierOf.push(it); else skipped.supplierOf++;
+  });
+  arrOf(sd.compCatOf).forEach(k => { const c = first("components", k); if (c && c.componentCategory === "other") sides.compCatOf.push(k); else skipped.compCatOf++; });
+  arrOf(sd.rowSnaps).forEach(rs => {
+    const o = rs && _BIN_SNAP_TABLES.includes(rs.t) ? first(rs.t, rs.id) : undefined;
+    let ok = false;
+    if (o) {
+      const rows = rs.t === "creations" ? (o.layers && o.layers[rs.li] && o.layers[rs.li].ingredients) : o.ingredients;
+      const row = rows ? rows[rs.ri] : undefined;
+      const after = rs.after || {};
+      ok = _binIsObj(row) && row.componentId === F && _BIN_SNAP_KEYS.every(k => _binOwn(row, k) && row[k] === after[k]);
+    }
+    if (ok) sides.rowSnaps.push(rs); else skipped.rowSnaps++;
+  });
+  let prep = null;
+  if (_binIsObj(sd.prep) && typeof sd.prep.key === "string") {
+    const key = sd.prep.key;
+    const ro = !!(ctx && ctx.prepReadOnly), has = !!(ctx && typeof ctx.prepHas === "function" && ctx.prepHas(key));
+    prep = { key, item: sd.prep.item, qty: sd.prep.qty, unit: sd.prep.unit,
+      put: !ro && !has && _binIsObj(sd.prep.item),
+      why: ro ? "readOnly" : has ? "has" : !_binIsObj(sd.prep.item) ? "bad" : "" };
+  }
+  return { ...plan, sides, skipped, prep };
+};
+// R12 只放回 plan.sides 挑过的关联;每张改到的表出一个新数组。挂回供货商只走 smReattachSupplier(决定 46),再把 id 挪回删之前的下标(§8 Q3)
+const applyBinSides = (cur, entry, plan, nowIso) => {
+  const F = entry.id;
+  const sides = (plan && plan.sides) || _binEmptySides();
+  const work = {};
+  const arr = (t) => work[t] || (Array.isArray(cur[t]) ? cur[t] : []);
+  const put = (t, i, v) => { if (!work[t]) work[t] = arr(t).slice(); work[t][i] = v; };
+  const idx = (t, id) => arr(t).findIndex(x => x && binSameId(x.id, id));
+  let famR = 0, famC = 0, sup = 0, cat = 0, rows = 0;
+  const fo = sides.familyOf || {};
+  (fo.recipes || []).forEach(id => { const i = idx("recipes", id); if (i >= 0) { put("recipes", i, { ...arr("recipes")[i], familyId: F }); famR++; } });
+  (fo.creations || []).forEach(id => { const i = idx("creations", id); if (i >= 0) { put("creations", i, { ...arr("creations")[i], familyId: F }); famC++; } });
+  (sides.supplierOf || []).forEach(it => {
+    const i = idx("shopMaterials", it.id);
+    if (i < 0) return;
+    let a = smReattachSupplier(arr("shopMaterials")[i], F, nowIso);
+    if (Number.isInteger(it.pos) && it.pos >= 0 && Array.isArray(a.supplierIds) && a.supplierIds.includes(F)) {
+      const ar = a.supplierIds.filter(x => x !== F);
+      ar.splice(Math.min(it.pos, ar.length), 0, F);
+      a = { ...a, supplierIds: ar };
+    }
+    put("shopMaterials", i, a); sup++;
+  });
+  (sides.compCatOf || []).forEach(id => { const i = idx("components", id); if (i >= 0) { put("components", i, { ...arr("components")[i], componentCategory: F }); cat++; } });
+  (sides.rowSnaps || []).forEach(rs => {
+    const i = idx(rs.t, rs.id);
+    if (i < 0) return;
+    const o = arr(rs.t)[i];
+    const before = rs.before || {};
+    const fix = (row) => { const r2 = { ...row }; _BIN_SNAP_KEYS.forEach(k => { if (_binOwn(before, k)) r2[k] = before[k]; else delete r2[k]; }); return r2; };
+    if (rs.t === "creations") {
+      const layers = o.layers.slice(); const l = layers[rs.li];
+      const ings = l.ingredients.slice(); ings[rs.ri] = fix(ings[rs.ri]);
+      layers[rs.li] = { ...l, ingredients: ings };
+      put(rs.t, i, { ...o, layers });
+    } else {
+      const ings = o.ingredients.slice(); ings[rs.ri] = fix(ings[rs.ri]);
+      put(rs.t, i, { ...o, ingredients: ings });
+    }
+    rows++;
+  });
+  const sk = (plan && plan.skipped) || _binEmptySkipped();
+  return { patches: work, counts: { famR, famC, famSkip: sk.familyOf, sup, supSkip: sk.supplierOf, cat, catSkip: sk.compCatOf, rows, rowSkip: sk.rowSnaps } };
+};
+// R13 放回去以后的各张表(只出改到的;plan.item 原样插回 plan.index)
+const binApplyRestore = (cur, entry, plan, nowIso) => {
+  const { patches, counts } = applyBinSides(cur, entry, plan, nowIso);
+  if (!(plan.status === "ok" || (plan.status === "exists" && plan.why === "same"))) return { next: {}, counts };
+  const next = { ...patches };
+  if (plan.status === "ok") {
+    const base = next[plan.list] !== undefined && next[plan.list] !== null ? next[plan.list] : cur[plan.list];
+    const a = base.slice(); a.splice(plan.index, 0, plan.item); next[plan.list] = a;
+  }
+  return { next, counts };
+};
+// R14 保存结果出来以后:成功 → 表里有它的真删、没有的重新显示;失败 → 全部重新显示(stale 不推提示条);suspended → 什么都不做
+const binSettle = (entries, pending, res, cur) => {
+  if (res && res.suspended) return { drop: [], unhide: [], pending, toast: false };
+  const byBid = new Map();
+  _binArr(entries).forEach(e => { if (e && typeof e === "object" && typeof e.bid === "string" && !byBid.has(e.bid)) byBid.set(e.bid, e); });
+  const drop = [], unhide = [];
+  if (res && res.ok) {
+    const left = new Map(pending);
+    for (const [bid, ms] of pending) {
+      if (!(ms <= res.atMs)) continue;
+      left.delete(bid);
+      const e = byBid.get(bid);
+      if (!e || !binPending(e)) continue;
+      const L = binKnown(e) && cur ? cur[BIN_KINDS[e.kind].list] : null;
+      if (binKnown(e) && Array.isArray(L) && L.some(x => x && binSameId(x.id, e.id))) drop.push(bid); else unhide.push(bid);
+    }
+    return { drop, unhide, pending: left, toast: false };
+  }
+  for (const [bid] of pending) { const e = byBid.get(bid); if (e && binPending(e)) unhide.push(bid); }
+  return { drop, unhide, pending: new Map(), toast: unhide.length > 0 && !!res && res.error !== "stale" };
+};
+// R15 合并导入「你删过的」:认法 = spec_merge_plan R16(取候选里 at 最大的一条,再看内容一不一样)
+const _binDup = (kind, a, b) => {
+  switch (kind) {
+    case "recipe": case "component": case "creation": case "product": case "family":
+      return !!((b.id && a.id === b.id) || (b.nameZh && a.nameZh && b.nameZh === a.nameZh) || (b.nameJa && a.nameJa && b.nameJa === a.nameJa));
+    case "knowledge": return !!((b.id && a.id === b.id) || _binSameT(a.titleZh, b.titleZh) || _binSameT(a.titleJa, b.titleJa) || _binSameT(a.title, b.title));
+    case "supplier": return !!((b.id && a.id === b.id) || (normSupName(b.name) !== "" && normSupName(a.name) === normSupName(b.name)));
+    case "compCat": return !!(b.id && a.id === b.id);
+    case "brand": case "material": return a.id === b.id;
+    case "shopMaterial": return !!((a.materialId && a.materialId === b.materialId) || (a.id && a.id === b.id));
+    default: return false;
+  }
+};
+const binIndexOf = (entries) => {
+  const by = new Map();
+  _binArr(entries).forEach(e => { if (binKnown(e) && !binPending(e)) { if (!by.has(e.kind)) by.set(e.kind, []); by.get(e.kind).push(e); } });
+  return { by };
+};
+const binMatchIncoming = (idx, kind, inc) => {
+  if (!_binIsObj(inc)) return null;
+  if (!(idx && idx.by instanceof Map)) return null;
+  const cands = (idx.by.get(kind) || []).filter(e => _binDup(kind, e.item, inc));
+  if (!cands.length) return null;
+  const e = cands.reduce((b, x) => (!b || b.at < x.at || (b.at === x.at && b.bid < x.bid) ? x : b), null);
+  return { entry: e, sameContent: binCanon(kind, e.item) === binCanon(kind, inc) };
+};
+// R22「写什么」+ R31 删组件时的快照行(删除和「还原的撤销」R46 共用)。删组件要在注入的组件表还含它的时候调(渲染期注入,点击那一刻就是)
+const _binSnapRows = (cur, C) => {
+  const mats = _binTab(cur, "materials");
+  const rowSnaps = [], patches = {};
+  const fixIngs = (t, o, li, ings) => {
+    if (!Array.isArray(ings)) return null;
+    let out = null;
+    ings.forEach((i, ri) => {
+      if (!i || typeof i !== "object" || i.noCost) return;
+      const c = ingLiveComp(i, mats);
+      if (!c || c.id !== C) return;
+      const s = componentRowSnapshot(i, mats);
+      if (!(s.unitPrice !== i.unitPrice || s.cost !== i.cost || i.currency !== s.currency)) return;
+      if (!out) out = ings.slice();
+      out[ri] = { ...i, ...s };
+      const before = {}; _BIN_SNAP_KEYS.forEach(k => { if (_binOwn(i, k)) before[k] = i[k]; });
+      rowSnaps.push({ t, id: o.id, li, ri, before, after: s });
+    });
+    return out;
+  };
+  ["recipes", "components"].forEach(t => {
+    let arr = null;
+    _binTab(cur, t).forEach((o, k) => {
+      if (!o || (t === "components" && o.id === C)) return;
+      const n = fixIngs(t, o, -1, o.ingredients);
+      if (n) { if (!arr) arr = cur[t].slice(); arr[k] = { ...o, ingredients: n }; }
+    });
+    if (arr) patches[t] = arr;
+  });
+  let carr = null;
+  _binTab(cur, "creations").forEach((o, k) => {
+    if (!o || !Array.isArray(o.layers)) return;
+    let layers = null;
+    o.layers.forEach((l, li) => {
+      if (!l) return;
+      const n = fixIngs("creations", o, li, l.ingredients);
+      if (n) { if (!layers) layers = o.layers.slice(); layers[li] = { ...l, ingredients: n }; }
+    });
+    if (layers) { if (!carr) carr = cur.creations.slice(); carr[k] = { ...o, layers }; }
+  });
+  if (carr) patches.creations = carr;
+  return { patches, rowSnaps };
+};
+const binDeleteWrite = (kind, snap, cur, nowIso) => {
+  const K = BIN_KINDS[kind], id = snap.id;
+  const patches = {}, side = {};
+  if (kind === "component") {
+    const r = _binSnapRows(cur, id);
+    Object.assign(patches, r.patches);
+    if (r.rowSnaps.length) side.rowSnaps = r.rowSnaps;
+  }
+  if (kind === "supplier") {
+    const sms = _binTab(cur, "shopMaterials");
+    const r = stripSupplierRefs(sms, id, nowIso);
+    if (r.list !== sms) patches.shopMaterials = r.list;
+    if (r.touched.length) side.supplierOf = r.touched.map(tid => { const sm = sms.find(x => x && x.id === tid); return { id: tid, pos: sm && Array.isArray(sm.supplierIds) ? sm.supplierIds.indexOf(id) : -1 }; });
+  }
+  if (kind === "family") {
+    const fr = [], fc = [];
+    const rec = _binTab(cur, "recipes").map(x => (x && x.familyId === id ? (fr.push(x.id), { ...x, familyId: "" }) : x));
+    const cre = _binTab(cur, "creations").map(x => (x && x.familyId === id ? (fc.push(x.id), { ...x, familyId: "" }) : x));
+    if (fr.length) patches.recipes = rec;
+    if (fc.length) patches.creations = cre;
+    if (fr.length + fc.length) side.familyOf = { recipes: fr, creations: fc };
+  }
+  if (kind === "compCat") {
+    const cc = [];
+    const comps = (patches.components || _binTab(cur, "components")).map(x => (x && x.componentCategory === id ? (cc.push(x.id), { ...x, componentCategory: "other" }) : x));
+    if (cc.length) { patches.components = comps; side.compCatOf = cc; }
+  }
+  patches[K.list] = (patches[K.list] || _binTab(cur, K.list)).filter(x => !x || x.id !== id);
+  return { patches, side };
+};
+// 界面上的字(R45 还原成功 / R71 一行 / 灰掉的原因)
+const _binBrandName = (cur, bid, lang) => { const b = _binTab(cur, "brands").find(x => x && x.id === bid); return b ? _binShow(binNameOf("brand", b), lang) : _binT(lang).otherBrand; };
+const binRestoreText = (entry, counts, prep, cur, lang) => {
+  const t = _binT(lang);
+  const name = binShowName(entry, lang);
+  let s = _binF(entry.kind === "family" ? t.restoredFamily : entry.kind === "compCat" ? t.restoredCat : t.restored, { name });
+  const c = counts || _binZeroCounts();
+  if (c.famR + c.famC > 0) s += _binF(t.famBack, { x: c.famR && c.famC ? _binF(t.famRC, { r: c.famR, c: c.famC }) : c.famR ? _binF(t.famR, { n: c.famR }) : _binF(t.famC, { n: c.famC }) });
+  if (c.famSkip > 0) s += _binF(t.famSkip, { n: c.famSkip });
+  if (c.sup > 0) s += _binF(t.supBack, { n: c.sup });
+  if (c.cat > 0) s += _binF(t.catBack, { n: c.cat });
+  if (c.catSkip > 0) s += t.catSkip;
+  if (prep && prep.put && prep.qty > 0) s += _binF(t.prepBack, { q: fmtQty(prep.qty), u: prep.unit });
+  if (prep && !prep.put && prep.why === "has") s += t.prepHas;
+  if (prep && !prep.put && prep.why === "readOnly") s += t.prepRO;
+  if (entry.kind === "product") {
+    const cs = entry.item.currentStock;
+    if ((typeof cs === "number" && isFinite(cs)) || (typeof cs === "string" && isFinite(parseFloat(cs)))) s += _binF(t.stockNote, { s: String(cs) });
+  }
+  if (entry.kind === "brand") {
+    const mv = _binIsObj(entry.side) && _binIsObj(entry.side.movedTo) ? entry.side.movedTo : null;
+    const n = mv && Array.isArray(mv.materials) ? mv.materials.length : 0;
+    if (n > 0) s += _binF(t.brandMoved, { n, to: _binBrandName(cur, mv.brandId, lang) });
+  }
+  return s;
+};
+const _binPad2 = (n) => String(n).padStart(2, "0");
+const binDayLabel = (e, lang, nowMs) => {
+  const d = new Date(Date.parse(e.at));
+  return localDateStr(new Date(nowMs)) === localDateStr(d) ? _binT(lang).today : `${_binPad2(d.getMonth() + 1)}/${_binPad2(d.getDate())}`;
+};
+const binRowText = (e, lang, nowMs) => {
+  const t = _binT(lang), ja = lang === "ja";
+  const d = new Date(Date.parse(e.at));
+  const tm = localDateStr(new Date(nowMs)) === localDateStr(d) ? `${_binPad2(d.getHours())}:${_binPad2(d.getMinutes())}` : `${_binPad2(d.getMonth() + 1)}/${_binPad2(d.getDate())}`;
+  let s = _binF(t.rowDel, { kind: BIN_KINDS[e.kind][ja ? "ja" : "zh"], name: binShowName(e, lang), t: tm });
+  const rn = e.refN || {};
+  const RK = { products: t.refProducts, creations: t.refCreations, recipes: t.refRecipes, components: t.refComponents, ingRows: t.refIngRows, shopMaterials: t.refShopMaterials, logs: t.refLogs, plan: t.refPlan };
+  const parts = BIN_REF_KEYS.filter(k => rn[k] > 0).map(k => _binF(RK[k], { n: rn[k] }));
+  if (parts.length) s += _binF(t.rowRefs, { refs: parts.join(t.refSep) });
+  return s;
+};
+const binBatchText = (es, lang, cur) => {
+  const t = _binT(lang);
+  const names = es.map(e => binShowName(e, lang));
+  let s = _binF(t.batchRow, { n: es.length, names: names.slice(0, 3).join(t.batchNameSep) + (es.length > 3 ? "…" : "") });
+  const mv = es.map(e => (_binIsObj(e.side) && _binIsObj(e.side.movedTo) ? e.side.movedTo : null)).filter(Boolean);
+  const m = mv.reduce((n, x) => n + (Array.isArray(x.materials) ? x.materials.length : 0), 0);
+  if (m > 0) s += _binF(t.batchMovedRow, { m, to: _binBrandName(cur, mv[0].brandId, lang) });
+  return s;
+};
+const binDisabledNote = (plan, lang) => {
+  const t = _binT(lang);
+  if (!plan || plan.status === "ok") return "";
+  if (plan.why === "other" || plan.why === "name") return t.noteOther;
+  if (plan.why === "shopDup") { const c = plan.conflict; const p = c ? fmtUnitPrice(c.pricePerG, curOf(c)) : ""; return p ? _binF(t.noteShopDupP, { p }) : t.noteShopDup; }
+  return "";
+};
+// ── 本窗口的状态(不进存档、刷新就没了;spec_bin 2.6)。_binCache / _binPending 两个 Map 只在原地改、不换对象(测试拿得到同一个)
+let _binAvail = "loading";      // "loading" | "ok" | "off":库打开成功 → ok;没有 indexedDB / 打开出错 → off
+let _binCache = new Map();      // bid → entry:本窗口眼里的回收站,每次读 / 写都同步改
 let _binIdx = binIndexOf([]);   // 合并导入同步用;_binCache 变了就重算
 let _binPending = new Map();    // bid → restoredAt 的毫秒:本窗口放回去、等保存成功的
-let _binCancelled = false;      // 清空 / 永久删除的撤销用(R 线定)
-// ── IndexedDB 读写(只有下面这几个碰 korora_safety;第 0 步全是空壳、不打开库)
-const openSafetyDB = () => Promise.resolve(null);                    // 空壳:打开不带版本号、缺表就 +1 重开(plan「数据」§2)
-const binPut = (entries) => Promise.resolve(false);                  // 空壳
-const binAll = () => Promise.resolve([]);                            // 空壳
-const binDrop = (bids) => Promise.resolve(false);                    // 空壳
-const binClear = () => Promise.resolve(false);                       // 空壳
+let _binCancelled = false;      // (没用上;第 0 步留的名字)
+let _binNotify = null;          // App 挂的回调:缓存变了 → 重画(回收站卡的条数、弹窗列表)
+let _binGen = 0;                // 每次开机 +1;上一次挂载留下的读写回来时不再动这一次的缓存
+let _binQ = Promise.resolve();  // 读写串成一条:同一个 bid 的写 / 删 / 标记按调用顺序生效(R51)
+let _binLoadQ = [];             // 库还在打开(loading)时排队的写,打开以后按顺序执行,再做开机修剪
+const _binChanged = () => {
+  _binIdx = binIndexOf([..._binCache.values()]);
+  if (typeof _binNotify === "function") { try { _binNotify(); } catch (e) { /* 重画失败不影响数据 */ } }
+};
+const _binChain = (fn) => { const p = _binQ.then(() => fn()).catch(() => undefined); _binQ = p; return p; };
+const _binKeep = (keep) => { _binCache.clear(); keep.forEach(e => _binCache.set(e.bid, e)); };
+// ── IndexedDB 读写(只有下面这几个碰 korora_safety;全部吞掉错误:出错 = 什么都没发生)
+// 打开不带版本号;第一次建 bin / reports 两张表;以后发现缺表就关掉、按 version + 1 重开建表;别的窗口要升级时自己关(onversionchange)
+const openSafetyDB = () => new Promise((resolve) => {
+  const need = [BIN_STORE, "reports"];
+  const open = (ver) => {
+    let req;
+    try { req = ver ? indexedDB.open(BIN_DB, ver) : indexedDB.open(BIN_DB); } catch (e) { resolve(null); return; }
+    req.onupgradeneeded = () => {
+      try {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(BIN_STORE)) db.createObjectStore(BIN_STORE, { keyPath: "bid" });
+        if (!db.objectStoreNames.contains("reports")) db.createObjectStore("reports", { keyPath: "rid" });
+      } catch (e) { /* 建不了表 → 下面 onsuccess 看到缺表 */ }
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      const missing = need.some(n => !db.objectStoreNames.contains(n));
+      if (missing) { try { db.close(); } catch (e) {} if (!ver) open((db.version || 1) + 1); else resolve(null); return; }
+      db.onversionchange = () => { try { db.close(); } catch (e) {} };
+      resolve(db);
+    };
+    req.onerror = () => resolve(null);
+    req.onblocked = () => resolve(null);
+  };
+  try { if (typeof indexedDB === "undefined" || !indexedDB) { resolve(null); return; } } catch (e) { resolve(null); return; }
+  open(0);
+});
+openSafetyDB.available = () => { try { return typeof indexedDB !== "undefined" && !!indexedDB; } catch (e) { return false; } };
+const _binWithDb = async (fn) => {
+  const db = await openSafetyDB();
+  if (!db) return undefined;
+  try { return await fn(db); } catch (e) { return undefined; } finally { try { db.close(); } catch (e) {} }
+};
+const _binDbAll = (db) => new Promise((resolve) => {
+  try {
+    const req = db.transaction(BIN_STORE, "readonly").objectStore(BIN_STORE).getAll();
+    req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+    req.onerror = () => resolve([]);
+  } catch (e) { resolve([]); }
+});
+const _binDbWrite = (db, puts, drops) => new Promise((resolve) => {
+  if (!(puts && puts.length) && !(drops && drops.length)) { resolve(true); return; }
+  try {
+    const tx = db.transaction(BIN_STORE, "readwrite");
+    tx.oncomplete = () => resolve(true); tx.onerror = () => resolve(false); tx.onabort = () => resolve(false);
+    const st = tx.objectStore(BIN_STORE);
+    (drops || []).forEach(b => { try { st.delete(b); } catch (e) { /* 主键不合法(null 之类)→ 跳过 */ } });
+    (puts || []).forEach(e => { try { st.put(e); } catch (e2) { /* 存不进去的跳过 */ } });
+  } catch (e) { resolve(false); }
+});
+// 一次写:先同步改本窗口的缓存(不等库),再排进读写链;loading 时排进 _binLoadQ。写完再按这一次的意思把缓存对一遍(中间有人重读过库时补回来)
+const _binOp = (puts, drops) => {
+  if (_binAvail === "off") return Promise.resolve(false);
+  const gen = _binGen;
+  drops.forEach(b => _binCache.delete(b));
+  puts.forEach(e => _binCache.set(e.bid, e));
+  _binChanged();
+  const settle = (r) => {
+    if (gen === _binGen && _binAvail === "ok") {
+      let ch = false;
+      drops.forEach(b => { if (_binCache.has(b)) { _binCache.delete(b); ch = true; } });
+      puts.forEach(e => { if (_binCache.get(e.bid) !== e) { _binCache.set(e.bid, e); ch = true; } });
+      if (ch) _binChanged();
+    }
+    return !!r;
+  };
+  if (_binAvail === "loading") return new Promise((res) => { _binLoadQ.push({ run: (db) => _binDbWrite(db, puts, drops), done: (r) => res(!!r) }); });
+  // 上一次挂载(开机前)排进来、还没轮到的写:不写了(那个窗口已经没了;测试里重挂 App 时也不串到新库里)
+  return _binChain(() => (gen === _binGen ? _binWithDb((db) => _binDbWrite(db, puts, drops)).then(settle) : false));
+};
+// binPut 之后照 R52 修剪一次缓存(删掉的走 binDrop)
+const binPut = (entries) => {
+  if (_binAvail === "off") return Promise.resolve(false);
+  const es = _binArr(entries).filter(e => e && typeof e === "object" && typeof e.bid === "string" && e.bid !== "");
+  if (!es.length) return Promise.resolve(false);
+  const p = _binOp(es, []);
+  const pr = binPrune([..._binCache.values()], Date.now());
+  if (pr.drop.length) binDrop(pr.drop);
+  if (pr.keep.length !== _binCache.size) { _binKeep(pr.keep); _binChanged(); }
+  return p;
+};
+const binAll = () => {
+  if (_binAvail !== "ok") return Promise.resolve([]);
+  return _binChain(() => _binWithDb(_binDbAll)).then(r => (Array.isArray(r) ? r : []));
+};
+const binDrop = (bids) => {
+  if (_binAvail === "off") return Promise.resolve(false);
+  const bs = _binArr(bids);
+  if (!bs.length) return Promise.resolve(false);
+  return _binOp([], bs);
+};
+const binClear = () => {
+  if (_binAvail === "off") return Promise.resolve(false);
+  return _binOp([], [..._binCache.keys()]);
+};
+// 开机(App 挂载时调一次):开库 → 先执行 loading 期间排队的写 → 读全部 → 开机修剪(loaded = 载入那一刻的数据,R52)→ 缓存 = 修剪后的
+const binBoot = (loaded, notify) => {
+  _binGen += 1;
+  const gen = _binGen;
+  _binNotify = typeof notify === "function" ? notify : null;
+  _binCache.clear(); _binPending.clear(); _binLoadQ = [];
+  if (!openSafetyDB.available()) { _binAvail = "off"; _binChanged(); return Promise.resolve(); }
+  _binAvail = "loading";
+  _binChanged();
+  return _binChain(async () => {
+    const db = await openSafetyDB();
+    if (gen !== _binGen) { if (db) { try { db.close(); } catch (e) {} } return; }
+    if (!db) { _binAvail = "off"; _binLoadQ.splice(0).forEach(q => q.done(false)); _binCache.clear(); _binChanged(); return; }
+    try {
+      for (let guard = 0; guard < 50; guard++) {
+        while (_binLoadQ.length) { const q = _binLoadQ.shift(); const r = await q.run(db); q.done(r); }
+        const all = await _binDbAll(db);
+        if (_binLoadQ.length) continue;
+        const p = binPrune(all, Date.now(), { startup: true, loaded });
+        await _binDbWrite(db, p.rewrite, p.drop);
+        if (_binLoadQ.length) continue;
+        if (gen === _binGen) _binKeep(p.keep);
+        break;
+      }
+    } finally { try { db.close(); } catch (e) {} }
+    if (gen !== _binGen) return;
+    _binAvail = "ok";
+    _binChanged();
+  });
+};
+// 回收站弹窗打开 / 弹窗开着时窗口拿到焦点:重读库,修剪(R52 第 3 行)
+const binReread = () => {
+  if (_binAvail !== "ok") return Promise.resolve();
+  const gen = _binGen;
+  return _binChain(() => (gen !== _binGen ? undefined : _binWithDb(async (db) => {
+    const all = await _binDbAll(db);
+    const p = binPrune(all, Date.now());
+    await _binDbWrite(db, p.rewrite, p.drop);
+    if (gen !== _binGen) return;
+    _binKeep(p.keep);
+    _binChanged();
+  })));
+};
 // 导入结果表 reports(I 线;spec_merge_plan R41):同库,最近 10 次。第 0 步空壳:不持久
 const reportPut = (rep) => Promise.resolve();                        // 空壳
 const reportAll = () => Promise.resolve([]);                         // 空壳
 const reportPatch = (rid, patch) => Promise.resolve();               // 空壳
 // ─── END recycle-bin helpers ───
+
+// ─── 第 6 批 R:删除 / 撤销 / 回收站里的操作(段外:要调 setter、推提示条。规则全在 .claude/batch6/specs/spec_bin.md B 到 E 组)───
+// env = { cur() 现在的数据(14 张表,缺的当 []), set[表名](新数组), lang(), prepRaw() 备货账本原样, prodPlan(), writePrep(ops, planFn, opts),
+//         onPrepDrop(key), toast(msg, opts), openBin()(可空), jump({ kind, id })(可空), stale() }
+// App 渲染时把自己的 env 注入 _binAppEnv(同 setFxForLookup 的渲染期注入,卸载时清掉);单独挂一个页面的老测试没有 App,
+// 页面就用 binLocalEnv 拿自己手上的 props 拼一个(只写得到自己那几张表)。
+// 以后新写的删除一律走 binDeleteRun:有引用确认 + 撤销 + 进回收站;撤销先过 binRestorePlan(提示条能停住,撤销可能很晚才点)。
+const BIN_TABLES = ["recipes", "cats", "components", "creations", "knowledge", "brands", "materials", "shopMaterials", "products", "salesLog", "productionLog", "suppliers", "productFamilies", "customCompCats"];
+let _binAppEnv = null;
+const binCurOf = (env) => {
+  const c = (env && typeof env.cur === "function" ? env.cur() : null) || {};
+  const o = {};
+  BIN_TABLES.forEach(t => { o[t] = Array.isArray(c[t]) ? c[t] : []; });
+  return o;
+};
+const _binSetAll = (env, next) => {
+  Object.keys(next || {}).forEach(t => { const f = env.set && env.set[t]; if (typeof f === "function") f(next[t]); });
+};
+// 页面自己拼的 env:tables 里给数组或取数的函数;写过的表记住最新的值(老测试的 setter 不重画,props 一直是旧的)
+function binLocalEnv({ lang, showToast, tables = {}, set = {}, prepRaw, onPrepDrop, writePrep } = {}) {
+  const latest = {};
+  const setW = {};
+  Object.keys(set).forEach(t => { if (typeof set[t] === "function") setW[t] = (v) => { latest[t] = v; set[t](v); }; });
+  return {
+    cur: () => { const o = {}; Object.keys(tables).forEach(t => { o[t] = Object.prototype.hasOwnProperty.call(latest, t) ? latest[t] : (typeof tables[t] === "function" ? tables[t]() : tables[t]); }); return o; },
+    set: setW, lang: () => lang, prepRaw: () => prepRaw, prodPlan: () => undefined,
+    writePrep: typeof writePrep === "function" ? writePrep : null, onPrepDrop: typeof onPrepDrop === "function" ? onPrepDrop : null,
+    toast: (m, o) => { if (typeof showToast === "function") showToast(m, o); }, openBin: null, jump: null, stale: () => false,
+  };
+}
+// R21 确认框正文的末句(回收站可用时才加;loading / off 不说做不到的事)。binConfirm = confirmDialog 外面包一层,只在正文后面接末句
+const binConfirm = (confirmDialog, kind, lang, message, onConfirm, opts) => confirmDialog(String(message) + binConfirmTail(kind, lang), onConfirm, opts);
+const binConfirmTail = (kind, lang) => (_binAvail === "ok" && BIN_KINDS[kind] ? "\n\n" + _binF(_binT(lang).tail, { kind: BIN_KINDS[kind][lang === "ja" ? "ja" : "zh"] }) : "");
+// R40 删除类提示条停住以后多的那个按钮(回收站可用、有地方打开时才给)
+const _binHeldBin = (env, lang) => (_binAvail === "ok" && typeof env.openBin === "function" ? { held: { label: _binT(lang).heldBin, onClick: () => env.openBin() } } : {});
+const _binMarkPending = (bid, nowIso) => {
+  if (_binCache.has(bid)) binPut([{ ..._binCache.get(bid), restoredAt: nowIso }]);
+  _binPending.set(bid, Date.parse(nowIso));
+};
+// R41 第 2 步(撤销和还原共用):写回各张表、放回备货、标待确认。返回 { counts, cur(写完以后的) }
+const _binPutBack = (env, entry, plan, nowIso, cur) => {
+  const { next, counts } = binApplyRestore(cur, entry, plan, nowIso);
+  _binSetAll(env, next);
+  if (plan.prep && plan.prep.put && typeof env.writePrep === "function") env.writePrep([{ type: "putItem", key: plan.prep.key, item: plan.prep.item }], null, { isUndo: true });
+  _binMarkPending(entry.bid, nowIso);
+  return { counts, cur: { ...cur, ...next } };
+};
+const _binFailText = (plan, entry, lang) => {
+  const t = _binT(lang), name = binShowName(entry, lang);
+  if (plan.status === "exists" && plan.why === "other") return _binF(t.undoOther, { name });
+  if (plan.status === "blocked" && plan.why === "name") return _binF(t.undoName, { name });
+  if (plan.status === "blocked" && plan.why === "shopDup") return t.undoShopDup;
+  return null;
+};
+// R20 / R22 一条删除(厂家走 binBrandRemovalRun)。o.name = 提示条里的名字(配方 / 组件 / 组合产品 / 材料照今天各自的取法,页面给);
+// 没给 = binShowName(知识 / 商品 / 供货商 / 家族 / 组件分类)。返回条目
+function binDeleteRun(env, kind, target, o = {}) {
+  const K = BIN_KINDS[kind];
+  if (!K || !target || !env) return null;
+  const lang = env.lang(), t = _binT(lang);
+  const cur = binCurOf(env);
+  const list = cur[K.list];
+  const snap = list.find(x => x && x.id === target.id) || target;
+  const index = list.findIndex(x => x && x.id === target.id);
+  const today = localDateStr();
+  const refN = binRefCounts(kind, snap, cur, { prodPlan: typeof env.prodPlan === "function" ? env.prodPlan() : undefined, today });
+  const nowIso = new Date().toISOString();
+  const w = binDeleteWrite(kind, snap, cur, nowIso);
+  const side = { ...w.side };
+  _binSetAll(env, w.patches);
+  let prepSum = null;
+  if (kind === "recipe" || kind === "component") {
+    const raw0 = typeof env.prepRaw === "function" ? env.prepRaw() : undefined;
+    prepSum = prepDropSummary(prepStockRead(raw0), kind, snap, today);
+    if (prepSum && typeof env.onPrepDrop === "function") {
+      const raw = raw0 && _binIsObj(raw0.items) ? raw0.items[prepSum.key] : undefined;
+      if (env.onPrepDrop(prepSum.key)) side.prep = { key: prepSum.key, item: raw, qty: prepSum.qty, unit: prepSum.unit };
+    }
+  }
+  const meta = { index, side, refN, reason: "delete" };
+  if (kind === "shopMaterial") meta.name = binNameOf("shopMaterial", snap, cur.materials);
+  const entry = binEntryOf(kind, snap, meta, nowIso);
+  binPut([entry]);
+  const nm = o.name !== undefined ? o.name : binShowName(entry, lang);
+  const msg = kind === "shopMaterial" ? t.deletedShop
+    : (side.prep && prepSum && prepSum.qty > 0) ? prepTxt(lang).delToast(nm, fmtQty(prepSum.qty), prepSum.unit)
+    : _binF(t.deleted, { name: nm });
+  env.toast(msg, { undo: () => binUndoRun(env, entry), ..._binHeldBin(env, lang) });
+  return entry;
+}
+// R41 撤销一条删除(任意晚都可能点;用删除时内存里的那条,不读库)
+function binUndoRun(env, entry) {
+  const lang = env.lang();
+  const cur = binCurOf(env);
+  const plan = binRestorePlan(entry, cur, binCtxOf(typeof env.prepRaw === "function" ? env.prepRaw() : undefined));
+  if (plan.status === "ok" || (plan.status === "exists" && plan.why === "same")) { _binPutBack(env, entry, plan, new Date().toISOString(), cur); return true; }
+  const msg = _binFailText(plan, entry, lang);
+  if (msg) env.toast(msg);
+  return false;
+}
+// R33 厂家(单个 / 批量 / 合并):每家一条、同一个 batch;材料挪给接手的厂家。返回有没有删
+function binBrandRemovalRun(env, deleteIds, targetId, reason) {
+  const lang = env.lang(), zh = lang === "zh";
+  const cur = binCurOf(env);
+  const del = new Set((deleteIds || []).filter(id => id !== targetId));
+  if (del.size === 0) return false;
+  const moved = cur.materials.filter(m => m && del.has(m.brandId));
+  if (moved.length > 0 && !targetId) return false;   // 有材料必须先选接手的厂家,不能裸删
+  const removed = cur.brands.map((b, i) => [i, b]).filter(([, b]) => b && del.has(b.id));
+  const now = new Date().toISOString();
+  const next = {};
+  if (moved.length > 0) next.materials = cur.materials.map(m => (m && del.has(m.brandId) ? { ...m, brandId: targetId, updatedAt: now } : m));
+  next.brands = cur.brands.filter(b => !(b && del.has(b.id)));
+  _binSetAll(env, next);
+  const batch = "b_" + Date.parse(now) + "_" + Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  const rsn = reason === "brandMerge" ? "brandMerge" : "delete";
+  const entries = removed.map(([i, b]) => {
+    const mv = moved.filter(m => m.brandId === b.id);
+    return binEntryOf("brand", b, { index: i, batch, reason: rsn, side: mv.length ? { movedTo: { brandId: targetId, materials: mv.map(m => m.id) } } : {}, refN: {} }, now);
+  });
+  binPut(entries);
+  const movedRecs = moved.map(m => ({ id: m.id, prevBrandId: m.brandId, hadUpdatedAt: Object.prototype.hasOwnProperty.call(m, "updatedAt"), prevUpdatedAt: m.updatedAt }));
+  // 提示条照今天(R22 补)
+  const bName = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "(无名)";
+  const target = targetId ? cur.brands.find(b => b && b.id === targetId) : null;
+  const names = removed.map(([, b]) => bName(b));
+  const who = names.length <= 2 ? names.map(n => `「${n}」`).join("") : (zh ? `${names.length} 家` : `${names.length} 社`);
+  const tName = target ? bName(target) : "";
+  const msg = zh
+    ? (moved.length > 0 ? `已删除${who},${moved.length} 条材料挪到「${tName}」` : `已删除${who}`)
+    : (moved.length > 0 ? `${who} を削除、材料 ${moved.length} 件を「${tName}」へ` : `${who} を削除`);
+  env.toast(msg, { undo: () => binBrandUndoRun(env, entries, movedRecs, now, targetId), ..._binHeldBin(env, lang) });
+  return true;
+}
+// R42 厂家删除的撤销:厂家按下标从小到大放回(现在没有这个 id 时);材料只换回「brandId 还是接手的那家、updatedAt 还是那次写的」的
+function binBrandUndoRun(env, entries, movedRecs, now, targetId) {
+  const lang = env.lang(), t = _binT(lang);
+  const nowIso = new Date().toISOString();
+  const ctx = binCtxOf(typeof env.prepRaw === "function" ? env.prepRaw() : undefined);
+  let cur = binCurOf(env);
+  let k = 0, j = 0;
+  const marked = [];
+  entries.slice().sort((a, b) => a.index - b.index).forEach(e => {
+    const plan = binRestorePlan(e, cur, ctx);
+    if (plan.status === "ok") {
+      const { next } = binApplyRestore(cur, e, plan, nowIso);
+      _binSetAll(env, next); cur = { ...cur, ...next }; marked.push(e);
+    } else if (plan.status === "exists" && plan.why === "same") marked.push(e);
+    else k++;
+  });
+  let mats = cur.materials, ch = false;
+  movedRecs.forEach(rec => {
+    const i = mats.findIndex(m => m && binSameId(m.id, rec.id));
+    const m = i >= 0 ? mats[i] : null;
+    if (m && m.brandId === targetId && m.updatedAt === now) {
+      const m2 = { ...m, brandId: rec.prevBrandId };
+      if (rec.hadUpdatedAt) m2.updatedAt = rec.prevUpdatedAt; else delete m2.updatedAt;
+      if (!ch) { mats = mats.slice(); ch = true; }
+      mats[i] = m2;
+    } else j++;
+  });
+  if (ch) _binSetAll(env, { materials: mats });
+  marked.forEach(e => _binMarkPending(e.bid, nowIso));
+  if (k || j) env.toast([k ? _binF(t.brandUndoK, { k }) : "", j ? _binF(t.brandUndoJ, { j }) : ""].filter(Boolean).join(t.brandUndoSep));
+}
+// R44 回收站里还原一条
+function binRestoreRun(env, bid) {
+  const lang = env.lang(), t = _binT(lang);
+  if (typeof env.stale === "function" && env.stale()) { env.toast(t.stale); return; }
+  const e = _binCache.get(bid);
+  if (!e || !binKnown(e) || binPending(e)) { binReread(); return; }
+  const cur = binCurOf(env);
+  const plan = binRestorePlan(e, cur, binCtxOf(typeof env.prepRaw === "function" ? env.prepRaw() : undefined));
+  if (plan.status !== "ok") {
+    const msg = plan.status === "exists" && plan.why === "same" ? _binF(t.restoreSame, { name: binShowName(e, lang) }) : _binFailText(plan, e, lang);
+    if (msg) env.toast(msg);
+    return;
+  }
+  const r = _binPutBack(env, e, plan, new Date().toISOString(), cur);
+  const view = BIN_KINDS[e.kind].view;
+  const held = view && _binAvail === "ok" && typeof env.jump === "function" ? { held: { label: t.heldView, onClick: () => env.jump({ kind: view, id: e.id }) } } : {};
+  const h = { entry: e, plan, prepPut: !!(plan.prep && plan.prep.put) };
+  env.toast(binRestoreText(e, r.counts, plan.prep, r.cur, lang), { undo: () => binUndoRestoreRun(env, h), ...held });
+}
+// R46 还原的撤销(一条):内容没变才撤,按这一种的「写什么」对现在那条再做一遍,不建新条目;quiet = 「全部还原」的撤销里,不推提示条。
+// curIn:「全部还原」的撤销一条接一条做,传上一条写完以后的数据(env.cur() 要等下一次渲染才变);返回 { ok, cur }
+function _binUndoRestoreOne(env, h, quiet, curIn) {
+  const { entry, prepPut } = h;
+  const lang = env.lang(), t = _binT(lang);
+  const K = BIN_KINDS[entry.kind];
+  const cur = curIn || binCurOf(env);
+  const x = cur[K.list].find(y => y && binSameId(y.id, entry.id));
+  if (!x || binCanon(entry.kind, x) !== binCanon(entry.kind, entry.item)) { if (!quiet) env.toast(t.undoRestoreChanged); return { ok: false, cur }; }
+  if (entry.kind === "brand" && cur.materials.some(m => m && m.brandId === entry.id)) { if (!quiet) env.toast(t.undoRestoreBrand); return { ok: false, cur }; }
+  const nowIso = new Date().toISOString();
+  const patches = binDeleteWrite(entry.kind, x, cur, nowIso).patches;
+  _binSetAll(env, patches);
+  const sp = _binIsObj(entry.side) && _binIsObj(entry.side.prep) ? entry.side.prep : null;
+  const raw = typeof env.prepRaw === "function" ? env.prepRaw() : undefined;
+  if (prepPut && sp && raw && _binIsObj(raw.items) && Object.prototype.hasOwnProperty.call(raw.items, sp.key)
+    && importCanon("prep", raw.items[sp.key]) === importCanon("prep", sp.item) && typeof env.writePrep === "function") env.writePrep([{ type: "dropItem", key: sp.key }]);
+  const c = _binCache.get(entry.bid);
+  if (c && binPending(c)) { const c2 = { ...c }; delete c2.restoredAt; _binPending.delete(entry.bid); binPut([c2]); }
+  else if (!c && _binAvail !== "off") { const e2 = { ...entry }; delete e2.restoredAt; binPut([e2]); }
+  return { ok: true, cur: { ...cur, ...patches } };
+}
+function binUndoRestoreRun(env, h) { return _binUndoRestoreOne(env, h, false).ok; }
+// R47 厂家「全部还原」(同一个 batch 的一组)
+function binRestoreBatchRun(env, batch) {
+  const lang = env.lang(), t = _binT(lang);
+  if (typeof env.stale === "function" && env.stale()) { env.toast(t.stale); return; }
+  let cur = binCurOf(env);
+  const es = binVisible([..._binCache.values()], cur).filter(e => e.batch === batch)
+    .sort((a, b) => (a.index - b.index) || (Date.parse(a.at) - Date.parse(b.at)) || (a.bid < b.bid ? -1 : a.bid > b.bid ? 1 : 0));
+  const nowIso = new Date().toISOString();
+  const ctx = binCtxOf(typeof env.prepRaw === "function" ? env.prepRaw() : undefined);
+  let k = 0;
+  const items = [];
+  es.forEach(e => {
+    const plan = binRestorePlan(e, cur, ctx);
+    if (plan.status === "ok") { cur = _binPutBack(env, e, plan, nowIso, cur).cur; items.push({ entry: e, plan, prepPut: false }); } else k++;
+  });
+  const n = items.length;
+  if (n >= 1) {
+    let msg = _binF(t.batchRestored, { n });
+    const withMv = items.filter(it => _binIsObj(it.entry.side) && _binIsObj(it.entry.side.movedTo));
+    const m = withMv.reduce((s, it) => s + (Array.isArray(it.entry.side.movedTo.materials) ? it.entry.side.movedTo.materials.length : 0), 0);
+    if (m > 0) msg += _binF(t.batchMoved, { m, to: _binBrandName(cur, withMv[0].entry.side.movedTo.brandId, lang) });
+    if (k > 0) msg += _binF(t.batchK, { k });
+    env.toast(msg, { undo: () => {
+      let bad = 0, c2 = binCurOf(env);
+      items.slice().sort((a, b) => b.entry.index - a.entry.index).forEach(it => { const r = _binUndoRestoreOne(env, it, true, c2); if (r.ok) c2 = r.cur; else bad++; });
+      if (bad) env.toast(_binF(_binT(env.lang()).undoRestoreBatch, { k: bad }));
+    } });
+  } else env.toast(_binF(t.batchNone, { k }));
+}
+// R48 永久删除一条 / 清空(不碰主数据;停止保存的窗口里也照做)
+function binPermDeleteRun(env, bid) {
+  const lang = env.lang(), t = _binT(lang);
+  const e = binVisible([..._binCache.values()], binCurOf(env)).find(x => x.bid === bid);
+  if (!e) return;
+  binDrop([bid]);
+  env.toast(_binF(t.permDeleted, { name: binShowName(e, lang) }), { undo: () => { if (!_binCache.has(e.bid)) binPut([e]); } });
+}
+function binClearRun(env) {
+  const lang = env.lang(), t = _binT(lang);
+  const n = binVisible([..._binCache.values()], binCurOf(env)).length;
+  if (n === 0) return;
+  const gone = [..._binCache.values()].filter(e => binKnown(e) && !binPending(e));
+  binDrop(gone.map(e => e.bid));
+  env.toast(_binF(t.cleared, { n }), { undo: () => { const es = gone.filter(e => !_binCache.has(e.bid)); if (es.length) binPut(es); } });
+}
+// R50 保存结果出来以后(App 的 effect 看 saveState 调):返回要不要推「还原了但没存进去」
+const binSettleRun = (res, cur) => {
+  const st = binSettle([..._binCache.values()], _binPending, res, cur);
+  if (st.pending !== _binPending) { _binPending.clear(); st.pending.forEach((v, k) => _binPending.set(k, v)); }
+  if (st.drop.length) binDrop(st.drop);
+  const un = st.unhide.map(b => _binCache.get(b)).filter(Boolean).map(e => { const c = { ...e }; delete c.restoredAt; return c; });
+  if (un.length) binPut(un);
+  return !!st.toast;
+};
 
 // ─── 内容质量扫描 v13.1: 中日混杂 + 图片 markdown ───────────────
 // 假名(平假名 + 片假名) → 一定是日语
@@ -5716,8 +6748,148 @@ function HomeScreenHowTo({ open, lang, onClose, onExport }) { return null; }
 function DeviceExportStatus({ lang, deviceInfo, env, changed, today, onRename }) { return null; }
 function StaffSafetyLine({ note, lang }) { return null; }
 // R 线:数据页「🗑 回收站(30 天)」卡(紧跟「🛟 恢复备份」卡)、回收站弹窗(层级 T.z.drawer,不带遮罩)
-function RecycleBinCard({ lang, onOpen }) { return null; }
-function RecycleBinDialog({ open, lang, onClose, onRestore, showToast, confirmDialog }) { return null; }
+// 第 6 批 R(spec_bin R70):数据页「🗑 回收站(30 天)」卡,紧跟「🛟 恢复备份」卡。cur = App 现在的数据(算可见条数);缓存变了 App 会重画
+function RecycleBinCard({ lang, onOpen, cur }) {
+  const t = _binT(lang);
+  const av = _binAvail;
+  const n = av === "ok" ? binVisible([..._binCache.values()], cur || {}).length : 0;
+  return (
+    <div data-b6="bin-card" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "0.75rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>{t.cardTitle}</div>
+      <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: av === "ok" ? 12 : 0, lineHeight: 1.7, overflowWrap: "anywhere" }}>
+        {av === "loading" ? t.cardLoading : av === "off" ? t.cardOff : _binF(t.cardOk, { n })}
+      </p>
+      {av === "ok" && <Btn onClick={onOpen}>{t.cardBtn}</Btn>}
+    </div>
+  );
+}
+// 第 6 批 R(spec_bin R71,design_data-safety §1.3):回收站。全屏(iPad 宽是居中大框),层级 T.z.drawer、不带遮罩 —— 里面还原 / 永久删除 / 清空的
+// 撤销提示条(T.z.toast)要露在它上面(审查 U2)。打开时和打开期间窗口拿到焦点时重读库(IndexedDB 不发 storage 事件)。员工模式不渲染(App 那边)
+// cur = App 现在的数据;ops = { perm(bid), clear(), restoreBatch(batch), ctx() };onRestore(bid) 还原一条。ver 只为缓存变了时跟着重画
+function RecycleBinDialog({ open, lang, onClose, onRestore, showToast, confirmDialog, cur, ops, ver }) {
+  const [filter, setFilter] = useState("all");
+  const [openBatch, setOpenBatch] = useState({});
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    binReread();
+    const onFocus = () => { binReread(); };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      // 上面还开着确认框之类的弹窗时,Esc 只关那一个
+      try { if ([...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].some(d => d !== rootRef.current)) return; } catch (x) { /* 查不了就照关 */ }
+      if (onClose) onClose();
+    };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("focus", onFocus); window.removeEventListener("keydown", onKey); };
+  }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open) return null;
+  const t = _binT(lang), ja = lang === "ja";
+  const now = Date.now();
+  const data = cur || {};
+  const ctx = ops && typeof ops.ctx === "function" ? ops.ctx() : binCtxOf(undefined);
+  const vis = binVisible([..._binCache.values()], data);
+  const counts = {};
+  vis.forEach(e => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+  const shown = filter === "all" ? vis : vis.filter(e => e.kind === filter);
+  // 按删除那天(本地日期)分组,组和组里都从新到旧(vis 已经排好)
+  const groups = [];
+  shown.forEach(e => {
+    const day = localDateStr(new Date(Date.parse(e.at)));
+    let g = groups[groups.length - 1];
+    if (!g || g.day !== day) { g = { day, label: binDayLabel(e, lang, now), items: [] }; groups.push(g); }
+    g.items.push(e);
+  });
+  const chip = (key, label) => {
+    const on = filter === key;
+    return (
+      <button key={key} type="button" className="k-btn k-tap" aria-pressed={on ? "true" : "false"} onClick={() => setFilter(key)}
+        style={{ ...T.fs.caption, padding: "4px 10px", border: `1px solid ${on ? T.ink : T.border}`, borderRadius: T.radiusPill, background: on ? T.ink : T.surface, color: on ? T.paper : T.body, cursor: "pointer", fontFamily: T.fontSans, whiteSpace: "nowrap" }}>
+        {label}
+      </button>
+    );
+  };
+  const rowBox = { borderBottom: `0.5px solid ${T.borderSoft}`, padding: "10px 0" };
+  const rowLine = { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "space-between" };
+  const rowOf = (e, indent) => {
+    const plan = binRestorePlan(e, data, ctx);
+    const dis = plan.status !== "ok";
+    const d = binDaysLeft(e, now);
+    return (
+      <div key={e.bid} data-b6="bin-row" data-bid={e.bid} style={{ ...rowBox, paddingLeft: indent ? 16 : 0 }}>
+        <div style={rowLine}>
+          <div style={{ flex: "1 1 260px", minWidth: 0, overflowWrap: "anywhere", ...T.fs.small, color: T.ink, fontFamily: T.fontSans }}>{binRowText(e, lang, now)}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span data-b6="bin-days" style={{ ...T.fs.caption, color: d <= BIN_RED_DAYS ? T.danger : T.secondary, whiteSpace: "nowrap" }}>{_binF(t.daysLeft, { d })}</span>
+            <Btn size="sm" variant="primary" disabled={dis} onClick={() => { if (!dis && onRestore) onRestore(e.bid); }}>{t.restoreBtn}</Btn>
+            <Btn size="sm" onClick={() => { if (ops) ops.perm(e.bid); }}>{t.permBtn}</Btn>
+          </div>
+        </div>
+        {dis && <WhyNote>{binDisabledNote(plan, lang)}</WhyNote>}
+      </div>
+    );
+  };
+  // 同一次删的几家厂家(同一个 batch、这一天里 ≥ 2 条看得见)合成一行,放在其中最新的那条的位置
+  const rowsOfGroup = (g) => {
+    const byBatch = new Map();
+    g.items.forEach(e => { if (e.kind === "brand" && typeof e.batch === "string") { if (!byBatch.has(e.batch)) byBatch.set(e.batch, []); byBatch.get(e.batch).push(e); } });
+    const out = [], done = new Set();
+    g.items.forEach(e => {
+      const es = e.kind === "brand" && typeof e.batch === "string" ? byBatch.get(e.batch) : null;
+      if (!es || es.length < 2) { out.push(rowOf(e, false)); return; }
+      if (done.has(e.batch)) return;
+      done.add(e.batch);
+      const b = e.batch, opened = !!openBatch[b];
+      const ordered = es.slice().sort((x, y) => (x.index - y.index) || (Date.parse(x.at) - Date.parse(y.at)) || (x.bid < y.bid ? -1 : x.bid > y.bid ? 1 : 0));
+      out.push(
+        <div key={"batch:" + b} data-b6="bin-batch" style={rowBox}>
+          <div style={rowLine}>
+            <div style={{ flex: "1 1 260px", minWidth: 0, overflowWrap: "anywhere", ...T.fs.small, color: T.ink, fontFamily: T.fontSans }}>{binBatchText(ordered, lang, data)}</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <Btn size="sm" variant="primary" onClick={() => { if (ops) ops.restoreBatch(b); }}>{t.batchBtn}</Btn>
+              <button type="button" className="k-btn k-tap" aria-label={opened ? t.collapse : t.expand} aria-expanded={opened ? "true" : "false"}
+                onClick={() => setOpenBatch(o => ({ ...o, [b]: !o[b] }))}
+                style={{ ...T.fs.small, padding: "2px 10px", border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.body, cursor: "pointer", fontFamily: T.fontSans }}>{opened ? "▴" : "▾"}</button>
+            </div>
+          </div>
+          {opened && ordered.map(x => rowOf(x, true))}
+        </div>
+      );
+    });
+    return out;
+  };
+  return (
+    <div ref={rootRef} role="dialog" aria-modal="true" aria-label={t.dlgTitle} data-b6="bin-dialog"
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflow: "auto", padding: "0 16px 96px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: 880, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, position: "sticky", top: 0, background: T.paper, padding: "16px 0 8px", zIndex: 1 }}>
+          <div style={{ fontFamily: T.fontSerif, fontSize: 20, fontWeight: 500, color: T.ink }}>{t.dlgTitle}</div>
+          <button type="button" className="k-btn k-tap-l" aria-label={t.close} onClick={onClose}
+            style={{ fontSize: 22, lineHeight: 1, padding: "4px 10px", border: "none", background: "transparent", color: T.ink, cursor: "pointer" }}>×</button>
+        </div>
+        <p style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.7, margin: "0 0 12px", overflowWrap: "anywhere" }}>{t.dlgNote}</p>
+        <div data-b6="bin-chips" style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 8 }}>
+          {chip("all", _binF(t.chipAll, { n: vis.length }))}
+          {Object.keys(BIN_KINDS).filter(k => counts[k] > 0).map(k => chip(k, `${BIN_KINDS[k][ja ? "ja" : "zh"]} ${counts[k]}`))}
+          <span style={{ flex: "1 1 0", minWidth: 0 }} />
+          <Btn size="sm" variant="danger" disabled={vis.length === 0} onClick={() => { if (ops && vis.length > 0) ops.clear(); }}>{t.clearBtn}</Btn>
+        </div>
+        {vis.length === 0
+          ? <div data-b6="bin-empty"><EmptyState variant="first" title={t.emptyFirst} lang={lang} /></div>
+          : shown.length === 0
+            ? <div data-b6="bin-empty"><EmptyState variant="filter" title={t.emptyFilter} lang={lang}
+                chips={[{ label: BIN_KINDS[filter] ? BIN_KINDS[filter][ja ? "ja" : "zh"] : String(filter), onRemove: () => setFilter("all") }]} /></div>
+            : groups.map(g => (
+              <div key={g.day} data-b6="bin-day" style={{ marginTop: 12 }}>
+                <div style={{ ...T.fs.label, color: T.secondary, letterSpacing: "0.08em", fontFamily: T.fontSans, padding: "4px 0" }}>{g.label}</div>
+                {rowsOfGroup(g)}
+              </div>
+            ))}
+      </div>
+    </div>
+  );
+}
 
 function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
   const [snapshots, setSnapshots] = useState([]);
@@ -8922,53 +10094,16 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const ingNote = asIng.length === 0 ? "" : (lang === "zh"
             ? "\n\n标「当原料」的是配料表里「来自组件」的行:删除后这些行按删除前的成本快照算,不再跟着组件价变;撤销删除就恢复。"
             : "\n\n「材料として」はパーツから原価を取る配合行です。削除後は削除前のスナップショット原価で計算されます(元に戻すと復帰)。");
-          // 审查 b4r1:删之前把引用它的「来自组件」行的快照刷成此刻的成本(组件还在注入里),删后这些行按它算 —— 以前留着上次打开编辑页时记的旧价。
-          // 先在这里算好(setState 的更新函数可能晚到组件库注入换掉之后才跑),写的时候只换没被改过的那份配料(同一个引用);撤销同样换回去
-          const reSnap = (ings) => {
-            if (!Array.isArray(ings)) return ings;
-            let ch = false;
-            const out = ings.map(i => {
-              const c = (i && !i.noCost) ? ingLiveComp(i, materials) : null;
-              if (!c || c.id !== snap.id) return i;
-              const s = componentRowSnapshot(i, materials);
-              if (s.unitPrice === i.unitPrice && s.cost === i.cost && i.currency === s.currency) return i;
-              ch = true; return { ...i, ...s };
-            });
-            return ch ? out : ings;
-          };
-          const rsR = new Map(), rsC = new Map(), rsL = new Map();
-          (recipes || []).forEach(r => { const n = r && reSnap(r.ingredients); if (r && n !== r.ingredients) rsR.set(r.id, [r.ingredients, n]); });
-          (components || []).forEach(c => { if (!c || c.id === snap.id) return; const n = reSnap(c.ingredients); if (n !== c.ingredients) rsC.set(c.id, [c.ingredients, n]); });
-          (creations || []).forEach(cr => {
-            if (!cr || !Array.isArray(cr.layers)) return;
-            let ch = false;
-            const n = cr.layers.map(l => { const ni = l ? reSnap(l.ingredients) : null; if (!l || ni === l.ingredients) return l; ch = true; return { ...l, ingredients: ni }; });
-            if (ch) rsL.set(cr.id, [cr.layers, n]);
-          });
-          const swap = (m, key, from, to) => (prev) => m.size === 0 ? prev : prev.map(x => { const e = x && m.get(x.id); return e && x[key] === e[from] ? { ...x, [key]: e[to] } : x; });
+          // 第 6 批 R(spec_bin R20 / R22 / R31):删除时把引用它的「来自组件」行的快照刷成此刻的成本(审查 b4r1 的 reSnap,改到 binDeleteWrite 里)、
+          // 账上的备货一起删、进回收站、提示条 + 撤销,都在 binDeleteRun。撤销先过 binRestorePlan:快照行只换回「现在还是删时写进去的值」的
           const doDelete = () => {
-            const idx = components.findIndex(x => x.id === snap.id);
-            setComponents(prev => swap(rsC, "ingredients", 0, 1)(prev.filter(x => x.id !== snap.id)));
-            if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 0, 1));
-            if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 0, 1));
+            binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, onPrepDrop,
+              tables: { components, recipes, creations, products, materials },
+              set: { components: setComponents, ...(setRecipes ? { recipes: setRecipes } : {}), ...(setCreations ? { creations: setCreations } : {}) } }), "component", snap, { name: cName });
             setEditTarget(null);
-            const undoPrep = prepSum && onPrepDrop ? onPrepDrop(prepSum.key) : null;   // 账上这一样一起删(dropItem);返回撤销(putItem)
-            showToast(undoPrep && prepSum.qty > 0 ? prepTxt(lang).delToast(cName, fmtQty(prepSum.qty), prepSum.unit) : lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
-              undo: () => {
-                if (typeof undoPrep === "function") undoPrep();
-                setComponents(prev => {
-                  if (prev.find(x => x.id === snap.id)) return prev;
-                  const next = [...prev];
-                  next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
-                  return swap(rsC, "ingredients", 1, 0)(next);
-                });
-                if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 1, 0));
-                if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 1, 0));
-              },
-            });
           };
           if (refs.length > 0) {
-            confirmDialog(
+            binConfirm(confirmDialog, "component", lang,
               lang === "zh"
                 ? "下面这些地方在用这个组件。删除后，组合产品里的这一部分保留当时的内容，但不再跟组件库同步；商品里这一项会显示「已删除」，采购计划会少算它。" + ingNote
                 : "以下で使われています。削除すると組立製品のパーツは部品庫と連動しなくなり、商品は「削除済み」になります。" + ingNote,
@@ -11531,11 +12666,8 @@ function ImageUrlsEditor({ urls, onChange }) {
   };
 
   const removeImage = (idx) => {
-    // v14: 若有 imageId（IndexedDB 引用），级联删 blob
-    const removed = urls[idx];
-    if (removed && typeof removed === 'object' && removed.imageId) {
-      deleteImageBlob(removed.imageId);
-    }
+    // 第 6 批 R(spec_bin R39 / 决定 48):只从这一条上拿掉,图片库里的照片留着(编辑页点「取消」就回来了)。
+    // 以前(v14)这里立刻 deleteImageBlob,点「取消」也回不来;代价是图片库留几张没人用的照片
     onChange(urls.filter((_, i) => i !== idx));
   };
 
@@ -14490,6 +15622,8 @@ const creationWords = (structure, lang = "zh") => {
     perUnitCost: stack ? "单台成本" : "单个成本",
     tipFillUsed: `💡 提示：下方每${stack ? "层" : "部分"}填上用量（做「${stack ? "制作台数" : "制作个数"}」那么多时一共要多少克），才能算出成本和整体配方`,
     deleteConfirm: stack ? "删除这一层吗？" : "删除这一部分吗？",
+    // 第 6 批 R(spec_bin R38):组合产品编辑页删一个部分 = 直接删 + 撤销,提示条的字
+    deletedToast: stack ? (zh ? "已删掉这一层" : "この層を外しました") : (zh ? "已删掉这一部分" : "このパーツを外しました"),
     editTitle: stack ? "编辑层：" : "编辑部分：",
     // v17.8: 部分编辑页顶上的说明,按这一部分和组件库的关系(layerLinkState)给
     // 第 5 批 E1:locked = 产品锁定、这一部分也锁着(CreationEditForm 传)→ 锁定时的说法;不传 = 和以前一样(只有中文,同以前)
@@ -14635,21 +15769,13 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           const cName = pickLang(snap, "name", lang) || snap.nameFr || "";
           const usedByProducts = (products || []).filter(p => (p.items || []).some(it => it && it.linkedType === "creation" && String(it.linkedId) === String(snap.id)));
           const refs = usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa || ""}`);
+          // 第 6 批 R(spec_bin R22):进回收站;撤销先过 binRestorePlan,放回原位
           const doDelete = () => {
-            const idx = creations.findIndex(x => x.id === snap.id);
-            setCreations(prev => prev.filter(x => x.id !== snap.id));
+            binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { creations, products }, set: { creations: setCreations } }), "creation", snap, { name: cName });
             setEditTarget(null);
-            showToast(lang === "zh" ? `已删除「${cName}」` : `「${cName}」を削除しました`, {
-              undo: () => setCreations(prev => {
-                if (prev.find(x => x.id === snap.id)) return prev;
-                const next = [...prev];
-                next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
-                return next;
-              }),
-            });
           };
           if (refs.length > 0) {
-            confirmDialog(
+            binConfirm(confirmDialog, "creation", lang,
               lang === "zh"
                 ? "下面这些商品挂着这个组合产品。删除后商品里这一项会显示「已删除」，采购计划会少算它的原料。"
                 : "以下の商品に含まれています。削除すると商品では「削除済み」になり、仕入れ計画から外れます。",
@@ -16094,13 +17220,22 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     setForm(prev => ({ ...prev, layers: [...(prev.layers || []), newLayer] }));
   };
 
+  // 第 6 批 R(spec_bin R38 / 待看 15):删一个部分 = 直接删 + 提示条撤销(只改表单,不保存就不进主数据,不进回收站);去掉 window.confirm 兜底。
+  // 撤销:编辑页还挂着才放回(放回删之前的位置,已经在了不重复放);编辑页关了什么都不做
+  const formLiveRef = useRef(true);
+  useEffect(() => { formLiveRef.current = true; return () => { formLiveRef.current = false; }; }, []);
   const deleteLayer = (idx) => {
-    const doDelete = () => setForm(prev => ({ ...prev, layers: prev.layers.filter((_, i) => i !== idx) }));
-    if (confirmDialog) {
-      confirmDialog(W.deleteConfirm, doDelete);
-    } else {
-      if (window.confirm(W.deleteConfirm)) doDelete();
-    }
+    const removed = form.layers[idx];
+    setForm(prev => ({ ...prev, layers: prev.layers.filter((_, i) => i !== idx) }));
+    if (showToast) showToast(W.deletedToast, { undo: () => {
+      if (!formLiveRef.current) return;
+      setForm(prev => {
+        if (prev.layers.includes(removed)) return prev;
+        const a = prev.layers.slice();
+        a.splice(Math.min(idx, a.length), 0, removed);
+        return { ...prev, layers: a };
+      });
+    } });
   };
 
   const moveLayer = (idx, dir) => {
@@ -17041,17 +18176,9 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
         }}
         onDelete={() => {
           // 第 5 批 E3:删知识不影响别的数据,改成先删 + 撤销(放回原位置),不再弹确认框
-          const cur = nowKnowledge();
-          const idx = cur.findIndex(x => x && x.id === editTarget.id);
-          const orig = idx >= 0 ? cur[idx] : editTarget;
-          setKnowledge(prev => prev.filter(x => x.id !== editTarget.id));
+          // 第 6 批 R(spec_bin R22 知识一行 / §8 Q8):再进回收站;撤销先过 binRestorePlan(同 id 不放 + 同标题不放)
+          binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { knowledge: nowKnowledge }, set: { knowledge: setKnowledge } }), "knowledge", editTarget);
           setEditTarget(null);
-          const title = pickLang(orig, "title", lang) || "";
-          showToast(KT.deleted(title), { undo: () => setKnowledge(prev => {
-            if (prev.some(x => x && x.id === orig.id)) return prev;
-            const at = idx >= 0 ? Math.min(idx, prev.length) : prev.length;
-            return [...prev.slice(0, at), orig, ...prev.slice(at)];
-          }) });
         }}
         onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
           // [B4 修复] 有 id 跳详情,无 id 回列表
@@ -18405,27 +19532,19 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
           ...(creations || []).filter(cr => cr && (cr.layers || []).some(l => l && linked(l.ingredients))).map(cr => `${zh ? "组合产品" : "組み合わせ"}：${nm(cr)}`),
           ...(shopN > 0 ? [zh ? `本店原料：${shopN} 条进价挂在这个产品上(删后不再参与成本)` : `仕入れ原料：${shopN} 件(削除後は原価に反映されません)`] : []),
         ];
+        // 第 6 批 R(spec_bin R22):进回收站(本店原料、配料行、图片库都不动);撤销先过 binRestorePlan,放回原位
         const doDelete = () => {
-          const idx = materials.findIndex(x => x.id === snap.id);
-          setMaterials(prev => prev.filter(x => x.id !== snap.id));
+          binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { materials, recipes, components, creations, shopMaterials }, set: { materials: setMaterials } }), "material", snap, { name: mName });
           setMaterialEditTarget(null);
           setMaterialViewId(null);
-          showToast(zh ? `已删除「${mName}」` : `「${mName}」を削除しました`, {
-            undo: () => setMaterials(prev => {
-              if (prev.find(x => x.id === snap.id)) return prev;
-              const next = [...prev];
-              next.splice(idx >= 0 ? Math.min(idx, next.length) : next.length, 0, snap);
-              return next;
-            }),
-          });
         };
         if (refs.length === 0) { doDelete(); return; }
-        confirmDialog(
+        binConfirm(confirmDialog, "material", lang,
           zh ? "下面这些地方关联了这个产品。删除后,它们的成本会改用配料行里手写的单价或当初存下的成本快照,可能和现在不一样。"
              : "以下がこの製品を参照しています。削除すると原価は手入力単価または保存時のスナップショットで計算されます。",
           doDelete,
           {
-            kicker: zh ? "删除产品" : "製品を削除",
+            kicker: zh ? "删除材料" : "材料を削除",   // 第 6 批 R(spec_bin R22,裁决 19):材料百科的条目叫「材料」
             title: zh ? `删除「${mName}」?` : `「${mName}」を削除?`,
             refs,
             confirmText: zh ? "仍然删除" : "削除する",
@@ -18869,34 +19988,11 @@ function MaterialsView(props) {
   const bName = (b) => (zh ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) || b.nameFr || "(无名)";
 
   // 删 deleteIds 这几家;它们名下的材料全部改挂到 targetId(没材料时 targetId 可空)。先做 + 给撤销。
-  const applyBrandRemoval = (deleteIds, targetId, afterDone) => {
-    const del = new Set(deleteIds.filter(id => id !== targetId));
-    if (del.size === 0) return;
-    const moved = materials.filter(m => del.has(m.brandId));
-    if (moved.length > 0 && !targetId) return; // 有材料必须先选接手的厂家,不能裸删
-    const removed = brands.map((b, i) => [i, b]).filter(([, b]) => del.has(b.id));
-    const prevBrandOf = new Map(moved.map(m => [m.id, m.brandId]));
-    const now = new Date().toISOString();
-    if (moved.length > 0) setMaterials(prev => prev.map(m => del.has(m.brandId) ? { ...m, brandId: targetId, updatedAt: now } : m));
-    setBrands(prev => prev.filter(b => !del.has(b.id)));
-    const target = targetId ? brands.find(b => b.id === targetId) : null;
-    const names = removed.map(([, b]) => bName(b));
-    const who = names.length <= 2 ? names.map(n => `「${n}」`).join("") : (zh ? `${names.length} 家` : `${names.length} 社`);
-    const tName = target ? bName(target) : "";
-    const msg = zh
-      ? (moved.length > 0 ? `已删除${who},${moved.length} 条材料挪到「${tName}」` : `已删除${who}`)
-      : (moved.length > 0 ? `${who} を削除、材料 ${moved.length} 件を「${tName}」へ` : `${who} を削除`);
-    showToast(msg, {
-      undo: () => {
-        setBrands(prev => {
-          const next = prev.filter(b => !del.has(b.id));
-          removed.forEach(([i, b]) => next.splice(Math.min(i, next.length), 0, b));
-          return next;
-        });
-        if (moved.length > 0) setMaterials(prev => prev.map(m => prevBrandOf.has(m.id) ? { ...m, brandId: prevBrandOf.get(m.id) } : m));
-      },
-    });
-    if (afterDone) afterDone();
+  // 第 6 批 R(spec_bin R33 / R42):每家一条进回收站(同一个 batch;合并来的 reason = "brandMerge");撤销只换回「brandId 还是接手的那家、
+  // updatedAt 还是那次写的」的材料(两个字段一起判、一起换回),厂家只在现在没有这个 id 时放回(审查 F6)。写法在 binBrandRemovalRun
+  const applyBrandRemoval = (deleteIds, targetId, afterDone, reason) => {
+    const did = binBrandRemovalRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { brands, materials }, set: { brands: setBrands, materials: setMaterials } }), deleteIds, targetId, reason);
+    if (did && afterDone) afterDone();
   };
 
   // 页面调用的两个入口
@@ -18927,7 +20023,7 @@ function MaterialsView(props) {
           onConfirm={(targetId) => {
             const r = reassign;
             setReassign(null);
-            applyBrandRemoval(r.sourceIds, targetId, r.afterDone);
+            applyBrandRemoval(r.sourceIds, targetId, r.afterDone, r.mode === "merge" ? "brandMerge" : "delete");
           }}
         />
       )}
@@ -21951,15 +23047,13 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       ...components.filter(c => c && usesMat(c.ingredients)).map(c => `${lang === "zh" ? "组件" : "パーツ"}：${nm(c)}`),
       ...creations.filter(cr => cr && (cr.layers || []).some(l => l && usesMat(l.ingredients))).map(cr => `${lang === "zh" ? "组合产品" : "組み合わせ"}：${nm(cr)}`),
     ];
+    // 第 6 批 R(spec_bin R22 / 决定 47):进回收站;撤销放回原位(以前追加到最后),同一材料现在已经有本店原料时不放回
     const doDelete = () => {
-      setShopMaterials(prev => prev.filter(x => x.id !== snapshot.id));
+      binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { shopMaterials, materials, recipes, components, creations }, set: { shopMaterials: setShopMaterials } }), "shopMaterial", snapshot);
       setEditing(null);
-      showToast(lang === "zh" ? "已删除本店原料" : "仕入れ原料を削除しました", {
-        undo: () => setShopMaterials(prev => prev.find(x => x.id === snapshot.id) ? prev : [...prev, snapshot]),
-      });
     };
     if (refs.length === 0) { doDelete(); return; }
-    confirmDialog(
+    binConfirm(confirmDialog, "shopMaterial", lang,
       lang === "zh"
         ? "删除后,下面这些地方的成本会改用材料百科的参考价(不再用本店进价,百科是日元的会按汇率折算)。"
         : "削除すると、以下の原価は仕入れ価格ではなく百科の参考価格で計算されます。",
@@ -22250,12 +23344,23 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
         setEditTarget(null);
       }}
       onDelete={() => {
-        confirmDialog(lang === "zh" ? "删除这个商品吗？销售/生产历史不会自动删除。" : "この商品を削除しますか？", () => {
-          setProducts(prev => prev.filter(x => x.id !== editTarget.id));
-          showToast(lang === "zh" ? "已删除" : "削除しました");
+        // 第 6 批 R(spec_bin R22 / R23,决定 42 / 49):有销售 / 生产记录或在今天的生产单上 → 确认框列出来;否则直接删。
+        // 都有撤销、进回收站;记录和今天的生产单不动(还原商品就回来);提示条带名字
+        const env = _binAppEnv || binLocalEnv({ lang, showToast, tables: { products, salesLog, productionLog }, set: { products: setProducts } });
+        const cur = binCurOf(env);
+        const snap = cur.products.find(x => x && x.id === editTarget.id) || editTarget;
+        const refN = binRefCounts("product", snap, cur, { prodPlan: env.prodPlan(), today: localDateStr() });
+        const bt = _binT(lang), name = _binShow(binNameOf("product", snap), lang);
+        const doDelete = () => {
+          binDeleteRun(env, "product", snap);
           setEditTarget(null);
           setViewId(null);   // 编辑页是从详情进的,不清掉就会停在已删商品的详情(白屏)
-        });
+        };
+        if (refN.logs + refN.plan === 0) { doDelete(); return; }
+        const refs = [];
+        if (refN.logs > 0) refs.push(_binF(bt.productLogs, { n: cur.salesLog.filter(s => s && s.productId === snap.id).length, m: cur.productionLog.filter(s => s && s.productId === snap.id).length }));
+        if (refN.plan > 0) refs.push(bt.productPlan);
+        binConfirm(confirmDialog, "product", lang, bt.productBody, doDelete, { kicker: bt.kickerProduct, title: _binF(bt.delTitle, { name }), refs, confirmText: bt.delBtn });
       }}
       onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
         // [B4 修复] 有 id 跳详情,无 id 回列表
@@ -22831,16 +23936,22 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
         setEditTarget(null);
       }}
       onDelete={() => {
-        confirmDialog(lang === "zh" ? "删除这个供货商吗？本店原料上的关联会自动解除。" : "この仕入先を削除? 関連も解除されます。", () => {
-          // 删 supplier + 从 shopMaterials 的 supplierIds 中剥离(以前注释这么写、代码没做,确认框的话不兑现)
-          const sid = editTarget.id;
-          setSuppliers(prev => prev.filter(x => x.id !== sid));
-          // 第 6 批第 0 步:剥 id 改调 stripSupplierRefs(第 0 步 = 今天的写法:剥 id + 写 updatedAt;PA 改成只写 orderAt)
-          if (setShopMaterials) { const nowIso = new Date().toISOString(); setShopMaterials(prev => stripSupplierRefs(prev, sid, nowIso).list); }
-          showToast(lang === "zh" ? "已删除" : "削除しました");
+        // 第 6 批 R(spec_bin R22 / R23,决定 46):有本店原料挂着 → 确认框列名字;否则直接删。都有撤销、进回收站。
+        // 剥 id 调 stripSupplierRefs(PA 合并后只写 orderAt、不写 updatedAt);撤销 / 还原挂回一律走 smReattachSupplier(不整条换回删前对象)
+        const env = _binAppEnv || binLocalEnv({ lang, showToast, tables: { suppliers, shopMaterials, materials }, set: { suppliers: setSuppliers, ...(setShopMaterials ? { shopMaterials: setShopMaterials } : {}) } });
+        const cur = binCurOf(env);
+        const snap = cur.suppliers.find(x => x && x.id === editTarget.id) || editTarget;
+        const refN = binRefCounts("supplier", snap, cur, null);
+        const bt = _binT(lang), name = _binShow(binNameOf("supplier", snap), lang);
+        const doDelete = () => {
+          binDeleteRun(env, "supplier", snap);
           setEditTarget(null);
           setViewId(null);   // 同商品:不清掉会停在已删供货商的详情(白屏)
-        });
+        };
+        if (refN.shopMaterials === 0) { doDelete(); return; }
+        const sm = cur.shopMaterials.find(x => x && Array.isArray(x.supplierIds) && x.supplierIds.includes(snap.id));
+        const first = _binShow(binNameOf("shopMaterial", sm, cur.materials), lang);
+        binConfirm(confirmDialog, "supplier", lang, bt.supplierBody, doDelete, { kicker: bt.kickerSupplier, title: _binF(bt.delTitle, { name }), refs: [_binF(bt.supplierRef, { first, n: refN.shopMaterials })], confirmText: bt.delBtn });
       }}
       onBack={() => confirmLeaveEditor(confirmDialog, lang, () => {
         // [B4 修复] 有 id 跳详情,无 id 回列表
@@ -30678,25 +31789,17 @@ function App() {
     const prepSum = prepDropSummary(prepStock, "recipe", editTarget, today);
     const prepRef = prepDropRef(prepSum, lang);
     if (refs.length > 0 && prepRef) refs.push(prepRef);
+    // 第 6 批 R(spec_bin R20 / R22 / R41):写主数据、账上这一样一起删、进回收站、提示条 + 撤销(放回原位,以前追加到最后;先过 binRestorePlan)
     const doDelete = () => {
-      const snapshot = editTarget;
-      setRecipes(prev => prev.filter(x => x.id !== snapshot.id));
+      binDeleteRun(binEnv, "recipe", editTarget, { name: rName });
       setTab("list");
-      const undoPrep = prepSum ? onPrepDrop(prepSum.key) : null;   // 账上这一样一起删(dropItem);返回撤销(putItem)
-      // 破坏性操作「先做 + 给撤销」
-      showToast(undoPrep && prepSum.qty > 0 ? prepTxt(lang).delToast(rName, fmtQty(prepSum.qty), prepSum.unit) : lang === "zh" ? `已删除「${rName}」` : `「${rName}」を削除しました`, {
-        undo: () => {
-          setRecipes(prev => prev.find(x => x.id === snapshot.id) ? prev : [...prev, snapshot]);
-          if (typeof undoPrep === "function") undoPrep();
-        },
-      });
     };
     if (refs.length > 0) {
-      // 影响到别的数据 → 拦一下，并把引用方摆出来
-      confirmDialog(
+      // 影响到别的数据 → 拦一下，并把引用方摆出来(第 6 批 R:去掉「此操作不可撤销」—— 删了能撤销、进回收站,末句由 binConfirm 加)
+      binConfirm(confirmDialog, "recipe", lang,
         lang === "zh"
-          ? "删除后下面这些地方会缺东西。此操作不可撤销。"
-          : "削除すると以下に影響します。この操作は取り消せません。",
+          ? "删除后下面这些地方会缺东西。"
+          : "削除すると以下に影響します。",
         doDelete,
         {
           kicker: lang === "zh" ? "删除配方" : "レシピを削除",
@@ -30940,6 +32043,47 @@ function App() {
     const raw = appSettings.prepStock && appSettings.prepStock.items ? appSettings.prepStock.items[key] : undefined;
     if (!writePrep([{ type: "dropItem", key }])) return null;
     return () => writePrep([{ type: "putItem", key, item: raw }], null, { isUndo: true });
+  };
+  // ─── 第 6 批 R:回收站和删除(spec_bin.md)───
+  // env 给模块顶层的 binDeleteRun / binUndoRun / binRestoreRun …… 用。撤销可能很晚才点(提示条能停住),每个方法都读最新的(binLive)
+  const [binVer, setBinVer] = useState(0);
+  const binLive = useRef(null);
+  binLive.current = { lang, appSettings, writePrep, onPrepDrop, showToast, jumpToItem };
+  const binEnv = useMemo(() => ({
+    cur: () => dataRef.current,
+    set: { recipes: setRecipes, cats: setCats, components: setComponents, creations: setCreations, knowledge: setKnowledge, brands: setBrands, materials: setMaterials,
+      shopMaterials: setShopMaterials, products: setProducts, salesLog: setSalesLog, productionLog: setProductionLog, suppliers: setSuppliers,
+      productFamilies: setProductFamilies, customCompCats: setCustomCompCats },
+    lang: () => binLive.current.lang,
+    prepRaw: () => binLive.current.appSettings.prepStock,
+    prodPlan: () => binLive.current.appSettings.prodPlan,
+    writePrep: (...a) => binLive.current.writePrep(...a),
+    onPrepDrop: (k) => binLive.current.onPrepDrop(k),
+    toast: (m, o) => binLive.current.showToast(m, o),
+    openBin: () => setBinOpen(true),
+    jump: (j) => { setBinOpen(false); binLive.current.jumpToItem(j); },
+    stale: () => staleRef.current,
+  }), []);   // eslint-disable-line react-hooks/exhaustive-deps
+  _binAppEnv = binEnv;   // 渲染期注入(同 setFxForLookup):各页面里的删除走 App 的 env
+  // 开机:开库、先写排队的、再修剪(loaded = 载入那一刻的数据,R52);缓存变了重画回收站卡 / 弹窗。卸载时摘掉注入和回调
+  useEffect(() => {
+    _binAppEnv = binEnv;   // 开发版 StrictMode 会先卸再挂一次 effect:卸的时候摘掉了,这里挂回去
+    binBoot(dataRef.current, () => setBinVer(v => v + 1));
+    return () => { if (_binAppEnv === binEnv) _binAppEnv = null; _binNotify = null; };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // R50:放回去的那条等下一次保存成功(内容一样跳过的也算)才真删;保存失败 → 重新显示,存储满了推一句(停止保存的窗口不推,顶上已有红条)
+  useEffect(() => {
+    if (!saveState || (saveState.status !== "saved" && saveState.status !== "error")) return;
+    const res = saveState.status === "saved"
+      ? { ok: true, atMs: saveState.at instanceof Date ? saveState.at.getTime() : Date.now(), suspended: _suspendSaves }
+      : { ok: false, error: staleRef.current ? "stale" : "save", atMs: Date.now(), suspended: _suspendSaves };
+    if (binSettleRun(res, dataRef.current)) showToast(_binT(lang).saveFail);
+  }, [saveState]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const binOps = {
+    perm: (bid) => binPermDeleteRun(binEnv, bid),
+    clear: () => binClearRun(binEnv),
+    restoreBatch: (b) => binRestoreBatchRun(binEnv, b),
+    ctx: () => binCtxOf(appSettings.prepStock),
   };
   // 采购页「按手上的备货算」用(F 线);第 0 步 prepOnHandMap 返回空 Map = 采购页和以前一样
   const prepOnHand = useMemo(() => prepOnHandMap(recipes, components, prepStock, today), [recipes, components, prepStock, today]);
@@ -31741,7 +32885,8 @@ function App() {
       {/* 第 6 批第 0 步:D 的安全横幅(存档空了 / 微信 / Safari 标签页 / 主屏幕版第一次;优先级在别的窗口改过、新版本之后)和「怎么装」说明,R 的回收站弹窗。空壳 */}
       {!staffMode && safetyBanner && <SafetyBanner kind={safetyBanner} lang={lang} onClose={() => {}} onHowTo={() => setHowToOpen(true)} onExport={exportData} onOpenRestore={() => setShowBackupDialog(true)} onGoData={() => goTab("data")} />}
       {!staffMode && <HomeScreenHowTo open={howToOpen} lang={lang} onClose={() => setHowToOpen(false)} onExport={exportData} />}
-      {!staffMode && <RecycleBinDialog open={binOpen} lang={lang} onClose={() => setBinOpen(false)} showToast={showToast} confirmDialog={confirmDialog} />}
+      {!staffMode && <RecycleBinDialog open={binOpen} lang={lang} onClose={() => setBinOpen(false)} showToast={showToast} confirmDialog={confirmDialog}
+        onRestore={(bid) => binRestoreRun(binEnv, bid)} cur={dataRef.current} ops={binOps} ver={binVer} />}
       {/* 第 5 批 E4:「没保存的修改」草稿列表浮层(第 0 步空壳;员工模式不出) */}
       {!staffMode && <DraftList lang={lang} />}
 
@@ -32077,12 +33222,18 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 setFamilyEditTarget(null);
               }}
               onDelete={() => {
-                confirmDialog("删除这个家族吗？\n\n家族里的配方和组合产品不会被删除，只会变成「未归属」状态。", () => {
-                  setRecipes(prev => prev.map(r => r.familyId === familyEditTarget.id ? { ...r, familyId: "" } : r));
-                  setCreations(prev => prev.map(c => c.familyId === familyEditTarget.id ? { ...c, familyId: "" } : c));   // v17.8 组合产品也挂家族,以前删家族漏了它们
-                  setProductFamilies(prev => prev.filter(x => x.id !== familyEditTarget.id));
-                  showToast("家族已删除");
-                  setFamilyEditTarget(null);
+                // 第 6 批 R(spec_bin R22 / R23,决定 42):有成员 → 确认框逐条列出;没有 → 直接删 + 撤销。都进回收站,还原时把没人动过的成员挂回来。
+                // 成员的 familyId 清成 ""(v17.8 起组合产品也清)
+                const fam = familyEditTarget;
+                if (!fam || typeof fam !== "object") return;
+                const bt = _binT(lang), name = _binShow(binNameOf("family", fam), lang);
+                const cur = dataRef.current || {};
+                const mR = (cur.recipes || []).filter(r => r && r.familyId === fam.id), mC = (cur.creations || []).filter(c => c && c.familyId === fam.id);
+                const doDelete = () => { binDeleteRun(binEnv, "family", fam); setFamilyEditTarget(null); };
+                if (mR.length + mC.length === 0) { doDelete(); return; }
+                binConfirm(confirmDialog, "family", lang, bt.familyBody, doDelete, {
+                  kicker: bt.kickerFamily, title: _binF(bt.delTitle, { name }), confirmText: bt.delBtn,
+                  refs: [...mR.map(r => _binF(bt.familyRefR, { name: _binShow(binNameOf("recipe", r), lang) })), ...mC.map(c => _binF(bt.familyRefC, { name: _binShow(binNameOf("creation", c), lang) }))],
                 });
               }}
               onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setFamilyEditTarget(null))}
@@ -33168,7 +34319,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <>
                 {secTitle(lang === "zh" ? "备份与恢复（防数据丢失）" : "バックアップと復元（紛失防止）")}
                 {/* 第 6 批第 0 步:R 的「🗑 回收站(30 天)」卡紧跟「🛟 恢复备份」卡(空壳) */}
-                {backupCards.map((s, i) => <Fragment key={i}>{card(s, i)}{i === 0 && <RecycleBinCard lang={lang} onOpen={() => setBinOpen(true)} />}</Fragment>)}
+                {backupCards.map((s, i) => <Fragment key={i}>{card(s, i)}{i === 0 && <RecycleBinCard lang={lang} onOpen={() => setBinOpen(true)} cur={dataRef.current} />}</Fragment>)}
                 {secTitle(lang === "zh" ? "内容交换（与 Claude / 买家）" : "データ交換")}
                 {exchangeCards.map(card)}
                 {/* 2026-09-29 体检第 2 批:导入结果留在页面上(以前只有 2.5 秒的提示条,而且合并导入的计数永远是 0) */}
@@ -33202,16 +34353,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                         {inUse > 0 ? `${inUse}${lang === "zh" ? "个组件使用中" : "個使用中"}` : (lang === "zh" ? "未使用" : "未使用")}
                       </span>
                       <button onClick={() => {
+                        // 第 6 批 R(spec_bin R22 / R23):照旧确认(在用时),多撤销、进回收站(还原时把没改过的组件分类换回来);提示条带名字
+                        const doDelete = () => binDeleteRun(binEnv, "compCat", cc);
                         if (inUse > 0) {
-                          confirmDialog(`有 ${inUse} 个组件正在使用「${cc.zh}」，确认删除？删除后这些组件的分类会变为「其他」。`, () => {
-                            setComponents(prev => prev.map(x => x.componentCategory === cc.id ? { ...x, componentCategory: "other" } : x));
-                            setCustomCompCats(prev => prev.filter(x => x.id !== cc.id));
-                            showToast("分类已删除");
-                          });
-                        } else {
-                          setCustomCompCats(prev => prev.filter(x => x.id !== cc.id));
-                          showToast("分类已删除");
-                        }
+                          binConfirm(confirmDialog, "compCat", lang,
+                            lang === "ja" ? _binF(_binT("ja").compCatBody, { n: inUse, name: cc.ja || cc.zh }) : _binF(_binT("zh").compCatBody, { n: inUse, name: cc.zh }),
+                            doDelete, { confirmText: _binT(lang).delBtn });
+                        } else doDelete();
                       }} style={{ background: "#FFFFFF", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 4, padding: "3px 8px", cursor: "pointer", fontSize: 11 }}>×</button>
                     </div>
                   );
