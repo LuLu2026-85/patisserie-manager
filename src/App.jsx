@@ -5060,7 +5060,11 @@ function useDirtyGuard(getState) {
 // 第 0 步全部是空壳(什么都不读、不写、不删):useEditorDraft 返回 { banner: null, markSaved(){}, discard(){} },其余不做事 / 原样返回。
 // E4 写真的时:localStorage 只在 draftsRead / draftsWrite 里碰(都包 try/catch);段里不许有 setState
 const DRAFT_KEY = "korora_drafts_v1";
-const DRAFT_KEY_LABELS = {};                 // 改过的键 → 「配料 / 步骤 …」的叫法(中 / 日),E4 填
+// 改过的键 → 「配料 / 步骤 …」的叫法(中 / 日),E4 填(形状照 E4 的定;第 6 批 KA 先放知识编辑页「给员工的要点」两项,现在没人读)
+const DRAFT_KEY_LABELS = {
+  staffPointsZh: { zh: "给员工的要点", ja: "スタッフ向けポイント" },
+  staffPointsJa: { zh: "给员工的要点", ja: "スタッフ向けポイント" },
+};
 const _draftLive = new Map();                // sid → { kind, id, isDirty, flush, markDiscarded }:本窗口开着的、接了草稿的编辑页
 const _draftDiscardQueue = new Map();        // sid → 入队时间:保存了、等主存档真的写成功再删的
 let _pendingDraftSid = null;                 // 草稿列表「继续编辑」要自动恢复的那一份(编辑页挂载时认领)
@@ -17007,7 +17011,10 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
   const [linkOpen, setLinkOpen] = useState(false);   // 「关联按钮」那一行展开没有
   const [tagMore, setTagMore] = useState(false);     // 筛选条「更多」展开没有
   const [tagMgr, setTagMgr] = useState(false);       // 管理标签页开着没有
+  const [staffOnly, setStaffOnly] = useState(false); // 第 6 批 KA:「📌 员工必读」筛选(和标签、搜索是「并且」;必读变 0 条也不自动关,R-K10)
   const KT = knowTxt(lang);
+  const KR = kreadTxt(lang);
+  const mustRead = staffReadingList(knowledge);       // 必读列表(全部,不受搜索 / 标签影响)
   const linkProblems = useMemo(() => knowledgeLinkProblems(knowledge, recipes, components, creations), [knowledge, recipes, components, creations]);
   const linkResolver = useMemo(() => makeKnowledgeLinkResolver(recipes, components, creations), [recipes, components, creations]);
   const nowKnowledge = () => { const k = typeof getKnowledge === "function" ? getKnowledge() : null; return Array.isArray(k) ? k : knowledge; };
@@ -17020,6 +17027,24 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
     setKnowledge(prev => prev.map(k => back.has(k) ? back.get(k) : k));
     if (skipped) showToast(KT.undoSkipped(skipped));
   };
+  // 第 6 批 KA(spec_ktrain R-K9):详情页「设为员工必读」开关 —— 先做 + 撤销,不弹确认框;标记组不写 updatedAt。
+  // 撤销 = 这一条还是当时写出的那个对象就换回点之前的对象本身,之后又改过(调过顺序 / 编辑过 / 换过)就不动、说一句
+  const toggleStaff = (id, on) => {
+    const L = nowKnowledge();
+    const r = setStaffRead(L, id, !!on, new Date().toISOString());
+    if (!r.changed) return;
+    swapIn(L.map((x, i) => [x, r.list[i]]).filter(([x, y]) => x !== y));
+    const ti = L.findIndex(x => !!x && typeof x === "object" && x.id === id);
+    const before = L[ti], after = r.list[ti];
+    showToast(on ? KR.toastOn : KR.toastOff(pickLang(before, "title", lang)), { undo: () => {
+      const cur = nowKnowledge();
+      const t = cur.find(x => !!x && typeof x === "object" && x.id === id);
+      if (t !== after) { showToast(KT.undoSkipped(1)); return; }
+      setKnowledge(prev => restoreStaffMarks(prev, id, before, after));
+    } });
+  };
+  // ↑↓(R-K10):马上换、不出提示条(按反方向就回去)
+  const moveStaff = (id, dir) => setKnowledge(prev => moveStaffRead(prev, id, dir, new Date().toISOString()));
 
   if (editTarget !== null) {
     return (
@@ -17067,6 +17092,7 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
     if (item) {
       return (
         <KnowledgeDetail
+          key={item.id}
           item={item}
           lang={lang}
           onEdit={() => { setEditTarget(item); setViewId(null); }}
@@ -17075,6 +17101,9 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
           components={components}
           creations={creations}
           onNavigate={onNavigate}
+          staffNo={isStaffRead(item) ? mustRead.indexOf(item) + 1 : 0}
+          onToggleStaff={(on) => toggleStaff(item.id, on)}
+          onPrint={typeof onPrintKnowledge === "function" ? () => onPrintKnowledge({ mode: "one", ids: [item.id] }) : undefined}
         />
       );
     }
@@ -17120,6 +17149,9 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
 
     return true;
   });
+  // 第 6 批 KA:「📌 员工必读」筛选开着时 = 必读列表里、同时在上面 filtered 里的,按必读列表的顺序;搜索 / 标签筛选开着时 ↑↓ 锁住
+  const shown = staffOnly ? mustRead.filter(k => filtered.includes(k)) : filtered;
+  const staffLocked = searchQuery !== "" || filterTag !== "all";
 
   return (
     <div>
@@ -17196,6 +17228,13 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
       {/* 标签筛选 */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
         <button onClick={() => setFilterTag("all")} style={{ padding: "4px 12px", fontSize: 12, border: filterTag === "all" ? "1.5px solid #111111" : "1px solid #CCCCCC", borderRadius: 20, background: filterTag === "all" ? "#111111" : "#FFFFFF", color: filterTag === "all" ? "#FFFFFF" : "#111111", cursor: "pointer" }}>{lang === "zh" ? "全部" : "すべて"}</button>
+        {/* 第 6 批 KA:「📌 员工必读 N」(只在有必读时画;N 不受搜索 / 标签影响) */}
+        {mustRead.length > 0 && (
+          <button data-k6-staffchip={staffOnly ? "on" : "off"} aria-pressed={staffOnly} className="k-tap" onClick={() => setStaffOnly(v => !v)}
+            style={{ padding: "4px 12px", fontSize: 12, border: staffOnly ? `1.5px solid ${T.ink}` : "1px solid #CCCCCC", borderRadius: 20, background: staffOnly ? T.ink : "#FFFFFF", color: staffOnly ? "#FFFFFF" : "#111111", cursor: "pointer", fontWeight: staffOnly ? 500 : 400 }}>
+            {KR.chip(mustRead.length)}
+          </button>
+        )}
         {KNOWLEDGE_TAGS.map(tag => {
           const count = knowledge.filter(k => (k.tags || []).includes(tag.id)).length;
           if (count === 0) return null;
@@ -17235,7 +17274,15 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
 
       {/* 2a §09 两种空态必须长得不一样：
           「首次为空」给下一步动作；「筛选无结果」把生效条件摆出来能一个个摘掉，且不给「新建」按钮 */}
-      {filtered.length === 0 && (
+      {/* 第 6 批 KA:「📌 员工必读」筛选开着时的说明条 + 打印合本(打印入口由 App 接 onPrintKnowledge 才出现) */}
+      {staffOnly && mustRead.length > 0 && (
+        <div data-k6-staffbar={staffLocked ? "locked" : "1"} style={{ marginBottom: "1rem", padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${T.ink}`, fontSize: 12, color: T.textSecondary, fontFamily: T.fontSans, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+          <span style={{ flex: "1 1 240px", minWidth: 0, overflowWrap: "anywhere" }}>{KR.barHead(mustRead.length)}{staffLocked ? KR.barLocked : KR.barOrder}</span>
+          {typeof onPrintKnowledge === "function" && <Btn size="sm" onClick={() => onPrintKnowledge({ mode: "pack", ids: mustRead.map(k => k.id) })}>{KR.printPack}</Btn>}
+        </div>
+      )}
+
+      {shown.length === 0 && (
         knowledge.length === 0 ? (
           <EmptyState
             variant="first" lang={lang}
@@ -17248,23 +17295,25 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             variant="filter" lang={lang}
             title={lang === "zh" ? "没有匹配的知识点" : "一致するナレッジがありません"}
             hint={lang === "zh"
-              ? `当前生效 ${[filterTag !== "all", !!searchQuery].filter(Boolean).length} 个条件`
-              : `絞り込み ${[filterTag !== "all", !!searchQuery].filter(Boolean).length} 件`}
+              ? `当前生效 ${[staffOnly, filterTag !== "all", !!searchQuery].filter(Boolean).length} 个条件`
+              : `絞り込み ${[staffOnly, filterTag !== "all", !!searchQuery].filter(Boolean).length} 件`}
             chips={[
+              ...(staffOnly ? [{ label: KR.filterChip, onRemove: () => setStaffOnly(false) }] : []),
               ...(filterTag !== "all" ? [{ label: (getKnowledgeTag(filterTag)[lang === "zh" ? "zh" : "ja"]) || filterTag, onRemove: () => setFilterTag("all") }] : []),
               ...(searchQuery ? [{ label: `“${searchQuery}”`, onRemove: () => setSearchQuery("") }] : []),
             ]}
-            onClearAll={() => { setFilterTag("all"); setSearchQuery(""); }}
+            onClearAll={() => { setStaffOnly(false); setFilterTag("all"); setSearchQuery(""); }}
           />
         )
       )}
 
       <div style={{ display: "grid", gap: 10 }}>
-        {filtered.map(k => {
+        {shown.map(k => {
           const title = pickLang(k, "title", lang);
           const content = pickLang(k, "content", lang);
           const preview = (content || "").replace(/【[^】]+】/g, "").replace(/\n+/g, " ").slice(0, 80);
           const avatarLetter = (title || "?").charAt(0).toUpperCase();
+          const staffNo = staffOnly ? mustRead.indexOf(k) + 1 : 0;   // 在全部必读里的第几条(1 起)
           return (
             <div
               key={k.id}
@@ -17284,6 +17333,10 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
               onMouseEnter={(e) => { e.currentTarget.style.borderColor = T.borderHover; e.currentTarget.style.transform = "translateY(-1px)"; }}
               onMouseLeave={(e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "translateY(0)"; }}
             >
+              {/* 第 6 批 KA:必读筛选里的序号(全部必读里的位置) */}
+              {staffNo > 0 && (
+                <div data-k6-no={staffNo} style={{ width: 22, flexShrink: 0, alignSelf: "center", textAlign: "right", fontFamily: T.fontSerif, fontSize: 16, color: T.ink, ...T.num }}>{staffNo}</div>
+              )}
               {/* 首字母徽章 */}
               <div style={{
                 width: 40, height: 40, borderRadius: "50%",
@@ -17293,9 +17346,13 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
                 flexShrink: 0,
               }}>{avatarLetter}</div>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
+              {/* 必读筛选里多了序号和 ↑↓,375 宽时摘要里「━━━━」这种连着的符号会把卡片撑宽 → 只在这时允许任意处折行(平时样式一个字不改) */}
+              <div style={{ flex: 1, minWidth: 0, ...(staffNo > 0 ? { overflowWrap: "anywhere" } : {}) }}>
                 <div style={{ fontFamily: T.fontSerif, fontSize: 15, fontWeight: 500, color: T.textPrimary, lineHeight: 1.3 }}>
                   {title}
+                  {isStaffRead(k) && (
+                    <span data-k6-badge="1" style={{ display: "inline-block", marginLeft: 8, padding: "1px 8px", border: `1px solid ${T.ink}`, borderRadius: T.radiusPill, fontFamily: T.fontSans, fontSize: 10, fontWeight: 500, color: T.ink, verticalAlign: "2px", whiteSpace: "nowrap" }}>{KR.badge}</span>
+                  )}
                 </div>
                 {preview && (
                   <div style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.65, marginTop: 6, fontStyle: "italic" }}>
@@ -17325,6 +17382,21 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
                   </div>
                 )}
               </div>
+              {/* 第 6 批 KA:必读筛选里的 ↑↓(40 × 40;第一条的 ↑、最后一条的 ↓ 灰;搜索 / 标签筛选开着时都灰)。点了不进详情 */}
+              {staffNo > 0 && (
+                <div data-k6-move={k.id} onClick={(e) => e.stopPropagation()} style={{ display: "flex", gap: 6, flexShrink: 0, alignSelf: "center" }}>
+                  {[[-1, "↑", KR.up, staffNo === 1], [1, "↓", KR.down, staffNo === mustRead.length]].map(([dir, sym, label, edge]) => {
+                    const off = staffLocked || edge;
+                    return (
+                      <button key={dir} type="button" className="k-btn k-tap" data-k6-dir={dir} aria-label={label} title={label} disabled={off}
+                        onClick={(e) => { e.stopPropagation(); if (!off) moveStaff(k.id, dir); }}
+                        style={{ width: 40, height: 40, padding: 0, border: `1px solid ${off ? T.line : T.border}`, borderRadius: T.radius, background: T.bgCard, color: off ? T.muted : T.ink, cursor: off ? "not-allowed" : "pointer", fontSize: 16, fontFamily: T.fontSans }}>
+                        {sym}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
@@ -17699,7 +17771,71 @@ const removeKnowledgeTag = (knowledge, tag, nowIso) => {
 const STAFF_MARK_KEYS = ["staffRead", "staffOrder", "staffAt"];
 const STAFF_PTS_KEYS = ["staffPointsZh", "staffPointsJa", "staffPtsAt"];
 const KNOW_PRIVATE_KEYS = ["staffRead", "staffOrder", "staffAt", "staffPtsAt"];   // IP 分发包剥这四个(要点留着)
-const KREAD_TXT = { zh: {}, ja: {} };   // KA / KB 往这里加字(中日键一一对应)
+// KA / KB 往这里加字(中日键一一对应;键名照 design_knowledge-training §1.7,加前 grep 防同名)
+const KREAD_TXT = {
+  zh: {
+    // ── KA:知识库列表 / 详情 / 编辑页(老板)──
+    chip: (n) => `📌 员工必读 ${n}`,
+    filterChip: "📌 员工必读",
+    badge: "📌 必读",
+    barHead: (n) => `📌 员工必读 ${n} 条 · 员工在员工模式「厨房视图」页顶上看。`,
+    barOrder: "按 ↑↓ 排顺序,员工看的列表和打印合本都按这个顺序。",
+    barText: (n) => `📌 员工必读 ${n} 条 · 员工在员工模式「厨房视图」页顶上看。按 ↑↓ 排顺序,员工看的列表和打印合本都按这个顺序。`,
+    barLocked: "清掉搜索和标签筛选才能调顺序",
+    printPack: "🖨 打印合本",
+    up: "往前挪", down: "往后挪",
+    markBtn: "📌 设为员工必读",
+    markedBtn: (i) => `✓ 员工必读 · 第 ${i} 条`,
+    toastOn: "已设为员工必读:员工模式「厨房视图」页顶上能看到",
+    toastOff: (t) => `「${t}」不再是员工必读`,
+    print: "🖨 打印",
+    previewBtn: "👁 员工看到的",
+    previewTitle: "👁 员工看到的样子(员工模式里就是这样)",
+    previewNotMarked: "这条还不是员工必读,员工模式里看不到。",
+    previewCut: (n) => `去掉了 ${n} 处带价格的文字:`,
+    previewKana: (p) => `这条中文内容里日文占了约 ${p}%,员工可能看不懂;可以在「给员工的要点」里用中文写几行。`,
+    previewLimit: "数字后面没写「元 / 円」的价格认不出来,请自己扫一眼。",
+    editSource: "去改原文",
+    ptsTitle: "👩‍🍳 给员工的要点(可以不写)",
+    ptsOpen: "+ 给员工写几行要点",
+    ptsHint: "员工看这条时先看到这几行,打印也印在最上面;打印时可以只印要点,做成一两页小抄。3 到 8 行就够,写人人都要记住的数字和动作。",
+    ptsZh: "中文", ptsJa: "日本語",
+    ptsLines: (n) => `${n} 行`,
+    ptsOver: "超过 8 行了,小抄会挤;细节留在正文里",
+    ptsMoney: (n) => `这几行里有 ${n} 处带价格,员工和打印都看不到这几处`,
+  },
+  ja: {
+    chip: (n) => `📌 スタッフ必読 ${n}`,
+    filterChip: "📌 スタッフ必読",
+    badge: "📌 必読",
+    barHead: (n) => `📌 スタッフ必読 ${n} 件 · スタッフモードの「キッチン」ページ上部で読めます。`,
+    barOrder: "↑↓ で順番を変更(一覧とまとめて印刷もこの順)。",
+    barText: (n) => `📌 スタッフ必読 ${n} 件 · スタッフモードの「キッチン」ページ上部で読めます。↑↓ で順番を変更(一覧とまとめて印刷もこの順)。`,
+    barLocked: "検索とタグの絞り込みを外すと順番を変えられます",
+    printPack: "🖨 まとめて印刷",
+    up: "前へ", down: "後ろへ",
+    markBtn: "📌 スタッフ必読にする",
+    markedBtn: (i) => `✓ スタッフ必読 · ${i} 件目`,
+    toastOn: "スタッフ必読にしました。スタッフモードの「キッチン」上部に表示されます",
+    toastOff: (t) => `「${t}」をスタッフ必読から外しました`,
+    print: "🖨 印刷",
+    previewBtn: "👁 スタッフ表示",
+    previewTitle: "👁 スタッフモードでの表示",
+    previewNotMarked: "まだスタッフ必読ではないため、スタッフモードには表示されません。",
+    previewCut: (n) => `価格を含む ${n} か所を除いています:`,
+    previewKana: (p) => `この中国語本文は約 ${p}% が日本語です。「スタッフ向けポイント」に中国語で数行書くと伝わりやすくなります。`,
+    previewLimit: "「元 / 円」が付いていない金額は検出できません。目視で確認してください。",
+    editSource: "本文を編集",
+    ptsTitle: "👩‍🍳 スタッフ向けのポイント(任意)",
+    ptsOpen: "+ スタッフ向けポイントを書く",
+    ptsHint: "スタッフが最初に読む数行です。印刷でも一番上に入り、ポイントだけの早見表も作れます。3〜8 行で、全員が覚える数字と動作を。",
+    ptsZh: "中国語", ptsJa: "日本語",
+    ptsLines: (n) => `${n} 行`,
+    ptsOver: "8 行を超えています。詳細は本文へ",
+    ptsMoney: (n) => `価格を含む ${n} か所はスタッフ表示・印刷では消えます`,
+  },
+};
+const kreadTxt = (lang) => KREAD_TXT[lang === "ja" ? "ja" : "zh"];
 // 外币(审查 B6M-5):和第 5 批 P 的 PROD_MONEY_RE(本身不改)合起来用;码位 $ U+0024 ＄ U+FF04 € U+20AC £ U+00A3,不带 g / i / u
 const KREAD_FX_RE = /[$＄€£]\s*\d|\d[\d,，.]*\s*(?:美元|欧元|英镑|ドル|ユーロ|USD|EUR)/;
 const isStaffRead = (k) => !!k && typeof k === "object" && k.staffRead === true;   // R-K1:只认严格的 true
@@ -17710,22 +17846,278 @@ const staffReadingList = (knowledge) => {
   return knowledge.map((k, i) => ({ k, i })).filter(x => isStaffRead(x.k))
     .sort((a, b) => { const ka = key(a.k), kb = key(b.k); return ka < kb ? -1 : ka > kb ? 1 : a.i - b.i; }).map(x => x.k);
 };
-const setStaffRead = (knowledge, id, on, nowIso) => ({ list: knowledge, changed: false });   // 空壳:R-K4 / R-K5
-const moveStaffRead = (knowledge, id, dir, nowIso) => knowledge;                          // 空壳:R-K6
-const restoreStaffMarks = (knowledge, id, before, after) => knowledge;                    // 空壳:R-K7(第四个参数可选)
-const staffPointsChanged = (before, form) => false;                                       // 空壳:R-K11
-// 空壳:R-M1 到 R-M10(给员工和打印的知识文字一律先过它;第 0 步原样返回)
-const stripMoneyClauses = (text) => ({ text: text === undefined || text === null ? "" : String(text), n: 0, cut: [] });
-const knowledgeStaffView = (k, lang) => ({ title: "—", titleOther: "", points: "", body: "", cut: [], n: 0, kana: 0 });   // 空壳:R-M11
-const knowledgeKanaRatio = (text) => 0;                     // 空壳:中文里日文假名的占比
-const knowledgeReadMinutes = (view, lang) => 0;             // 空壳:中文每分钟 450 字、日文 500 字,至少 1 分钟
-const knowledgeBlocks = (text) => [];                       // 空壳:正文版式(5 种写法),拼回去 = 原文
-const knowledgeBlocksText = (blocks) => "";                 // 空壳:knowledgeBlocks 拼回去
+// R-K3:找目标 = 数组里第一个 id 严格相等的对象
+const _kFind = (list, id) => list.findIndex(x => !!x && typeof x === "object" && x.id === id);
+const _kValidOrder = (o) => Number.isInteger(o) && o >= 1;   // 有效编号(规格 2.2)
+// 按对象身份换元素;没换的还是原对象(R-K8)
+const _kSwap = (list, swap) => list.map(x => (x && typeof x === "object" && swap.has(x)) ? swap.get(x) : x);
+// R-K4 / R-K5:详情页开关。标上 = 排在必读列表唯一的最后(已有必读里有没编号 / 怪编号的,先按现在的顺序把全部编成 1..m;
+// 否则 = 最大编号 + 1,空号 / 同号不重编);取消 = 删 staffRead / staffOrder、staffAt 写现在,别的条目一个不动。都不写 updatedAt
+const setStaffRead = (knowledge, id, on, nowIso) => {
+  if (!Array.isArray(knowledge)) return { list: knowledge, changed: false };
+  const ti = _kFind(knowledge, id);
+  if (ti < 0) return { list: knowledge, changed: false };
+  const target = knowledge[ti];
+  const swap = new Map();
+  if (on) {
+    if (isStaffRead(target)) return { list: knowledge, changed: false };
+    const M = staffReadingList(knowledge);
+    let o;
+    if (M.some(k => !_kValidOrder(k.staffOrder))) {
+      M.forEach((k, j) => { if (k.staffOrder !== j + 1) swap.set(k, { ...k, staffOrder: j + 1, staffAt: nowIso }); });
+      o = M.length + 1;
+    } else {
+      o = M.reduce((mx, k) => Math.max(mx, k.staffOrder), 0) + 1;
+    }
+    swap.set(target, { ...target, staffRead: true, staffOrder: o, staffAt: nowIso });
+  } else {
+    if (!isStaffRead(target)) return { list: knowledge, changed: false };
+    const { staffRead, staffOrder, ...rest } = target;   // eslint-disable-line no-unused-vars
+    swap.set(target, { ...rest, staffAt: nowIso });
+  }
+  return { list: _kSwap(knowledge, swap), changed: true };
+};
+// R-K6:↑↓ —— 和邻居换位后全部必读编成 1..m,只写编号真变了的(连 staffAt);到头 / 不是必读 / dir 不是 ±1 → 原数组
+const moveStaffRead = (knowledge, id, dir, nowIso) => {
+  if (!Array.isArray(knowledge) || (dir !== 1 && dir !== -1)) return knowledge;
+  const ti = _kFind(knowledge, id);
+  if (ti < 0) return knowledge;
+  const M = staffReadingList(knowledge);
+  const p = M.indexOf(knowledge[ti]);
+  if (p < 0) return knowledge;
+  const q = p + dir;
+  if (q < 0 || q >= M.length) return knowledge;
+  const N = M.slice();
+  N[p] = M[q]; N[q] = M[p];
+  const swap = new Map();
+  N.forEach((k, j) => { if (k.staffOrder !== j + 1) swap.set(k, { ...k, staffOrder: j + 1, staffAt: nowIso }); });
+  return swap.size ? _kSwap(knowledge, swap) : knowledge;
+};
+// R-K7:撤销开关。传了 after(界面一律这样用):目标还是 after 这个对象 → 那个位置换回 before 本身;之后又改过 / 换过 → 原数组。
+// 没传 after:标记组三个键按 before 逐个换回(before 没有的删),三个键都没变 → 原数组。顺手重编号的别的条目不撤
+const restoreStaffMarks = (knowledge, id, before, after) => {
+  if (!Array.isArray(knowledge)) return knowledge;
+  const ti = _kFind(knowledge, id);
+  if (ti < 0) return knowledge;
+  const target = knowledge[ti];
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  if (after !== undefined) {
+    if (target !== after || !before || typeof before !== "object" || before === target) return knowledge;
+    const out = knowledge.slice();
+    out[ti] = before;
+    return out;
+  }
+  const b = before && typeof before === "object" ? before : {};
+  const next = { ...target };
+  STAFF_MARK_KEYS.forEach(k => { if (has(b, k)) next[k] = b[k]; else delete next[k]; });
+  if (STAFF_MARK_KEYS.every(k => has(target, k) === has(next, k) && target[k] === next[k])) return knowledge;
+  const out = knowledge.slice();
+  out[ti] = next;
+  return out;
+};
+// R-K11:要点和打开编辑页时不一样没有(去首尾空白、\r\n 当 \n 比)
+const staffPointsChanged = (before, form) => {
+  const norm = (v) => (v === undefined || v === null ? "" : String(v)).replace(/\r\n/g, "\n").trim();
+  const b = before === undefined || before === null ? {} : before;
+  return norm(b.staffPointsZh) !== norm(form && form.staffPointsZh) || norm(b.staffPointsJa) !== norm(form && form.staffPointsJa);
+};
+// R-K13:要点的行数(编辑页右上角;超过 8 行黄字)—— 只数去空白后不空的行
+const staffPointsLineCount = (v) => String(v === undefined || v === null ? "" : v).replace(/\r\n/g, "\n").split("\n").filter(l => l.trim() !== "").length;
+
+// ── 去钱(spec_ktrain 4.M:R-M1 到 R-M10)。给员工看的、打印的知识文字一律先过 stripMoneyClauses;按行判断,
+// 命中的行先去最里层括号里带钱的小段,再按句去;句子里按「、」「,」「,」(数字之间的千位逗号不算)「 + 」切小段,只去带钱的那几段,
+// 切不开 / 剩下的拼回来还带钱就整句去掉。配方备注 / 步骤 / 生产单等别处照旧走第 5 批的 stripMoneyText ──
+// R-M1:先拿掉 ** 和 |(KnowledgeBody 显示时这两种记号不出现),再看 PROD_MONEY_RE ∪ KREAD_FX_RE
+const _kmHit = (s) => { const t = String(s).split("**").join("").split("|").join(""); return PROD_MONEY_RE.test(t) || KREAD_FX_RE.test(t); };
+const _kmIsDigit = (c) => typeof c === "string" && c.length === 1 && c >= "0" && c <= "9";
+// R-M7:单元切小段。只认括号外(深度 0)的分隔符:「、」;「，」「,」(前后都是 ASCII 数字时是千位逗号,不算);「空格 + 空格」。
+// 返回 [{ clause, sep }],依次拼起来 = U
+const _kmSplit = (U) => {
+  const segs = [];
+  const plus = / +\+ +/y;
+  let depth = 0, start = 0, i = 0;
+  while (i < U.length) {
+    const c = U[i];
+    if (c === "(" || c === "（") { depth++; i++; continue; }
+    if (c === ")" || c === "）") { depth = Math.max(0, depth - 1); i++; continue; }
+    let len = 0;
+    if (depth === 0) {
+      if (c === "、") len = 1;
+      else if (c === "，" || c === ",") { if (!(_kmIsDigit(U[i - 1]) && _kmIsDigit(U[i + 1]))) len = 1; }
+      else if (c === " ") { plus.lastIndex = i; const m = plus.exec(U); if (m) len = m[0].length; }
+    }
+    if (len > 0) { segs.push({ clause: U.slice(start, i), sep: U.slice(i, i + len) }); i += len; start = i; }
+    else i++;
+  }
+  segs.push({ clause: U.slice(start), sep: "" });
+  return segs;
+};
+// R-M8:单元去钱。返回保留下来的串,或 null(整个单元去掉);去掉的每一处按顺序记进 cut
+const _kmUnit = (U, cut) => {
+  const segs = _kmSplit(U);
+  const m = segs.length - 1;
+  const rm = segs.map(s => _kmHit(s.clause));
+  if (!rm.some(Boolean)) { cut.push(U.trim()); return null; }        // 切不开:整个单元算 1 处
+  segs.forEach((s, i) => { if (rm[i]) cut.push(s.clause.trim()); });
+  let a = -1, b = -1;
+  segs.forEach((s, i) => { if (!rm[i] && s.clause.trim() !== "") { if (a < 0) a = i; b = i; } });
+  if (a < 0) return null;
+  let R = "";
+  for (let i = a; i <= b; i++) if (!rm[i]) R += i === b ? segs[i].clause : segs[i].clause + segs[i].sep;
+  if (a > 0) R = R.trimStart();
+  if (b < m) R = R.trimEnd();
+  if (_kmHit(R)) { cut.push(R.trim()); return null; }                 // 拼回来还带钱:整个单元去掉,多算 1 处
+  return R;
+};
+// R-M5:括号步(从左往右找一遍最里层括号;整个括号去掉时,紧挨在开括号前面的一个半角空格一起去掉)
+const _kmBrackets = (L, cut) => {
+  const re = /[(（][^()（）]*[)）]/g;
+  let out = "", last = 0, mm;
+  while ((mm = re.exec(L))) {
+    const s = mm.index, inner = mm[0].slice(1, -1);
+    if (!_kmHit(inner)) continue;
+    const R = _kmUnit(inner, cut);
+    let seg = L.slice(last, s);
+    if (R !== null) seg += mm[0][0] + R + mm[0][mm[0].length - 1];
+    else if (seg.length > 0 && seg[seg.length - 1] === " ") seg = seg.slice(0, -1);
+    out += seg;
+    last = s + mm[0].length;
+  }
+  return out + L.slice(last);
+};
+// R-M6:句子步(切句和 stripMoneyText 同一个正则;句号跟着前一句)
+const _kmSentences = (L1, cut) => {
+  const sents = L1.match(/[^；;。．]+[；;。．]?|[；;。．]/g) || [];
+  let out = "";
+  sents.forEach(x => {
+    const p = /[；;。．]$/.test(x) ? x.slice(-1) : "";
+    const body = p ? x.slice(0, -1) : x;
+    if (!_kmHit(body)) { out += x; return; }
+    const R = _kmUnit(body, cut);
+    if (R !== null) out += R + p;
+  });
+  return out;
+};
+// R-M2 到 R-M10:返回 { text, n, cut }。一行都没命中 → text 就是原字符串(同一个值);命中的行处理完是空白 → 整行不要
+const stripMoneyClauses = (text) => {
+  const S = text === undefined || text === null ? "" : String(text);
+  const cut = [], out = [];
+  S.split("\n").forEach(L => {
+    if (!_kmHit(L)) { out.push(L); return; }
+    const L2 = _kmSentences(_kmBrackets(L, cut), cut);
+    if (L2.trim() !== "") out.push(L2);
+  });
+  return cut.length === 0 ? { text: S, n: 0, cut: [] } : { text: out.join("\n"), n: cut.length, cut };
+};
+// 中文正文里日文假名占多少(假名个数 ÷ 去掉空白后的字数;平假名、片假名、长音、半角片假名)。0..1
+const knowledgeKanaRatio = (text) => {
+  const s = typeof text === "string" ? text.replace(/\s/g, "") : "";
+  if (!s) return 0;
+  const kana = (s.match(/[ぁ-ゖゝ-ゟァ-ヺー-ヿｦ-ﾟ]/g) || []).length;
+  return kana / s.length;
+};
+const KNOW_KANA_WARN = 0.1;   // 「👁 员工看到的」里日文占比到这个数就提醒一句(10-03:11 条)
+// R-M11:员工看到的(员工外壳、知识打印、老板「👁」预览都只用这个):标题 / 要点 / 正文都过 stripMoneyClauses,日文空了回退中文。
+// titleOther 只给双语抬头用、不算进 cut / n;kana = 中文界面下中文正文的假名占比(规格不管这一项)
+const knowledgeStaffView = (k, lang) => {
+  if (!k || typeof k !== "object") return { title: "—", titleOther: "", points: "", body: "", cut: [], n: 0, kana: 0 };
+  const T = stripMoneyClauses(pickLang(k, "title", lang));
+  const O = stripMoneyClauses(rawLang(k, "title", lang));
+  const P = stripMoneyClauses(pickLang(k, "staffPoints", lang));
+  const B = stripMoneyClauses(pickLang(k, "content", lang));
+  const cut = [...T.cut, ...P.cut, ...B.cut];
+  const kana = lang === "zh" && typeof k.contentZh === "string" && k.contentZh ? knowledgeKanaRatio(B.text) : 0;
+  return { title: T.text.trim() === "" ? "—" : T.text, titleOther: O.text, points: P.text, body: B.text, cut, n: cut.length, kana };
+};
+// 阅读时间(分钟):中文每分钟 450 字、日文 500 字,不算空白,至少 1 分钟。view = knowledgeStaffView 的结果(标题 + 要点 + 正文)或一段文字
+const knowledgeReadMinutes = (view, lang) => {
+  const s = typeof view === "string" ? view : (view && typeof view === "object") ? [view.title, view.points, view.body].filter(x => typeof x === "string").join("") : "";
+  return Math.max(1, Math.ceil(s.replace(/\s/g, "").length / (lang === "ja" ? 500 : 450)));
+};
+
+// ── 正文版式(决定 68:只认 5 种写法;knowledgeBlocksText(knowledgeBlocks(t)) === t,一个字都不丢)──
+// 从上往下扫:① 表格 = 连续 ≥ 2 行都是 | 开头且 | 结尾(分隔行 |---| 不显示;分隔行在第二行时第一行是表头);
+// ② 分隔线 = 整行是 ≥ 6 个 ━─=-;③ 小标题 = 整行是【…】,或 # 到 #### 加空格开头(显示时去掉 #);
+// ④ 对齐示意图(pre)= 连续的非空行,每行「中间有 ≥ 3 个连着的空格」/「开头有 ≥ 4 个空格」/ 含 ─│↑↓┌└├ 之一,
+//    而且至少一行「中间有 ≥ 3 个连着的空格」(只缩进 4 格的条目列表、句子里的「──」不算图;10-03 只有 Cannelé 和三层果馅);
+// ⑤ 其余连着的行(含空行)是一段 p。成对的 **…** 在显示时排成粗体(_kbInline)。块 = { type, src: [原行], rows?, head?, text? }
+const _kbRaw = (l) => l.replace(/\r$/, "");
+const _kbIsRow = (l) => { const t = _kbRaw(l).trim(); return t.length >= 2 && t[0] === "|" && t[t.length - 1] === "|"; };
+const _kbCells = (l) => _kbRaw(l).trim().slice(1, -1).split("|").map(c => c.trim());
+const _kbIsSep = (l) => _kbIsRow(l) && _kbCells(l).every(c => /^:?-+:?$/.test(c));
+const _kbIsRule = (l) => /^[━─=\-]{6,}$/.test(_kbRaw(l).trim());
+const _kbHeading = (l) => {
+  const s = _kbRaw(l), t = s.trim();
+  if (/^【[^】]*】$/.test(t)) return t;
+  const m = /^#{1,4} +(.*)$/.exec(s);
+  return m ? m[1] : null;
+};
+const _kbPreMember = (l) => { const s = _kbRaw(l); return s.trim() !== "" && (/\S {3,}\S/.test(s) || /^ {4,}/.test(s) || /[─│↑↓┌└├]/.test(s)); };
+const _kbPreTrigger = (l) => /\S {3,}\S/.test(_kbRaw(l));
+const knowledgeBlocks = (text) => {
+  const S = text === undefined || text === null ? "" : String(text);
+  if (S === "") return [];
+  const L = S.split("\n"), n = L.length, out = [];
+  const tableEnd = (i) => { let j = i; while (j < n && _kbIsRow(L[j])) j++; return j - i >= 2 ? j : i; };
+  let i = 0;
+  while (i < n) {
+    const te = tableEnd(i);
+    if (te > i) {
+      const src = L.slice(i, te), sep = src.map(_kbIsSep);
+      out.push({ type: "table", src, head: src.length >= 2 && sep[1] && !sep[0], rows: src.filter((_, k) => !sep[k]).map(_kbCells) });
+      i = te; continue;
+    }
+    if (_kbIsRule(L[i])) { out.push({ type: "rule", src: [L[i]] }); i++; continue; }
+    const hd = _kbHeading(L[i]);
+    if (hd !== null) { out.push({ type: "h", src: [L[i]], text: hd }); i++; continue; }
+    let j = i;
+    while (j < n && _kbPreMember(L[j]) && !_kbIsRule(L[j]) && _kbHeading(L[j]) === null && tableEnd(j) === j) j++;
+    if (j > i && L.slice(i, j).some(_kbPreTrigger)) { out.push({ type: "pre", src: L.slice(i, j) }); i = j; continue; }
+    const last = out[out.length - 1];
+    if (last && last.type === "p") last.src.push(L[i]); else out.push({ type: "p", src: [L[i]] });
+    i++;
+  }
+  return out;
+};
+const knowledgeBlocksText = (blocks) => (Array.isArray(blocks) ? blocks : []).map(b => (b && Array.isArray(b.src) ? b.src : []).join("\n")).join("\n");
+// 一行里成对的 **…** → [{ t, b }](b = 粗体);不成对的 ** 原样留着
+const _kbInline = (s) => {
+  const out = [], re = /\*\*(.+?)\*\*/g;
+  let last = 0, m;
+  while ((m = re.exec(s))) {
+    if (m.index > last) out.push({ t: s.slice(last, m.index), b: false });
+    out.push({ t: m[1], b: true });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) out.push({ t: s.slice(last), b: false });
+  return out;
+};
 const staffReadingLinks = (k, ctx) => [];                   // 空壳(KB):和这一条有关的、只通往厨房视图的关联
 const knowledgePrintData = (args) => null;                  // 空壳(KB):打印确认那一刻按 ids 从最新的 knowledge 重取、去好钱
 const knowledgePrintPages = (data) => 0;                    // 空壳(KB):每页约 1,100 字估
 const knowledgeMoneyCount = (entries, lang, pointsOnly = false) => 0;   // 空壳(KB):R-M12
-const mergeKnowledgeStaffMarks = (local, pairs) => ({ list: local, n: 0 });   // 空壳:R-K14(planMergeImport 知识那一步已经调它)
+// R-K14:合并导入时已有知识(pairs = [[本机 id, 文件那条]],按文件顺序)的标记组按 staffAt、要点组按 staffPtsAt 各自整组取较新的一边
+// (pickGroupByStamp;一样新 / 两边都没写 = 本机)。同一条配到好几条 = 一条条比,留时间最新的那一组。改没改按六个键的有无和值看;
+// 没改的是原对象,一条都没改 → 原数组。不碰 updatedAt、不碰别的键。planMergeImport 算计划、applyMergePlan 兜底(prev !== base)都调它
+const mergeKnowledgeStaffMarks = (local, pairs) => {
+  if (!Array.isArray(local)) return { list: local, n: 0 };
+  const cur = local.slice();
+  (Array.isArray(pairs) ? pairs : []).forEach(p => {
+    if (!Array.isArray(p)) return;
+    const id = p[0], inc = p[1];
+    if (id === undefined || id === null || !inc || typeof inc !== "object") return;
+    const i = _kFind(local, id);
+    if (i < 0) return;
+    const k = cur[i];
+    cur[i] = pickGroupByStamp(pickGroupByStamp(k, k, inc, STAFF_MARK_KEYS, "staffAt"), k, inc, STAFF_PTS_KEYS, "staffPtsAt");
+  });
+  const SIX = [...STAFF_MARK_KEYS, ...STAFF_PTS_KEYS];
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const changed = (i) => cur[i] !== local[i] && SIX.some(k => has(local[i], k) !== has(cur[i], k) || local[i][k] !== cur[i][k]);
+  let n = 0;
+  local.forEach((x, i) => { if (changed(i)) n++; });
+  return n === 0 ? { list: local, n: 0 } : { list: local.map((x, i) => changed(i) ? cur[i] : x), n };
+};
 // R-K16:IP 分发包剥标记和两个时间戳;一个都没有 → 原对象(IP 包 JSON 逐字节不变)
 const stripPrivateKnowledgeFields = (k) => {
   if (!k || typeof k !== "object" || !KNOW_PRIVATE_KEYS.some(key => Object.prototype.hasOwnProperty.call(k, key))) return k;
@@ -17735,13 +18127,134 @@ const stripPrivateKnowledgeFields = (k) => {
 };
 // ─── END knowledge-training helpers ───
 // ─── 第 6 批第 0 步:知识的界面组件 ───
-// KnowledgeBody:知识正文(老板详情页、员工阅读页、打印模板共用)。第 0 步空壳 = 今天详情页那个 <div>(DOM 逐字节一样);KA 按 knowledgeBlocks 排版
+// KnowledgeBody:知识正文(老板详情页、员工阅读页、打印模板共用),按 knowledgeBlocks 排版(决定 68):【…】/ # 小标题排粗体(# 不显示)、
+// | a | b | 排成表格(分隔行不显示)、对齐示意图用等宽字整块不折行(块里左右滑,页面不横滚)、━━━ 排成细线、**…** 排粗体;其余一个字不改、照旧换行。
+// variant:"screen" 老板详情页(外层样式和以前那个 <div> 一样)/ "staff" 员工阅读页(17 px、行高 1.8)/ "print" 打印(11 pt、行高 1.7、细黑框、示意图 9.5 pt 折行)。
+// 给员工 / 打印的 text 由调用方先过 knowledgeStaffView(去钱),这里不去钱
+const KB_MONO = '"SFMono-Regular", Menlo, Consolas, "Noto Sans Mono CJK SC", "Noto Sans SC", monospace';
+const KB_FONT_ZH = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Zen Kaku Gothic New", sans-serif';
+const KB_FONT_JA = '"Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Noto Sans SC", sans-serif';
+const kbInlineNodes = (line) => _kbInline(line).map((x, i) => x.b ? <strong key={i} style={{ fontWeight: 600 }}>{x.t}</strong> : x.t);
 function KnowledgeBody({ text, variant = "screen", lang }) {
-  return <div style={{ fontSize: 14, color: T.textPrimary, lineHeight: 1.95, whiteSpace: "pre-wrap", fontFamily: T.fontSans }}>{text}</div>;
+  const print = variant === "print", staff = variant === "staff";
+  const blocks = knowledgeBlocks(text);
+  const ink = print ? "#000" : T.ink;
+  const lineC = print ? "#000" : T.line;
+  const wrap = print
+    ? { fontSize: "11pt", color: "#000", lineHeight: 1.7, whiteSpace: "pre-wrap", fontFamily: lang === "ja" ? KB_FONT_JA : KB_FONT_ZH, overflowWrap: "anywhere" }
+    : staff
+      ? { fontSize: 17, color: T.ink, lineHeight: 1.8, whiteSpace: "pre-wrap", fontFamily: T.fontSans, overflowWrap: "anywhere" }
+      : { fontSize: 14, color: T.textPrimary, lineHeight: 1.95, whiteSpace: "pre-wrap", fontFamily: T.fontSans };
+  const cell = (head) => ({ border: `${print ? "0.5pt" : "1px"} solid ${lineC}`, padding: print ? "2pt 6pt" : "4px 10px", verticalAlign: "top", textAlign: "left", whiteSpace: "pre-wrap",
+    fontWeight: head ? 600 : 400, ...(head && !print ? { background: T.sunken } : {}) });
+  return (
+    <div data-k6-tag="kbody" style={wrap}>
+      {blocks.map((b, bi) => {
+        if (b.type === "h") return <div key={bi} data-k6-block="h" style={{ fontWeight: 600, color: ink }}>{kbInlineNodes(b.text)}</div>;
+        if (b.type === "rule") return <div key={bi} data-k6-block="rule" role="separator" style={{ borderTop: `${print ? "0.5pt" : "1px"} solid ${lineC}`, height: 0, margin: print ? "4pt 0" : "8px 0" }} />;
+        if (b.type === "table") {
+          const [first, ...rest] = b.rows;
+          return (
+            <div key={bi} data-k6-block="table" style={{ overflowX: print ? "visible" : "auto", margin: print ? "3pt 0" : "4px 0", whiteSpace: "normal" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: print ? "10pt" : staff ? 15 : 13, lineHeight: 1.6 }}>
+                {b.head && first && <thead><tr>{first.map((c, ci) => <th key={ci} style={cell(true)}>{kbInlineNodes(c)}</th>)}</tr></thead>}
+                <tbody>{(b.head ? rest : b.rows).map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci} style={cell(false)}>{kbInlineNodes(c)}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
+          );
+        }
+        if (b.type === "pre") return (
+          <div key={bi} data-k6-block="pre" style={{ overflowX: print ? "visible" : "auto", margin: print ? "3pt 0" : "4px 0" }}>
+            <pre style={{ margin: 0, fontFamily: KB_MONO, fontSize: print ? "9.5pt" : staff ? 14 : 13, lineHeight: 1.6, whiteSpace: print ? "pre-wrap" : "pre", color: ink }}>
+              {b.src.map((ln, li) => <Fragment key={li}>{li ? "\n" : ""}{kbInlineNodes(_kbRaw(ln))}</Fragment>)}
+            </pre>
+          </div>
+        );
+        // p:连着的行照原样换行;最后一行是空行、后面还有块时多补一个换行(不然这一行空行显示不出来)
+        const tail = bi < blocks.length - 1 && _kbRaw(b.src[b.src.length - 1]).trim() === "" ? "\n" : "";
+        return (
+          <div key={bi} data-k6-block="p">
+            {b.src.map((ln, li) => <Fragment key={li}>{li ? "\n" : ""}{kbInlineNodes(ln)}</Fragment>)}{tail}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
-// 下面都是空壳(先 return null),props 见 .claude/batch6/api.md
-function StaffPointsFields({ form, setForm, lang }) { return null; }                     // KA:知识编辑页「给员工的要点」
-function KnowledgeStaffPreview({ k, lang, isMarked, onEdit, ctx }) { return null; }       // KA:详情页「👁 员工看到的」
+// KA:知识编辑页「给员工的要点」(「内容」卡和「📷 参考图片」卡之间)。不是必读、也没写过要点时收成一行链接,点开才是整张卡;
+// 中日两格上下排,右上角行数,超过 8 行 / 带价格黄字(只提示,不拦保存)。折叠状态是自己的 useState,不写数据
+function StaffPointsFields({ form, setForm, lang }) {
+  const KR = kreadTxt(lang);
+  const filled = (v) => typeof v === "string" && v.trim() !== "";
+  const [open, setOpen] = useState(() => isStaffRead(form) || filled(form && form.staffPointsZh) || filled(form && form.staffPointsJa));
+  if (!open) {
+    return (
+      <div data-k6-points="closed" style={{ marginBottom: "1rem" }}>
+        <button type="button" className="k-btn k-tap" onClick={() => setOpen(true)}
+          style={{ ...T.fs.small, color: T.info, background: "none", border: "none", padding: "6px 0", cursor: "pointer", fontFamily: T.fontSans }}>
+          {KR.ptsOpen}
+        </button>
+      </div>
+    );
+  }
+  const area = { width: "100%", minHeight: 110, padding: "8px 12px", fontSize: 13, lineHeight: 1.7, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard,
+    color: T.textPrimary, fontFamily: T.fontSans, boxSizing: "border-box", resize: "vertical" };
+  return (
+    <div data-k6-points="open" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 6, color: T.textPrimary }}>{KR.ptsTitle}</div>
+      <div style={{ ...T.fs.caption, color: T.textSecondary, marginBottom: 12, lineHeight: 1.6 }}>{KR.ptsHint}</div>
+      {[["staffPointsZh", KR.ptsZh], ["staffPointsJa", KR.ptsJa]].map(([key, label], i) => {
+        const v = typeof form[key] === "string" ? form[key] : "";
+        const lines = staffPointsLineCount(v);
+        const money = stripMoneyClauses(v).n;
+        return (
+          <div key={key} data-k6-pts={key} style={{ marginTop: i ? 12 : 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+              <label style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "0.3px" }}>{label}</label>
+              <span data-k6-pts-lines={lines} style={{ ...T.fs.label, color: lines > 8 ? T.warning : T.textTertiary, ...T.num }}>{KR.ptsLines(lines)}</span>
+            </div>
+            <textarea value={v} onChange={(e) => { const val = e.target.value; setForm(prev => ({ ...prev, [key]: val })); }} style={area} />
+            {lines > 8 && <div data-k6-pts-warn="over" style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {KR.ptsOver}</div>}
+            {money > 0 && <div data-k6-pts-warn="money" style={{ ...T.fs.caption, color: T.warning, marginTop: 4 }}>⚠ {KR.ptsMoney(money)}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+// KA:详情页「👁 员工看到的」(就地展开在标题下面)。内容 = knowledgeStaffView(k, 当前界面语言)(R-M13 第 3 条);上面几行提示:还不是必读 /
+// 去掉了 N 处价格并逐处列出 / 中文里日文占比高 / 认不出的价格请自己扫一眼(永远出,R-M14);下面是员工阅读页的样子(KB 的 StaffKnowledgeBodyBlock)。
+// related = relatedRecipes 拆开后逐个:唯一命中 → { name, type, id };同名 / 找不到 → { name }(name 先去钱,去完是空的不要)
+function KnowledgeStaffPreview({ k, lang, isMarked, onEdit, ctx }) {
+  const KR = kreadTxt(lang);
+  const v = knowledgeStaffView(k, lang);
+  const c = ctx || {};
+  const resolve = makeKnowledgeLinkResolver(c.recipes || [], c.components || [], c.creations || []);
+  const related = [];
+  ((k && Array.isArray(k.relatedRecipes)) ? k.relatedRecipes : []).flatMap(splitLinkNames).forEach(raw => {
+    const m = resolve(raw);
+    const name = stripMoneyClauses(raw).text.trim();
+    if (m && !m.ambiguous && m.item) related.push({ name: name || _klDisplayName(m.item, lang), type: m.type, id: m.item.id });
+    else if (name) related.push({ name });
+  });
+  const line = { ...T.fs.caption, color: T.body, lineHeight: 1.7, marginTop: 6, overflowWrap: "anywhere" };
+  return (
+    <div data-k6-preview="1" style={{ marginTop: 16, border: `1px solid ${T.border}`, borderRadius: T.radius, padding: "12px 14px", background: T.bgCard }}>
+      <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>{KR.previewTitle}</div>
+      {!isMarked && <div data-k6-pv="notmarked" style={{ ...line, color: T.textSecondary }}>{KR.previewNotMarked}</div>}
+      {v.n > 0 && (
+        <div data-k6-pv="cut" style={{ ...line, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 220px", minWidth: 0, color: T.warning }}>⚠ {KR.previewCut(v.n)}{v.cut.map(x => `「${x}」`).join("")}</span>
+          {onEdit && <Btn size="sm" onClick={onEdit}>{KR.editSource}</Btn>}
+        </div>
+      )}
+      {lang === "zh" && v.kana >= KNOW_KANA_WARN && <div data-k6-pv="kana" style={{ ...line, color: T.warning }}>⚠ {KR.previewKana(Math.round(v.kana * 100))}</div>}
+      <div data-k6-pv="limit" style={{ ...line, color: T.textSecondary }}>ⓘ {KR.previewLimit}</div>
+      <div style={{ height: 1, background: T.lineFaint, margin: "10px 0" }} />
+      <StaffKnowledgeBodyBlock view={v} lang={lang} related={related} images={(k && k.imageUrls) || []} />
+    </div>
+  );
+}
 function StaffKnowledgeBodyBlock({ view, lang, related, onOpenItem, images }) { return null; }   // KB:员工阅读页 / 老板预览的正文块
 function StaffReadingOverlay({ lang, list, open, onClose, onOpen, onOpenItem, onPrint, recipes, components, creations }) { return null; }   // KB
 function KitchenReadingLinks({ kind, id, reading, lang }) { return null; }               // KB:厨房视图「📚 先读」
@@ -17758,14 +18271,28 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
 
   // 在 recipes / components / creations 里按名字找目标,规则见上面 makeKnowledgeLinkResolver
   const resolveLink = makeKnowledgeLinkResolver(recipes, components, creations);
+  // 第 6 批 KA:头部两行(放不下就折行)+「📌 设为员工必读 / ✓ 员工必读 · 第 i 条」「🖨 打印」「👁 员工看到的」;「👁」就地展开在标题下面
+  const KR = kreadTxt(lang);
+  const [preview, setPreview] = useState(false);
+  const marked = staffNo > 0;
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
           {lang === "zh" ? "知识点详情" : "ナレッジ詳細"}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {typeof onToggleStaff === "function" && (
+            <span data-k6-mark={marked ? "on" : "off"}>
+              {/* key:换 variant 时整个换掉(Btn 的 success / primary 带 borderColor,原地切换 React 会警告 border 简写和分写混用) */}
+              <Btn key={marked ? "on" : "off"} size="sm" variant={marked ? "success" : "default"} onClick={() => onToggleStaff(!marked)}>{marked ? KR.markedBtn(staffNo) : KR.markBtn}</Btn>
+            </span>
+          )}
+          {typeof onPrint === "function" && <span data-k6-print="one"><Btn size="sm" onClick={onPrint}>{KR.print}</Btn></span>}
+          <span data-k6-previewbtn={preview ? "open" : "closed"}>
+            <Btn key={preview ? "on" : "off"} size="sm" variant={preview ? "primary" : "default"} onClick={() => setPreview(v => !v)}>{KR.previewBtn}</Btn>
+          </span>
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
         </div>
@@ -17786,6 +18313,9 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
         {titleOther && titleOther !== title && (
           <div style={{ fontSize: 13, color: T.textSecondary, marginTop: 6, fontStyle: "italic" }}>{titleOther}</div>
         )}
+
+        {/* 第 6 批 KA:👁 员工看到的(就地展开) */}
+        {preview && <KnowledgeStaffPreview k={k} lang={lang} isMarked={marked} onEdit={onEdit} ctx={{ recipes, components, creations }} />}
 
         {/* 标签 */}
         {(k.tags || []).length > 0 && (
@@ -17904,12 +18434,19 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
-    onSave({
+    // 第 6 批 KA(spec_ktrain R-K12):这一次保存只取一次时间;「给员工的要点」原样存,去首尾空白后为空的键删掉;
+    // 要点和打开时不一样(trim、\r\n 当 \n)才写 staffPtsAt(= 这次的 updatedAt;全删掉也算变了)。标记组跟着 form 原样保存。
+    // 老条目没有要点键时 dropBlankKeys 返回同一个对象,写出去的和以前一样
+    const now = new Date().toISOString();
+    let out = {
       ...form,
       id: item ? item.id : "k_" + Date.now(),
-      createdAt: item?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+      createdAt: item?.createdAt || now,
+      updatedAt: now,
+    };
+    out = dropBlankKeys(out, ["staffPointsZh", "staffPointsJa"]);
+    if (staffPointsChanged(item, form)) out = { ...out, staffPtsAt: now };
+    onSave(out);
   };
 
   return (
@@ -17996,6 +18533,9 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
           <textarea value={form.contentJa} onChange={f("contentJa")} placeholder="【】で節分け" style={{...inpStyle, minHeight: 200, resize: "vertical", fontFamily: "system-ui, monospace"}} />
         </div>
       </div>
+
+      {/* 第 6 批 KA:给员工的要点(不是必读、也没写过时收成一行链接) */}
+      <StaffPointsFields form={form} setForm={setForm} lang={lang} />
 
       {/* 📷 参考图片 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
