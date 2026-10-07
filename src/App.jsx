@@ -4423,10 +4423,12 @@ const anyEditorDirty = () => { for (const f of _dirtyChecks) { try { if (f()) re
 // 以前算「改过」、离开时白问一句。顶层不动;数组里的空值两边都变 null,照样比得出增删
 // 审查第 6 轮:数字一律按字符串比 —— 老数据的创立年份 / 库存 / 售价存的是数字 1919,输入框敲了又删掉写回的是 "1919",以前白问一句
 const _dirtyNorm = (k, v) => (k !== "" && (v === "" || v === null || v === false || (Array.isArray(v) && v.length === 0))) ? undefined : ((typeof v === "number" && isFinite(v)) ? String(v) : v);
-function useDirtyGuard(getState) {
+// 复查修(ui-r1-01):opts.startDirty = 一打开就算「有没保存的改动」(组件编辑页改了内容、点「⧉ 这次的改动存成新版本」打开的预填页 ——
+// 改动是从上一页带过来的,以前要等她在这一页按过键才拍基准,预填进来的改动不算,什么都不碰就离开时不问、改动丢了)。不传 = 和以前一模一样
+function useDirtyGuard(getState, opts) {
   const latest = useRef(getState);
   latest.current = getState;
-  const initial = useRef(null);
+  const initial = useRef(opts && opts.startDirty ? "\u0000carried" : null);
   const armedObj = useRef(undefined);   // 第 5 批第 0 步:拍快照那一刻 getState() 返回的对象本身(armedState 用)
   useEffect(() => {
     const check = () => initial.current !== null && JSON.stringify(latest.current(), _dirtyNorm) !== initial.current;
@@ -6834,6 +6836,7 @@ const SCALE_TXT = {
   zh: {
     title: "缩放计算", modeAria: "缩放方式", reset: "重置",
     modes: { yieldCount: "按个数", yieldWeight: "按产出量", mold: "按模具", ing: "按某样原料", total: "按总重" },
+    kitchenLocked: "按模具缩放时厨房视图会算错(它只会按个数缩放),请用「打印 → 🍳 厨房操作台」",
     moldFrom: "原模具", moldTo: "新模具", round: "圆", rect: "方", diam: "直径", wl: "长 × 宽", h: "高", hPh: "可选", common: "常用",
     moldFilled: (t) => `模具写的是「${t}」,按它填好了,不对就改`,
     moldUnread: (t) => `模具写的是「${t}」,没认出尺寸,请填原模具`,
@@ -6849,6 +6852,7 @@ const SCALE_TXT = {
   ja: {
     title: "スケール計算", modeAria: "スケール方法", reset: "リセット",
     modes: { yieldCount: "個数で", yieldWeight: "出来高で", mold: "型で", ing: "材料で", total: "総重量で" },
+    kitchenLocked: "型で換算中はキッチン表示が合わないため(個数でしか換算できません)、「印刷 → 🍳 キッチン用」を使ってください",
     moldFrom: "元の型", moldTo: "新しい型", round: "丸", rect: "角", diam: "直径", wl: "縦 × 横", h: "高さ", hPh: "任意", common: "よく使う",
     moldFilled: (t) => `型の記載「${t}」から入力済み。違えば修正`,
     moldUnread: (t) => `型の記載「${t}」から寸法を読めません。元の型を入力`,
@@ -6889,7 +6893,7 @@ function ScaleMoldInput({ which, label, value, onChange, X, inStyle, labStyle })
   );
 }
 function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, setTargetYield, target, scale,
-  sc, setSc, info, obj, kind = "recipe", ctx }) {   // S2:sc / setSc / info / obj / kind / ctx(没给 sc 时只有按个数,和第 0 步一样)
+  sc, setSc, info, obj, kind = "recipe", ctx, kitchenLocked = false }) {   // kitchenLocked(复查修 ui-r1-03):详情页的厨房视图按钮这时是灰的   // S2:sc / setSc / info / obj / kind / ctx(没给 sc 时只有按个数,和第 0 步一样)
   const X = SCALE_TXT[lang === "ja" ? "ja" : "zh"];
   const F = fmtQty;
   const mode = (sc && SCALE_MODES.includes(sc.mode)) ? sc.mode : "yield";
@@ -7005,6 +7009,8 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
       </div>
     );
     labelLine();
+    // 复查修(ui-r1-03):厨房视图按钮灰掉的原因以前只写在 title 里,iPad 没有悬停看不到 —— 在缩放行里写出来
+    if (kitchenLocked) note("kitchen", X.kitchenLocked);
   } else if (mode === "ing") {
     const opts = scaleIngOptions(obj, ctx);
     const opt = opts.find(o => o.key === sc.ingKey) || null;
@@ -7259,7 +7265,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
       {/* 🔢 缩放计算 —— 压成一行，底部一条发丝线(第 5 批第 0 步抽成 ScaleBar;S2 加缩放方式的下拉) */}
       {originalYield > 0 && (r.ingredients || []).length > 0 && (
         <ScaleBar variant="recipe" lang={lang} originalYield={originalYield} unit={r.unit || "個"} targetYield={sc.target} setTargetYield={(v) => setSc(s => ({ ...s, target: v }))} target={target} scale={scale}
-          sc={sc} setSc={setSc} info={info} obj={r} kind="recipe" ctx={scCtx} />
+          sc={sc} setSc={setSc} info={info} obj={r} kind="recipe" ctx={scCtx} kitchenLocked={kitchenLocked && !!onKitchen} />
       )}
 
       {/* 备货卡(prepstock E 线,紧凑:最早 3 批 +「看全部备货 →」)。没标、账上也没有时不渲染 */}
@@ -7293,10 +7299,12 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
           const p2 = missing.filter(ing => ingPriceIssue(ing, materials) === "unit");
           const p1 = missing.filter(ing => ingPriceIssue(ing, materials) === "noPrice");
           const zh = lang === "zh";
+          // 复查修(ui-r1-08):两段都有时各占一行(以前用 "\n" 连,InlineError 的 detail 是普通 div,换行被折成空格,读成「…橙皮屑 1 项按个写…」);只有一段时照旧是一串字
+          const segs = !p2.length ? [] : [p1.length ? (zh ? `${p1.length} 项原料没有单价：${names(p1)}` : `${p1.length} 件に単価がありません：${names(p1)}`) : "",
+               zh ? `${p2.length} 项按个写、没填每个几克(成本少算了):${names(p2)}` : `${p2.length} 件は個数単位で 1 個あたりの g が未入力(原価が過少):${names(p2)}`].filter(Boolean);
           const detail = !p2.length
             ? (zh ? `${missing.length} 项原料没有单价：${names(missing)}` : `${missing.length} 件に単価がありません：${names(missing)}`)
-            : [p1.length ? (zh ? `${p1.length} 项原料没有单价：${names(p1)}` : `${p1.length} 件に単価がありません：${names(p1)}`) : "",
-               zh ? `${p2.length} 项按个写、没填每个几克(成本少算了):${names(p2)}` : `${p2.length} 件は個数単位で 1 個あたりの g が未入力(原価が過少):${names(p2)}`].filter(Boolean).join("\n");
+            : segs.length > 1 ? segs.map((t, i) => <div key={i} data-cost-seg={i}>{t}</div>) : segs[0];
           return (
             <div style={{ marginBottom: T.sp.xxl }}>
               <InlineError
@@ -7708,17 +7716,25 @@ const componentSavePending = (rows, saveToShop, materials, shopMaterials) => {
 // 复制副本时先去掉末尾上一次加的「北京 / 北京 2」。拼好后和全部配方 / 组件 / 组合产品的中日法名按知识按钮的 linkKeys 前三档(全名 / 去版本号 / 再去括号)比,
 // 撞了就把「北京」换成「北京 2」「北京 3」…。只看这台设备上的数据(两台电脑各自复制同一条会起出同一个名字,见 CLAUDE.md)
 const _COPY_VER_RE = /(^|[^A-Za-z0-9])v(\d+)(?:\.(\d+))?([A-Za-z])?(?![A-Za-z0-9.])/;
+const _COPY_VER_G = new RegExp(_COPY_VER_RE.source, "g");
+// 第 5 批复查修(R1-DATA-2):只有末尾正是这里加过的「 {vX.Y / vXA.Y} {北京}( N)」才算复制副本 —— 去掉这一段、版本从这一段升;
+// 别的名字不碰「北京」(以前「老北京 v1.0」→「老 v1.1 北京」、「北京 v2.0」中文名变空),版本号取最后一个(「Hario v60 咖啡冻 v1.0」升的是 v1.0)
 const _copyBump = (name, label) => {
   const s = String(name === undefined || name === null ? "" : name).trim();
   if (!s) return { base: "", ver: null };
-  const m = s.match(_COPY_VER_RE);
+  const lab = String(label || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (lab) {
+    const cm = s.match(new RegExp("\\s(v\\d+[A-Za-z]?\\.\\d+)\\s+" + lab + "(?:\\s+\\d+)?$"));
+    const b = cm ? s.slice(0, cm.index).trim() : "";
+    if (b) return { base: b, ver: cm[1].replace(/\.(\d+)$/, (_, n) => "." + (Number(n) + 1)) };
+  }
+  let m = null;
+  for (const x of s.matchAll(_COPY_VER_G)) m = x;
   let base = s, ver = "v1.1";
   if (m) {
     ver = m[3] !== undefined ? `v${m[2]}.${Number(m[3]) + 1}` : `v${m[2]}${m[4] || ""}.1`;
-    base = (s.slice(0, m.index) + m[1] + s.slice(m.index + m[0].length)).replace(/\s{2,}/g, " ").trim();
+    base = (s.slice(0, m.index) + m[1] + s.slice(m.index + m[0].length)).replace(/\s{2,}/g, " ").trim() || s;
   }
-  const lab = String(label || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (lab) base = base.replace(new RegExp("\\s*" + lab + "(?:\\s*\\d+)?$"), "").trim();
   return { base, ver };
 };
 const _copyAllItems = (all) => Array.isArray(all) ? all
@@ -7771,7 +7787,8 @@ const copyAsNewVersion = (kind, obj, all, nowIso, formState) => {
   if (imgs) out.imageUrls = kept;
   if (kind === "recipe" && rest.familyId) out.variantLabel = names.label;
   out.copiedFrom = { kind, id: obj.id, nameZh: _normTxt(obj.nameZh) || _normTxt(obj.nameJa) || _normTxt(obj.nameFr), at };
-  Object.defineProperty(out, "_copyMeta", { value: { label: names.label, droppedImages: imgs ? imgs.length - kept.length : 0, srcName: out.copiedFrom.nameZh }, enumerable: false });
+  // fromForm(复查修 ui-r1-01):带着编辑页里没保存的改动来的 → 新编辑页一打开就算有改动,离开先问
+  Object.defineProperty(out, "_copyMeta", { value: { label: names.label, droppedImages: imgs ? imgs.length - kept.length : 0, srcName: out.copiedFrom.nameZh, fromForm: !!(formState && formState.dirty) }, enumerable: false });
   return out;
 };
 
@@ -7999,7 +8016,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const isCopy = !existed && !!c.copiedFrom && typeof c.copiedFrom === "object";
           const head = isCopy
             ? (lang === "ja" ? `✓ 新バージョン「${pickLang(c, "name", lang) || c.nameFr || ""}」を保存しました(元はそのまま)` : `✓ 新版本「${pickLang(c, "name", lang) || c.nameFr || ""}」已保存,原版没动`)
-            : "✓ 组件已保存";
+            : (lang === "ja" ? "✓ コンポーネントを保存しました" : "✓ 组件已保存");   // 复查修(ui-r1-05):日文界面以前是「✓ 组件已保存 · 在庫は…」中日混写
           showToast(meta && meta.prepMsg ? `${head} · ${meta.prepMsg}` : head);
           impactSeq.current += 1;
           setImpact(before ? { compId: c.id, before, seq: impactSeq.current } : null);
@@ -9589,6 +9606,9 @@ const UGP_TXT = {
     useMat: (g) => `↺ 用材料百科的 ${g} g`,
     otherGroup: "同一个材料只能存一个克重,另一组留在这一行上",
     cost: "成本",
+    mixed: (n, g) => `这一组有 ${n} 行还没按 ${g} g 算(没填或填的不一样)`,
+    mixedApply: (g) => `都按 ${g} g 算`,
+    rowOff: "(这一行还没按这个克重算)",
   },
   ja: {
     title: "⚖ 個数単位の材料 · 1 個あたりの g",
@@ -9601,6 +9621,9 @@ const UGP_TXT = {
     useMat: (g) => `↺ 事典の ${g} g に戻す`,
     otherGroup: "同じ材料に保存できる g は 1 つだけ。もう一方はこの行に残ります",
     cost: "原価",
+    mixed: (n, g) => `このグループの ${n} 行はまだ ${g} g で計算されていません(未入力または値が異なる)`,
+    mixedApply: (g) => `すべて ${g} g にする`,
+    rowOff: "(この行はまだこの g で計算されていません)",
   },
 };
 // 组里每一行套一个变换 fn(row) → 新行,再按「改之前 / 改之后」的克重系数刷价(R30 第 2 步)
@@ -9646,6 +9669,10 @@ function UnitGramsPanel({ ings, setIngs, materials, lang, canSaveToMat }) {
         const checked = g.rows.some(r => r._pieceToMat === true);
         const hasPrice = getMaterialEffectivePrice(m) > 0;
         const cand = validG(val) ? val : matUnitOk ? matG : hOk ? String(h.gpp) : "";
+        // 第 5 批复查修(R1-MONEY-2):框里显示的是组里第一条自己有克重的行(R33);组里别的行没填 / 填的不一样时(存进百科没勾、之后又加了一行同单位的),
+        // 框里的数只管有它的行 —— 标出来、给一键「都按 X g 算」,这几行的「成本 a → b」的 a 写它现在的成本
+        const ugOf = (r) => Object.prototype.hasOwnProperty.call(r, "unitGrams") ? _normNum(r.unitGrams) : "";
+        const offIds = new Set(own && validG(val) ? g.rows.filter(r => ugOf(r) !== _normNum(val)).map(r => r._id) : []);
         const setVal = (t) => setIngs(prev => _ugpApply(prev, ids, materials, (r) => {
           if (String(t).trim() === "") {
             if (!Object.prototype.hasOwnProperty.call(r, "unitGrams") && !Object.prototype.hasOwnProperty.call(r, "_pieceToMat")) return r;
@@ -9682,6 +9709,13 @@ function UnitGramsPanel({ ings, setIngs, materials, lang, canSaveToMat }) {
                   style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: "transparent", border: `0.5px solid ${T.info}`, color: T.info, whiteSpace: "normal", textAlign: "left" }}>{X.fromSpec(_normTxt(m && m.packSize), String(h.gpp))}</button>
               )}
             </div>
+            {offIds.size > 0 && (
+              <div data-unit-grams="mixed" style={{ fontSize: 11, color: T.warning, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", minWidth: 0 }}>
+                <span style={{ overflowWrap: "anywhere", minWidth: 0 }}>{X.mixed(offIds.size, String(parseFloat(val)))}</span>
+                <button type="button" data-unit-grams="mixedapply" onClick={() => setVal(val)}
+                  style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: "transparent", border: `0.5px solid ${T.warning}`, color: T.warning, whiteSpace: "normal", textAlign: "left" }}>{X.mixedApply(String(parseFloat(val)))}</button>
+              </div>
+            )}
             {matG && !matUnitOk && (
               <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4, overflowWrap: "anywhere" }}>{X.matOtherUnit(_normTxt(m.pieceUnit), matG, u)}</div>
             )}
@@ -9696,13 +9730,15 @@ function UnitGramsPanel({ ings, setIngs, materials, lang, canSaveToMat }) {
             )}
             {!hasPrice && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{X.noPrice}</div>}
             {hasPrice && g.rows.map(r => {
+              const isOff = offIds.has(r._id);
               const { unitGrams: _ug, ...noUg } = r;
-              const a = fmtCost(getIngLiveCost(noUg, materials, [], [])) || "¥0";
+              const a = fmtCost(getIngLiveCost(isOff ? r : noUg, materials, [], [])) || "¥0";
               const b = cand ? (fmtCost(getIngLiveCost({ ...r, unitGrams: cand }, materials, [], [])) || "¥0") : "—";
               return (
                 <div key={r._id} style={{ fontSize: 11, color: T.textSecondary, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap", minWidth: 0 }}>
                   <span style={{ overflowWrap: "anywhere", minWidth: 0 }}>{pickLang(r, "name", lang)} · {_normTxt(r.qty)} {_normTxt(r.unit)}</span>
                   <span style={{ whiteSpace: "nowrap", ...T.num }}>{X.cost} {a} → {b}</span>
+                  {isOff && <span data-unit-grams="rowoff" style={{ color: T.warning, overflowWrap: "anywhere", minWidth: 0 }}>{X.rowOff}</span>}
                 </div>
               );
             })}
@@ -10025,9 +10061,10 @@ const savePieceWrites = (writes, rows, materials, setMaterials, showToast, lang,
     const matName = mat ? ((zh ? (mat.nameZh || mat.nameJa) : (mat.nameJa || mat.nameZh)) || mat.nameFr || "") : "";
     const row = (rows || []).find(r => r && r.materialId === w.materialId && _normCountUnit(r.unit) === _normCountUnit(w.unit));
     const nm = row ? pickLang(row, "name", lang) : "";
+    // w.kept(复查修 R1-DATA-1):部分编辑页把行上的克重留着(和组件一样)—— 撤销只去掉材料百科的,这一行不会回到没填
     showToast(zh
-      ? `✓ 材料百科记上了「${matName}」1 ${w.unit} ≈ ${w.grams} g${layerPage ? "(立即生效,组合产品不保存也会保留)" : ""} · 撤销后材料百科去掉这个克重;刚才这一条里的「${nm}」也回到没填克重(会重新显示单位不符)`
-      : `✓ 材料事典「${matName}」に 1${w.unit} ≈ ${w.grams} g を保存${layerPage ? "(すぐ反映・組み合わせを保存しなくても残ります)" : ""} · 取り消すと事典の g も消え、この項目の「${nm}」も未入力に戻ります`, { undo });
+      ? `✓ 材料百科记上了「${matName}」1 ${w.unit} ≈ ${w.grams} g${layerPage ? "(立即生效,组合产品不保存也会保留)" : ""} · 撤销后材料百科去掉这个克重${w.kept ? "" : `;刚才这一条里的「${nm}」也回到没填克重(会重新显示单位不符)`}`
+      : `✓ 材料事典「${matName}」に 1${w.unit} ≈ ${w.grams} g を保存${layerPage ? "(すぐ反映・組み合わせを保存しなくても残ります)" : ""} · 取り消すと事典の g ${w.kept ? "は消えます" : `も消え、この項目の「${nm}」も未入力に戻ります`}`, { undo });
   });
 };
 
@@ -10187,7 +10224,8 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
   );
   const nextIngId = useRef(ings.length);
   const nextStepId = useRef(steps.length);
-  const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }));   // 没保存就切页时 App 先问一句
+  // 复查修(ui-r1-01):从改过的编辑页「⧉ 这次的改动存成新版本」打开的预填页,一打开就算有改动(_copyMeta.fromForm,不可枚举、不进数据)
+  const dirtyBind = useDirtyGuard(() => ({ form, ings, steps }), { startDirty: !!(component && component._copyMeta && component._copyMeta.fromForm) });   // 没保存就切页时 App 先问一句
   const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
   // 第 5 批 E4 本机草稿(第 0 步空壳:banner 是 null,markSaved / discard 不做事)
   const draft = useEditorDraft(dirtyBind, { kind: "component", id: (component && component.id) ? component.id : null, base: (component && component.id) ? component : null, lang });
@@ -10280,7 +10318,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         💡 提示：中文名必填，日文可以不填。备注、步骤中日文任一填写即可。
       </div>
       {/* 第 5 批 E2「🔗 这个组件用在哪」+「⧉ 这次的改动存成新版本」(只在不是新建、而且有内容时出现) */}
-      <CompUsersBlock comp={component} isNew={isNew} form={form} ings={ings} steps={steps} creations={creations} recipes={recipes} products={products} components={components} materials={materials} lang={lang} onSaveAsCopy={onSaveAsCopy} />
+      <CompUsersBlock comp={component} isNew={isNew} form={form} ings={ings} steps={steps} creations={creations} recipes={recipes} products={products} components={components} materials={materials} lang={lang} onSaveAsCopy={typeof onSaveAsCopy === "function" ? (fs) => onSaveAsCopy({ ...fs, dirty: dirtyBind.isDirty() }) : onSaveAsCopy} />
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", borderLeft: `4px solid ${cat.color}` }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -11484,15 +11522,20 @@ const printAllergenText = (summary, handwritten, lang) => {
 //     ja 用日文配料名去括号备注;both = 「中 / 日」(两个一样就一个)。
 //   · 同名的合并;按投料重量从多到少(ingGramsOfRow,S1 合并后计件行有克重也算得出),读不出克数的(按个写、「適量」)按原来的顺序放最后。
 //   · ctx = { materials }(可不给:不给就不认 labelNameZh)
-const _showStrip = (s) => _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || _normTxt(s);
+// 复查修(PS-4):再去掉结尾的内部版本号(「基础卡仕达 v1.0」→「基础卡仕达」;只认带点的 vX.Y,免得把「v60」这种型号当版本号)
+const _showStrip = (s) => { const a = _normTxt(_normTxt(s).replace(/\s*[（(][^（）()]*[)）]\s*$/, "")) || _normTxt(s); return _normTxt(a.replace(/\s+[vV]\d+(?:\.\d+)+[A-Za-z]?$/, "")) || a; };
 const showcaseIngNames = (ings, lang, ctx = {}) => {
   const mm = materialMapOf(ctx && ctx.materials);
+  // 复查修(PS-4):「来自组件」的行用组件的品名(同 showcaseTitleOf:去版本号和括号备注)—— 以前印配料名,客户看到「基础卡仕达 v1.0」、
+  // 日文「クレーム・パティシエール(当店 v1.0)半量 / 残り半量」两条。材料优先(同算价顺序);组件表没给就用渲染期注入的
+  const cm = (ctx && Array.isArray(ctx.components)) ? new Map(ctx.components.filter(c => c && c.id !== undefined && c.id !== null && c.id !== "").map(c => [c.id, c])) : _componentsById;
   const groups = new Map();
   (Array.isArray(ings) ? ings : []).forEach((ing, i) => {
     if (!ing || typeof ing !== "object") return;
     const m = (ing.materialId !== undefined && ing.materialId !== null && ing.materialId !== "") ? (mm.get(ing.materialId) || null) : null;
-    const zh = (m && _normTxt(m.labelNameZh)) || _showStrip(_normTxt(ing.nameZh) || _normTxt(ing.nameJa) || _normTxt(ing.nameFr));
-    const jaN = _showStrip(_normTxt(ing.nameJa) || _normTxt(ing.nameZh) || _normTxt(ing.nameFr));
+    const comp = (!m && ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "") ? (cm.get(ing.componentId) || null) : null;
+    const zh = (m && _normTxt(m.labelNameZh)) || (comp && showcaseTitleOf(comp, "zh")) || _showStrip(_normTxt(ing.nameZh) || _normTxt(ing.nameJa) || _normTxt(ing.nameFr));
+    const jaN = (comp && showcaseTitleOf(comp, "ja")) || _showStrip(_normTxt(ing.nameJa) || _normTxt(ing.nameZh) || _normTxt(ing.nameFr));
     const name = lang === "ja" ? jaN : lang === "both" ? ((zh && jaN && zh !== jaN) ? `${zh} / ${jaN}` : (zh || jaN)) : zh;
     if (!name) return;
     const g = ingGramsOfRow(ing, m);
@@ -11585,13 +11628,24 @@ const creationUsedLine = (l, servesNow, unitWord, lang, noMoney) => {
     if (sp.per === "each" && isFinite(n) && n > 0) {
       const s = parseFloat(sp.serves) > 0 ? parseFloat(sp.serves) : 1;
       const head = ja ? `1 ${unitWord} ${fmtQty(n)} ${u} × ${fmtQty(s)} = ${fmtQty(n * s)} ${u}` : `每${unitWord} ${fmtQty(n)} ${u} × ${fmtQty(s)} = ${fmtQty(n * s)} ${u}`;
-      return { kind: "each", text: head + (note ? (ja ? `・${note}` : ` · ${note}`) : "") };
+      // 复查修(PS-1):过期(另一台旧版改了制作个数、一批的量没跟上)时多带 stale,两个模板在这一行下面加 ⚠(这一行本身照原样,它就是 usedAmount 写的)
+      const out = { kind: "each", text: head + (note ? (ja ? `・${note}` : ` · ${note}`) : "") };
+      if (st.stale) out.stale = { s1: s, s2: _servesNum(servesNow), each: n, total: n * s, u };
+      return out;
     }
     return note ? { kind: "note", text: note } : null;
   }
   const raw = usedAmountNote(l.usedAmount);
   const t = raw ? _normTxt(clean(raw)) : "";
   return t ? { kind: "raw", text: t } : null;
+};
+// 复查修(PS-1):过期用量(creationUsedLine 的 stale)那一句 ⚠,打印和整体配方共用;说法同编辑页 LayerUsedField 的 stale。只有克数,没有钱
+const usedStaleText = (st, structure, lang) => {
+  const ja = lang === "ja", W = creationWords(structure, ja ? "ja" : "zh"), U = W.unit, u = st.u;
+  const F = fmtQty, per = F(st.total / st.s2);
+  return ja
+    ? `1${U} ${F(st.each)}${u}・${F(st.s1)}${U} 基準のままですが仕込み数は ${F(st.s2)}。このバッチは ${F(st.total)}${u}(1${U} 約 ${per}${u})。更新前の別の端末で変更された可能性があります。編集画面で再計算してください`
+    : `用量是按每${U} ${F(st.each)} ${u}、${F(st.s1)} ${U}写的,${W.servesLabel}现在是 ${F(st.s2)},这一批还是 ${F(st.total)} ${u}(每${U}约 ${per} ${u})。多半是另一台还没刷新的设备改的,去编辑页「按每${U}重算」`;
 };
 // 某个模板会印出来的、她手写的文字(去钱之前)的清单 —— 弹窗黄条「这一份去掉 N 句」只数会印出来的(printMoneyCount);
 // 取文字的规则和模板一样:单语按 pickLang(这一语言空着用另一语言),双语中日都印;步骤按 stepRows 的行(单语 = 这一行当前语言、空着用另一语言,双语时另一语言不一样的那行也印)
@@ -11717,7 +11771,7 @@ const PRINT_TXT = {
     creationIntro: "📘 組立レシピ・A4 製造シート:パーツごとの分量と作り方、最後に組立。",
     scaleTitle: "🔢 仕込み量",
     scaleMake: "仕込み", scaleFrom: (f, u, k) => `元 ${f} ${u} · ×${k}`,
-    scaleCreation: (label, s, k) => `使用量は${label} ${s} 基準、現在 ×${k}`,
+    scaleCreation: (label, s, k) => `使用量は仕込み数 ${s} 基準、現在 ×${k}`,   // 复查修(ui-r1-04):label(creationWords 的 servesLabel)只有中文,日文固定写「仕込み数」(同整体配方页)
     scaleReset: "↺ 元の量",
     scaleVia: (label) => `(詳細ページは「${label}」で計算)`,
     scaleNoYield: "出来数が未入力のため元の量で印刷します",
@@ -11950,7 +12004,8 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
   const yieldNum = (() => { const n = parseFloat(obj.yield); return (isFinite(n) && n > 0) ? n : 0; })();
   const unit = _normTxt(obj.unit) || (kind === "component" ? "g" : "個");
   const sc0 = isScaleInfo(scale0) ? scale0 : null;
-  const qty0 = sc0 ? _plainNumStr(sc0.to) : (yieldNum > 0 ? _plainNumStr(yieldNum) : "");
+  // 复查修(PS-3):预填照详情页显示的取整(fmtQty,去千位逗号);以前 12 位有效数字,按总重 3000 g 预填「68.4931506849」。不改这一格时照旧原样带 scale0
+  const qty0 = sc0 ? fmtQty(sc0.to).replace(/,/g, "") : (yieldNum > 0 ? _plainNumStr(yieldNum) : "");
   const [qtyText, setQtyText] = useState(qty0);
   const [locked, setLocked] = useState(!!(sc0 && sc0.keepCount));
   const [byCount, setByCount] = useState(false);   // 点过「改成按个数」/「按原量」:不再原样带 scale0
@@ -12124,7 +12179,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
                     </div>
                   )}
                   {chk("allergens", X.sec.allergens)}
-                  {chk("keep", X.sec.keep)}
+                  {kind !== "component" && chk("keep", X.sec.keep)}{/* 复查修(PS-5):组件没有保质期 · 贮存条件(组件不卖给客人,编辑页也没有这张卡),不给这个勾选 */}
                   {chk("steps", X.sec.steps)}
                   {chk("notes", X.sec.notesIntro)}
                 </>
@@ -12155,7 +12210,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
                 )}
               </div>
             )}
-            {isShow && sections.keep && !hasKeep && hint(X.keepEmpty, T.textTertiary, "keepempty", _normTxt(obj.storage) ? <div>{X.keepLegacy(_normTxt(obj.storage))}</div> : null)}
+            {isShow && kind !== "component" && sections.keep && !hasKeep && hint(X.keepEmpty, T.textTertiary, "keepempty", _normTxt(obj.storage) ? <div>{X.keepLegacy(_normTxt(obj.storage))}</div> : null)}
             {isShow && sections.steps && sections.hideQty && hint(X.stepsQtyWarn, T.warning, "stepsqty")}
             {(isShow || template === "archive") && sections.notes && !moneyKept && hint(X.notesWarn, T.textTertiary, "notes")}
           </div>
@@ -12907,6 +12962,7 @@ function CreationPrintTemplate({ data, lang, sections = {}, brandName, brandSubt
               <div style={{ fontSize: "17pt", fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{p.needed !== null ? `${fmtQty(p.needed)} ${l.unit || "g"}` : ""}</div>
             </div>
             {used && <div style={{ fontSize: "9pt", marginTop: "3px" }}>{used.kind === "raw" ? tx("用量原文", "原文") : used.kind === "each" ? tx("用量", "使用量") : tx("用量说明", "説明")}：{used.text}</div>}
+            {used && used.stale && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(usedStaleText(used.stale, creationStructureOf(c), "zh"), usedStaleText(used.stale, creationStructureOf(c), "ja"))}</div>}
             {p.noUsed && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx("没填用量：下面是整批配方，没按个数算", "使用量未入力：全量レシピ")}</div>}
             {/* 2026-09-29 体检第 2 批:「500g + 170g」这类用量屏幕上有黄色提醒,打印单上以前没有,员工照大号数字做会少做 */}
             {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ fontSize: "10pt", fontWeight: 700, marginTop: "4px" }}>⚠ {tx(`用量只认开头的数字，按 ${fmtQty(p.used)} ${l.unit || "g"} 一批算，请核对用量原文`, `先頭の数字 ${fmtQty(p.used)} ${l.unit || "g"} で計算。原文を確認`)}</div>}
@@ -13774,6 +13830,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         }}
         onUpdateComponent={onUpdateComponent}
         onGoComponents={onGoComponents}
+        lang={lang}   // 复查修(ui-r1-02):以前没传,日文界面下组合产品编辑页 / 部分编辑页 / 选组件弹窗一律中文
       />
     );
   }
@@ -14158,6 +14215,7 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
               </div>
             </div>
             {used && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 4 }}>{used.kind === "raw" ? (zh ? "用量原文：" : "原文：") : used.kind === "each" ? (zh ? "用量：" : "使用量：") : (zh ? "用量说明：" : "説明：")}{used.text}</div>}
+            {used && used.stale && <div data-used-warn="sheetstale" style={{ fontSize: 12, color: T.warning, marginTop: 4, overflowWrap: "anywhere" }}>⚠ {usedStaleText(used.stale, creationStructureOf(c), zh ? "zh" : "ja")}</div>}
 
             {p.noUsed && (
               <div style={{ fontSize: 12, color: T.danger, marginTop: 8 }}>
@@ -14951,7 +15009,7 @@ const USED_TXT = {
     cost: null, costNone: "填用量→算成本",
     echoBatch: (n, u) => `→ 按 ${n} ${u} 算`,
     echoEach: (U, n, u, s, t) => `→ 每${U} ${n} ${u} × ${s} = ${t} ${u}`,
-    servesBlank: "(制作个数没填,按 1 算)",
+    servesBlank: (label) => `(${label}没填,按 1 算)`,   // 复查修(ui-r1-07):叫法跟 creationWords(叠层「制作台数」/ 拼装「制作个数」)
     stale: (U, e, u, label, s2, s1, n) => `按每${U} ${e} ${u} 填的,${label}现在是 ${s2},一批还是按 ${s1} ${U}算的 ${n} ${u}(多半是另一台还没刷新的设备改的)。`,
     staleRecompose: (U, n2, u) => `按每${U}重算 → ${n2} ${u}`,
     staleBatch: (n, u) => `改成这一批一共 ${n} ${u}`,
@@ -14968,7 +15026,7 @@ const USED_TXT = {
     cost: "原価", costNone: "使用量を入れると原価を計算",
     echoBatch: (n, u) => `→ ${n}${u} で計算`,
     echoEach: (U, n, u, s, t) => `→ 1${U} ${n}${u} × ${s} = ${t}${u}`,
-    servesBlank: "(仕込み数未入力のため 1 で計算)",
+    servesBlank: () => "(仕込み数未入力のため 1 で計算)",
     stale: (U, e, u, label, s2, s1, n) => `1${U} ${e}${u} で入力済みですが仕込み数は ${s2}、バッチは ${s1} 基準の ${n}${u} のまま(更新前の別の端末で変更された可能性があります)。`,
     staleRecompose: (U, n2, u) => `1${U}あたりで再計算 → ${n2}${u}`,
     staleBatch: (n, u) => `バッチ合計 ${n}${u} にする`,
@@ -15000,7 +15058,7 @@ function LayerUsedField({ layer, W, cost, onField, serves, lang, idx, onLayer })
   // 回显行(数字格有数时)
   let echo = null;
   if (n > 0) echo = per === "each"
-    ? X.echoEach(U, F(n), u, F(s), F(n * s)) + (!(parseFloat(serves) > 0) ? X.servesBlank : "")
+    ? X.echoEach(U, F(n), u, F(s), F(n * s)) + (!(parseFloat(serves) > 0) ? X.servesBlank(W.servesLabel) : "")
     : X.echoBatch(F(n), u);
   // 警示(同一时刻最多一条):过期 > 老数据读不准 / 读不出 / 没填 > 新写法没填数;没产出量的部分不出「成本按 0 算」
   let warn = null;
@@ -15477,7 +15535,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>{W.sectionHint}</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <Btn size="sm" variant="primary" onClick={() => setShowComponentPicker(true)}>+ 从组件库选</Btn>
+            <Btn size="sm" variant="primary" onClick={() => setShowComponentPicker(true)}>{lang === "ja" ? "+ パーツ庫から選ぶ" : "+ 从组件库选"}</Btn>
             <Btn size="sm" onClick={() => addEmptyLayer()}>{W.newBlank}</Btn>
           </div>
         </div>
@@ -15632,14 +15690,14 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
 const PICKER2_CSS = ".k-picker2 { align-items: center; justify-content: center; padding: 20px; } .k-picker2-panel { width: 640px; max-width: 100%; max-height: 85vh; border-radius: 12px; } "
   + "@media (max-width: 599px) { .k-picker2 { align-items: flex-end; padding: 0; } .k-picker2-panel { width: 100%; max-height: 90vh; border-radius: 12px 12px 0 0; } }";   // 不写「>」:服务端渲染会把它转义
 const PICKER2_TXT = {
-  zh: { title: "从组件库选", desc: "点卡片勾选，可以选好几个；同一个组件可以加两次（比如两片海绵）", search: "搜名字、风味或原料",
+  zh: { title: "从组件库选", desc: "点卡片勾选，可以选好几个。同一个组件要用两次（比如两片海绵）：加进去以后再打开一次选它", search: "搜名字、风味或原料",
     all: (n) => `全部 ${n}`, inuse: (n) => `● 在用 ${n}`, inuseLabel: "● 在用", cat: (name, n) => `${name} ${n}`,
     added: (n) => n >= 2 ? `已加 ×${n}` : "已加", prep: "备货", nIng: (n) => `${n} 种原料`, inuseTitle: "在用",
     ingHit: (name, n) => `含「${name}」${n > 1 ? `等 ${n} 行` : ""}`,
     selected: (n) => `已选 ${n} 个`, clear: "清空", add: (n) => `加入 ${n} 个`, close: "关闭",
     locked: "🔒 这个产品已锁定：新加的部分保存时也会锁上",
     empty: "组件库还是空的", goNew: "去组件仓库新建", noMatch: "没有匹配的组件" },
-  ja: { title: "パーツ庫から選ぶ", desc: "カードをタップして複数選択できます。同じパーツを 2 回追加することもできます", search: "名前・フレーバー・材料で検索",
+  ja: { title: "パーツ庫から選ぶ", desc: "カードをタップして複数選択できます。同じパーツを 2 回使うときは、追加したあともう一度開いて選んでください", search: "名前・フレーバー・材料で検索",
     all: (n) => `すべて ${n}`, inuse: (n) => `● 使用中 ${n}`, inuseLabel: "● 使用中", cat: (name, n) => `${name} ${n}`,
     added: (n) => n >= 2 ? `追加済み ×${n}` : "追加済み", prep: "作り置き", nIng: (n) => `材料 ${n} 種`, inuseTitle: "使用中",
     ingHit: (name, n) => `「${name}」を使用${n > 1 ? `（計 ${n} 行）` : ""}`,
@@ -15832,11 +15890,29 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
     }
     // 第 5 批 2.4(S1):勾了「同时存进材料百科」的计件行写材料克重 —— 只在这里写一次(同步回组件库确认后也走这里);第 0 步空壳
     const pieced = pieceRowsForSave(refreshedIngs, materials);
-    if (pieced.writes.length > 0 && onSaveMaterialPiece) onSaveMaterialPiece(pieced.writes, refreshedIngs);
-    const total = pieced.rows.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
+    // 第 5 批复查修(R1-DATA-1):从组件库来的部分,打开时这一行自己带着克重、和这次写进(或材料百科本来就有的)同单位克重一样时,行上的克重放回去 ——
+    // 钱一分不变,内容还和组件一样,跟组件库走 / 锁定的部分不会因为「把克重挪进百科」变成本产品专用(组件那行也带着克重时)
+    let outRows = pieced.rows, writes = pieced.writes;
+    if (!(opts && opts.synced) && layer.sourceComponentId) {
+      const kept = new Set();
+      outRows = pieced.rows.map(r => {
+        const o = (layer.ingredients || [])[r._id];
+        if (!o || Object.prototype.hasOwnProperty.call(r, "unitGrams") || !Object.prototype.hasOwnProperty.call(o, "unitGrams") || !r.materialId || o.materialId !== r.materialId || _normCountUnit(o.unit) !== _normCountUnit(r.unit)) return r;
+        const og = parseFloat(o.unitGrams);
+        const w = pieced.writes.find(x => x.materialId === r.materialId && _normCountUnit(x.unit) === _normCountUnit(r.unit));
+        const m = _findMatNullOk(materials, r.materialId);
+        const g = w ? parseFloat(w.grams) : (_matHasGrams(m) && _normCountUnit(m.pieceUnit) === _normCountUnit(r.unit) ? parseFloat(m.gramsPerPiece) : NaN);
+        if (!(isFinite(og) && og > 0 && og === g)) return r;
+        if (w) kept.add(w);
+        return { ...r, unitGrams: o.unitGrams };
+      });
+      if (kept.size) writes = pieced.writes.map(w => kept.has(w) ? { ...w, kept: true } : w);
+    }
+    if (writes.length > 0 && onSaveMaterialPiece) onSaveMaterialPiece(writes, refreshedIngs);
+    const total = outRows.reduce((s, i) => s + (i.noCost ? 0 : (parseFloat(i.cost) || 0)), 0);
     onSave({
       ...form,
-      ingredients: pieced.rows.map(({ _id, _priceModified, _originalPrice, _preNoCost, _pieceToMat, ...rest }) => rest),
+      ingredients: outRows.map(({ _id, _priceModified, _originalPrice, _preNoCost, _pieceToMat, ...rest }) => rest),
       ...stepsOut(),
       totalCost: total,
     }, opts);
@@ -17474,6 +17550,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
         );
       }}
       onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setMaterialEditTarget(null))}
+      lang={lang}   // 复查修(ui-r1-02):以前没传,日文界面下材料编辑页(克重行 / 按件计价)一律中文
     />;
   }
 
@@ -20083,14 +20160,15 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
 // 第 5 批 2.4(S1,R41):材料百科编辑页的克重行「按个用时,每个约几克(可选)· 1 [单位] ≈ [克数] g」(在 PackPriceFields 最下面,只有材料编辑页有)。
 // 材料没克重、规格推不出每个几克、规格也不是按个数写的 → 收成一行可点的小字「+ 按个用时每个几克」。
 // 本店原料有进货价(shopPpgCNY > 0)时,改了克重提示每个成本会怎么变,不改本店原料
-function PieceGramsRow({ packSize, pieceGrams, pieceUnit, onPieceChange, pieceInitGrams, shopPpgCNY, lang, inpStyle }) {
+function PieceGramsRow({ packSize, pieceGrams, pieceUnit, onPieceChange, pieceInitGrams, shopPpgCNY, lang, inpStyle, onGramsCommit }) {
   const zh = lang === "zh";
   const [open, setOpen] = useState(false);
   const valid = (t) => { const n = parseFloat(t); return isFinite(n) && n > 0; };
   const h = packPieceHint(packSize);
   const cnt = parsePackCount(packSize);
   const gStr = pieceGrams == null ? "" : String(pieceGrams), uStr = pieceUnit == null ? "" : String(pieceUnit);
-  if (!open && !valid(gStr) && !h && !cnt) {
+  // 第 5 批复查修(R1-MONEY-3):打开时材料就有克重、或单位框有字时不收起 —— 以前只看框里现在的字,删空重打时整行(连同正在敲的框)收成小字
+  if (!open && !valid(gStr) && !valid(pieceInitGrams) && !_normTxt(uStr) && !h && !cnt) {
     return (
       <div data-unit-grams="matrow" style={{ marginTop: 10 }}>
         <button type="button" onClick={() => setOpen(true)} style={{ padding: 0, border: "none", background: "none", cursor: "pointer", fontSize: 11, color: T.textTertiary, textDecoration: "underline" }}>
@@ -20108,7 +20186,7 @@ function PieceGramsRow({ packSize, pieceGrams, pieceUnit, onPieceChange, pieceIn
         <span style={{ fontSize: 12, color: T.textSecondary }}>1</span>
         <input data-unit-grams="matunit" value={uStr} onChange={e => onPieceChange({ pieceUnit: e.target.value })} placeholder={zh ? "本" : "本"} style={small} />
         <span style={{ fontSize: 12, color: T.textSecondary }}>≈</span>
-        <input data-unit-grams="matgrams" type="text" inputMode="decimal" value={gStr} onChange={e => onPieceChange({ gramsPerPiece: e.target.value })} style={small} />
+        <input data-unit-grams="matgrams" type="text" inputMode="decimal" value={gStr} onChange={e => onPieceChange({ gramsPerPiece: e.target.value }, true)} onBlur={() => onGramsCommit && onGramsCommit()} style={small} />
         <span style={{ fontSize: 12, color: T.textSecondary }}>g</span>
         {h && !gStr.trim() && (
           <Btn size="sm" onClick={() => onPieceChange({ gramsPerPiece: String(h.gpp), pieceUnit: h.unit })}>{zh ? `按规格估 ${String(h.gpp)} g/${h.unit}` : `規格から ${String(h.gpp)} g/${h.unit}`}</Btn>
@@ -20144,6 +20222,11 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
   const [anchorVal, setAnchorVal] = useState(0);
   const withPiece = typeof onPieceChange === "function";
   const gpp = parseFloat(pieceGrams);
+  // 第 5 批复查修(R1-MONEY-1):改克重时「改前」的每个克数 = 最后一个有效、已经定下来的克数,不是上一次按键时框里的字。
+  // 删空重打 / 全选打「0.8」会经过「空」「0」「0.」,那几步每个价算不出来,以前下一键被当成「第一次填」、每克价停在上一键算的数(存错两个价字段)。
+  // 打开时没有克重 = 第一次填:离开克重格、填价格、改单位或点「按规格估」才算定下来,中间敲的「2」不当改前(「25」不会被当成从 2 改到 25)
+  const [lastGpp, setLastGpp] = useState(() => { const n = parseFloat(pieceInitGrams); return isFinite(n) && n > 0 ? n : 0; });
+  const commitGpp = () => { if (!(lastGpp > 0) && isFinite(gpp) && gpp > 0) setLastGpp(gpp); };
   const pieceOk = (ps, gp, pu) => {   // 件模式:传了、计件规格、克重有效、克重单位和规格的计件单位一样
     if (!withPiece || parsePackSizeToGrams(ps) !== 0) return null;
     const cnt = parsePackCount(ps);
@@ -20167,6 +20250,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
   const show = (field, derived) => (draft && draft.field === field ? draft.value : derived);
   const editPrice = (field, divisor) => (e) => {
     const v = e.target.value;
+    if (withPiece) commitGpp();
     setDraft({ field, value: v });
     setAnchor(field);
     if (!v.trim()) { setAnchorVal(0); onChange({ pricePerG: "" }); return; }
@@ -20188,6 +20272,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
   // 件模式的「每{u}价」:填它 → 每克价 = 每个价 ÷ 每个克数,记住按「每个」报的价
   const editPiecePrice = (e) => {
     const v = e.target.value;
+    commitGpp();
     setDraft({ field: "piece", value: v });
     if (!v.trim()) { setAnchor("piece"); setAnchorVal(0); onChange({ pricePerG: "" }); return; }
     const n = parseFloat(v);
@@ -20196,15 +20281,19 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
     onChange({ pricePerG: r6(n / gpp) });
   };
   // 克重行改了克重 / 单位:件模式前后都成立、克重变了 → 保住每个价(一包 = n 个,pack / case 锚点时同样结果);第一次填克重(原来无效)不动价
-  const editPiece = (patch) => {
+  const editPiece = (patch, typing) => {
     const ng = Object.prototype.hasOwnProperty.call(patch, "gramsPerPiece") ? patch.gramsPerPiece : pieceGrams;
     const nu = Object.prototype.hasOwnProperty.call(patch, "pieceUnit") ? patch.pieceUnit : pieceUnit;
     const g2 = parseFloat(ng);
     onPieceChange(patch);
-    if (pieceMode && pieceOk(packSize, g2, nu) && g2 !== gpp) {
-      const perPiece = (anchor === "piece" && anchorVal > 0) ? anchorVal : ppg * gpp;
-      if (perPiece > 0) onChange({ pricePerG: r6(perPiece / g2) });
-    }
+    if (!(isFinite(g2) && g2 > 0)) return;   // 敲到空 / 0 / 0.:不动价,改前仍是 lastGpp
+    if (lastGpp > 0) {
+      if (pieceOk(packSize, lastGpp, pieceUnit) && pieceOk(packSize, g2, nu) && g2 !== lastGpp) {
+        const perPiece = (anchor === "piece" && anchorVal > 0) ? anchorVal : ppg * lastGpp;
+        if (perPiece > 0) onChange({ pricePerG: r6(perPiece / g2) });
+      }
+      setLastGpp(g2);
+    } else if (!typing) setLastGpp(g2);
   };
 
   const zh = lang === "zh";
@@ -20285,7 +20374,7 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
         {zh ? `💡 三格填任意一格,另外两格自动算。拿到的是袋价 / 箱价就直接填,不用自己换算 ${sym}/100g。` : "💡 いずれか 1 つ入力すれば残り 2 つは自動換算。"}
       </div>
       {/* 第 5 批 2.4(S1,R41):材料百科编辑页的克重行(本店原料页不传 onPieceChange,没有这一行) */}
-      {withPiece && <PieceGramsRow packSize={packSize} pieceGrams={pieceGrams} pieceUnit={pieceUnit} onPieceChange={editPiece} pieceInitGrams={pieceInitGrams} shopPpgCNY={shopPpgCNY} lang={lang} inpStyle={inpStyle} />}
+      {withPiece && <PieceGramsRow packSize={packSize} pieceGrams={pieceGrams} pieceUnit={pieceUnit} onPieceChange={editPiece} pieceInitGrams={pieceInitGrams} shopPpgCNY={shopPpgCNY} lang={lang} inpStyle={inpStyle} onGramsCommit={commitGpp} />}
     </>
   );
 }
@@ -25803,8 +25892,11 @@ const prodName = (o, lang) => o ? (pickLang(o, "name", lang) || o.nameFr || "") 
 // 按「;」/ 换行分段,带钱的那段整段去掉,其余照印
 // 第 5 批 P(第三段):打印模板的 stripMoneyText 也用它(名字不变)。以前是 /[¥￥円]|\d\s*元|价格|価格|成本|原価|毛利|利润|利益/,
 // 会误伤「4 元素骨架」「円やかな酸味」「円形に絞る」;现在「元 / 円」只认跟在数字后面的(「4 元素」除外)和「円/kg」,另加 RMB、日元、单价、
-// コスト、値段、粗利、售价、売価、定价、进价。真数据配料备注新旧去掉的都是那 9 句(生产单 / 厨房视图输出不变),整段备注不再误删 14 句
-const PROD_MONEY_RE = /[¥￥]|RMB|\d[\d,，.]*\s*[万千]?\s*(?:円|日元|元(?!素))|円\s*[/／]|价格|価格|单价|単価|成本|原価|コスト|値段|毛利|粗利|利润|利益|售价|売価|定价|进价/;
+// コスト、値段、粗利、售价、売価、定价、进价。09-26 配料备注新旧去掉的都是那 9 句,整段备注不再误删 14 句;
+// 10-03 / 合并 RURU 包的数据里另有「单价待填 / 单价没填 / 单价按…暂填」这类记账备注,新正则认「单价」,生产单 / 厨房视图不再印(本意,同 design_print §4 的「已写单价」)。
+// 复查修(PS-2 / R1-regress-01):数字也认全角(日文输入法默认打出「４５０円」「１，２００円」)和汉数字 + 円(「千円」「五百円」「三千円」)——
+// 以前的 /[¥￥円]/ 任何「円」都算钱,改成「跟在数字后面」时 \d 只认半角,这几种价格漏到员工的生产单 / 厨房视图和打印上
+const PROD_MONEY_RE = /[¥￥]|RMB|(?:[\d０-９][\d０-９,，.．]*\s*[万千]?\s*(?:円|日元|元(?!素))|[〇一二三四五六七八九十百千万]+円)|円\s*[/／]|价格|価格|单价|単価|成本|原価|コスト|値段|毛利|粗利|利润|利益|售价|売価|定价|进价/;
 // 审查 r1:也按句号(。．)切 —— 录入包的备注常是一整段「……。价格是……。用不加糖的蛋黄时 = ……」,只按分号切会把做法连着价格一起删掉。
 // 不按逗号切(「5,816 円」的千位逗号、「……，北京待核」这种半句留着没意义)
 const prodNote = (note) => String(note === undefined || note === null ? "" : note).split(/[；;\n。．]/).map(x => x.trim()).filter(x => x && !PROD_MONEY_RE.test(x)).join("；");
