@@ -4080,15 +4080,22 @@ function backupSummary(src) {
   BACKUP_SUMMARY_KEYS.forEach(k => { o[k] = Array.isArray(src && src[k]) ? src[k].length : 0; });
   return o;
 }
-// 轮换:返回要删掉的备份 id。固定备份只按「最多 BACKUP_PINNED_MAX 份」删最旧的,不和自动备份一起轮换
+// 第 6 批 I 线(spec_merge_plan R35,plan 决定 29):合并导入之前的固定备份(reason "merge")单独 5 个名额,不挤覆盖导入 / 清除全部那 10 个
+const BACKUP_MERGE_PINNED_MAX = 5;
+// 轮换:返回要删掉的备份 id。固定备份只按名额删最旧的,不和自动备份一起轮换
 function pickBackupsToDelete(metas, now) {
   const sorted = [...(metas || [])].sort((a, b) => (b.savedAt || "").localeCompare(a.savedAt || ""));   // 新 → 旧
   const keep = new Set();
   // 恢复前的固定备份单独算名额(审查发现:连着恢复 10 次找版本,覆盖导入前那份唯一的原数据就被挤掉了)
   const pins = sorted.filter(m => m.pinned);
-  pins.filter(m => m.reason !== "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
+  pins.filter(m => m.reason !== "restore" && m.reason !== "merge").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
   pins.filter(m => m.reason === "restore").slice(0, BACKUP_PINNED_MAX).forEach(m => keep.add(m.id));
-  const auto = sorted.filter(m => !m.pinned);
+  // 合并前的:最新 5 份留着;超名额的不直接删,退回自动备份那一池按「最近 15 份 / 每小时 / 每天」决定去留(审查 F13:
+  // 内容和已有自动备份一样时是把那份标成固定,它常常就是那一天唯一的一份;一天合几个录入包,整份删掉那一天就一份备份都不剩)
+  const mergePins = pins.filter(m => m.reason === "merge");
+  mergePins.slice(0, BACKUP_MERGE_PINNED_MAX).forEach(m => keep.add(m.id));
+  const overflow = new Set(mergePins.slice(BACKUP_MERGE_PINNED_MAX).map(m => m.id));
+  const auto = sorted.filter(m => !m.pinned || overflow.has(m.id));
   auto.slice(0, BACKUP_RECENT).forEach(m => keep.add(m.id));
   // 最近 BACKUP_HOURS 小时每小时留一份(那一小时最早那份):卖货时每点一次 +/- 都存一份,
   // 只留最近 15 份的话几分钟就轮完,两小时前的状态就找不回来了
@@ -4151,13 +4158,18 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
         const same = (pinned && hash) ? (metas.find(m => m.hash === hash) || null) : ((newest && hash && newest.hash === hash) ? newest : null);
         if (same) {
           // 和已有的一份内容一样:不再多存一份;要固定就把那一份标成固定
-          outId = same.id;
           if (pinned && !same.pinned) {
             const upd = { ...same, pinned: true, reason: opts.reason || "" };
-            metaStore.put(upd);
-            finish(metas.map(m => m.id === upd.id ? upd : m));
-          } else result = true;
-          return;
+            const list = metas.map(m => m.id === upd.id ? upd : m);
+            // 第 6 批 I 线(api.md 第 9 节第 8 条,修法 ②):标成固定以后同一个事务里就会被轮换删掉的那份(比如超了合并前 5 个名额、又过了 14 天)
+            // 不标,往下走「另存一份新的固定」—— 不然 out.id 指向已删的那份,「回到导入之前」拿到死 id,库里也没有这份内容的固定备份
+            if (!pickBackupsToDelete(list, now).includes(upd.id)) {
+              outId = same.id;
+              metaStore.put(upd);
+              finish(list);
+              return;
+            }
+          } else { outId = same.id; result = true; return; }
         }
         const meta = { savedAt: new Date(now).toISOString(), size: payload.length, hash, summary, pinned, reason: pinned ? (opts.reason || "") : "" };
         const addReq = metaStore.add(meta);
@@ -4318,10 +4330,54 @@ const binPut = (entries) => Promise.resolve(false);                  // 空壳
 const binAll = () => Promise.resolve([]);                            // 空壳
 const binDrop = (bids) => Promise.resolve(false);                    // 空壳
 const binClear = () => Promise.resolve(false);                       // 空壳
-// 导入结果表 reports(I 线;spec_merge_plan R41):同库,最近 10 次。第 0 步空壳:不持久
-const reportPut = (rep) => Promise.resolve();                        // 空壳
-const reportAll = () => Promise.resolve([]);                         // 空壳
-const reportPatch = (rid, patch) => Promise.resolve();               // 空壳
+// 导入结果表 reports(I 线;spec_merge_plan R41):同库(openSafetyDB 建表,keyPath rid),最近 10 次。三个都不抛错、不进主存档 / 导出;
+// 库用不了(没有 IndexedDB、隐私模式、openSafetyDB 给 null)时 put / patch 什么都不做、all 给 [](R45:结果卡只用内存里那份)
+const IMPORT_REPORT_STORE = "reports";
+const IMPORT_REPORT_KEEP = 10;
+const _reportDb = async () => {
+  try { const db = await openSafetyDB(); return (db && db.objectStoreNames && db.objectStoreNames.contains(IMPORT_REPORT_STORE)) ? db : null; } catch (e) { return null; }
+};
+// (at 降序, rid 降序),按 JS 字符串 < / > 比(R41 / G19)
+const _reportOrder = (a, b) => { const x = String(a && a.at), y = String(b && b.at); if (x !== y) return x < y ? 1 : -1; const p = String(a && a.rid), q = String(b && b.rid); return p < q ? 1 : p > q ? -1 : 0; };
+const _reportTx = (db, mode, body) => new Promise((resolve) => {
+  let out;
+  try {
+    const tx = db.transaction(IMPORT_REPORT_STORE, mode);
+    tx.oncomplete = () => resolve(out); tx.onerror = () => resolve(undefined); tx.onabort = () => resolve(undefined);
+    body(tx.objectStore(IMPORT_REPORT_STORE), (v) => { out = v; });
+  } catch (e) { resolve(undefined); }
+});
+const reportPut = async (rep) => {
+  try {
+    if (!rep || typeof rep !== "object" || rep.rid === undefined || rep.rid === null) return;
+    const db = await _reportDb();
+    if (!db) return;
+    const r = importReportTrim(rep);   // 存之前按 R40 再截一次(已经 ≤ 3 万字时原样)
+    await _reportTx(db, "readwrite", (store) => {
+      store.put(r);
+      const all = store.getAll();
+      all.onsuccess = () => { [...(all.result || [])].sort(_reportOrder).slice(IMPORT_REPORT_KEEP).forEach(x => store.delete(x.rid)); };
+    });
+  } catch (e) {}
+};
+const reportAll = async () => {
+  try {
+    const db = await _reportDb();
+    if (!db) return [];
+    const list = await _reportTx(db, "readonly", (store, done) => { const req = store.getAll(); req.onsuccess = () => done(req.result || []); });
+    return Array.isArray(list) ? [...list].sort(_reportOrder) : [];
+  } catch (e) { return []; }
+};
+const reportPatch = async (rid, patch) => {
+  try {
+    const db = await _reportDb();
+    if (!db) return;
+    await _reportTx(db, "readwrite", (store) => {
+      const req = store.get(rid);
+      req.onsuccess = () => { if (req.result) store.put({ ...req.result, ...(patch || {}) }); };
+    });
+  } catch (e) {}
+};
 // ─── END recycle-bin helpers ───
 
 // ─── 内容质量扫描 v13.1: 中日混杂 + 图片 markdown ───────────────
@@ -4608,18 +4664,337 @@ const IMPORT_KINDS = [
 ];
 // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批):前 12 类、今天的字
 const IMPORT_ENTITY_LABELS = IMPORT_KINDS.slice(0, 12).map(k => [k.key, k.oldZh, k.oldJa]);
-SAFETY_TXT.imp = { zh: {}, ja: {} };   // I 线往这里加导入对比 / 结果卡的字(SAFETY_TXT 在 device-safety 段)
-// ── C 组(覆盖对比)和 B 组(合并预览)的显示:第 0 步空壳
-const importFileInfo = (d, fileName) => null;                        // 空壳:R28
-const parseExportFileName = (name) => null;                          // 空壳:R29
-const localSavedAtOf = (raw) => null;                                // 空壳:R30
-const hasUserData = (cur) => null;                                   // 空壳:R31(spec_reminder R11 引用同一个口径)
-const overwritePlan = (cur, d, opts) => null;                        // 空壳:R32
-const overwritePreviewView = (oplan, info, lang, opts) => null;      // 空壳:R34
-const mergePreviewView = (plan, info, lang, opts) => null;           // 空壳:R24
-const itemName = (key, x, lang, ctx) => null;                        // 空壳:R22
-const fmtWhen = (s, now) => null;                                    // 空壳:R23
-const fmtDay = (s, now) => null;                                     // 空壳:R23
+// I 线的字(导入对比、合并预览、结果卡;spec_merge_plan R24 / R25 / R33 / R34 / R39 / R43 / R44 / R46 原文)。中日键一一对应;新文字的类名用 IMPORT_KINDS 的 zh / ja
+SAFETY_TXT.imp = {
+  zh: {
+    pkgWord: "录入包", fullWord: "完整备份", ipWord: "IP 分发包", genAt: (t) => "生成于 " + t, noGenAt: "没写生成时间", exportedAt: (t) => t + " 导出", kindSep: "、",
+    newerApp: "这个文件来自更新版本的 kororā,先刷新这台设备上的 App 再导入",
+    addedSome: "会加进来 ", addedNone: "会加进来:没有",
+    cats: (a, b) => `老价格表:加 ${a} 个大类、${b} 个品牌`,
+    skip: (n) => `已经有了,跳过 ${n} 条`, skipSame: (n) => `内容一样 ${n} 条`, skipDiff: (n) => `内容不一样,这台设备上的不动 ${n} 条:`,
+    skipHint: "想用文件里的版本:先在 App 里把这台设备上那条删掉(会进回收站),再合并一次",
+    fromFile: (n) => `会换成文件里的(文件那条改得更晚)${n} 条:`, patched: (n) => `这台设备上的留着,从文件补上了几项 ${n} 条:`,
+    keptLocal: "保留这台设备上的(这台改得更晚):", same: "完全一样:", part: (lab, n) => `${lab} ${n} 条`,
+    log: (lab, n) => `${lab} ${n} 条换成修改时间更晚的那份(库存不会跟着改,导完去商品页核对)`,
+    dup: (n) => `文件里自己重复的 ${n} 条(只算一条)`,
+    deleted: (n) => `⚠ 你在这台设备上删过的 ${n} 条:`, deletedItem: (lab, name, t) => `${lab}「${name}」(${t} 删的)`,
+    deletedCheck: "这次不加回来(要回来:取消勾选,或者去「回收站」还原)",
+    deletedPulled: (n) => `其中 ${n} 条被这次加进来的东西用到,照常加回:`, deletedOther: (n) => `你删过,这是另一个版本,照常加 ${n} 条:`,
+    not: "不会合并:商品的库存和售价、备货库存、汇率和员工模式退出密码这些设置", backup: "合并前会自动存一份「固定」备份。",
+    more: (n) => ` 等 ${n} 条`, localName: (x) => `(这台设备上叫「${x}」)`,
+    notesDeleted: (n, names) => `· 你在这台设备上删过、这次没加回来的 ${n} 条:${names}`,
+    // 覆盖对比(R34)
+    fresh: "这台设备上还没有数据,可以放心覆盖", older: "⚠ 这个文件比这台设备上的数据旧",
+    fileRow: (f) => `文件:${f}`, fileWhen: (t, gen) => ` · ${t} ${gen ? "生成" : "导出"}`, localRow: (dev, t) => `这台设备${dev}:最后保存 ${t}`,
+    pkg: (kinds, n, m) => `这是录入包(只有 ${kinds} ${n} 类),覆盖会把其余 ${m} 类清空`,
+    ip: "这是 IP 分发包:没有本店原料、商品、销售记录……覆盖会把这几类清空",
+    lose: (n) => `⚠ 覆盖以后,只在这台设备上的 ${n} 条会没有:`, newer: (n) => `⚠ 两边都有、这台设备改得更晚的 ${n} 条,会换回文件里的旧样子`, kindMore: " 等",
+    settings: "设置:汇率、显示口径、目标成本率、员工模式退出密码会换成文件里的;家族、组件分类文件里有才换",
+    photo: "照片不在文件里,只存在各自的设备上", suggest: "想保留这台设备上的、只把文件里的新东西加进来?用「改用合并导入」。",
+    // 两个确认框(R25 / R33)
+    mergeMsg: "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n销售 / 生产记录同一条以修改时间晚的为准。\n\n确认继续？",
+    mergeTitle: (f) => `合并「${f}」`, mergeKicker: "合并导入", mergeOk: "确定",
+    owRisky: "仍然覆盖", owOk: "覆盖导入", toMerge: "改用合并导入",
+    stale: "这个窗口已经停止保存,先刷新再导入(不然导进来的东西刷新就没了)",
+    mergeFail: "⚠️ 合并导入失败:",
+    // 结果卡(R43 / R44)
+    repOk: "导入前存了固定备份", repRevert: "回到导入之前", repFailMerge: "合并前的固定备份没存上(浏览器的数据库用不了)", repFailOverwrite: "覆盖前的固定备份没存上(浏览器的数据库用不了)",
+    olderN: (n) => `更早的 ${n} 次 ▾`, olderClose: "收起 ▴", kindMerge: "合并导入", kindOverwrite: "覆盖导入", noNew: "没有新内容",
+    revertNote: "导入之后在这台设备上做的修改也会一起回去。",
+  },
+  ja: {
+    pkgWord: "追加用パック", fullWord: "フルバックアップ", ipWord: "IP パック", genAt: (t) => `作成 ${t}`, noGenAt: "作成日時なし", exportedAt: (t) => `${t} 書き出し`, kindSep: "・",
+    newerApp: "新しいバージョンの kororā のファイルです。先にこの端末のアプリを再読み込みしてください",
+    addedSome: "追加 ", addedNone: "追加なし",
+    cats: (a, b) => `旧価格表:カテゴリー ${a}・ブランド ${b} を追加`,
+    skip: (n) => `既にあるためスキップ ${n} 件`, skipSame: (n) => `内容が同じ ${n} 件`, skipDiff: (n) => `内容が違う(この端末の方を残す)${n} 件:`,
+    skipHint: "ファイルの版を使うには、この端末の方を削除(ゴミ箱へ)してからもう一度マージしてください",
+    fromFile: (n) => `ファイルの方に更新(ファイルが新しい)${n} 件:`, patched: (n) => `この端末の内容を残し、ファイルから一部を補う ${n} 件:`,
+    keptLocal: "この端末の方を残す(この端末が新しい):", same: "まったく同じ:", part: (lab, n) => `${lab} ${n} 件`,
+    log: (lab, n) => `${lab} ${n} 件を更新日時の新しい方に置き換え(在庫は変わりません。商品画面で確認してください)`,
+    dup: (n) => `ファイル内の重複 ${n} 件(1 件として扱います)`,
+    deleted: (n) => `⚠ この端末で削除した ${n} 件:`, deletedItem: (lab, name, t) => `${lab}「${name}」(${t} 削除)`,
+    deletedCheck: "今回は戻さない(戻すにはチェックを外すか「ゴミ箱」から復元)",
+    deletedPulled: (n) => `うち ${n} 件は今回追加するものが使っているため追加します:`, deletedOther: (n) => `削除済みですが別の版なので追加します ${n} 件:`,
+    not: "マージされないもの:商品の在庫と売価、仕込み在庫、為替やスタッフ PIN などの設定", backup: "マージ前に固定バックアップを保存します。",
+    more: (n) => ` ほか ${n} 件`, localName: (x) => `(この端末では「${x}」)`,
+    notesDeleted: (n, names) => `· この端末で削除済みのため戻さなかった ${n} 件:${names}`,
+    fresh: "この端末にはまだデータがないので、上書きして大丈夫です", older: "⚠ このファイルはこの端末のデータより古いです",
+    fileRow: (f) => `ファイル:${f}`, fileWhen: (t, gen) => ` · ${t} ${gen ? "作成" : "書き出し"}`, localRow: (dev, t) => `この端末${dev}:最終保存 ${t}`,
+    pkg: (kinds, n, m) => `これは追加用パック(${kinds} の ${n} 種類だけ)です。上書きすると残り ${m} 種類が空になります`,
+    ip: "IP パックです(仕入れ原料・商品・売上記録などなし)。上書きするとこれらが空になります",
+    lose: (n) => `⚠ 上書きすると、この端末にだけある ${n} 件が消えます:`, newer: (n) => `⚠ 両方にあり、この端末の方が新しい ${n} 件はファイルの古い内容に戻ります`, kindMore: " ほか",
+    settings: "設定(為替・表示通貨・目標原価率・スタッフ PIN)はファイルの内容になります。ファミリーとパーツ分類はファイルにある場合だけ置き換えます",
+    photo: "写真はファイルに含まれず、各端末にだけあります", suggest: "この端末の内容を残して新しいものだけ追加するなら「マージに切り替え」を使ってください。",
+    mergeMsg: "マージインポート:ファイルの新しい項目を追加します。\n\nレシピ / パーツ / 組み合わせ / ナレッジは id または名前で重複を除き、既存のものは変更しません。\n材料事典・メーカー・仕入れ原料の既存分は、ファイル側の更新日時が新しい場合だけファイルの内容を使います(価格と通貨は常に同じ側から)。\n売上 / 生産記録は同じ記録なら更新日時が新しい方を使います。\n\n続けますか?",
+    mergeTitle: (f) => `「${f}」をマージ`, mergeKicker: "マージインポート", mergeOk: "マージする",
+    owRisky: "それでも上書き", owOk: "上書きする", toMerge: "マージに切り替え",
+    stale: "このウィンドウは保存を停止しています。再読み込みしてからインポートしてください",
+    mergeFail: "⚠️ マージ失敗:",
+    repOk: "インポート前に固定バックアップあり", repRevert: "インポート前に戻す", repFailMerge: "固定バックアップを保存できませんでした", repFailOverwrite: "固定バックアップを保存できませんでした",
+    olderN: (n) => `以前の ${n} 回 ▾`, olderClose: "閉じる ▴", kindMerge: "マージ", kindOverwrite: "上書き", noNew: "新しい内容なし",
+    revertNote: "インポート後の変更も元に戻ります。",
+  },
+};
+const _impTxt = (lang) => SAFETY_TXT.imp[lang === "zh" ? "zh" : "ja"];   // 规格文件头:zh = lang === "zh",其他一律当日文(同今天)
+const _impKind = (key) => IMPORT_KINDS.find(k => k.key === key) || null;
+const _impLab = (key, lang) => { const k = _impKind(key); return k ? (lang === "zh" ? k.zh : k.ja) : String(key); };
+// ── R23 时间(本地时区;now 可以是 ISO 字符串或毫秒,缺省 = 现在)
+const _impTp = (s) => { if (typeof s !== "string") return null; const v = Date.parse(s); return isFinite(v) ? v : null; };
+const _imp2 = (n) => String(n).padStart(2, "0");
+const _impYmd = (s) => typeof s === "string" && s.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(s);
+function fmtWhen(s, now) {
+  const ny = new Date(now === undefined ? Date.now() : now).getFullYear();
+  if (_impYmd(s)) return (+s.slice(0, 4) !== ny ? s.slice(0, 4) + "/" : "") + s.slice(5, 7) + "/" + s.slice(8, 10);
+  const ms = _impTp(s); if (ms === null) return null;
+  const x = new Date(ms);
+  return (x.getFullYear() !== ny ? x.getFullYear() + "/" : "") + `${_imp2(x.getMonth() + 1)}/${_imp2(x.getDate())} ${_imp2(x.getHours())}:${_imp2(x.getMinutes())}`;
+}
+function fmtDay(s, now) {
+  const ny = new Date(now === undefined ? Date.now() : now).getFullYear();
+  if (_impYmd(s)) return (+s.slice(0, 4) !== ny ? s.slice(0, 4) + "/" : "") + s.slice(5, 7) + "/" + s.slice(8, 10);
+  const ms = _impTp(s); if (ms === null) return null;
+  const x = new Date(ms);
+  return (x.getFullYear() !== ny ? x.getFullYear() + "/" : "") + `${_imp2(x.getMonth() + 1)}/${_imp2(x.getDate())}`;
+}
+// 结果卡标题的时间:今天的只写 HH:MM(和以前一样),别的天 fmtWhen
+const importCardTime = (at, now) => {
+  const ms = _impTp(at), n = now === undefined ? Date.now() : now;
+  if (ms !== null && localDateStr(new Date(ms)) === localDateStr(new Date(n))) { const x = new Date(ms); return `${_imp2(x.getHours())}:${_imp2(x.getMinutes())}`; }
+  return fmtWhen(at, n);
+};
+// ── R22 名字。本店原料没有自己的名字:按 materialId 先在本机、再在文件里找材料;ctx = { curMaterials, fileMaterials }(都可以缺)
+function itemName(key, x, lang, ctx) {
+  if (!x || typeof x !== "object") return "";
+  if (key === "shopMaterials") {
+    for (const L of [ctx && ctx.curMaterials, ctx && ctx.fileMaterials]) {
+      if (!Array.isArray(L)) continue;
+      const m = L.find(m => m && m.id === x.materialId);
+      if (m) return itemName("materials", m, lang, ctx);
+    }
+    return String(x.id || x.materialId || "");
+  }
+  const order = lang === "zh" ? ["nameZh", "titleZh", "zh", "nameJa", "titleJa", "ja", "nameFr", "title", "name", "id"]
+    : ["nameJa", "titleJa", "ja", "nameZh", "titleZh", "zh", "nameFr", "title", "name", "id"];
+  for (const k of order) if (x[k]) return String(x[k]);
+  return "";
+}
+// 名单:前 5 个(kind 时带类名;local 时和本机名字不一样的接「这台设备上叫」)+「等 N 条」。refs 里每项 { key?, name, localName? }
+function fmtNames(refs, lang, o = {}) {
+  const t = _impTxt(lang);
+  const head = refs.slice(0, 5).map(r => (o.kind ? _impLab(r.key, lang) : "") + `「${r.name}」`
+    + (o.local && r.localName !== undefined && r.localName !== r.name ? t.localName(r.localName) : "")).join("、");
+  return head + (refs.length > 5 ? t.more(refs.length) : "");
+}
+// ── C 组:文件长什么样(R28 / R29)、本机最后保存(R30)、这台设备上有没有她的数据(R31)
+function parseExportFileName(name) {
+  if (typeof name !== "string") return null;
+  const s = name.replace(/\s*\(\d+\)(?=\.json$)/i, "");   // 浏览器加的「(1)」,.json 不分大小写
+  const m = s.match(/^patisserie_(\d{4}-\d{2}-\d{2})(?:_(\d{2})(\d{2}))?(?:_(.+))?\.json$/i);
+  if (!m) return null;
+  return { date: m[1], time: m[2] !== undefined ? `${m[2]}:${m[3]}` : null, device: m[4] || null };
+}
+function importFileInfo(d, fileName) {
+  const src = (d && typeof d === "object") ? d : {};
+  const own = (k) => Object.prototype.hasOwnProperty.call(src, k);
+  const kinds = IMPORT_KINDS.filter(k => Array.isArray(src[k.key])).map(k => k.key);
+  const missing = IMPORT_KINDS.slice(0, 12).filter(k => !Array.isArray(src[k.key])).map(k => k.key);
+  const kind = src._ipPackage === true ? "ip" : (own("__generator") || own("__comment") || own("__generatedAt")) ? "pkg" : missing.length === 0 ? "full" : "partial";
+  const pf = parseExportFileName(fileName);
+  return {
+    kind, kinds, missing,
+    exportedAt: typeof src.exportedAt === "string" ? src.exportedAt : null,
+    generatedAt: typeof src.__generatedAt === "string" ? src.__generatedAt : null,
+    fileVersion: src.version,
+    newerApp: (typeof src.version === "number" ? src.version : parseFloat(src.version)) > 17,
+    fromDevice: (pf && pf.device) ?? null,
+  };
+}
+// 从存档字符串末尾读 savedAt(saveData 的写法,同 backupBodyOf 的找法),不整串 parse
+function localSavedAtOf(raw) {
+  if (typeof raw !== "string") return null;
+  const i = raw.lastIndexOf(',"savedAt":');
+  if (i > 0 && raw.length - i < 60) {
+    try { const v = JSON.parse(raw.slice(i + 11, raw.length - 1)); return typeof v === "string" ? v : null; } catch (e) { return null; }
+  }
+  return null;
+}
+// 去掉预置条目以后,配方 / 组件 / 组合产品 / 材料 / 本店原料 / 商品 / 两种记录任一有东西(spec_reminder R11 用同一个口径)
+function hasUserData(cur) {
+  const c = cur || {};
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const ids = (list) => new Set(arr(list).map(x => x && x.id));
+  const sr = ids(SEED_RECIPES), sc = ids(SEED_COMPONENTS), sk = ids(SEED_CREATIONS);
+  if (arr(c.recipes).some(x => x && !sr.has(x.id))) return true;
+  if (arr(c.components).some(x => x && !sc.has(x.id))) return true;
+  if (arr(c.creations).some(x => x && !sk.has(x.id))) return true;
+  return ["materials", "shopMaterials", "products", "salesLog", "productionLog"].some(k => arr(c[k]).some(x => !!x));
+}
+// R32 覆盖对比:每一类本机条目按 id 在文件里找,找不到 = 会丢;找到但内容不一样、本机写了更晚(或文件没写)的修改时间 = 本机更晚
+function overwritePlan(cur, d, opts = {}) {
+  const lang = opts.lang;
+  const c = cur || {}, f = d || {};
+  const ctx = { curMaterials: c.materials };
+  const idOk = (v) => v !== undefined && v !== null && v !== "";
+  const isObj = (x) => !!x && typeof x === "object";
+  const per = {};
+  let loseTotal = 0, localNewerTotal = 0;
+  IMPORT_KINDS.forEach((k, ki) => {
+    const key = k.key;
+    const local = Array.isArray(c[key]) ? c[key] : [];
+    const file = Array.isArray(f[key]) ? f[key] : [];
+    const twelve = ki < 12;
+    const replaced = twelve ? true : !!f[key];
+    const emptied = twelve && !Array.isArray(f[key]) && local.length > 0;
+    const p = { localN: local.length, fileN: file.length, replaced, emptied, lose: [], same: 0, changed: 0, localNewer: [] };
+    if (replaced) {
+      local.forEach(L => {
+        if (!isObj(L)) return;
+        const F = idOk(L.id) ? file.find(F => isObj(F) && idOk(F.id) && F.id === L.id) : undefined;
+        const ref = () => ({ id: L.id, name: itemName(key, L, lang, ctx) });
+        if (!F) { p.lose.push(ref()); return; }
+        if (importCanon(key, F) === importCanon(key, L)) { p.same++; return; }
+        p.changed++;
+        const tl = _impTp(L.updatedAt), tf = _impTp(F.updatedAt);
+        if (tl !== null && (tf === null || tl > tf)) p.localNewer.push(ref());
+      });
+    }
+    loseTotal += p.lose.length; localNewerTotal += p.localNewer.length;
+    per[key] = p;
+  });
+  const fresh = !hasUserData(c);
+  const info = importFileInfo(f, null);
+  const older = (info.kind === "full" && !fresh && _impTp(info.exportedAt) !== null && _impTp(opts.localSavedAt) !== null) ? _impTp(info.exportedAt) < _impTp(opts.localSavedAt) : null;
+  const fa = f.appSettings;
+  const settingsDiff = (fa && typeof fa === "object" && !Array.isArray(fa))
+    ? ["fxJpyToCny", "displayCurrency", "targetCostRate", "staffPin"].filter(k => Object.prototype.hasOwnProperty.call(fa, k) && JSON.stringify(fa[k]) !== JSON.stringify((c.appSettings || {})[k]))
+    : [];
+  const risky = (!fresh && (older === true || loseTotal > 0 || localNewerTotal > 0)) || ((info.kind === "pkg" || info.kind === "partial") && info.missing.length > 0) || info.kind === "ip";
+  return { per, loseTotal, localNewerTotal, older, settingsDiff, fresh, risky };
+}
+// R34 覆盖确认框里那一块对比的行 [{ key, tone, text }];tone 只是颜色意图(gray / plain / yellow / red)
+function overwritePreviewView(oplan, info, lang, opts = {}) {
+  const t = _impTxt(lang), now = opts.now;
+  const rows = [];
+  const row = (key, tone, text) => rows.push({ key, tone, text });
+  if (oplan.fresh) row("fresh", "gray", t.fresh);
+  if (oplan.older === true) row("older", "red", t.older);
+  const pkgLike = info.kind === "pkg" || info.kind === "partial";
+  const tw = pkgLike ? fmtWhen(info.generatedAt ?? info.exportedAt, now) : fmtWhen(info.exportedAt, now);
+  row("file", "gray", t.fileRow(opts.fileName) + (tw ? t.fileWhen(tw, pkgLike) : ""));
+  if (!oplan.fresh && _impTp(opts.localSavedAt) !== null) row("local", "gray", t.localRow(opts.deviceName ? "(" + opts.deviceName + ")" : "", fmtWhen(opts.localSavedAt, now)));
+  if (info.newerApp) row("newerApp", "yellow", t.newerApp);
+  if (pkgLike && info.missing.length > 0) {
+    const m = info.missing.length;
+    const have = IMPORT_KINDS.slice(0, 12).filter(k => !info.missing.includes(k.key)).map(k => _impLab(k.key, lang));
+    row("pkg", "red", t.pkg(have.join(t.kindSep), 12 - m, m));
+  }
+  if (info.kind === "ip") row("ip", "red", t.ip);
+  const kindLine = (key, list) => {
+    const n = list.length;
+    if (_impKind(key).fam === "L") return `${_impLab(key, lang)} ${n}`;
+    return `${_impLab(key, lang)} ${n}:${list.slice(0, 5).map(r => r.name).join("、")}${n > 5 ? t.kindMore : ""}`;
+  };
+  if (!oplan.fresh && oplan.loseTotal > 0) {
+    row("lose", "red", t.lose(oplan.loseTotal));
+    IMPORT_KINDS.forEach(k => { if (oplan.per[k.key].lose.length) row("loseKind", "red", kindLine(k.key, oplan.per[k.key].lose)); });
+  }
+  if (!oplan.fresh && oplan.localNewerTotal > 0) {
+    row("newer", "yellow", t.newer(oplan.localNewerTotal));
+    IMPORT_KINDS.forEach(k => { if (oplan.per[k.key].localNewer.length) row("newerKind", "yellow", kindLine(k.key, oplan.per[k.key].localNewer)); });
+  }
+  if (oplan.settingsDiff.length > 0) row("settings", "gray", t.settings);
+  if (oplan.risky) { row("photo", "gray", t.photo); row("suggest", "gray", t.suggest); }
+  return rows;
+}
+// R24 合并确认框里那一块预览的行 [{ key, tone, text }](勾选框那一行多一个 checked)。只读 plan.detail
+function mergePreviewView(plan, info, lang, opts = {}) {
+  const t = _impTxt(lang), now = opts.now, det = plan.detail;
+  const rows = [];
+  const row = (key, tone, text, extra) => rows.push(Object.assign({ key, tone, text }, extra || {}));
+  const K = Object.keys(det.kinds);
+  // 供货商:PA 合并前是 W 类(整条跳过)、之后是 B 类(按修改时间合并),跟 IMPORT_KINDS 的 fam 走(R24 的 Wd / Bd)
+  const Wd = K.filter(k => _impKind(k).fam === "W" && k !== "customCompCats"), Bd = K.filter(k => _impKind(k).fam === "B");
+  const sum = (ks, g) => ks.reduce((s, k) => s + (Array.isArray(det.kinds[k][g]) ? det.kinds[k][g].length : det.kinds[k][g]), 0);
+  const refsWithKey = (ks, g) => ks.flatMap(k => det.kinds[k][g].map(r => ({ ...r, key: k })));
+  const parts = (ks, g) => ks.filter(k => det.kinds[k][g].length > 0).map(k => t.part(_impLab(k, lang), det.kinds[k][g].length)).join(" · ");
+  let ftxt;
+  if (info.kind === "pkg" || info.kind === "partial") {
+    const tw = fmtWhen(info.generatedAt ?? info.exportedAt, now);
+    const ks = info.kinds.map(k => _impLab(k, lang)).join(t.kindSep);
+    ftxt = [t.pkgWord, ks || null, tw ? t.genAt(tw) : t.noGenAt].filter(x => x !== null).join(" · ");
+  } else if (info.kind === "full") {
+    const tw = fmtWhen(info.exportedAt, now);
+    ftxt = [t.fullWord, info.fromDevice, tw ? t.exportedAt(tw) : null].filter(x => x !== null).join(" · ");
+  } else {
+    const tw = fmtWhen(info.exportedAt, now);
+    ftxt = [t.ipWord, tw ? t.exportedAt(tw) : null].filter(x => x !== null).join(" · ");
+  }
+  row("file", "gray", ftxt);
+  if (info.newerApp) row("newerApp", "yellow", t.newerApp);
+  const addedTxt = K.filter(k => det.kinds[k].added.length > 0).map(k => `${_impLab(k, lang)} ${det.kinds[k].added.length}`).join(" · ");
+  row("added", "plain", det.totals.added > 0 ? t.addedSome + addedTxt : t.addedNone);
+  if (det.cats && det.cats.newCats + det.cats.newBrands > 0) row("cats", "gray", t.cats(det.cats.newCats, det.cats.newBrands));
+  const nW = sum(Wd, "same") + sum(Wd, "keptLocal") + sum(Wd, "patched") + sum(Wd, "dupInFile");
+  if (nW > 0) {
+    row("skip", "plain", t.skip(nW));
+    const ns = sum(Wd, "same");
+    if (ns > 0) row("skipSame", "gray", t.skipSame(ns));
+    const nk = sum(Wd, "keptLocal");
+    if (nk > 0) {
+      row("skipDiff", "yellow", t.skipDiff(nk) + fmtNames(refsWithKey(Wd, "keptLocal"), lang, { kind: true, local: true }));
+      row("skipHint", "yellow", t.skipHint);
+    }
+  }
+  const nf = sum(Bd, "fromFile");
+  if (nf > 0) row("fromFile", "plain", t.fromFile(nf) + fmtNames(refsWithKey(Bd, "fromFile"), lang, { kind: true, local: true }));
+  const np = sum(K, "patched");
+  if (np > 0) row("patched", "plain", t.patched(np) + fmtNames(refsWithKey(K, "patched"), lang, { kind: true, local: true }));
+  if (sum(Bd, "keptLocal") > 0) row("keptLocal", "gray", t.keptLocal + parts(Bd, "keptLocal"));
+  if (sum(Bd, "same") > 0) row("same", "gray", t.same + parts(Bd, "same"));
+  ["salesLog", "productionLog"].forEach(k => {
+    if (!det.kinds[k] || det.kinds[k].fromFile.length === 0) return;
+    row("log", "yellow", t.log(_impLab(k, lang), det.kinds[k].fromFile.length));
+  });
+  if (det.totals.dupInFile > 0) row("dup", "gray", t.dup(det.totals.dupInFile));
+  const H = det.deleted.filter(x => x.status !== "other");
+  if (H.length) {
+    row("deleted", "yellow", t.deleted(H.length) + H.slice(0, 5).map(x => t.deletedItem(_impLab(x.key, lang), x.name, fmtDay(x.at, now))).join("、") + (H.length > 5 ? t.more(H.length) : ""));
+    if (H.some(x => x.status === "skipped" || x.status === "readded")) row("deletedCheck", "yellow", t.deletedCheck, { checked: opts.skipDeleted });
+  }
+  const pulled = det.deleted.filter(x => x.status === "pulled");
+  if (pulled.length) row("deletedPulled", "gray", t.deletedPulled(pulled.length) + fmtNames(pulled, lang, { kind: true }));
+  const other = det.deleted.filter(x => x.status === "other");
+  if (other.length) row("deletedOther", "gray", t.deletedOther(other.length) + fmtNames(other, lang, { kind: true }));
+  row("not", "gray", t.not);
+  row("backup", "gray", t.backup);
+  return rows;
+}
+// ── E 组:导入结果的报告对象(R40)。skipped 只存前 200 个;整份 JSON 超过 3 万字时从 skipped 尾部一个一个删(lines / notes 不删)
+const IMPORT_REPORT_MAX_CHARS = 30000;
+function importReportTrim(rep) {
+  if (!rep || typeof rep !== "object") return rep;
+  const r = { ...rep, skipped: Array.isArray(rep.skipped) ? [...rep.skipped] : rep.skipped };
+  while (Array.isArray(r.skipped) && r.skipped.length > 0 && JSON.stringify(r).length > IMPORT_REPORT_MAX_CHARS) r.skipped.pop();
+  return r;
+}
+// rid 不用 Math.random(别打乱合并时生成 id 用的那串随机数;老测试按种子比生成的 id):时间 + 这次打开里的序号
+let _importRidSeq = 0;
+function importReportOf({ kind, fileName, at, lang, lines, skipped, notes, backup }) {
+  const sk = Array.isArray(skipped) ? skipped : [];
+  return importReportTrim({
+    rid: "r_" + Date.now() + "_" + (++_importRidSeq).toString(36),
+    kind, fileName, at, lang, lines: Array.isArray(lines) ? lines : [],
+    skipped: sk.slice(0, 200), skippedN: sk.length, notes: Array.isArray(notes) ? notes : [],
+    backup: backup || { reason: kind === "merge" ? "merge" : "import", status: "pending", id: null }, dismissed: false,
+  });
+}
+// 「更早的 n 次」展开后每次一行(R43 第 6 条)
+function importOlderRowText(rep, lang, now) {
+  const t = _impTxt(lang);
+  const sum = (Array.isArray(rep.lines) ? rep.lines : []).filter(l => typeof l === "string" && l.startsWith("+")).map(l => l.slice(2)).join(" · ");
+  return `${fmtWhen(rep.at, now)} · ${rep.fileName} · ${rep.kind === "merge" ? t.kindMerge : t.kindOverwrite} · ${sum || t.noNew}`;
+}
 // R13「内容一样」的比法:键排序、只去顶层 updatedAt;本店原料没有 supplierIds 当 [];组合产品的部分去 follow / localVariant / _lid。
 // 第 0 步就是真的(spec_bin Q2:R 先于 I 合并,回收站「已经在了」要用它);spec_bin R2 和 spec_merge_plan R13 逐字一样,两份规格谁改另一份跟着改
 const _importSortDeep = (v) => Array.isArray(v) ? v.map(_importSortDeep)
@@ -4638,61 +5013,98 @@ const _mergeGenId = (prefix) => prefix + Date.now() + Math.random().toString(36)
 const _mergeGenRecipeId = () => Date.now() + Math.floor(Math.random() * 1000);
 const _mergeNameOf = (x) => (x && (x.nameZh || x.nameJa || x.nameFr || x.titleZh || x.titleJa || x.title || x.id)) || "";
 const _mergeSameName = (a, b) => (b.id && a.id === b.id) || (b.nameZh && a.nameZh && b.nameZh === a.nameZh) || (b.nameJa && a.nameJa && b.nameJa === a.nameJa);
+// 第 6 批 I 线(B 组预览,R15):四个 *Plan 多一个可选的记账参数 tr(放在最后、带缺省值,参数个数照旧)。给了 tr 才记:
+//   tr = { invalid, dupInFile, match: Map(本机下标 → { i: 文件下标, x1: 首个匹配的文件条目 }), units: [{ i, item, dups: [文件下标…] }] }
+//   —— 文件里每一条恰好归一处:无效 / 首个匹配某条本机条目 / 文件内重复 / 新单位。计算一个字不变(applyMergePlan 兜底调的时候不给 tr)
 // 今天的 pickNew:按 isDup 去重,返回要追加的条目(文件里自己重复的也只加第一条);判重跳过的有 label 时记进 skipped
-function mergeNamedPlan(base, incoming, isDup, makeId, label, onDup, skipped) {
+function mergeNamedPlan(base, incoming, isDup, makeId, label, onDup, skipped, tr = null) {
   const add = [];
-  (incoming || []).forEach(inc => {
-    if (!inc || typeof inc !== "object") return;
-    const dup = (base || []).find(x => x && isDup(x, inc)) || add.find(x => isDup(x, inc));
-    if (dup) { if (label && skipped) skipped.push(`${label}「${_mergeNameOf(inc)}」`); if (onDup) onDup(inc, dup); return; }
-    add.push(makeId ? { ...inc, id: inc.id || makeId() } : inc);
+  const bl = base || [];
+  (incoming || []).forEach((inc, i) => {
+    if (!inc || typeof inc !== "object") { if (tr) tr.invalid++; return; }
+    let j = -1;
+    for (let q = 0; q < bl.length; q++) { const x = bl[q]; if (x && isDup(x, inc)) { j = q; break; } }
+    const u = j < 0 ? add.findIndex(x => isDup(x, inc)) : -1;
+    const dup = j >= 0 ? bl[j] : (u >= 0 ? add[u] : undefined);
+    if (dup) {
+      if (label && skipped) skipped.push(`${label}「${_mergeNameOf(inc)}」`);
+      if (onDup) onDup(inc, dup);
+      if (tr) { if (j >= 0) { if (!tr.match.has(j)) tr.match.set(j, { i, x1: inc }); else tr.dupInFile++; } else { tr.dupInFile++; tr.units[u].dups.push(i); } }
+      return;
+    }
+    const item = makeId ? { ...inc, id: inc.id || makeId() } : inc;
+    add.push(item);
+    if (tr) tr.units.push({ i, item, dups: [] });
   });
   return add;
 }
 // 厂家 / 材料:按 id 在结果里找第一条,没有 → 追加(skip 里的文件下标不追加),有 → mergeOne 合并(R9)
-function mergeByIdPlan(list, incoming, mergeOne, skip) {
+function mergeByIdPlan(list, incoming, mergeOne, skip, tr = null) {
   const result = [...list];
+  const curLen = result.length;
   incoming.forEach((inc, i) => {
     const j = result.findIndex(b => b.id === inc.id);
-    if (j < 0) { if (!(skip && skip.has(i))) result.push(inc); } else result[j] = mergeOne(result[j], inc);
+    if (j < 0) {
+      if (!(skip && skip.has(i))) { result.push(inc); if (tr) tr.units.push({ i, item: inc, dups: [], ri: result.length - 1 }); }
+    } else {
+      result[j] = mergeOne(result[j], inc);
+      if (tr) _mergeTrackB(tr, j, curLen, i, inc, result);
+    }
   });
   return result;
 }
+// B 类记账:合进了本机条目(第一次 = x1,之后 = 文件内重复)或合进了前面的新单位(文件内重复,单位换成合并后的那条)
+function _mergeTrackB(tr, j, curLen, i, x1, result) {
+  if (j < curLen) { if (!tr.match.has(j)) tr.match.set(j, { i, x1 }); else tr.dupInFile++; return; }
+  const u = tr.units.find(x => x.ri === j);
+  if (u) { u.dups.push(i); u.item = result[j]; }
+  tr.dupInFile++;
+}
 // 本店原料(R3 第 8 步):materialId 或 id 认同一条;已有的走 mergeShopEntry(PA;第 0 步 = 今天那一行),新的补 id 和 supplierIds。
 // o = { genId, nowIso, idMap };skip 只挡「会被追加」的文件下标
-function mergeShopPlan(list, incoming, o, skip) {
+function mergeShopPlan(list, incoming, o, skip, tr = null) {
   const result = [...list];
+  const curLen = result.length;
   const idMap = (o && o.idMap) || {};
   const gen = (o && o.genId) || _mergeGenId;
   incoming.forEach((inc, i) => {
     const key = inc.materialId || inc.id;
-    if (!key) return;
+    if (!key) { if (tr) tr.invalid++; return; }
     const existingIdx = result.findIndex(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id));
     if (existingIdx < 0) {
       if (skip && skip.has(i)) return;
       const f = remapShopSupplierIds(inc, idMap);
       result.push({ ...f, id: f.id || gen("sm_"), supplierIds: Array.isArray(f.supplierIds) ? f.supplierIds : [] });
+      if (tr) tr.units.push({ i, item: result[result.length - 1], dups: [], ri: result.length - 1 });
     } else {
       result[existingIdx] = mergeShopEntry(result[existingIdx], inc, idMap, o && o.nowIso);
+      if (tr) _mergeTrackB(tr, existingIdx, curLen, i, remapShopSupplierIds(inc, idMap), result);   // R27:x1 用换过供货商 id 的那条比
     }
   });
   return result;
 }
 // 销售 / 生产记录(R3 第 10 步):按 id 去重;同一条两边都有时,修改时间(没有就用创建时间)晚的为准
 const _mergeLogTime = (x) => Date.parse((x && (x.updatedAt || x.createdAt)) || "") || 0;
-function mergeLogsPlan(base, incoming, prefix, genId) {
+function mergeLogsPlan(base, incoming, prefix, genId, tr = null) {
   const add = [];
   const replace = new Map();
   const gen = genId || _mergeGenId;
-  (incoming || []).forEach(inc => {
-    if (!inc || typeof inc !== "object") return;
-    if (!inc.id) { add.push({ ...inc, id: gen(prefix) }); return; }
+  const bl = base || [];
+  (incoming || []).forEach((inc, i) => {
+    if (!inc || typeof inc !== "object") { if (tr) tr.invalid++; return; }
+    if (!inc.id) { add.push({ ...inc, id: gen(prefix) }); if (tr) tr.units.push({ i, item: add[add.length - 1], dups: [] }); return; }
     const inAdd = add.findIndex(x => x.id === inc.id);
-    if (inAdd >= 0) { if (_mergeLogTime(inc) > _mergeLogTime(add[inAdd])) add[inAdd] = inc; return; }
-    const dup = (base || []).find(s => s && s.id === inc.id);
-    if (!dup) { add.push(inc); return; }
+    if (inAdd >= 0) {
+      if (_mergeLogTime(inc) > _mergeLogTime(add[inAdd])) { add[inAdd] = inc; if (tr) tr.units[inAdd].item = inc; }
+      if (tr) { tr.units[inAdd].dups.push(i); tr.dupInFile++; }
+      return;
+    }
+    const j = bl.findIndex(s => s && s.id === inc.id);
+    if (j < 0) { add.push(inc); if (tr) tr.units.push({ i, item: inc, dups: [] }); return; }
+    const dup = bl[j];
     const prevRep = replace.get(inc.id);
     if (_mergeLogTime(inc) > _mergeLogTime(prevRep || dup)) replace.set(inc.id, inc);
+    if (tr) { if (!tr.match.has(j)) tr.match.set(j, { i, x1: inc }); else tr.dupInFile++; }
   });
   return { add, replace };
 }
@@ -4756,8 +5168,30 @@ function mergePrintSettingsPlan(prev, filePs) {
 // R12:厂家 / 材料 / 本店原料 / 老价格表里有 null / undefined(含稀疏空位)→ 整次合并拒绝(文件那一类有才查;本机的一律查)
 const _mergeBadList = (L) => Array.isArray(L) && (L.some(x => x === null || x === undefined) || L.length !== Object.keys(L).filter(i => /^\d+$/.test(i)).length);
 const MERGE_W_KEYS = ["recipes", "components", "creations", "knowledge", "products", "suppliers", "productFamilies", "customCompCats"];
+// R18 引用表:这一条指着哪些条目([目标类, String(值)];值是 undefined / null / "" 的不算)
+const _impRefsOf = (key, o) => {
+  const out = [];
+  if (!o || typeof o !== "object") return out;
+  const push = (tk, v) => { if (v !== undefined && v !== null && v !== "") out.push([tk, String(v)]); };
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const ingRefs = (ings) => arr(ings).forEach(i => { if (i && typeof i === "object") { push("materials", i.materialId); push("components", i.componentId); } });
+  if (key === "materials") push("brands", o.brandId);
+  if (key === "shopMaterials") { push("materials", o.materialId); arr(o.supplierIds).forEach(v => push("suppliers", v)); }
+  if (key === "recipes" || key === "components") ingRefs(o.ingredients);
+  if (key === "recipes" || key === "creations") push("productFamilies", o.familyId);
+  if (key === "creations") arr(o.layers).forEach(l => { if (l && typeof l === "object") { push("components", l.sourceComponentId); ingRefs(l.ingredients); } });
+  if (key === "products") arr(o.items).forEach(it => {
+    if (!it || typeof it !== "object") return;
+    const tk = it.linkedType === "recipe" ? "recipes" : it.linkedType === "creation" ? "creations" : it.linkedType === "component" ? "components" : null;
+    if (tk) push(tk, it.linkedId);
+  });
+  if (key === "components") push("customCompCats", o.componentCategory);
+  return out;
+};
 // planMergeImport(cur, d, opts) → plan(spec_merge_plan 2.5)。cur = dataRef 的 14 张表 + printSettings + appSettings(只读);
 // opts = { lang, nowIso, genId, genRecipeId, prepItemsN, binIdx, skipDeleted }。纯函数:不改 cur / d,不碰 localStorage / IndexedDB / React
+// 第 6 批 I 线(B 组):各步照今天算(A 组一个字不变),同时记账(R15);再按回收站(binMatchIncoming,R16)和依赖闭包(R18)
+// 定「你删过、这次不加」的单位,从追加部分拿掉(R19),最后拼 detail(R20 / R21)、notes、提示条(R7)。回收站为空 / 不勾时和第 0 步逐字节一样
 function planMergeImport(cur, d, opts = {}) {
   ["brands", "materials", "shopMaterials", "cats"].forEach(k => {
     if (_mergeBadList(d[k])) throw new Error(`坏文件:${k} 里有空条目`);
@@ -4769,7 +5203,13 @@ function planMergeImport(cur, d, opts = {}) {
   const genId = opts.genId || _mergeGenId;
   const genRecipeId = opts.genRecipeId || _mergeGenRecipeId;
   const prepItemsN = opts.prepItemsN || 0;
-  const lines = [];
+  const binIdx = (opts.binIdx === undefined || opts.binIdx === null) ? null : opts.binIdx;
+  const skipDeleted = opts.skipDeleted === undefined ? true : opts.skipDeleted;
+  // 报告行先按步骤记下来:「+ 新X n」的 n 要等「你删过的」定了才知道(R19);其余行一字不改、位置不变
+  const lineDesc = [];
+  const fixed = (text) => lineDesc.push({ text });
+  const plusW = (key, fmt) => lineDesc.push({ key, w: true, fmt });
+  const plusB = (key, n, fmt) => { if (n) lineDesc.push({ key, n, fmt }); };
   const skipped = [];
   const notes = [];
   const sameName = _mergeSameName;
@@ -4781,20 +5221,23 @@ function planMergeImport(cur, d, opts = {}) {
   MERGE_W_KEYS.forEach(k => { add[k] = []; });
   const logOps = { salesLog: null, productionLog: null };
   const skipIdx = { brands: new Set(), materials: new Set(), shopMaterials: new Set() };
+  const TR = {};   // 每类的记账(R15),见 mergeNamedPlan 上面的说明
+  const newTr = (key) => (TR[key] = { invalid: 0, dupInFile: 0, match: new Map(), units: [] });
 
   // 1. 合并 cats(按名字匹配大类,已有则只追加新品牌)
+  let catsRes = null;
   if (has("cats")) {
     const r = mergeCatsPlan(cur.cats, d.cats, genId);
+    catsRes = r;
     if (r.catsNew || r.brandsAdded) next.cats = r.result;
-    if (r.catsNew) lines.push((zh ? "+ 老价格表新大类 " : "+ 旧価格表カテゴリー ") + r.catsNew);
-    if (r.brandsAdded) lines.push((zh ? "+ 老价格表新品牌 " : "+ 旧価格表ブランド ") + r.brandsAdded);
+    if (r.catsNew) fixed((zh ? "+ 老价格表新大类 " : "+ 旧価格表カテゴリー ") + r.catsNew);
+    if (r.brandsAdded) fixed((zh ? "+ 老价格表新品牌 " : "+ 旧価格表ブランド ") + r.brandsAdded);
   }
 
   // 2. 组件 / 3. 配方 / 4. 组合产品(按 id 或 nameZh / nameJa 去重,已有的不动)
   // 文件里被跳过的组件 id 和本机那条不一样时记下「文件 id → 本机 id」,新加进来的条目里按 id 引用它的地方改写过去(remapImportedComponentRefs)
   const compIdMap = new Map();
   let compAdd = [];
-  let recipeAdd = [], creationAdd = [];
   const refStat = { rows: 0, layers: 0, unfollowed: 0 };
   const remap = (list) => {
     if (!compIdMap.size) return list;
@@ -4805,6 +5248,7 @@ function planMergeImport(cur, d, opts = {}) {
     refStat.rows += r.rows; refStat.layers += r.layers; refStat.unfollowed += r.unfollowed;
     return r.list;
   };
+  const setUnitItems = (key, list) => { TR[key].units.forEach((u, k) => { u.item = list[k]; }); };   // remap 之后的样子才是要加进来的样子
   // 备货 G 线:被跳过的已有配方 / 组件,文件里那条的备货设置和本机不一样 → 报告里说一句(只提示,不改)
   const PREP_CFG_KEYS = ["prepMode", "prepStore", "prepShelfDays", "prepMinStock", "prepThawZh", "prepThawJa"];
   const prepSig = (o) => PREP_CFG_KEYS.map(k => { const v = o ? o[k] : undefined; return k === "prepMode" ? (v === "stock" ? "stock" : "") : (v === undefined || v === null ? "" : String(v).trim()); }).join("\u0001");
@@ -4815,27 +5259,28 @@ function planMergeImport(cur, d, opts = {}) {
   if (has("components")) {
     const onDupComp = notePrepDiff("component", cur.components);
     const add0 = mergeNamedPlan(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ",
-      (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); onDupComp(inc, dup); }, skipped);
+      (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); onDupComp(inc, dup); }, skipped, newTr("components"));
     compAdd = add0;
     const a = remap(add0);
     compAdd = a;
     add.components = a;
-    if (a.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + a.length);
+    setUnitItems("components", a);
+    plusW("components", (n) => (zh ? "+ 新组件 " : "+ コンポーネント ") + n);
   }
   if (has("recipes")) {
-    const a = remap(mergeNamedPlan(cur.recipes, d.recipes, sameName, genRecipeId, zh ? "配方" : "レシピ", notePrepDiff("recipe", cur.recipes), skipped));
-    recipeAdd = a;
+    const a = remap(mergeNamedPlan(cur.recipes, d.recipes, sameName, genRecipeId, zh ? "配方" : "レシピ", notePrepDiff("recipe", cur.recipes), skipped, newTr("recipes")));
     add.recipes = a;
-    if (a.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + a.length);
+    setUnitItems("recipes", a);
+    plusW("recipes", (n) => (zh ? "+ 新配方 " : "+ レシピ ") + n);
   }
   if (has("creations")) {
-    const a = remap(mergeNamedPlan(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品", null, skipped));
-    creationAdd = a;
+    const a = remap(mergeNamedPlan(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品", null, skipped, newTr("creations")));
     add.creations = a;
-    if (a.length) lines.push((zh ? "+ 新组合产品 " : "+ 組立製品 ") + a.length);
+    setUnitItems("creations", a);
+    plusW("creations", (n) => (zh ? "+ 新组合产品 " : "+ 組立製品 ") + n);
   }
   if (refStat.rows || refStat.layers) {
-    lines.push(zh
+    fixed(zh
       ? `· 文件里的组件本机已有同名的(id 不同):${refStat.rows ? `${refStat.rows} 行「来自组件」的配料` : ""}${refStat.rows && refStat.layers ? "、" : ""}${refStat.layers ? `${refStat.layers} 个组合产品部分` : ""}改指本机那个组件${refStat.unfollowed ? `;其中 ${refStat.unfollowed} 个部分和本机组件内容不一样,先不跟组件库走(组合产品详情页会提示你选)` : ""}`
       : `· 同名パーツが既にあるため(id 違い):${refStat.rows ? `配合 ${refStat.rows} 行` : ""}${refStat.rows && refStat.layers ? "・" : ""}${refStat.layers ? `パーツ ${refStat.layers} 件` : ""}を既存パーツに付け替え${refStat.unfollowed ? `(内容が違う ${refStat.unfollowed} 件は連動を外しました。詳細ページで選べます)` : ""}`);
   }
@@ -4849,10 +5294,10 @@ function planMergeImport(cur, d, opts = {}) {
     const sameT = (a, b) => { const x = normT(a), y = normT(b); return !!x && x === y; };
     const isDupK = (k, inc) => (inc.id && k.id === inc.id) || sameT(k.titleZh, inc.titleZh) || sameT(k.titleJa, inc.titleJa) || sameT(k.title, inc.title);
     const a = mergeNamedPlan(cur.knowledge, d.knowledge, isDupK, () => genId("k_"), zh ? "知识" : "ナレッジ",
-      (inc, dup) => { if (dup && (cur.knowledge || []).includes(dup)) kPairs.push([dup.id, inc]); }, skipped);
+      (inc, dup) => { if (dup && (cur.knowledge || []).includes(dup)) kPairs.push([dup.id, inc]); }, skipped, newTr("knowledge"));
     add.knowledge = a;
     kMarks = mergeKnowledgeStaffMarks(cur.knowledge, kPairs);
-    if (a.length) lines.push((zh ? "+ 新知识点 " : "+ ナレッジ ") + a.length);
+    plusW("knowledge", (n) => (zh ? "+ 新知识点 " : "+ ナレッジ ") + n);
   }
 
   // 6. 合并 brands / materials(按 id 匹配;已存在时按修改时间取新的一边)
@@ -4864,17 +5309,17 @@ function planMergeImport(cur, d, opts = {}) {
   };
   if (has("brands")) {
     const [n, m] = countNewById(cur.brands, d.brands);
-    if (n) lines.push((zh ? "+ 新厂家 " : "+ メーカー ") + n);
-    if (m) lines.push(zh ? `· 已有厂家 ${m} 家:按修改时间取新的一边` : `· 既存メーカー ${m}:新しい方を採用`);
-    next.brands = mergeByIdPlan(cur.brands, d.brands, (l, x) => mergeByNewer(l, x, []), skipIdx.brands);
+    plusB("brands", n, (k) => (zh ? "+ 新厂家 " : "+ メーカー ") + k);
+    if (m) fixed(zh ? `· 已有厂家 ${m} 家:按修改时间取新的一边` : `· 既存メーカー ${m}:新しい方を採用`);
+    next.brands = mergeByIdPlan(cur.brands, d.brands, (l, x) => mergeByNewer(l, x, []), skipIdx.brands, newTr("brands"));
   }
   if (has("materials")) {
     const [n, m] = countNewById(cur.materials, d.materials);
-    if (n) lines.push((zh ? "+ 新材料 " : "+ 材料 ") + n);
-    if (m) lines.push(zh ? `· 已有材料 ${m} 条:按修改时间取新的一边` : `· 既存材料 ${m}:新しい方を採用`);
+    plusB("materials", n, (k) => (zh ? "+ 新材料 " : "+ 材料 ") + k);
+    if (m) fixed(zh ? `· 已有材料 ${m} 条:按修改时间取新的一边` : `· 既存材料 ${m}:新しい方を採用`);
     // v11: priceRange 迁移;v14: imageUrls 格式升级;第 4 批:合并规则只在 mergeMaterialEntry 里写
     const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
-    next.materials = mergeByIdPlan(cur.materials, migrated, (l, x) => mergeMaterialEntry(l, x, nowIso), skipIdx.materials);
+    next.materials = mergeByIdPlan(cur.materials, migrated, (l, x) => mergeMaterialEntry(l, x, nowIso), skipIdx.materials, newTr("materials"));
   }
   // 供货商:PA 的 mergeSupplierList(spec_purchase_order R31)要在本店原料那一步之前算好 idMap;报告行和 skipped 照旧在第 10 步那个位置出
   const supRes = has("suppliers") ? mergeSupplierList(cur.suppliers, d.suppliers, () => genId("sup_")) : null;
@@ -4887,36 +5332,35 @@ function planMergeImport(cur, d, opts = {}) {
       if (!inc || !(inc.materialId || inc.id)) return;
       if (base.some(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id))) m++; else n++;
     });
-    if (n) lines.push((zh ? "+ 新本店原料 " : "+ 仕入れ原料 ") + n);
-    if (m) lines.push(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
-    next.shopMaterials = mergeShopPlan(base, d.shopMaterials, { genId, nowIso, idMap: supIdMap }, skipIdx.shopMaterials);
+    plusB("shopMaterials", n, (k) => (zh ? "+ 新本店原料 " : "+ 仕入れ原料 ") + k);
+    if (m) fixed(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
+    next.shopMaterials = mergeShopPlan(base, d.shopMaterials, { genId, nowIso, idMap: supIdMap }, skipIdx.shopMaterials, newTr("shopMaterials"));
   }
 
   // 7. 合并 products(商品,按 id / nameZh / nameJa 去重)
   if (has("products")) {
-    const a = mergeNamedPlan(cur.products, d.products, sameName, () => genId("prod_"), zh ? "商品" : "商品", null, skipped);
-    add.products = a;
-    if (a.length) lines.push((zh ? "+ 新商品 " : "+ 商品 ") + a.length);
+    add.products = mergeNamedPlan(cur.products, d.products, sameName, () => genId("prod_"), zh ? "商品" : "商品", null, skipped, newTr("products"));
+    plusW("products", (n) => (zh ? "+ 新商品 " : "+ 商品 ") + n);
   }
 
   // 8 / 9. 销售 / 生产记录:按 id 去重;同一条两边都有时,修改时间(没有就用创建时间)晚的为准
   let logsReplaced = 0, prodLogsReplaced = 0;
   if (has("salesLog")) {
-    const r = mergeLogsPlan(cur.salesLog, d.salesLog, "sl_", genId);
+    const r = mergeLogsPlan(cur.salesLog, d.salesLog, "sl_", genId, newTr("salesLog"));
     logOps.salesLog = r;
     next.salesLog = applyLogOps(cur.salesLog, r, true);
-    if (r.add.length) lines.push((zh ? "+ 新销售记录 " : "+ 売上記録 ") + r.add.length);
-    if (r.replace.size) { lines.push(zh ? `· 销售记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 売上記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
+    if (r.add.length) fixed((zh ? "+ 新销售记录 " : "+ 売上記録 ") + r.add.length);
+    if (r.replace.size) { fixed(zh ? `· 销售记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 売上記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
   }
   if (has("productionLog")) {
-    const r = mergeLogsPlan(cur.productionLog, d.productionLog, "pl_", genId);
+    const r = mergeLogsPlan(cur.productionLog, d.productionLog, "pl_", genId, newTr("productionLog"));
     logOps.productionLog = r;
     next.productionLog = applyLogOps(cur.productionLog, r, true);
-    if (r.add.length) lines.push((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
-    if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; prodLogsReplaced += r.replace.size; }
+    if (r.add.length) fixed((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
+    if (r.replace.size) { fixed(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; prodLogsReplaced += r.replace.size; }
   }
   // 备货 G 线:生产记录被换了、本机账上有备货时,那句后面加「备货库存也一样,去盘点」(账本不跟着生产记录合并)
-  if (logsReplaced) lines.push((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
+  if (logsReplaced) fixed((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
     + (prodLogsReplaced && prepItemsN > 0 ? prepTxt(lang).mergeLogsTail : ""));
 
   // 10. 合并 suppliers(第 0 步 = 今天的 pickNew;PA 合并后按名字认同一家,两行新报告进 notes)
@@ -4924,57 +5368,164 @@ function planMergeImport(cur, d, opts = {}) {
     const label = zh ? "供货商" : "仕入先";
     (supRes.keptLocal || []).forEach(f => skipped.push(`${label}「${_mergeNameOf(f)}」`));
     add.suppliers = supRes.add;
-    if (supRes.added) lines.push((zh ? "+ 新供货商 " : "+ 仕入先 ") + supRes.added);
+    // 记账:第 0 步的 mergeSupplierList 就是今天的 pickNew(按 _mergeSameName),这里照同一个认法再走一遍记下谁对上谁,
+    // 新单位换成 mergeSupplierList 加进来的那几条(顺序一一对应)。**PA 把认法换成 R31 的两遍查找时,这几行跟着换**(spec_merge_plan R27)
+    const tr = newTr("suppliers");
+    mergeNamedPlan(cur.suppliers, d.suppliers, _mergeSameName, null, null, null, null, tr);
+    tr.units.forEach((u, k) => { if (supRes.add[k] !== undefined) u.item = supRes.add[k]; });
+    plusW("suppliers", (n) => (zh ? "+ 新供货商 " : "+ 仕入先 ") + n);
   }
 
   // 11. 合并 productFamilies(产品家族,按 id / nameZh / nameJa 去重)
   if (has("productFamilies")) {
-    const a = mergeNamedPlan(cur.productFamilies, d.productFamilies, sameName, () => genId("fam_"), zh ? "家族" : "ファミリー", null, skipped);
-    add.productFamilies = a;
-    if (a.length) lines.push((zh ? "+ 新产品家族 " : "+ ファミリー ") + a.length);
+    add.productFamilies = mergeNamedPlan(cur.productFamilies, d.productFamilies, sameName, () => genId("fam_"), zh ? "家族" : "ファミリー", null, skipped, newTr("productFamilies"));
+    plusW("productFamilies", (n) => (zh ? "+ 新产品家族 " : "+ ファミリー ") + n);
   }
 
   // 12. 合并 customCompCats(自定义组件分类,按 id 去重)
   if (has("customCompCats")) {
-    const a = mergeNamedPlan(cur.customCompCats, d.customCompCats, (x, b) => !!(b.id && x.id === b.id), null, null, null, skipped);
-    add.customCompCats = a;
-    if (a.length) lines.push((zh ? "+ 新组件分类 " : "+ コンポ分類 ") + a.length);
+    add.customCompCats = mergeNamedPlan(cur.customCompCats, d.customCompCats, (x, b) => !!(b.id && x.id === b.id), null, null, null, skipped, newTr("customCompCats"));
+    plusW("customCompCats", (n) => (zh ? "+ 新组件分类 " : "+ コンポ分類 ") + n);
   }
 
   // 13. 合并 printSettings(对象;只在当前是默认值时才用导入的)
   if (d.printSettings && typeof d.printSettings === "object") next.printSettings = mergePrintSettingsPlan(cur.printSettings, d.printSettings);
 
+  // ── R5:W 类加进来的条目 id 本机已经有了的,今天的 appendTo 会挡掉(实际只有组件分类:它不补 id)—— 记成「文件内重复」、不查回收站
+  const wBase = (k) => (k === "knowledge" && kMarks) ? kMarks.list : cur[k];
+  MERGE_W_KEYS.forEach(k => {
+    if (!has(k) || !TR[k]) return;
+    const ids = new Set((cur[k] || []).map(x => x && x.id));
+    TR[k].units.forEach(u => { if (u.item && u.item.id !== undefined && ids.has(u.item.id)) u.blocked = true; });
+  });
+
+  // ── R16 到 R18:回收站和依赖闭包
+  const DK = IMPORT_KINDS.filter(k => k.key !== "cats" && has(k.key) && TR[k.key]);
+  const allUnits = [];
+  DK.forEach(k => TR[k.key].units.forEach(u => { u.key = k.key; u.status = null; u.bin = null; if (!u.blocked) allUnits.push(u); }));
+  const nOf = (key, j) => {   // 本机第 j 条合并以后的样子(N,R20)
+    const fam = _impKind(key).fam;
+    if (fam === "B") return next[key][j];
+    if (fam === "L") { const L = cur[key][j]; const r = logOps[key].replace.get(L.id); return (r && _mergeLogTime(r) > _mergeLogTime(L)) ? r : L; }
+    return wBase(key)[j];
+  };
+  if (binIdx !== null) allUnits.forEach(u => {
+    const bk = _impKind(u.key).bin;
+    if (!bk) return;
+    let m = null;
+    try { m = binMatchIncoming(binIdx, bk, u.item); } catch (e) { m = null; }
+    if (!m || !m.entry) return;
+    u.bin = m.entry;
+    u.status = m.sameContent ? (skipDeleted === true ? "cand" : "readded") : "other";
+  });
+  const C = allUnits.filter(u => u.status === "cand");
+  if (C.length) {
+    const rk = (tk, v) => tk + "\u0001" + v;
+    const IN = new Set();
+    allUnits.forEach(u => { if (u.status !== "cand") _impRefsOf(u.key, u.item).forEach(([tk, v]) => IN.add(rk(tk, v))); });
+    DK.forEach(k => TR[k.key].match.forEach((mm, j) => {   // 被文件换掉 / 补上的已有条目带进来的新引用
+      const L = cur[k.key][j], N = nOf(k.key, j);
+      if (importCanon(k.key, N) === importCanon(k.key, L)) return;
+      const old = new Set(_impRefsOf(k.key, L).map(([tk, v]) => rk(tk, v)));
+      _impRefsOf(k.key, N).forEach(([tk, v]) => { const x = rk(tk, v); if (!old.has(x)) IN.add(x); });
+    }));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const c of C) {
+        if (c.status !== "cand" || !IN.has(rk(c.key, String(c.item.id)))) continue;
+        c.status = "pulled"; changed = true;
+        _impRefsOf(c.key, c.item).forEach(([tk, v]) => IN.add(rk(tk, v)));
+      }
+    }
+    C.forEach(c => { if (c.status === "cand") c.status = "skipped"; });
+  }
+  const isSkippedUnit = (u) => !!u && u.status === "skipped";
+
+  // ── R19:删过不加的从追加部分拿掉
+  const finalAdd = {};
+  MERGE_W_KEYS.forEach(k => { finalAdd[k] = has(k) && TR[k] ? add[k].filter((x, q) => !isSkippedUnit(TR[k].units[q])) : add[k]; });
+  ["brands", "materials", "shopMaterials"].forEach(k => {
+    if (!has(k) || !TR[k] || !TR[k].units.some(isSkippedUnit)) return;
+    const curLen = (cur[k] || []).length;
+    TR[k].units.forEach(u => { if (isSkippedUnit(u)) { skipIdx[k].add(u.i); u.dups.forEach(i => skipIdx[k].add(i)); } });
+    next[k] = [...next[k].slice(0, curLen), ...TR[k].units.filter(u => !isSkippedUnit(u)).map(u => u.item)];
+  });
   // W 类的 next(R5):按 id 挡一次(今天 appendTo 的那道挡);知识先套上员工必读标记(KA,第 0 步不变)
   MERGE_W_KEYS.forEach(k => {
     if (!has(k)) return;
-    const baseList = (k === "knowledge" && kMarks) ? kMarks.list : cur[k];
+    const baseList = wBase(k);
     const ids = new Set((baseList || []).map(x => x && x.id));
-    const a = add[k].filter(x => !(x.id !== undefined && ids.has(x.id)));
+    const a = finalAdd[k].filter(x => !(x.id !== undefined && ids.has(x.id)));
     next[k] = (a.length || baseList !== cur[k]) ? [...(baseList || []), ...a] : cur[k];
   });
+  const lines = [];
+  lineDesc.forEach(ld => {
+    if (ld.text !== undefined) { lines.push(ld.text); return; }
+    const n = ld.w ? finalAdd[ld.key].length : ld.n - skipIdx[ld.key].size;
+    if (n > 0) lines.push(ld.fmt(n));
+  });
+
+  // ── R20 / R21:预览的分组
+  const ctx = { curMaterials: cur.materials, fileMaterials: Array.isArray(d.materials) ? d.materials : [] };
+  const iname = (key, x) => itemName(key, x, lang, ctx);
+  const kinds = {};
+  const deleted = [];
+  DK.forEach(k => {
+    const key = k.key, tr = TR[key], units = tr.units;
+    const ent = { fileN: d[key].length, invalid: tr.invalid, dupInFile: tr.dupInFile + units.filter(u => u.blocked).length,
+      added: units.filter(u => !u.blocked && !isSkippedUnit(u)).map(u => ({ id: u.item.id, name: iname(key, u.item) })),
+      same: [], keptLocal: [], patched: [], fromFile: [] };
+    [...tr.match.entries()].sort((a, b) => a[1].i - b[1].i).forEach(([j, mm]) => {
+      const L = cur[key][j], x1 = mm.x1, N = nOf(key, j);
+      const ref = { id: L.id, name: iname(key, x1), localName: iname(key, L) };
+      const tf = Date.parse((x1 && x1.updatedAt) || "") || 0, tl = Date.parse((L && L.updatedAt) || "") || 0;
+      if (importCanon(key, x1) === importCanon(key, L)) ent.same.push(ref);
+      else if (importCanon(key, N) === importCanon(key, L)) ent.keptLocal.push(ref);
+      else if (k.fam === "L" || (k.fam === "B" && (tf > tl || (tf === 0 && tl === 0)))) ent.fromFile.push(ref);
+      else ent.patched.push(ref);
+    });
+    kinds[key] = ent;
+    units.forEach(u => { if (!u.blocked && u.bin) deleted.push({ key, id: u.item.id, name: iname(key, u.item), at: u.bin.at, bid: u.bin.bid, status: u.status }); });
+  });
+  const totals = { added: 0, same: 0, keptLocal: 0, patched: 0, fromFile: 0, dupInFile: 0, invalid: 0, deletedSkipped: 0 };
+  Object.values(kinds).forEach(e => {
+    totals.added += e.added.length; totals.same += e.same.length; totals.keptLocal += e.keptLocal.length;
+    totals.patched += e.patched.length; totals.fromFile += e.fromFile.length; totals.dupInFile += e.dupInFile; totals.invalid += e.invalid;
+  });
+  const deletedSkipped = deleted.filter(x => x.status === "skipped");
+  totals.deletedSkipped = deletedSkipped.length;
+  const detail = { kinds, cats: catsRes ? { newCats: catsRes.catsNew, newBrands: catsRes.brandsAdded } : null, deleted, totals };
+
+  // notes 的顺序(R19):KA 的行 → PA 的行 → 删过不加那一行
   if (kMarks && kMarks.n > 0) notes.push(zh ? `· ${kMarks.n} 条已有知识的员工必读 / 要点用了文件里较新的` : `· 既存ナレッジ ${kMarks.n} 件のスタッフ必読・ポイントをファイルの新しい方に更新`);
   if (supRes && supRes.notes) supRes.notes.forEach(l => notes.push(l));
+  const S = deletedSkipped.length;
+  if (S > 0) notes.push(_impTxt(lang).notesDeleted(S, fmtNames(deletedSkipped, lang, { kind: true })));
 
-  // 提示条:一句话;完整结果(含因同名 / 同编号跳过的条目)留在数据页上
-  const added = lines.filter(l => l.startsWith("+"));
-  const toast = (added.length > 0
-    ? (zh ? "✓ 合并完成:" : "✓ マージ完了:") + added.map(l => l.slice(2)).join(" · ")
+  // 提示条(R7):一句话;完整结果(含因同名 / 同编号跳过的条目)留在数据页上。S = 0 时和今天逐字节一样
+  const plus = lines.filter(l => l.startsWith("+"));
+  const toast = (plus.length > 0
+    ? (zh ? "✓ 合并完成:" : "✓ マージ完了:") + plus.map(l => l.slice(2)).join(" · ")
     : lines.length > 0
       ? (zh ? "✓ 合并完成(没有新增条目;已有的条目按修改时间比过,取了新的一边)" : "✓ マージ完了(新規なし)")
+      : S > 0 ? (zh ? "没有加进来新条目" : "追加はありません")
       : (zh ? "没有新内容:文件里的条目这里都已经有了" : "新しい内容はありません(すべて既存)"))
-    + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : "");
+    + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : "")
+    + (S > 0 ? (zh ? ` · 你删过的 ${S} 条没加回来(详见数据页)` : ` · 削除済み ${S} 件は戻していません`) : "");
   // 备货 G 线:合并导入一个字都不碰 appSettings(库存账)和已有配方 / 组件的备货设置,只在数据页的结果里说清楚(放在提示条的判断之后)
   const prepNotes = [];
   if (d.appSettings && Object.keys(prepStockRead(d.appSettings.prepStock).items).length > 0) prepNotes.push(prepTxt(lang).mergeNotMerged);
   if (prepCfgDiff.size) prepNotes.push(prepTxt(lang).mergeCfgDiff(prepCfgDiff.size));
+  MERGE_W_KEYS.forEach(k => { add[k] = finalAdd[k]; });
   return {
     next, add, logOps, skipIdx,
     lines: prepNotes.length ? [...lines, ...prepNotes] : lines,
     skipped, toast, notes,
-    added: { recipes: recipeAdd, components: compAdd, creations: creationAdd },
+    added: { recipes: finalAdd.recipes, components: finalAdd.components, creations: finalAdd.creations },
     prepCfgDiffN: prepCfgDiff.size,
-    detail: null,             // I 线:R21 的预览分组
-    deletedSkipped: [],       // I 线:「你删过的」这次没加回来的
+    detail,                   // R21 的预览分组
+    deletedSkipped,           // 「你删过的」这次没加回来的(detail.deleted 里同一批对象)
     kPairs,                   // KA:applyMergePlan 兜底时对 prev 重做标记合并要用
     supIdMap,                 // PA:文件供货商 id → 本机 id(本店原料那一步、applyMergePlan 兜底都用)
   };
@@ -5680,14 +6231,34 @@ function StorageMeterCard({ lang, extraRows = null }) {
   );
 }
 // ─── 第 6 批第 0 步:数据页「上次合并 / 覆盖导入的结果」卡(从 App 里原样抽出来,DOM 一样;I 线加持久、notes、备份行、更早的几次)───
-function ImportReportCard({ report: importReport, lang, onClose }) {
+// 第 6 批 I 线(spec_merge_plan R42 到 R44):报告存在 korora_safety 的 reports 表,刷新后还在;老的几行 DOM 和以前一样,新行一律带 data-b6
+// (而且不是「只有一个文字子节点的 div」—— 老测试按这个认报告行)。可选 props:history = reportAll() 的结果(「更早的 n 次」),
+// onShow(rep) 换上来显示那一份,onRevert(snap) 「回到导入之前」(App 里走 restoreBackupSnapshot);now 只给测试
+function ImportReportCard({ report: importReport, lang, onClose, history = [], onShow, onRevert, now }) {
+  const [olderOpen, setOlderOpen] = useState(false);
+  const [snap, setSnap] = useState(null);
+  const bk = importReport && importReport.backup;
+  const wantSnap = !!(bk && bk.status === "ok" && bk.id !== null && bk.id !== undefined);
+  // R44:固定备份还在(新库、不是 legacy、id 对得上)才给「回到导入之前」;卡片挂载、换了一份 / 状态补上以后重查
+  useEffect(() => {
+    if (!wantSnap) return;
+    let alive = true;
+    listBackupSnapshots().then(list => { if (alive) setSnap((list || []).find(m => m && !m.legacy && m.id === bk.id) || null); }).catch(() => {});
+    return () => { alive = false; };
+  }, [importReport]);
   if (!importReport) return null;
+  const t = _impTxt(lang);
+  const nowMs = now === undefined ? Date.now() : now;
+  const skN = typeof importReport.skippedN === "number" ? importReport.skippedN : importReport.skipped.length;
+  const older = (Array.isArray(history) ? history : []).filter(r => r && r.rid !== importReport.rid);
+  const snapOk = wantSnap && snap && snap.id === bk.id;
+  const notes = Array.isArray(importReport.notes) ? importReport.notes : [];
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderLeft: `3px solid ${T.info}`, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
         <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>
           {importReport.kind === "merge" ? (lang === "zh" ? "上次合并导入的结果" : "前回のマージ結果") : (lang === "zh" ? "上次覆盖导入的结果" : "前回の上書き結果")}
-          <span style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, marginLeft: 8 }}>{importReport.fileName} · {String(importReport.at.getHours()).padStart(2, "0")}:{String(importReport.at.getMinutes()).padStart(2, "0")}</span>
+          <span style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, marginLeft: 8 }}>{importReport.fileName} · {importCardTime(importReport.at, nowMs)}</span>
         </div>
         <button type="button" onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.subtle, fontSize: 16, padding: "0 4px" }} title={lang === "zh" ? "关掉" : "閉じる"}>×</button>
       </div>
@@ -5696,19 +6267,75 @@ function ImportReportCard({ report: importReport, lang, onClose }) {
           ? (lang === "zh" ? "没有新内容:文件里的条目这里都已经有了。" : "新しい内容はありませんでした。")
           : importReport.lines.map((l, i) => <div key={i}>{l}</div>)}
       </div>
-      {importReport.skipped.length > 0 && (
+      {notes.length > 0 && (
+        <div data-b6="rep-notes" style={{ ...T.fs.caption, color: T.body, lineHeight: 1.7, overflowWrap: "anywhere" }}>
+          {notes.map((l, i) => <div key={i}><span>{l}</span></div>)}
+        </div>
+      )}
+      {skN > 0 && (
         <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, lineHeight: 1.7 }}>
-          <div style={{ color: T.body }}>{lang === "zh" ? `因为这里已有同名或同编号的,跳过了 ${importReport.skipped.length} 条(已有的没动):` : `同名・同IDのため ${importReport.skipped.length} 件スキップ:`}</div>
-          <div>{importReport.skipped.slice(0, 30).join("、")}{importReport.skipped.length > 30 ? (lang === "zh" ? ` 等 ${importReport.skipped.length} 条` : ` ほか`) : ""}</div>
+          <div style={{ color: T.body }}>{lang === "zh" ? `因为这里已有同名或同编号的,跳过了 ${skN} 条(已有的没动):` : `同名・同IDのため ${skN} 件スキップ:`}</div>
+          <div>{importReport.skipped.slice(0, 30).join("、")}{skN > 30 ? (lang === "zh" ? ` 等 ${skN} 条` : ` ほか`) : ""}</div>
+        </div>
+      )}
+      {snapOk && (
+        <div data-b6="rep-backup" style={{ ...T.fs.caption, color: T.body, marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>{t.repOk}</span>
+          <Btn size="sm" onClick={() => { if (onRevert) onRevert(snap); }}>{t.repRevert}</Btn>
+        </div>
+      )}
+      {bk && bk.status === "failed" && (
+        <div data-b6="rep-backup" style={{ ...T.fs.caption, color: T.warning, marginTop: 8 }}>
+          <span>{importReport.kind === "merge" ? t.repFailMerge : t.repFailOverwrite}</span>
+        </div>
+      )}
+      {older.length > 0 && (
+        <div data-b6="rep-older" style={{ ...T.fs.caption, marginTop: 8, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
+          <Btn size="sm" variant="ghost" onClick={() => setOlderOpen(o => !o)}>{olderOpen ? t.olderClose : t.olderN(older.length)}</Btn>
+          {olderOpen && older.map(r => (
+            <button key={r.rid} type="button" className="k-tap" data-b6-older={r.rid} onClick={() => { if (onShow) onShow(r); }}
+              style={{ background: "none", border: "none", padding: "2px 0", cursor: "pointer", textAlign: "left", color: T.body, ...T.fs.caption, overflowWrap: "anywhere", maxWidth: "100%" }}>
+              {importOlderRowText(r, lang, nowMs)}
+            </button>
+          ))}
         </div>
       )}
     </div>
   );
 }
-// ─── 第 6 批第 0 步:空壳组件(先 return null;位置是最终位置,props 见 .claude/batch6/api.md)───
-// I 线:两个导入确认框的对比块(ConfirmDialog 的 body)
-function OverwritePreviewBody({ rows, lang }) { return null; }
-function MergePreviewBody({ rows, lang, onToggleSkipDeleted }) { return null; }
+// ─── I 线:两个导入确认框的对比块(ConfirmDialog 的 body;外面已经包着 data-b6="confirm-body")。行由 overwritePreviewView / mergePreviewView 给 ───
+const _IMP_TONE = { red: T.danger, yellow: T.warning, gray: T.secondary, plain: T.body };
+const _IMP_INDENT = new Set(["loseKind", "newerKind", "skipSame", "skipDiff", "skipHint", "deletedCheck", "deletedPulled", "deletedOther"]);
+const _impRowStyle = (r) => ({ color: _IMP_TONE[r.tone] || T.body, paddingLeft: _IMP_INDENT.has(r.key) ? 14 : 0, fontWeight: (r.tone === "red" || r.key === "added" || r.key === "skip") && !_IMP_INDENT.has(r.key) ? 500 : 400 });
+const _IMP_BOX = { border: `1px solid ${T.line}`, padding: "10px 12px", ...T.fs.caption, lineHeight: 1.65, overflowWrap: "anywhere", minWidth: 0, display: "flex", flexDirection: "column", gap: 2 };
+function OverwritePreviewBody({ rows, lang }) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return (
+    <div data-b6="ow-preview" style={_IMP_BOX}>
+      {rows.map((r, i) => <div key={i} data-b6-row={r.key} style={_impRowStyle(r)}>{r.text}</div>)}
+    </div>
+  );
+}
+// 合并预览:「你删过的」那个勾在这里管 —— 每切一次调 onToggleSkipDeleted(新的勾),它用打开预览时同一份数据重算、返回新的行(R26)
+function MergePreviewBody({ rows, lang, onToggleSkipDeleted }) {
+  const [st, setSt] = useState({ src: rows, list: rows });
+  const list = st.src === rows ? st.list : rows;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const toggle = (checked) => {
+    const r = onToggleSkipDeleted ? onToggleSkipDeleted(!!checked) : null;
+    if (Array.isArray(r)) setSt({ src: rows, list: r });
+  };
+  return (
+    <div data-b6="merge-preview" style={_IMP_BOX}>
+      {list.map((r, i) => r.key === "deletedCheck"
+        ? <label key={i} data-b6-row={r.key} style={{ ..._impRowStyle(r), display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!r.checked} onChange={(e) => toggle(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+            <span>{r.text}</span>
+          </label>
+        : <div key={i} data-b6-row={r.key} style={_impRowStyle(r)}>{r.text}</div>)}
+    </div>
+  );
+}
 // D 线:顶栏「💾」(DraftChip 左边)、横幅(现有两条横幅后面)、「怎么装」全屏说明、数据页导出卡按钮上面那两行、员工顶栏下面那一行灰字
 function ExportChip({ view, level, lang, onExport }) { return null; }
 function SafetyBanner({ kind, lang, empty, onClose, onHowTo, onExport, onOpenRestore, onGoData }) { return null; }
@@ -5758,6 +6385,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     clear: lang === "zh" ? "清除全部之前" : "全削除前",
     restore: lang === "zh" ? "恢复备份之前" : "復元前",
     "clear-cats": lang === "zh" ? "清掉旧价格表之前" : "旧価格表の削除前",   // 数据体检 H14(2026-09-29 第 2 批 2c)
+    merge: lang === "zh" ? "合并导入之前" : "マージ前",                       // 第 6 批 I 线(spec_merge_plan R39):合并导入之前的固定备份
   }[r] || "");
 
   // 第 6 批第 0 步:恢复的整段挪到模块顶层 restoreBackupSnapshot(行为不变),I 线的「回到导入之前」也走它
@@ -30342,6 +30970,66 @@ function App() {
   dataRef.current = { recipes, cats, components, creations, knowledge, brands, materials, shopMaterials, products, salesLog, productionLog, suppliers, productFamilies, customCompCats };
   // 合并 / 覆盖导入的结果,留在数据页上(提示条 5 秒就没了)
   const [importReport, setImportReport] = useState(null);
+  // 第 6 批 I 线(spec_merge_plan R40 到 R42):报告也存进 korora_safety 的 reports 表(最近 10 次),刷新后显示最近一次没点 × 的那份;
+  // importReports = reportAll() 的结果(「更早的 n 次」)。异步回来的结果只在真的变了时才 setState(库用不了时一次都不 set)
+  const [importReports, setImportReports] = useState([]);
+  const importReportRef = useRef(null);
+  importReportRef.current = importReport;
+  const importReportsRef = useRef([]);
+  importReportsRef.current = importReports;
+  const importTouchedRef = useRef(false);   // 这次打开里已经导入过 → 开机读回来的不盖它(R42)
+  const refreshImportReports = () => {
+    reportAll().then(list => {
+      const L = Array.isArray(list) ? list : [];
+      const a = importReportsRef.current;
+      if (L.length === a.length && L.every((x, i) => JSON.stringify(x) === JSON.stringify(a[i]))) return;
+      importReportsRef.current = L;
+      setImportReports(L);
+    }).catch(() => {});
+  };
+  useEffect(() => {
+    let alive = true;
+    reportAll().then(list => {
+      if (!alive || !Array.isArray(list) || list.length === 0) return;
+      importReportsRef.current = list;
+      setImportReports(list);
+      if (importTouchedRef.current) return;
+      const first = list.find(r => r && r.dismissed !== true);
+      if (first) setImportReport(first);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const showImportReport = (rep) => {
+    importTouchedRef.current = true;
+    importReportRef.current = rep;
+    setImportReport(rep);
+    reportPut(rep).then(refreshImportReports);
+  };
+  // 合并前固定备份存完以后补上报告的备份状态(R38):库里那份用 reportPatch,正显示的这一份同时改内存里的(状态没变就不 set)
+  const settleImportBackup = (rid, reason, status, id) => {
+    const backup = { reason, status, id: status === "ok" ? id : null };
+    reportPatch(rid, { backup }).then(refreshImportReports);
+    const cur = importReportRef.current;
+    if (!cur || cur.rid !== rid || (cur.backup && cur.backup.status === backup.status && cur.backup.id === backup.id)) return;
+    importReportRef.current = { ...cur, backup };
+    setImportReport(r => (r && r.rid === rid) ? { ...r, backup } : r);
+  };
+  const closeImportReport = () => {
+    const cur = importReportRef.current;
+    importReportRef.current = null;
+    setImportReport(null);
+    if (cur && cur.rid) reportPatch(cur.rid, { dismissed: true }).then(refreshImportReports);
+  };
+  // 覆盖对比里「这台设备(…)」的名字:D 线的设备名(effectiveDeviceName;D 合并前是空壳 → 不写括号)
+  const importDeviceName = () => {
+    try {
+      const nav = typeof navigator !== "undefined" ? navigator : {};
+      let mm = false;
+      try { mm = !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches); } catch (e) {}
+      const env = deviceEnvOf({ ua: nav.userAgent, platform: nav.platform, maxTouchPoints: nav.maxTouchPoints, navStandalone: nav.standalone, mmStandalone: mm });
+      return effectiveDeviceName(deviceInfo, env, nav.userAgent) || "";
+    } catch (e) { return ""; }
+  };
   // ─── 第 6 批第 0 步:App 里的空壳状态(plan 裁决 16)。各线新加的监听各写在自己的 effect 里,不改已有的 flush / 多窗口监听 ───
   const [purchaseState, setPurchaseState] = useState(() => purchaseStateLoad(today));   // PB:本机采购状态 korora_purchase_v1(第 0 步只读、读出来是空状态)
   const orderReminders = [];                                                           // PB:「今日」页截单提醒(purchaseReminders 的结果)
@@ -31302,6 +31990,67 @@ function App() {
     return null; // 校验通过
   };
 
+  // 第 6 批 I 线:合并导入先看预览(spec_merge_plan R24 到 R26),确认回调的先后照 R10。选文件和「改用合并导入」都走这里
+  const openMergePreview = (d, fileName) => {
+    const it = _impTxt(lang);
+    const cur0 = { ...(dataRef.current || {}), printSettings, appSettings };   // 预览和勾选框重算都用打开时这一份(R26)
+    const prepItemsN = Object.keys(prepStock.items).length;
+    const info = importFileInfo(d, fileName);
+    const sel = { skipDeleted: true };   // 「这次不加回来」那个勾,默认勾上(待看 9 的 A)
+    // 预览只看分组和名字,生成的 id 用不上:给一个不碰 Math.random 的计数器(确认时照旧用今天的 genId,随机数序列和以前一样)
+    let pvN = 0;
+    const pvGen = { genId: (prefix) => prefix + "preview_" + (++pvN), genRecipeId: () => -(++pvN) };
+    const planOf = (base, skip, extra) => planMergeImport(base, d, { lang, nowIso: new Date().toISOString(), prepItemsN, binIdx: _binIdx, skipDeleted: skip, ...pvGen, ...(extra || {}) });
+    const rowsOf = (p, skip) => mergePreviewView(p, info, lang, { now: Date.now(), skipDeleted: skip });
+    let rows0;
+    try { rows0 = rowsOf(planOf(cur0, true), true); }
+    catch (err) {
+      // R12:文件或本机的厂家 / 材料 / 本店原料 / 老价格表里有空条目 → 预览时就拒绝,不弹框、什么都不写(以前点确定后在状态更新里抛错,整个 App 白屏)
+      showToast(it.mergeFail + (err && err.message ? err.message : String(err)));
+      return;
+    }
+    const onToggle = (checked) => { sel.skipDeleted = !!checked; try { return rowsOf(planOf(cur0, sel.skipDeleted), sel.skipDeleted); } catch (e2) { return null; } };
+    confirmDialog(it.mergeMsg, () => {
+      if (staleRef.current) { showToast(it.stale); return; }   // R10 第 1 步
+      // 2026-09-29 体检第 2 批:先用「点确定那一刻」的数据(dataRef)算好要加的条目和计数,再 setX;结果留在数据页上。
+      // 第 6 批第 0 步:计算整段抽成模块顶层的 planMergeImport(纯函数,预览和执行用同一套),写回走 applyMergePlan;
+      // 打印设置 / appSettings / 备货账本样数用这个回调闭包里的值(和以前一样);别处在这之后又改过某张表时,applyMergePlan 照以前的写法兜底
+      const base = { ...(dataRef.current || {}), printSettings, appSettings };
+      const nowIso = new Date().toISOString();
+      const genId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
+      let plan;
+      try {
+        plan = planOf(base, sel.skipDeleted, { nowIso, genId, genRecipeId: () => Date.now() + Math.floor(Math.random() * 1000) });
+      } catch (err) {
+        showToast(it.mergeFail + (err && err.message ? err.message : String(err)));
+        return;
+      }
+      // R10 第 3 步:合并前存一份固定备份(原因 merge),不 await —— 它读存档那一段是同步的,存的是合并前的内容;存不上不再问,结果卡写一句
+      const out = {};
+      const idbOk = typeof indexedDB !== "undefined";
+      const pinP = pinBackupNow("merge", out);
+      applyMergePlan(plan, base, {
+        cats: setCats, components: setComponents, recipes: setRecipes, creations: setCreations, knowledge: setKnowledge,
+        brands: setBrands, materials: setMaterials, shopMaterials: setShopMaterials, products: setProducts,
+        salesLog: setSalesLog, productionLog: setProductionLog, suppliers: setSuppliers, productFamilies: setProductFamilies,
+        customCompCats: setCustomCompCats, printSettings: setPrintSettings,
+      }, d, { nowIso, genId });
+      // 报告:提示条给一句话,完整结果(含因同名 / 同编号跳过的条目)留在数据页上(R40;库用不了时备份必然没存上,当场就写 failed,不再异步改)
+      showToast(plan.toast, { ms: 8000 });
+      const rep = importReportOf({ kind: "merge", fileName, at: new Date().toISOString(), lang, lines: plan.lines, skipped: plan.skipped, notes: plan.notes,
+        backup: { reason: "merge", status: idbOk ? "pending" : "failed", id: null } });
+      showImportReport(rep);
+      Promise.resolve(pinP).then((okp) => settleImportBackup(rep.rid, "merge", okp ? (out.id !== undefined ? "ok" : "none") : "failed", out.id),
+        () => settleImportBackup(rep.rid, "merge", "failed", null));
+      // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(报告行不动)
+      offerKnowledgeRepairs({ recipes: base.recipes || [], components: base.components || [], creations: base.creations || [] },
+        { recipes: [...(base.recipes || []), ...plan.added.recipes], components: [...(base.components || []), ...plan.added.components], creations: [...(base.creations || []), ...plan.added.creations] }, null);
+    }, {
+      title: it.mergeTitle(fileName), kicker: it.mergeKicker, confirmText: it.mergeOk, danger: false, wide: true,
+      body: <MergePreviewBody rows={rows0} lang={lang} onToggleSkipDeleted={onToggle} />,
+    });
+  };
+
   // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批):IMPORT_ENTITY_LABELS 第 6 批第 0 步挪到 import-preview 段(从 IMPORT_KINDS 派生,字不变)
   const importData = (e) => {
     const f = e.target.files[0];
@@ -31316,6 +32065,8 @@ function App() {
           showToast((lang === "zh" ? "⚠️ 导入失败:" : "⚠️ インポート失敗:") + err);
           return;
         }
+        // 第 6 批 I 线(spec_merge_plan R46):别的窗口改过、这个窗口已经停止保存 → 不弹框(导进来的东西刷新就没了)
+        if (staleRef.current) { showToast(_impTxt(lang).stale); return; }
         // 2026-09-29 体检第 2 批:以前确认框只写「导入后将覆盖当前数据」,局部包误点这里会把材料库等整块清空。
         // 现在逐类列出「现有 → 文件 / 清空」,文件里缺的类别直接建议改用合并导入;覆盖前自动存一份固定备份
         const cur = dataRef.current || {};
@@ -31368,20 +32119,35 @@ function App() {
           if (d.customCompCats) setCustomCompCats(d.customCompCats);
           if (d.productFamilies) setProductFamilies(d.productFamilies);
           showToast(lang === "zh" ? "✓ 数据导入成功" : "✓ インポート完了", { ms: 5000 });
-          setImportReport({ kind: "overwrite", fileName: f.name, at: new Date(), lines: [...emptied, ...replaced, ...prepLines], skipped: [] });
         };
+        // 第 6 批 I 线:结果卡持久(R40 / R48);覆盖前的固定备份是 await 的,所以状态当场就知道
+        const finishOverwrite = (status, id) => showImportReport(importReportOf({ kind: "overwrite", fileName: f.name, at: new Date().toISOString(), lang,
+          lines: [...emptied, ...replaced, ...prepLines], skipped: [], notes: [], backup: { reason: "import", status, id: status === "ok" ? id : null } }));
+        // 对比块(R32 / R34):文件比本机旧、会丢的条目、本机改得更晚的、录入包 / IP 包 / 新版本文件;有风险时确认钮「仍然覆盖」、另给「改用合并导入」(R33)
+        const it = _impTxt(lang);
+        const info = importFileInfo(d, f.name);
+        let localSavedAt = null;
+        try { localSavedAt = localSavedAtOf(localStorage.getItem(STORAGE_KEY)); } catch (e2) {}
+        const oplan = overwritePlan({ ...cur, printSettings, appSettings }, d, { localSavedAt, lang });
+        const owRows = overwritePreviewView(oplan, info, lang, { fileName: f.name, deviceName: importDeviceName(), localSavedAt, now: Date.now() });
         confirmDialog(msg, async () => {
-          if (await pinBackupNow("import")) applyOverwrite();
+          if (staleRef.current) { showToast(it.stale); return; }
+          const out = {};
+          if (await pinBackupNow("import", out)) { applyOverwrite(); finishOverwrite(out.id !== undefined ? "ok" : "none", out.id); }
           else confirmDialog(
             lang === "zh" ? "覆盖前的固定备份没存上(浏览器的数据库用不了)。仍然覆盖吗?建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できませんでした。それでも上書きしますか?",
-            applyOverwrite,
+            () => { applyOverwrite(); finishOverwrite("failed", null); },
             { title: lang === "zh" ? "备份没存上" : "バックアップ失敗", confirmText: lang === "zh" ? "仍然覆盖" : "上書きする" }
           );
         }, {
           title: lang === "zh" ? (partial ? "覆盖导入会清空数据" : "覆盖导入") : (partial ? "上書きでデータが消えます" : "上書きインポート"),
           kicker: lang === "zh" ? "导入数据(覆盖)" : "上書きインポート",
           refs: [...emptied, ...replaced, ...prepLines],
-          confirmText: lang === "zh" ? (partial ? "仍然覆盖" : "覆盖导入") : "上書きする",
+          confirmText: oplan.risky ? it.owRisky : it.owOk,
+          wide: true,
+          body: <OverwritePreviewBody rows={owRows} lang={lang} />,
+          // R47:「改用合并导入」关掉这个框,拿同一个文件直接出合并预览(不重选、不重新校验);录入包 / 只有几类 / IP 包时是蓝色主按钮(待看 29)
+          extra: oplan.risky ? { label: it.toMerge, primary: ["pkg", "partial", "ip"].includes(info.kind), onClick: () => { setConfirmState(null); openMergePreview(d, f.name); } } : undefined,
         });
       } catch (err) {
         showToast((lang === "zh" ? "⚠️ 导入失败:JSON 格式错 - " : "⚠️ JSON エラー:") + (err.message || err));
@@ -31406,39 +32172,9 @@ function App() {
           showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + err);
           return;
         }
-
-        confirmDialog(
-          "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n销售 / 生产记录同一条以修改时间晚的为准。\n\n确认继续？",
-          () => {
-            // 2026-09-29 体检第 2 批:先用「点确定那一刻」的数据(dataRef)算好要加的条目和计数,再 setX;结果留在数据页上。
-            // 第 6 批第 0 步:计算整段抽成模块顶层的 planMergeImport(纯函数,预览和执行以后用同一套),写回走 applyMergePlan;行为和以前一模一样:
-            // 哪张表调不调 setX、追加 / 合并的结果、报告行 lines / skipped、提示条的字都没变(merge_plan_equiv 对 pre_b6 逐例比)。
-            // 打印设置 / appSettings / 备货账本样数用这个回调闭包里的值(和以前一样);别处在这之后又改过某张表时,applyMergePlan 照以前的写法兜底
-            const base = { ...(dataRef.current || {}), printSettings, appSettings };
-            const nowIso = new Date().toISOString();
-            const genId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
-            let plan;
-            try {
-              plan = planMergeImport(base, d, { lang, nowIso, genId, genRecipeId: () => Date.now() + Math.floor(Math.random() * 1000), prepItemsN: Object.keys(prepStock.items).length });
-            } catch (err) {
-              // spec_merge_plan R12:文件或本机的厂家 / 材料 / 本店原料 / 老价格表里有空条目 → 整次合并拒绝,什么都不写(以前在状态更新里抛错,整个 App 白屏)
-              showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + (err && err.message ? err.message : String(err)));
-              return;
-            }
-            applyMergePlan(plan, base, {
-              cats: setCats, components: setComponents, recipes: setRecipes, creations: setCreations, knowledge: setKnowledge,
-              brands: setBrands, materials: setMaterials, shopMaterials: setShopMaterials, products: setProducts,
-              salesLog: setSalesLog, productionLog: setProductionLog, suppliers: setSuppliers, productFamilies: setProductFamilies,
-              customCompCats: setCustomCompCats, printSettings: setPrintSettings,
-            }, d, { nowIso, genId });
-            // 报告:提示条给一句话,完整结果(含因同名 / 同编号跳过的条目)留在数据页上
-            showToast(plan.toast, { ms: 8000 });
-            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines: plan.lines, skipped: plan.skipped });
-            // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(报告行不动)
-            offerKnowledgeRepairs({ recipes: base.recipes || [], components: base.components || [], creations: base.creations || [] },
-              { recipes: [...(base.recipes || []), ...plan.added.recipes], components: [...(base.components || []), ...plan.added.components], creations: [...(base.creations || []), ...plan.added.creations] }, null);
-          }
-        );
+        // 第 6 批 I 线(R46):停止保存的窗口不让导入
+        if (staleRef.current) { showToast(_impTxt(lang).stale); return; }
+        openMergePreview(d, f.name);
       } catch (err) {
         showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + (err.message || "JSON 格式错"));
       }
@@ -33173,7 +33909,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 {exchangeCards.map(card)}
                 {/* 2026-09-29 体检第 2 批:导入结果留在页面上(以前只有 2.5 秒的提示条,而且合并导入的计数永远是 0) */}
                 {/* 第 6 批第 0 步:结果卡抽成 ImportReportCard(DOM 一样;I 线加持久、notes、备份行、更早的几次) */}
-                <ImportReportCard report={importReport} lang={lang} onClose={() => setImportReport(null)} />
+                <ImportReportCard report={importReport} lang={lang} onClose={closeImportReport} history={importReports}
+                  onShow={(rep) => { importReportRef.current = rep; setImportReport(rep); }}
+                  onRevert={(snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note: _impTxt(lang).revertNote })} />
                 {secTitle(lang === "zh" ? "维护工具" : "メンテナンス")}
                 {maintainCards.map(card)}
               </>
