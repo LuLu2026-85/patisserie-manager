@@ -17721,10 +17721,175 @@ const knowledgeKanaRatio = (text) => 0;                     // 空壳:中文里�
 const knowledgeReadMinutes = (view, lang) => 0;             // 空壳:中文每分钟 450 字、日文 500 字,至少 1 分钟
 const knowledgeBlocks = (text) => [];                       // 空壳:正文版式(5 种写法),拼回去 = 原文
 const knowledgeBlocksText = (blocks) => "";                 // 空壳:knowledgeBlocks 拼回去
-const staffReadingLinks = (k, ctx) => [];                   // 空壳(KB):和这一条有关的、只通往厨房视图的关联
-const knowledgePrintData = (args) => null;                  // 空壳(KB):打印确认那一刻按 ids 从最新的 knowledge 重取、去好钱
-const knowledgePrintPages = (data) => 0;                    // 空壳(KB):每页约 1,100 字估
-const knowledgeMoneyCount = (entries, lang, pointsOnly = false) => 0;   // 空壳(KB):R-M12
+// ── KB(员工阅读 / 知识打印)的四个函数 + KB 的字(design_knowledge-training §1.4 到 §1.7、spec_ktrain R-M12 / R-M13)──
+// 阅读页 / 打印的「和它有关的」:k.relatedRecipes 按四档名字规则认(makeKnowledgeLinkResolver,规则一个字不改)。
+//   唯一命中 → { name, kind, id, item }(员工点了只开那一样的厨房视图,不通往老板详情页);同名 / 找不到 → { name, kind: null, id: null, item: null, ambiguous }(只是灰字)。
+//   name 是写在知识里的原名去钱以后(R-M13:stripMoneyClauses;去完是空的:唯一命中的照样给按钮,其余不要);同一个目标只留第一次、同一个名字的灰字只留一次。
+//   ctx = { resolve?, split?, recipes?, components?, creations?, keepMoney? }:没给 resolve 时拿三张表现建(老板预览直接传三张表也行);keepMoney 只给老板打印「保留价格」用
+const staffReadingLinks = (k, ctx) => {
+  if (!k || typeof k !== "object" || !Array.isArray(k.relatedRecipes)) return [];
+  const c = ctx || {};
+  const resolve = typeof c.resolve === "function" ? c.resolve : makeKnowledgeLinkResolver(c.recipes, c.components, c.creations);
+  const split = typeof c.split === "function" ? c.split : splitLinkNames;
+  const nameOf = (s) => (c.keepMoney ? String(s) : stripMoneyClauses(s).text).trim();
+  const out = [], seenT = new Set(), seenN = new Set();
+  k.relatedRecipes.flatMap(split).forEach(raw => {
+    const name = nameOf(raw);
+    const m = resolve(raw);
+    if (m && !m.ambiguous && m.item) {
+      const key = m.type + "\u0000" + String(m.item.id);
+      if (seenT.has(key)) return;
+      seenT.add(key);
+      out.push({ name, kind: m.type, id: m.item.id, item: m.item });
+      return;
+    }
+    if (!name || seenN.has(name)) return;
+    seenN.add(name);
+    out.push({ name, kind: null, id: null, item: null, ambiguous: !!(m && m.ambiguous) });
+  });
+  return out;
+};
+// R-M12:打印弹窗「这一份去掉 {n} 处」。entries 不是数组 → 0;不是对象的跳过(数组算对象、贡献 0);lang:"zh" / "ja" 各一种,其余(双语)两种都数;
+// pointsOnly 按真假值读:只印要点时只数标题和要点(正文不上纸)
+const knowledgeMoneyCount = (entries, lang, pointsOnly = false) => {
+  if (!Array.isArray(entries)) return 0;
+  const langs = lang === "zh" ? ["zh"] : lang === "ja" ? ["ja"] : ["zh", "ja"];
+  let n = 0;
+  for (const k of entries) {
+    if (!k || typeof k !== "object") continue;
+    for (const L of langs) {
+      n += pointsOnly
+        ? stripMoneyClauses(pickLang(k, "title", L)).n + stripMoneyClauses(pickLang(k, "staffPoints", L)).n
+        : knowledgeStaffView(k, L).n;
+    }
+  }
+  return n;
+};
+// 知识打印的数据(弹窗点「打印预览」那一刻算好、交给 KnowledgePrintTemplate;什么都不记、不写回)。
+// args = { entries(按这一本的顺序,已经按 ids 从最新的 knowledge 取好), mode: "one" | "pack", lang: "zh" | "ja" | "both", cover, newPage, signoff, pointsOnly,
+//          keepMoney(员工时一律 false), staff, today("YYYY-MM-DD"), ctx(给 staffReadingLinks:resolve / split 或三张表) }
+// → { mode, lang, cover, newPage, signoff, pointsOnly, keepMoney, printedAt, cut, items: [{ no, id, title: { zh, ja }, points: { zh, ja }, body: { zh, ja }, related: [{ name, kind, id, item }], images, updated }] }
+//   文字:没勾保留价格 → knowledgeStaffView(去钱;日文空着回退中文,同员工阅读页);勾了 → 原文。双语时某一种语言原文空着,那一格是 ""(不重复印另一种)。
+//   编号 no = 这一本里的顺序(不是对象的跳过,不占号);images = 参考图张数(只印一句);updated = updatedAt 的本地日期(读不出 → "")
+const knowledgePrintData = (args) => {
+  const a = args || {};
+  const staff = !!a.staff;
+  const keepMoney = !staff && !!a.keepMoney;
+  const lang = a.lang === "ja" ? "ja" : a.lang === "zh" ? "zh" : "both";
+  const mode = a.mode === "one" ? "one" : "pack";
+  const pointsOnly = !!a.pointsOnly;
+  const has = (k, base, L) => { const v = k[base + (L === "zh" ? "Zh" : "Ja")]; return typeof v === "string" && v.trim() !== ""; };
+  const viewOf = (k, L) => {
+    if (!keepMoney) return knowledgeStaffView(k, L);
+    const t = pickLang(k, "title", L);
+    return { title: String(t).trim() === "" ? "—" : String(t), points: String(pickLang(k, "staffPoints", L)), body: String(pickLang(k, "content", L)) };
+  };
+  const linkCtx = { ...(a.ctx || {}), keepMoney };
+  const entries = (Array.isArray(a.entries) ? a.entries : []).filter(k => k && typeof k === "object" && !Array.isArray(k));
+  const items = entries.map((k, i) => {
+    const title = { zh: "", ja: "" }, points = { zh: "", ja: "" }, body = { zh: "", ja: "" };
+    if (lang !== "both") {
+      const v = viewOf(k, lang);
+      title[lang] = v.title; points[lang] = v.points; body[lang] = v.body;
+    } else {
+      const vz = viewOf(k, "zh"), vj = viewOf(k, "ja");
+      [["title", "title"], ["staffPoints", "points"], ["content", "body"]].forEach(([base, f]) => {
+        const out = f === "title" ? title : f === "points" ? points : body;
+        const zh = has(k, base, "zh"), ja = has(k, base, "ja");
+        if (zh) out.zh = vz[f];
+        if (ja) out.ja = vj[f];
+      });
+      if (!title.zh && !title.ja) title.zh = "—";
+    }
+    const t = Date.parse(k.updatedAt || "");
+    return {
+      no: i + 1, id: k.id, title, points, body,
+      related: staffReadingLinks(k, linkCtx),
+      images: Array.isArray(k.imageUrls) ? k.imageUrls.filter(Boolean).length : 0,
+      updated: Number.isFinite(t) ? localDateStr(new Date(t)) : "",
+    };
+  });
+  return {
+    mode, lang, cover: mode === "pack" && !!a.cover, newPage: !!a.newPage, signoff: !!a.signoff, pointsOnly, keepMoney,
+    printedAt: typeof a.today === "string" && a.today ? a.today : localDateStr(),
+    cut: keepMoney ? 0 : knowledgeMoneyCount(entries, lang, pointsOnly),
+    items,
+  };
+};
+// 「大约 N 页」:按每页约 1,100 字估(决定 71,只给弹窗那一句)。每条 = 标题 + 要点 + 正文 + 相关产品那一行的字数(双语两种都算);
+// 每条另起一页时每条至少 1 页;只印要点时整份连着排(要点小抄);封面和目录、签字表各算 1 页。没有一条 → 0
+const KPRINT_PAGE_CHARS = 1100;
+const knowledgePrintPages = (data) => {
+  if (!data || typeof data !== "object" || !Array.isArray(data.items) || !data.items.length) return 0;
+  const L = data.lang === "zh" ? ["zh"] : data.lang === "ja" ? ["ja"] : ["zh", "ja"];
+  const s = (o, l) => String((o && o[l]) || "").length;
+  const charsOf = (it) => {
+    let n = 0;
+    L.forEach(l => {
+      n += s(it.title, l) + s(it.points, l);
+      if (!data.pointsOnly) n += s(it.body, l);
+    });
+    if (data.pointsOnly) return n + 40;   // 抬头 + 要点框的空白(没写要点的那一句也差不多)
+    return n + 60 + (Array.isArray(it.related) ? it.related.reduce((a, r) => a + String(r.name || "").length + 3, 0) : 0);
+  };
+  let pages;
+  if (data.pointsOnly || !data.newPage) pages = Math.max(1, Math.ceil(data.items.reduce((a, it) => a + charsOf(it), 0) / KPRINT_PAGE_CHARS));
+  else pages = data.items.reduce((a, it) => a + Math.max(1, Math.ceil(charsOf(it) / KPRINT_PAGE_CHARS)), 0);
+  return pages + (data.cover ? 1 : 0) + (data.signoff ? 1 : 0);
+};
+// KB 的字(KREAD_TXT 的员工阅读 / 打印部分;中日键一一对应。往已有的表里加、不新建表,加前 grep 防同名键,KA 的键在上面那张表里)
+Object.assign(KREAD_TXT.zh, {
+  readRow: (n) => `📚 员工必读 · ${n} 条`, readRowSub: "开工前要读的要点",
+  kitchenRead: "📚 先读:",
+  listTitle: (n) => `📚 员工必读(${n} 条)`, listHint: "按顺序读;读完在打印出来的签字表上签名。",
+  backKitchen: "← 回厨房视图", back: "← 返回",
+  printAll: "🖨 打印全部", printOne: "🖨 打印这一条",
+  kicker: (i, n) => `员工必读 · 第 ${i} 条 / 共 ${n} 条`, minutes: (m) => `约 ${m} 分钟`,
+  points: "要点", related: "和它有关的:", prev: "← 上一条", next: "下一条 →",
+  emptyTitle: "还没有员工必读", emptyHint: "老板在知识库里把要读的标成「员工必读」后,这里就有了",
+  enterHint: (n) => `厨房视图页顶上还有「员工必读」(${n} 条,只能看)。`,
+  imgAlt: (i) => `参考图 ${i}`,
+  pmTitle: "🖨 打印知识", pmContent: "内容",
+  pmPackHead: (n) => `员工必读 ${n} 条(按知识库里排的顺序),勾掉的这次不印:`,
+  pmOne: (t) => `这一条:「${t}」`, pmGone: "这条知识已经不在了",
+  pmAdd: "+ 再加几条(只这一次)", pmAddSearch: "🔍 搜标题", pmAddNone: "没有对得上的标题", pmAdded: "这次加的",
+  pmLang: "🌐 打印语言", pmLangs: { zh: "仅中文", ja: "仅日文", both: "中日双语" },
+  pmWhat: "📝 印什么", pmCover: "封面和目录", pmNewPage: "每条另起一页", pmSign: "最后一页:阅读签字表",
+  pmPointsOnly: (n) => `只印要点(写了要点的 ${n} 条;没写的印一句「见完整版」)`,
+  pmMoney: (n) => (n > 0 ? `💰 价格不会打印:这一份去掉 ${n} 处带价格的文字。` : "💰 价格不会打印:这一份里没认出带价格的文字。"),
+  pmKeepMoney: "保留价格(只给自己存档,下次打开不记得)", pmMoneyKept: "这一份会印出价格,只给自己存档,别交给员工。",
+  pmPages: (n) => `大约 ${n} 页(按字数估)`, pmNone: "至少勾一条才能打印", pmCancel: "取消", pmGo: "🖨 打印预览",
+  tCover: "员工必读 · 培训资料", tCoverMeta: (n, d) => `共 ${n} 条 · 打印于 ${d}`, tToc: "目录", tUpdated: (d) => `更新于 ${d}`,
+  tPoints: "要点", tRelated: "相关产品:", tImages: (n) => `(原文有 ${n} 张参考图,在 app 里看)`, tNoPoints: "(这条没写要点,见完整版)",
+  tFooter: (b, d) => `${b} · 店内培训资料 · 打印于 ${d}`,
+  signTitle: "阅读确认", signHint: "读完请填一行。看不懂的地方写在「想问的」里,下次一起讲。", signCols: ["日期", "姓名", "读完的编号", "想问的", "签名"],
+});
+Object.assign(KREAD_TXT.ja, {
+  readRow: (n) => `📚 スタッフ必読 · ${n} 件`, readRowSub: "作業前に読んでおくこと",
+  kitchenRead: "📚 先に読む:",
+  listTitle: (n) => `📚 スタッフ必読(${n} 件)`, listHint: "順番に読んでください。読み終えたら印刷した確認表にサインを。",
+  backKitchen: "← キッチンへ", back: "← 戻る",
+  printAll: "🖨 まとめて印刷", printOne: "🖨 これを印刷",
+  kicker: (i, n) => `スタッフ必読 · ${i} / ${n}`, minutes: (m) => `約 ${m} 分`,
+  points: "ポイント", related: "関連:", prev: "← 前へ", next: "次へ →",
+  emptyTitle: "スタッフ必読はまだありません", emptyHint: "ナレッジで「スタッフ必読」に設定すると表示されます",
+  enterHint: (n) => `キッチンページ上部に「スタッフ必読」(${n} 件・閲覧のみ)があります。`,
+  imgAlt: (i) => `参考画像 ${i}`,
+  pmTitle: "🖨 ナレッジを印刷", pmContent: "内容",
+  pmPackHead: (n) => `スタッフ必読 ${n} 件(ナレッジの並び順)。チェックを外したものは今回印刷しません:`,
+  pmOne: (t) => `この 1 件:「${t}」`, pmGone: "このナレッジはもうありません",
+  pmAdd: "+ ほかのナレッジも加える(今回だけ)", pmAddSearch: "🔍 タイトルで検索", pmAddNone: "一致するタイトルがありません", pmAdded: "今回追加",
+  pmLang: "🌐 印刷言語", pmLangs: { zh: "中国語のみ", ja: "日本語のみ", both: "中日併記" },
+  pmWhat: "📝 印刷する内容", pmCover: "表紙と目次", pmNewPage: "1 件ごとに改ページ", pmSign: "最終ページ:読了サイン表",
+  pmPointsOnly: (n) => `ポイントだけ印刷(ポイントあり ${n} 件・未記入は「完全版を参照」)`,
+  pmMoney: (n) => (n > 0 ? `💰 価格は印刷しません:今回 ${n} か所を除きます。` : "💰 価格は印刷しません:今回は価格を含む文が見つかりませんでした。"),
+  pmKeepMoney: "価格を残す(自分の保存用・記憶しません)", pmMoneyKept: "今回は価格も印刷されます。自分の保存用です。スタッフには渡さないでください。",
+  pmPages: (n) => `約 ${n} ページ(文字数から概算)`, pmNone: "1 件以上チェックしてください", pmCancel: "キャンセル", pmGo: "🖨 印刷プレビュー",
+  tCover: "スタッフ必読 · 研修資料", tCoverMeta: (n, d) => `全 ${n} 件 · 印刷 ${d}`, tToc: "目次", tUpdated: (d) => `更新 ${d}`,
+  tPoints: "ポイント", tRelated: "関連:", tImages: (n) => `(参考画像 ${n} 枚はアプリで)`, tNoPoints: "(ポイント未記入・完全版を参照)",
+  tFooter: (b, d) => `${b} · 店内研修資料 · 印刷 ${d}`,
+  signTitle: "読了確認", signHint: "読み終えたら 1 行記入。わからなかった点は「質問」欄へ。", signCols: ["日付", "名前", "読んだ番号", "質問", "サイン"],
+});
 const mergeKnowledgeStaffMarks = (local, pairs) => ({ list: local, n: 0 });   // 空壳:R-K14(planMergeImport 知识那一步已经调它)
 // R-K16:IP 分发包剥标记和两个时间戳;一个都没有 → 原对象(IP 包 JSON 逐字节不变)
 const stripPrivateKnowledgeFields = (k) => {
@@ -17742,12 +17907,397 @@ function KnowledgeBody({ text, variant = "screen", lang }) {
 // 下面都是空壳(先 return null),props 见 .claude/batch6/api.md
 function StaffPointsFields({ form, setForm, lang }) { return null; }                     // KA:知识编辑页「给员工的要点」
 function KnowledgeStaffPreview({ k, lang, isMarked, onEdit, ctx }) { return null; }       // KA:详情页「👁 员工看到的」
-function StaffKnowledgeBodyBlock({ view, lang, related, onOpenItem, images }) { return null; }   // KB:员工阅读页 / 老板预览的正文块
-function StaffReadingOverlay({ lang, list, open, onClose, onOpen, onOpenItem, onPrint, recipes, components, creations }) { return null; }   // KB
-function KitchenReadingLinks({ kind, id, reading, lang }) { return null; }               // KB:厨房视图「📚 先读」
-function KnowledgePrintModal({ src, knowledge, lang, staff, onClose, onConfirm, recipes, components, creations }) { return null; }   // KB
-function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle }) { return null; }   // KB
-function ReadSignTable({ lang }) { return null; }                                         // KB:阅读签字表
+// ─── KB:员工阅读(员工外壳)和知识打印(老板 / 员工)的组件(design_knowledge-training §1.4 到 §1.6)───
+// 给员工 / 打印的知识文字一律先过 knowledgeStaffView(里面是 stripMoneyClauses,spec_ktrain R-M13);别给员工复用 KnowledgeDetail(第 3 批规矩:老板详情页有标签、编辑、关联失效说明)
+const _kbL = (lang) => (lang === "ja" ? "ja" : "zh");
+// 员工阅读页 / 老板「👁」预览共用的正文块。view = knowledgeStaffView(k, lang)(已经去好钱);related = staffReadingLinks(k, ctx);
+// onOpenItem(kind, id) 只开那一样的厨房视图(没给 → 唯一命中的也只是字);images = 条目的 imageUrls(只显示缩略图,不包链接 —— 员工 iPad 是主屏幕 app,
+// 跳出去回不来;说明文字去钱)。不显示标签、编辑、关联失效的说明;正文字 17 px、行高 1.8,标题 26 px
+function StaffKnowledgeBodyBlock({ view, lang, related, onOpenItem, images }) {
+  if (!view || typeof view !== "object") return null;
+  const L = _kbL(lang);
+  const X = KREAD_TXT[L];
+  const points = typeof view.points === "string" && view.points.trim() ? view.points : "";
+  const rel = Array.isArray(related) ? related.filter(r => r && (r.item || r.name)) : [];
+  const imgs = Array.isArray(images) ? images.filter(Boolean) : [];
+  const relName = (r) => (r.item ? (prodName(r.item, L) || r.name) : r.name);
+  return (
+    <div data-k6-block="1" style={{ minWidth: 0, color: T.ink, fontFamily: T.fontSans }}>
+      <div data-k6-title="1" style={{ fontSize: 26, lineHeight: 1.3, fontWeight: 500, overflowWrap: "anywhere" }}>{view.title}</div>
+      {points && (
+        <div data-k6-points="1" style={{ marginTop: 16, padding: "12px 16px", border: `2px solid ${T.ink}`, borderRadius: T.radius }}>
+          <div style={{ fontSize: 13, color: T.subtle, letterSpacing: "0.12em", marginBottom: 4 }}>{X.points}</div>
+          <div style={{ fontSize: 17, lineHeight: 1.8, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{points}</div>
+        </div>
+      )}
+      {typeof view.body === "string" && view.body.trim() !== "" && (
+        <div data-k6-body="1" style={{ marginTop: 18, fontSize: 17, lineHeight: 1.8, minWidth: 0, overflowWrap: "anywhere" }}>
+          <KnowledgeBody text={view.body} variant="staff" lang={L} />
+        </div>
+      )}
+      {imgs.length > 0 && (
+        <div data-k6-images="1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10, marginTop: 18 }}>
+          {imgs.map((img, i) => {
+            const cap = img && typeof img === "object" ? stripMoneyClauses(img.caption).text.trim() : "";
+            return (
+              <div key={i} style={{ minWidth: 0 }}>
+                <ImageThumb img={img} alt={cap || X.imgAlt(i + 1)} style={{ width: "100%", aspectRatio: "1", objectFit: "cover", border: `1px solid ${T.line}`, display: "block" }} onError={(e) => { e.target.style.display = "none"; }} />
+                {cap && <div style={{ fontSize: 13, color: T.body, marginTop: 4, overflowWrap: "anywhere" }}>{cap}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {rel.length > 0 && (
+        <div data-k6-related="1" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 22, paddingTop: 14, borderTop: `1px solid ${T.line}` }}>
+          <span style={{ fontSize: 15, color: T.subtle }}>{X.related}</span>
+          {rel.map((r, i) => (r.kind && r.item && onOpenItem
+            ? <button key={i} type="button" className="k-tap" data-k6-open={`${r.kind}:${r.id}`} onClick={() => onOpenItem(r.kind, r.id)}
+                style={{ minHeight: 44, maxWidth: "100%", padding: "6px 14px", fontSize: 16, lineHeight: 1.4, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: "pointer", fontFamily: T.fontSans, textAlign: "left", overflowWrap: "anywhere" }}>
+                {relName(r)} →
+              </button>
+            : <span key={i} style={{ fontSize: 15, color: T.subtle, padding: "4px 2px", overflowWrap: "anywhere" }}>{relName(r)}</span>))}
+        </div>
+      )}
+    </div>
+  );
+}
+// 员工必读的全屏遮罩(员工外壳「厨房视图」页顶上那一行 / KitchenView「📚 先读」打开)。open = { id: null } 列表 / { id } 阅读页(id 不在列表里 → 列表);
+// onOpen(id | null) 换页;onOpenItem(kind, id) 关掉遮罩开那一样的厨房视图;onPrint(src) 员工打印(src = { mode: "one" | "pack", ids })。
+// zIndex 用 T.z.drawer:提示条、打印设置弹窗、打印预览、退出员工模式的 PIN 框都在它上面。什么都不写
+function StaffReadingOverlay({ lang, list, open, onClose, onOpen, onOpenItem, onPrint, recipes, components, creations }) {
+  const L = _kbL(lang);
+  const X = KREAD_TXT[L];
+  const items = useMemo(() => (Array.isArray(list) ? list.filter(k => k && typeof k === "object") : []), [list]);
+  const views = useMemo(() => items.map(k => knowledgeStaffView(k, L)), [items, L]);
+  const linkCtx = useMemo(() => ({ resolve: makeKnowledgeLinkResolver(recipes, components, creations), split: splitLinkNames }), [recipes, components, creations]);
+  const id = open && open.id !== undefined && open.id !== null ? open.id : null;
+  const idx = id === null ? -1 : items.findIndex(k => String(k.id) === String(id));
+  const boxRef = useRef(null);
+  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = 0; }, [idx]);
+  const go = (i) => { if (i >= 0 && i < items.length && onOpen) onOpen(items[i].id); };
+  const bar = (left, right) => <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{left}{right}</div>;
+  let body;
+  if (idx < 0) {
+    body = (
+      <>
+        {bar(<Btn size="lg" onClick={onClose}>{X.backKitchen}</Btn>, onPrint && items.length ? <Btn size="lg" onClick={() => onPrint({ mode: "pack", ids: items.map(k => k.id) })}>{X.printAll}</Btn> : null)}
+        <div style={{ fontSize: 24, fontWeight: 500, marginTop: 20, overflowWrap: "anywhere" }}>{X.listTitle(items.length)}</div>
+        <div style={{ fontSize: 15, color: T.body, marginTop: 6, lineHeight: 1.6 }}>{X.listHint}</div>
+        {items.length === 0 ? <EmptyState variant="first" title={X.emptyTitle} hint={X.emptyHint} lang={L} /> : (
+          <div data-k6-readlist="1" style={{ marginTop: 14, borderTop: `1px solid ${T.ink}` }}>
+            {items.map((k, i) => {
+              const m = knowledgeReadMinutes(views[i], L);
+              return (
+                <button key={String(k.id)} type="button" data-k6-readitem={String(k.id)} onClick={() => go(i)} className="k-kitchen-row k-tap"
+                  style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", gap: 12, alignItems: "center", width: "100%", minHeight: 60, textAlign: "left", cursor: "pointer",
+                    padding: "10px 4px", border: "none", borderBottom: `1px solid ${T.lineFaint}`, background: "transparent", color: T.ink, fontFamily: T.fontSans }}>
+                  <span style={{ fontSize: 15, color: T.subtle, minWidth: 22, ...T.num }}>{i + 1}</span>
+                  <span style={{ fontSize: 18, fontWeight: 500, minWidth: 0, overflowWrap: "anywhere" }}>{views[i].title}</span>
+                  <span style={{ fontSize: 14, color: T.subtle, whiteSpace: "nowrap", ...T.num }}>{m > 0 ? `${X.minutes(m)} ` : ""}→</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
+  } else {
+    const k = items[idx], v = views[idx];
+    const m = knowledgeReadMinutes(v, L);
+    body = (
+      <>
+        {bar(<Btn size="lg" onClick={() => onOpen && onOpen(null)}>{X.back}</Btn>, onPrint ? <Btn size="lg" onClick={() => onPrint({ mode: "one", ids: [k.id] })}>{X.printOne}</Btn> : null)}
+        <div data-k6-kicker="1" style={{ fontSize: 14, color: T.subtle, letterSpacing: "0.06em", marginTop: 20, ...T.num }}>{X.kicker(idx + 1, items.length)}{m > 0 ? ` · ${X.minutes(m)}` : ""}</div>
+        <div style={{ marginTop: 8 }}>
+          <StaffKnowledgeBodyBlock view={v} lang={L} related={staffReadingLinks(k, linkCtx)} onOpenItem={onOpenItem} images={k.imageUrls} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: 28, paddingTop: 16, borderTop: `1px solid ${T.ink}` }}>
+          <Btn size="lg" disabled={idx === 0} onClick={() => go(idx - 1)}>{X.prev}</Btn>
+          <Btn size="lg" disabled={idx >= items.length - 1} onClick={() => go(idx + 1)}>{X.next}</Btn>
+        </div>
+      </>
+    );
+  }
+  return (
+    <div ref={boxRef} role="dialog" aria-modal="true" data-k6-reading={idx < 0 ? "list" : "item"}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, color: T.ink, overflowY: "auto", fontFamily: T.fontSans }}>
+      <div className="rc-container" style={{ paddingTop: 16, paddingBottom: 48 }}>{body}</div>
+    </div>
+  );
+}
+// KitchenView 名字(和 P 的厨房要点)后面一行「📚 先读:[…→]」:reading = ctx.reading = { links(kind, id) → 必读里和这一样有关的(knowledgeLinksTo 的规则), open(id) }。
+// 只有员工外壳在有必读时传它;没传 / 没有相关的 → null(老板的厨房视图、没有必读时 DOM 和以前一样)。按钮 ≥ 44 高,标题太长截成一行
+function KitchenReadingLinks({ kind, id, reading, lang }) {
+  if (!reading || typeof reading.links !== "function" || id === undefined || id === null) return null;
+  const list = (reading.links(kind, id) || []).filter(k => k && typeof k === "object");
+  if (!list.length) return null;
+  const L = _kbL(lang);
+  const X = KREAD_TXT[L];
+  return (
+    <div data-k6-kread="1" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 12, minWidth: 0 }}>
+      <span style={{ fontSize: 16, fontWeight: 500 }}>{X.kitchenRead}</span>
+      {list.map(k => (
+        <button key={String(k.id)} type="button" className="k-tap" data-k6-kreadbtn={String(k.id)} onClick={() => reading.open && reading.open(k.id)}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, minHeight: 44, maxWidth: "100%", minWidth: 0, padding: "0 14px", fontSize: 16, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: "pointer", fontFamily: T.fontSans, textAlign: "left" }}>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{knowledgeStaffView(k, L).title}</span>
+          <span style={{ flexShrink: 0 }}>→</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+// 知识的打印设置(App 的 printTarget.stage === "kopts",不进第 5 批 PrintModal、什么都不记)。src = { mode: "one" | "pack", ids }:
+//   pack 没给 ids → 全部员工必读(按排好的顺序);员工只列必读的、没有「再加几条」和「保留价格」(去钱不能关),也不显示任何带「价格」两个字的说明。
+//   onConfirm(data):data = knowledgePrintData(…),点的那一刻按 ids 从最新的 knowledge 重取、去好钱
+function KnowledgePrintModal({ src, knowledge, lang, staff, onClose, onConfirm, recipes, components, creations }) {
+  const ui = _kbL(lang);
+  const X = KREAD_TXT[ui];
+  const s = src || {};
+  const mode = s.mode === "one" ? "one" : "pack";
+  const all = useMemo(() => (Array.isArray(knowledge) ? knowledge.filter(k => k && typeof k === "object" && !Array.isArray(k)) : []), [knowledge]);
+  const findK = (id) => all.find(k => String(k.id) === String(id)) || null;
+  const [baseIds] = useState(() => {
+    const given = Array.isArray(s.ids) ? s.ids.filter(id => id !== undefined && id !== null) : [];
+    if (mode === "one") return given.slice(0, 1);
+    return given.length ? given : staffReadingList(all).map(k => k.id);
+  });
+  const [extra, setExtra] = useState([]);
+  const [off, setOff] = useState(() => new Set());
+  const [q, setQ] = useState("");
+  const [pLang, setPLang] = useState(ui);
+  const [opt, setOpt] = useState(() => ({ cover: mode === "pack", newPage: true, signoff: mode === "pack", pointsOnly: false }));
+  const [keep, setKeep] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && onClose) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const seen = new Set();
+  const rows = [...baseIds, ...(staff ? [] : extra)].filter(id => { const key = String(id); if (seen.has(key)) return false; seen.add(key); return true; })
+    .map(findK).filter(k => k && (!staff || mode === "one" || isStaffRead(k)));
+  const isExtra = (k) => extra.some(id => String(id) === String(k.id)) && !baseIds.some(id => String(id) === String(k.id));
+  const chosen = mode === "one" ? rows.slice(0, 1) : rows.filter(k => !off.has(String(k.id)));
+  const keepMoney = !staff && keep;
+  const titleOf = (k) => (staff ? knowledgeStaffView(k, ui).title : (String(pickLang(k, "title", ui)).trim() || "—"));
+  const ctx = { recipes, components, creations };
+  const build = () => knowledgePrintData({ entries: chosen, mode, lang: pLang, cover: opt.cover, newPage: opt.newPage, signoff: opt.signoff, pointsOnly: opt.pointsOnly,
+    keepMoney, staff: !!staff, today: localDateStr(), ctx });
+  // 页数和「去掉 N 处」要把整份去一遍钱:只在勾选 / 语言 / 选项 / 数据变了时重算(搜索框打字不算)
+  const chosenKey = chosen.map(k => String(k.id)).join("\u0000");
+  const pages = useMemo(() => (chosen.length ? knowledgePrintPages(build()) : 0), [all, chosenKey, pLang, opt, keepMoney, staff, recipes, components, creations]);
+  const moneyN = useMemo(() => knowledgeMoneyCount(chosen, pLang, opt.pointsOnly), [all, chosenKey, pLang, opt.pointsOnly]);
+  const ptsN = chosen.filter(k => ["staffPointsZh", "staffPointsJa"].some(f => typeof k[f] === "string" && k[f].trim())).length;
+  const nq = String(q).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+  const inRows = new Set(rows.map(k => String(k.id)));
+  const found = (!staff && mode === "pack" && nq) ? all.filter(k => !inRows.has(String(k.id))
+    && [k.titleZh, k.titleJa].some(t => String(t || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "").includes(nq))).slice(0, 8) : [];
+  const confirm = () => { if (chosen.length && onConfirm) onConfirm(build()); };
+  const sectionHead = { fontSize: 13, fontWeight: 500, marginBottom: 8, color: T.textPrimary };
+  const chkRow = { display: "flex", alignItems: "center", gap: 10, minHeight: 40, fontSize: 14, cursor: "pointer", color: T.textPrimary, overflowWrap: "anywhere", minWidth: 0 };
+  const optChk = (key, label) => (
+    <label key={key} data-k6-popt={key} style={chkRow}>
+      <input type="checkbox" checked={!!opt[key]} onChange={e => { const v = e.target.checked; setOpt(o => ({ ...o, [key]: v })); }} style={{ flexShrink: 0, width: 18, height: 18 }} />
+      <span style={{ minWidth: 0 }}>{label}</span>
+    </label>
+  );
+  const one = mode === "one" ? rows[0] || null : null;
+  return (
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: T.z.modal, padding: 16, boxSizing: "border-box" }}>
+      <div role="dialog" aria-modal="true" data-k6-kprint={mode} onClick={e => e.stopPropagation()}
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 600, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: T.sh.overlay, minWidth: 0, fontFamily: T.fontSans }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "16px 20px 8px", flexShrink: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 500, color: T.ink }}>{X.pmTitle}</div>
+          <button type="button" className="k-tap-l" aria-label={uiTxt(ui).close} onClick={onClose}
+            style={{ background: "none", border: "none", fontSize: 22, minWidth: 40, minHeight: 40, cursor: "pointer", color: T.textTertiary, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: "4px 20px 12px", flex: "1 1 auto", minHeight: 0 }}>
+          {/* 内容 */}
+          <div data-k6-pcontent="1" style={{ marginBottom: 16 }}>
+            <div style={sectionHead}>{X.pmContent}</div>
+            {mode === "one" ? (
+              <div style={{ fontSize: 14, color: one ? T.ink : T.danger, lineHeight: 1.6, overflowWrap: "anywhere" }}>{one ? X.pmOne(titleOf(one)) : X.pmGone}</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4, lineHeight: 1.6 }}>{X.pmPackHead(rows.filter(k => !isExtra(k)).length)}</div>
+                {rows.map((k, i) => (
+                  <label key={String(k.id)} data-k6-prow={String(k.id)} style={chkRow}>
+                    <input type="checkbox" checked={!off.has(String(k.id))} onChange={e => { const v = e.target.checked; setOff(prev => { const n = new Set(prev); if (v) n.delete(String(k.id)); else n.add(String(k.id)); return n; }); }}
+                      style={{ flexShrink: 0, width: 18, height: 18 }} />
+                    <span style={{ fontSize: 13, color: T.subtle, minWidth: 18, ...T.num }}>{i + 1}</span>
+                    <span style={{ minWidth: 0 }}>{titleOf(k)}{isExtra(k) && <span style={{ fontSize: 11, color: T.textTertiary, marginLeft: 6 }}>{X.pmAdded}</span>}</span>
+                  </label>
+                ))}
+                {!staff && (
+                  <div data-k6-padd="1" style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 13, color: T.textSecondary, marginBottom: 4 }}>{X.pmAdd}</div>
+                    <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={X.pmAddSearch} className="k-input"
+                      style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: 16, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans }} />
+                    {nq && (found.length ? (
+                      <div style={{ marginTop: 4 }}>
+                        {found.map(k => (
+                          <button key={String(k.id)} type="button" className="k-tap" data-k6-paddhit={String(k.id)} onClick={() => { setExtra(prev => [...prev, k.id]); setQ(""); }}
+                            style={{ display: "block", width: "100%", minHeight: 40, textAlign: "left", padding: "6px 8px", fontSize: 14, border: "none", borderBottom: `1px solid ${T.lineFaint}`, background: "transparent", color: T.ink, cursor: "pointer", fontFamily: T.fontSans, overflowWrap: "anywhere" }}>
+                            + {titleOf(k)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 4 }}>{X.pmAddNone}</div>)}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          {/* 🌐 打印语言 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionHead}>{X.pmLang}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {["zh", "ja", "both"].map(v => (
+                <button type="button" key={v} className="k-tap" data-k6-plang={v} aria-pressed={pLang === v} onClick={() => setPLang(v)}
+                  style={{ flex: "1 1 90px", minHeight: 40, padding: "8px 10px", fontSize: 13, border: `1.5px solid ${pLang === v ? T.ink : T.border}`, background: pLang === v ? T.ink : T.paper, color: pLang === v ? T.paper : T.ink, borderRadius: T.radius, cursor: "pointer", fontWeight: pLang === v ? 500 : 400, fontFamily: T.fontSans }}>{X.pmLangs[v]}</button>
+              ))}
+            </div>
+          </div>
+          {/* 📝 印什么 */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={sectionHead}>{X.pmWhat}</div>
+            {mode === "pack" && optChk("cover", X.pmCover)}
+            {mode === "pack" && optChk("newPage", X.pmNewPage)}
+            {optChk("signoff", X.pmSign)}
+            {optChk("pointsOnly", X.pmPointsOnly(ptsN))}
+          </div>
+          {/* 💰 只有老板看得到(员工的打印永远去钱,界面上也不出现带「价格」的说明) */}
+          {!staff && (
+            <div data-k6-pmoney={keepMoney ? "kept" : String(moneyN)} style={{ border: `0.5px solid ${keepMoney ? T.danger : T.warning}`, borderRadius: T.radius, padding: "8px 12px", fontSize: 13, color: keepMoney ? T.danger : T.body, lineHeight: 1.6, overflowWrap: "anywhere", marginBottom: 12 }}>
+              {keepMoney ? X.pmMoneyKept : X.pmMoney(moneyN)}
+              <label data-k6-popt="keepMoney" style={{ ...chkRow, fontSize: 13, color: T.body }}>
+                <input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)} style={{ flexShrink: 0, width: 18, height: 18 }} />
+                <span style={{ minWidth: 0 }}>{X.pmKeepMoney}</span>
+              </label>
+            </div>
+          )}
+          {chosen.length > 0 && <div data-k6-ppages={String(pages)} style={{ fontSize: 13, color: T.textSecondary, ...T.num }}>{X.pmPages(pages)}</div>}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "12px 20px 16px", borderTop: `0.5px solid ${T.border}`, flexShrink: 0, background: T.paper, position: "sticky", bottom: 0 }}>
+          {!chosen.length && <span data-k6-pnone="1" style={{ fontSize: 12, color: T.warning, marginRight: "auto" }}>{X.pmNone}</span>}
+          <Btn size="lg" onClick={onClose}>{X.pmCancel}</Btn>
+          <Btn size="lg" variant="primary" disabled={!chosen.length} onClick={confirm}>{X.pmGo}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+// 知识打印模板(PrintView 分发的 knowledge 支)。data = knowledgePrintData 的结果(文字已经去好钱 / 勾了保留价格的原文)。
+// 封面(合本、勾了才有):字标 + 「员工必读 · 培训资料」+ 条数和打印日期 + 目录(不写页码);每一条:抬头「{编号} · {标题}」/ 更新于 / 要点粗框 / 正文(KnowledgeBody 打印样式)/
+// 相关产品 / 图片一句;只印要点:抬头 + 要点框(没写的印一句);签字表另起一页;最后一行页脚。不用 position: fixed、不用底色(打印 CSS 会把底色去掉),
+// 中文 / 双语时根元素中文字体在前(.print-area 的 CSS 不改),双语时日文那几段单独用日文字体
+const KPRINT_ZH_FONT = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Zen Kaku Gothic New", sans-serif';
+const KPRINT_JA_FONT = '"Zen Kaku Gothic New", "Noto Sans JP", "Hiragino Sans", "PingFang SC", "Microsoft YaHei", sans-serif';
+function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle }) {
+  if (!data || typeof data !== "object" || !Array.isArray(data.items)) return null;
+  const L = data.lang === "ja" || data.lang === "zh" || data.lang === "both" ? data.lang : (lang === "ja" ? "ja" : lang === "both" ? "both" : "zh");
+  const both = L === "both";
+  const X = KREAD_TXT[L === "ja" ? "ja" : "zh"], XJ = KREAD_TXT.ja;
+  const lb = (key, ...a) => {
+    const z = typeof X[key] === "function" ? X[key](...a) : X[key];
+    if (!both) return z;
+    const j = typeof XJ[key] === "function" ? XJ[key](...a) : XJ[key];
+    return `${z} · ${j}`;
+  };
+  const jaFont = both ? { fontFamily: KPRINT_JA_FONT } : {};
+  const brand = brandName || "kororā";
+  const mainTitle = (it) => (L === "ja" ? it.title.ja : (it.title.zh || it.title.ja)) || "—";
+  const subTitle = (it) => (both && it.title.zh && it.title.ja ? it.title.ja : "");
+  const parts = (o) => (L === "ja" ? [["ja", o.ja]] : L === "zh" ? [["zh", o.zh]] : [["zh", o.zh], ["ja", o.ja]]).filter(([, t]) => typeof t === "string" && t.trim() !== "");
+  const relText = (it) => (Array.isArray(it.related) ? it.related.map(r => (r.item ? (L === "ja" ? (r.item.nameJa || r.item.nameZh) : (r.item.nameZh || r.item.nameJa)) || r.name : r.name)).filter(Boolean).join(" · ") : "");
+  const pageBreak = { breakBefore: "page", pageBreakBefore: "always" };
+  const items = data.items;
+  return (
+    <div data-k6-print={data.mode === "one" ? "one" : "pack"} style={{ position: "relative", zIndex: 1, color: "#000", fontSize: "11pt", lineHeight: 1.7, ...(L === "ja" ? {} : { fontFamily: KPRINT_ZH_FONT }) }}>
+      {data.cover && (
+        <div data-k6-pcover="1" style={{ breakAfter: "page", pageBreakAfter: "always" }}>
+          <div style={{ textAlign: "center", paddingTop: "18mm", paddingBottom: "10mm", borderBottom: "1.5px solid #000" }}>
+            {logoSrc && <img src={logoSrc} alt="LOGO" style={{ display: "block", width: "auto", height: "auto", maxWidth: "60mm", maxHeight: "30mm", margin: "0 auto 5mm" }} />}
+            {logoSrc !== LOGO_DATA_URI && <div style={{ fontSize: "14pt", letterSpacing: "0.3em", marginBottom: "2mm" }}>{brand}</div>}
+            {brandSubtitle && <div style={{ fontSize: "9pt", letterSpacing: "0.2em" }}>— {brandSubtitle} —</div>}
+            <div style={{ fontSize: "22pt", fontWeight: 700, marginTop: "10mm" }}>{lb("tCover")}</div>
+            <div style={{ fontSize: "11pt", marginTop: "3mm" }}>{lb("tCoverMeta", items.length, data.printedAt)}</div>
+          </div>
+          <div style={{ marginTop: "8mm" }}>
+            <div style={{ fontSize: "13pt", fontWeight: 700, borderBottom: "1px solid #000", paddingBottom: "2pt" }}>{lb("tToc")}</div>
+            {items.map(it => (
+              <div key={String(it.id) + ":" + it.no} className="p-row" style={{ display: "flex", gap: "8pt", padding: "4pt 0", borderBottom: "0.5px solid #D8D8D8", fontSize: "11pt" }}>
+                <span style={{ minWidth: "18pt", fontWeight: 700 }}>{it.no}</span>
+                <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{mainTitle(it)}{subTitle(it) && <span style={{ ...jaFont, fontSize: "9.5pt", marginLeft: "6pt" }}>{subTitle(it)}</span>}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {items.map((it, i) => {
+        const pts = parts(it.points);
+        const bodies = parts(it.body);
+        const rel = relText(it);
+        return (
+          <div key={String(it.id) + ":" + it.no} data-k6-pitem={String(it.id)} style={i > 0 && data.newPage && !data.pointsOnly ? pageBreak : (i > 0 ? { marginTop: "16pt" } : {})}>
+            <div className="p-row" style={{ fontSize: data.pointsOnly ? "13pt" : "16pt", fontWeight: 700, lineHeight: 1.35, borderBottom: "1.5px solid #000", paddingBottom: "3pt", breakAfter: "avoid", pageBreakAfter: "avoid", overflowWrap: "anywhere" }}>
+              {it.no} · {mainTitle(it)}
+              {subTitle(it) && <div style={{ ...jaFont, fontSize: data.pointsOnly ? "10pt" : "12pt", fontWeight: 400 }}>{subTitle(it)}</div>}
+            </div>
+            {!data.pointsOnly && it.updated && <div style={{ fontSize: "9pt", marginTop: "2pt" }}>{lb("tUpdated", it.updated)}</div>}
+            {pts.length > 0 ? (
+              <div data-k6-ppoints="1" style={{ marginTop: "6pt", border: "2px solid #000", padding: "6pt 10pt", breakInside: "avoid", pageBreakInside: "avoid" }}>
+                <div style={{ fontSize: "9pt", letterSpacing: "0.14em", marginBottom: "2pt" }}>{lb("tPoints")}</div>
+                {pts.map(([l, t], j) => <div key={l} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: j > 0 ? "10.5pt" : "11.5pt", fontWeight: 700, ...(l === "ja" ? jaFont : {}), ...(j > 0 ? { marginTop: "4pt" } : {}) }}>{t}</div>)}
+              </div>
+            ) : (data.pointsOnly && <div style={{ fontSize: "10pt", marginTop: "4pt" }}>{lb("tNoPoints")}</div>)}
+            {!data.pointsOnly && bodies.map(([l, t], j) => (
+              <div key={l} data-k6-pbody={l} style={{ marginTop: "8pt", ...(l === "ja" ? jaFont : {}), ...(j > 0 ? { borderTop: "0.5px solid #000", paddingTop: "8pt" } : {}) }}>
+                <KnowledgeBody text={t} variant="print" lang={l} />
+              </div>
+            ))}
+            {!data.pointsOnly && rel && <div style={{ fontSize: "10pt", marginTop: "8pt", overflowWrap: "anywhere" }}>{lb("tRelated")}{rel}</div>}
+            {!data.pointsOnly && it.images > 0 && <div style={{ fontSize: "9.5pt", marginTop: "4pt" }}>{lb("tImages", it.images)}</div>}
+          </div>
+        );
+      })}
+      {data.signoff && <div style={pageBreak}><ReadSignTable lang={L} /></div>}
+      <div data-k6-pfooter="1" style={{ marginTop: "16pt", paddingTop: "3pt", borderTop: "0.5px solid #000", fontSize: "8.5pt" }}>{lb("tFooter", brand, data.printedAt)}</div>
+    </div>
+  );
+}
+// 阅读签字表(合本最后一页;只是纸,不写任何数据 —— 同第 5 批 PrintRecordTable 的样式):5 列 8 行,双语时表头每格上面中文、下面日文
+const READ_SIGN_ROWS = 8;
+function ReadSignTable({ lang }) {
+  const L = lang === "ja" ? "ja" : lang === "both" ? "both" : "zh";
+  const Z = KREAD_TXT.zh, J = KREAD_TXT.ja;
+  const title = L === "ja" ? J.signTitle : L === "both" ? `${Z.signTitle} · ${J.signTitle}` : Z.signTitle;
+  const widths = ["14%", "16%", "18%", "36%", "16%"];
+  return (
+    <div data-k6-sign="1">
+      <div className="p-row" style={{ fontSize: "13pt", fontWeight: 700, borderBottom: "1.5px solid #000", paddingBottom: "3px", breakAfter: "avoid", pageBreakAfter: "avoid" }}>{title}</div>
+      <div style={{ fontSize: "10pt", margin: "6px 0 4px", lineHeight: 1.6 }}>
+        {L !== "ja" && <div>{Z.signHint}</div>}
+        {L !== "zh" && <div style={L === "both" ? { fontFamily: KPRINT_JA_FONT } : undefined}>{J.signHint}</div>}
+      </div>
+      <table>
+        <thead>
+          <tr>{Z.signCols.map((c, i) => (
+            <th key={i} className="p-th" style={{ textAlign: i === 0 ? "left" : "center", width: widths[i] }}>
+              {L === "both" ? <><div style={{ fontSize: "10pt" }}>{c}</div><div style={{ fontSize: "8pt", fontFamily: KPRINT_JA_FONT }}>{J.signCols[i]}</div></> : (L === "ja" ? J.signCols[i] : c)}
+            </th>
+          ))}</tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: READ_SIGN_ROWS }, (_, r) => (
+            <tr key={r}>{Z.signCols.map((_, i) => <td key={i} className="p-td" style={{ height: "34px", ...(i > 0 ? { borderLeft: "1px solid #D8D8D8" } : {}) }} />)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 // ─── 知识点详情 ─────────────────────────────────────────────
 // 第 6 批第 0 步:多可选 props staffNo(必读里第几条)/ onToggleStaff / onPrint(KA 接);正文换成 KnowledgeBody(第 0 步 DOM 一样)
@@ -28911,6 +29461,7 @@ function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel, 
       <>
         <div style={{ ...T.fs.titleS, color: T.ink }}>{X.enterTitle}</div>
         <div style={{ ...T.fs.small, color: T.body, marginTop: 10, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{X.enterHint}</div>
+        {extraHint && <div data-k6-enterhint="1" style={{ ...T.fs.small, color: T.body, marginTop: 10, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{extraHint}</div>}
         {!hasPin && <div style={{ ...T.fs.caption, color: T.warning, marginTop: 8 }}>{X.noPinNote}</div>}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 18 }}>
           <Btn variant="ghost" onClick={onCancel}>{X.cancel}</Btn>
@@ -29581,8 +30132,21 @@ function KitchenListView({ lang, recipes = [], creations = [], components = [], 
       </button>
     );
   };
+  const RX = KREAD_TXT[lang === "ja" ? "ja" : "zh"];
   return (
     <div data-kitchen-list="1">
+      {/* 第 6 批 KB:「📚 员工必读 · N 条」(只有员工外壳在有必读时传 readingCount;没有必读时一个节点都不多) */}
+      {readingCount > 0 && onOpenReading && (
+        <button type="button" data-k6-readrow="1" onClick={onOpenReading} className="k-kitchen-row k-tap"
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10, alignItems: "center", width: "100%", minHeight: 60, textAlign: "left", cursor: "pointer",
+            padding: "10px 14px", marginBottom: 14, border: `2px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans, boxSizing: "border-box" }}>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 19, fontWeight: 500, overflowWrap: "anywhere" }}>{RX.readRow(readingCount)}</span>
+            <span style={{ display: "block", fontSize: 14, color: T.subtle, marginTop: 2 }}>{RX.readRowSub}</span>
+          </span>
+          <span style={{ fontSize: 20 }}>→</span>
+        </button>
+      )}
       <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder={X.search} className="k-input" data-kitchen-search="1"
         style={{ width: "100%", boxSizing: "border-box", padding: "12px 14px", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans }} />
       {nq && total === 0 ? (
@@ -29635,8 +30199,21 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
   const sheet0 = page === "kitchen" && !kitchenItem ? buildProdSheet(plan.lines, ctx) : [];
   // 终审 r2:记过一部分的做一批行按还没记的那部分列(同生产单卡片)
   const sheet = prepOn && sheet0.length ? prepSheetShown(sheet0, ctx, prepStock && prepStock.items ? prepStock : prepStockRead(prepStock), today, productionLog) : sheet0;
+  // 第 6 批 KB:员工必读(知识库里标了「员工必读」的,按排好的顺序)。reading = null | { id: null }(必读列表)| { id }(阅读页),只在这台设备的这个外壳里,什么都不写。
+  // 厨房视图「📚 先读」= 必读里按钮指向这一样的(knowledgeLinksTo 同一套四档规则,同名候选也算);没有必读时 kctx 不带 reading、列表不画那一行(DOM 和以前一样)
+  const mustRead = useMemo(() => staffReadingList(knowledge), [knowledge]);
+  const [reading, setReading] = useState(null);
+  const readLinks = useMemo(() => {
+    const cache = new Map();
+    return (kind, id) => {
+      const key = kind + "\u0000" + String(id);
+      if (!cache.has(key)) cache.set(key, knowledgeLinksTo(kind, id, mustRead, recipes, components, creations));
+      return cache.get(key);
+    };
+  }, [mustRead, recipes, components, creations]);
+  const readingCtx = mustRead.length ? { list: mustRead, links: readLinks, open: (id) => setReading({ id }) } : undefined;
   // 厨房视图另外要的(只用来显示 / 判断「这一行记完没有」):账本、今天单子的行、生产记录、员工标记
-  const kctx = { ...ctx, prepStock, planLines: plan.lines, productionLog, staff: true };
+  const kctx = { ...ctx, prepStock, planLines: plan.lines, productionLog, staff: true, ...(readingCtx ? { reading: readingCtx } : {}) };
   return (
     <div data-staffshell="1">
       <div className="k-staffbar">
@@ -29679,7 +30256,8 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
           ? <KitchenView key={`${kitchenItem.kind}:${kitchenItem.id}${kitchenItem.stage ? ":" + kitchenItem.stage : ""}`} kind={kitchenItem.kind} target={kitchenTarget} initialQty={kitchenItem.qty} lang={lang} today={today}
               ctx={kctx} onBack={() => setKitchenItem(null)} showToast={showToast}
               stage={kitchenItem.stage} uid={kitchenItem.uid} fromLine={kitchenItem.fromLine} onPrepOp={onPrepOp} onLogLine={onLogLine} />
-          : <KitchenListView lang={lang} recipes={recipes} creations={creations} components={components} sheet={sheet} onOpen={openKitchen} />)}
+          : <KitchenListView lang={lang} recipes={recipes} creations={creations} components={components} sheet={sheet} onOpen={openKitchen}
+              readingCount={mustRead.length} onOpenReading={() => setReading({ id: null })} />)}
         {page === "prep" && (
           <div data-staffprep="1">
             <PrepStockView staff lang={lang} today={today} recipes={recipes} components={components} products={products} prepStock={prepStock} productionLog={productionLog}
@@ -29691,6 +30269,12 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
             recipes={recipes} creations={creations} components={components} materials={materials} brands={brands} onSave={onDailyClose} confirmDialog={confirmDialog} />
         )}
       </div>
+      {/* 第 6 批 KB:员工必读的全屏遮罩(列表 → 阅读页;关联只开厨房视图;打印走 App 的知识打印设置,员工的去钱不能关) */}
+      {reading && mustRead.length > 0 && (
+        <StaffReadingOverlay lang={lang} list={mustRead} open={reading} onClose={() => setReading(null)} onOpen={(id) => setReading({ id })}
+          onOpenItem={(kind, id) => { setReading(null); openKitchen(kind, id); }} onPrint={onPrintKnowledge}
+          recipes={recipes} components={components} creations={creations} />
+      )}
     </div>
   );
 }
@@ -31785,7 +32369,7 @@ function App() {
           onConfirm={(data) => setPrintTarget({ type: "prepLabel", stage: "preview", data, lang: data && data.lang })} />
       )}
       {printTarget && printTarget.stage === "kopts" && printTarget.type === "knowledge" && (
-        <KnowledgePrintModal src={printTarget.src} knowledge={knowledge} lang={lang} staff={!!printTarget.staff} recipes={recipes} components={components} creations={creations}
+        <KnowledgePrintModal src={printTarget.src} knowledge={knowledge} lang={lang} staff={!!printTarget.staff || staffMode} recipes={recipes} components={components} creations={creations}
           onClose={() => setPrintTarget(null)}
           onConfirm={(data) => setPrintTarget({ type: "knowledge", stage: "preview", data, lang: data && data.lang })} />
       )}
@@ -31811,7 +32395,8 @@ function App() {
       {/* 第 3 批 F4:员工模式 进入 / 设 PIN / 退出 */}
       {staffDialog && (
         <StaffPinDialog key={staffDialog} mode={staffDialog} lang={lang} hasPin={isValidStaffPin(appSettings.staffPin)}
-          onEnter={doStaffEnter} onExit={tryStaffExit} onCancel={() => setStaffDialog(null)} />
+          onEnter={doStaffEnter} onExit={tryStaffExit} onCancel={() => setStaffDialog(null)}
+          extraHint={staffDialog === "enter" && staffReadingList(knowledge).length > 0 ? KREAD_TXT[lang === "ja" ? "ja" : "zh"].enterHint(staffReadingList(knowledge).length) : undefined} />
       )}
       {/* 审查 r2:别的窗口进 / 退员工模式、这一页有没保存的改动。进:取消 = 输 PIN 退出员工模式(没设 PIN 直接退),PIN 框取消会回到这里 */}
       {/* 审查 r3:问的时候老板界面整个盖住(不透明,在 PIN 框和这个对话框下面、其余老板浮层上面)—— 以前只有 32% 的半透明遮罩,
@@ -33085,6 +33670,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           knowledge={knowledge}
           setKnowledge={setKnowledge}
           getKnowledge={() => (dataRef.current && dataRef.current.knowledge) || knowledge}
+          onPrintKnowledge={(src) => openKnowledgePrint(src, false)}
           lang={lang} setLang={setLang}
           viewId={knowledgeViewId} setViewId={setKnowledgeViewId}
           editTarget={knowledgeEditTarget} setEditTarget={setKnowledgeEditTarget}
@@ -33268,6 +33854,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           prepStock={prepStock} prepOn={prepOn} onPrepOp={onPrepOp} onLogLine={logProdFromSheet}
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit}
+          knowledge={knowledge} onPrintKnowledge={(src) => openKnowledgePrint(src, true)}
           saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
             const res = doSave();
             setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
