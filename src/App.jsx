@@ -422,44 +422,262 @@ const SAFETY_TXT = {
     },
   },
 };
-// ── A 组 · 日期(空壳)
-const isDateStr = (s) => false;                       // 空壳:R1
-const dayDiff = (a, b) => null;                        // 空壳:R2
-const addDaysStr = (s, n) => null;                     // 空壳:R2
-const localDayOfIso = (iso) => null;                   // 空壳:R3
-const validExp = (e) => false;                         // 空壳:R3
-const daysBetweenLocal = (iso, today) => null;         // 空壳:R4
-const fmtExpTime = (iso) => "";                        // 空壳:R5
-// ── B 组 · 设备 key(第 0 步不读不写)
-const readDeviceInfo = () => ({});                      // 空壳:R6(真身要 try/catch 读 localStorage)
-const mergeDevicePatch = (cur, patch) => cur;          // 空壳:R6
-const writeDeviceInfo = (patch) => ({ ok: false, info: {} });   // 空壳:R6(真身写前重读、只改 patch 那几块)
-const initDeviceInfo = (today) => ({});                // 空壳:R9 —— 规格 1.3 定的「{}、不读不写」;App 的 deviceInfo 状态用它做初值
-// ── C 到 F 组 · 提醒(空壳)
-const hasUserSummary = (s) => false;                   // 空壳:R12
-const exportReminderOf = (args) => ({ level: "none", days: null });   // 空壳:R16(规格 1.3)
-const saveBodyOf = (t) => "";                          // 空壳:R21
-const exportReminderView = (rem, opts) => ({ show: false, tone: null, wide: null, short: null, title: null, drawer: null });   // 空壳:R23
-const deviceExportLine = (args) => "";                 // 空壳:R25
-const startToastOf = (args) => null;                   // 空壳:R26(规格 1.3)
+// D 线(2026-10-07):规格 4.F 以外、界面上还要的字(「怎么装」4 步、存储表盘两句、恢复备份卡补的一句、改名框)。
+// 4.F 那张表(SAFETY_TXT.dev)和规格逐字一样(b6_step0_tests 钉着),所以另放一块,中日键一一对应
+SAFETY_TXT.devUi = {
+  zh: {
+    howTitle: "把 kororā 装到主屏幕(大约 2 分钟)",
+    howStep1: "先点下面「导出完整备份」,存进「文件」App。",
+    howStep2: "点分享按钮(方框加向上的箭头;在地址栏旁边,找不到就先点「⋯」)→「添加到主屏幕」→「添加」。",
+    howStep3: "从主屏幕打开 kororā(第一次要再输一次进入密码)。",
+    howStep4: "如果里面是空的:「数据」→「导入数据(覆盖)」→ 选第 1 步存的文件。",
+    howStep4b: "主屏幕上的和 Safari 里的是分开的两份,以后只用主屏幕上的那个。",
+    howExport: "↓ 导出完整备份",
+    howOk: "知道了",
+    meterMain: "约 {x} MB / 约 {q} MB · {p}%",   // plan 决定 40 的写法(配额是按 iPad Safari 估的,所以写「约」)
+    meterFull: "⚠ 快满了。浏览器给每个网站大约 {q} MB 放这些数据(按每个字 2 字节算,以前这里少算了一半)。满了以后新的修改存不进去,顶上会写「保存失败」。先导出一份完整备份;要从根上解决,得把数据搬进浏览器数据库(另议)。",
+    restoreNote: "自动备份和数据存在同一个浏览器里:浏览器把数据清掉时备份也一起没了,所以还要定期导出文件。",
+    renameLabel: "这台设备的名字(导出的文件名会带上它;空着 = 用猜的名字)",
+  },
+  ja: {
+    howTitle: "ホーム画面に追加する(約 2 分)",
+    howStep1: "先に下の「フル出力」で「ファイル」アプリに保存します。",
+    howStep2: "共有ボタン(四角に上矢印。アドレスバーの横。見つからなければ先に「⋯」を押す)→「ホーム画面に追加」→「追加」。",
+    howStep3: "ホーム画面から kororā を開きます(初回は入室パスワードをもう一度)。",
+    howStep4: "空なら「データ → 上書きインポート」で 1 のファイルを選びます。",
+    howStep4b: "ホーム画面版と Safari は別々なので、今後はホーム画面版だけ使ってください。",
+    howExport: "↓ フル出力",
+    howOk: "わかりました",
+    meterMain: "約 {x} MB / 約 {q} MB · {p}%",
+    meterFull: "⚠ 残りわずかです。ブラウザがサイトごとに使える容量は約 {q} MB です(1 文字 2 バイトで計算。以前の表示は半分に少なく出ていました)。いっぱいになると変更が保存できず、上に「保存失敗」と出ます。まずフル出力を。根本的にはデータをブラウザのデータベースへ移す必要があります(別途検討)。",
+    restoreNote: "自動バックアップはデータと同じブラウザ内にあります。ブラウザがデータを消すとバックアップも消えるので、定期的にファイルへ書き出してください。",
+    renameLabel: "この端末の名前(書き出すファイル名に付きます。空 = 推測した名前)",
+  },
+};
+// {x} 换成 String(值),一遍替换(换进去的字不再扫,没给值的 {x} 原样留着);lang === "ja" 取日文,其余一律中文(规格 4.F 开头)
+const _devHas = (o, k) => !!o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k);
+const devFill = (tpl, vars) => String(tpl).replace(/\{(\w+)\}/g, (m, k) => (_devHas(vars, k) ? String(vars[k]) : m));
+const devTxt = (lang) => SAFETY_TXT.dev[lang === "ja" ? "ja" : "zh"];
+const devUiTxt = (lang) => SAFETY_TXT.devUi[lang === "ja" ? "ja" : "zh"];
+const _devIsObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+const _devP2 = (n) => String(n).padStart(2, "0");
+// ── A 组 · 日期(只依赖 localDateStr)
+const isDateStr = (s) => {                                                    // R1
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+};
+const _devUtc = (s) => { const [y, m, d] = s.split("-").map(Number); return Date.UTC(y, m - 1, d); };
+const dayDiff = (a, b) => (isDateStr(a) && isDateStr(b)) ? Math.round((_devUtc(b) - _devUtc(a)) / 86400000) : null;   // R2:b − a 的天数
+const addDaysStr = (s, n) => {                                                // R2
+  if (!isDateStr(s)) return null;
+  const t = new Date(_devUtc(s) + n * 86400000);
+  return `${String(t.getUTCFullYear()).padStart(4, "0")}-${_devP2(t.getUTCMonth() + 1)}-${_devP2(t.getUTCDate())}`;
+};
+const localDayOfIso = (iso) => {                                              // R3
+  if (typeof iso !== "string") return null;
+  const ms = Date.parse(iso);
+  if (!isFinite(ms)) return null;
+  const s = localDateStr(new Date(ms));
+  return isDateStr(s) ? s : null;
+};
+const validExp = (e) => _devIsObj(e) && localDayOfIso(e.at) !== null && typeof e.hash === "string" && e.hash !== "";   // R3
+const daysBetweenLocal = (iso, today) => {                                    // R4:按本地日期数,不按 24 小时;可以是负数
+  const a = localDayOfIso(iso);
+  return (a !== null && isDateStr(today)) ? dayDiff(a, today) : null;
+};
+const fmtExpTime = (iso) => {                                                 // R5:「10/03 09:36」(本地时间,四段补两位)
+  if (typeof iso !== "string") return "";
+  const ms = Date.parse(iso);
+  if (!isFinite(ms)) return "";
+  const t = new Date(ms);
+  return `${_devP2(t.getMonth() + 1)}/${_devP2(t.getDate())} ${_devP2(t.getHours())}:${_devP2(t.getMinutes())}`;
+};
+// ── B 组 · 设备 key(只有这两个碰 localStorage;读不到 / 坏了 / 不是对象当 {},写前重读、只改 patch 那几块)
+const readDeviceInfo = () => {                                                // R6
+  let raw = null;
+  try { raw = localStorage.getItem(DEVICE_KEY); } catch (e) { return {}; }
+  let o; try { o = JSON.parse(raw); } catch (e) { return {}; }
+  return _devIsObj(o) ? { ...o } : {};
+};
+const mergeDevicePatch = (cur, patch) => {                                    // R6:内存和存储共用;hide 按子键合并
+  const next = { ...cur, ...patch };
+  if (_devIsObj(patch.hide)) next.hide = { ...(_devIsObj(cur.hide) ? cur.hide : {}), ...patch.hide };
+  return next;
+};
+const writeDeviceInfo = (patch) => {                                          // R6:读到 v > 1 时保留 v 和不认得的键
+  const cur = readDeviceInfo();
+  const next = mergeDevicePatch(cur, patch);
+  next.v = (typeof cur.v === "number" && isFinite(cur.v) && cur.v > 1) ? cur.v : 1;
+  try { localStorage.setItem(DEVICE_KEY, JSON.stringify(next)); return { ok: true, info: next }; }
+  catch (e) { return { ok: false, info: next }; }
+};
+const initDeviceInfo = (today) => {                                           // R9:App 第一次渲染的惰性初值里调(不放 effect)
+  const a = readDeviceInfo();
+  if (isDateStr(a.first)) return a;                // 有了就不动(包括比今天晚的)
+  writeDeviceInfo({ first: today });               // 没有 / 坏了 → 写今天
+  const b = readDeviceInfo();                      // 读回来;写不进去 / 读回来没有 → first: null(R16 当「已满 3 天」)
+  return isDateStr(b.first) ? b : { ...b, first: null };
+};
+// ── C 组 · 有没有她的数据(hasUserData 在 import-preview 段,I 线名下)、备份摘要、存档内容
+const _devNum = (v) => (typeof v === "number" && isFinite(v)) ? v : 0;      // R12:Number.isFinite,不做类型转换
+const hasUserSummary = (s) => _devIsObj(s) && (_devNum(s.recipes) > SEED_RECIPES.length || _devNum(s.components) > SEED_COMPONENTS.length
+  || _devNum(s.creations) > SEED_CREATIONS.length || _devNum(s.materials) > 0);   // R12:厂家、知识的条数不看
+const saveBodyOf = (t) => JSON.stringify({ recipes: t.recipes, cats: t.cats, components: t.components, creations: t.creations, knowledge: t.knowledge,   // R21:和 saveData 拼的 body 逐字节一样
+  brands: t.brands, materials: t.materials, printSettings: t.printSettings, customCompCats: t.customCompCats, productFamilies: t.productFamilies,
+  shopMaterials: t.shopMaterials, products: t.products, salesLog: t.salesLog, productionLog: t.productionLog, suppliers: t.suppliers,
+  appSettings: t.appSettings, version: 17 });
+// ── D 组 · 提醒级别(R16,从上往下第一条成立的)
+const exportReminderOf = ({ today, stale, hasData, saveFailed, dirty, exp, curHash, first }) => {
+  if (!isDateStr(today) || stale || !hasData) return { level: "none", days: null };
+  if (saveFailed) return dirty ? { level: "saveFail", days: null } : { level: "none", days: null };   // 保存失败时不看天数和 hash
+  if (!validExp(exp)) {
+    if (isDateStr(first) && dayDiff(first, today) < 3) return { level: "noRecordGrace", days: dayDiff(first, today) };   // 第一次打开新版不满 3 天
+    return { level: "noRecord", days: null };
+  }
+  const d = daysBetweenLocal(exp.at, today);
+  if (curHash === exp.hash) return { level: "clean", days: d };
+  if (d < 3) return { level: "recent", days: d };
+  if (d < 7) return { level: "due", days: d };
+  return { level: "overdue", days: d };
+};
+const EXPORT_SHOW_LEVELS = ["due", "overdue", "noRecord", "saveFail"];        // R17:只有这四种露出来
+// ── E 组 · 怎么显示
+const exportReminderView = (rem, opts) => {                                   // R23
+  if (!rem || !EXPORT_SHOW_LEVELS.includes(rem.level)) return { show: false, tone: null, wide: null, short: null, title: null, drawer: null };
+  const { lang, exp } = opts || {};
+  const X = devTxt(lang);
+  const tone = rem.level === "due" ? "warning" : "danger";
+  if (rem.level === "due" || rem.level === "overdue") {
+    const v = { d: String(rem.days), t: fmtExpTime(exp && exp.at) };
+    return { show: true, tone, wide: devFill(X.chipWideDays, v), short: devFill(X.chipShortDays, v), title: devFill(X.chipTitleDays, v), drawer: devFill(X.drawerDays, v) };
+  }
+  if (rem.level === "noRecord") return { show: true, tone, wide: X.chipWideNoRec, short: X.chipShortNoRec, title: X.chipTitleNoRec, drawer: X.drawerNoRec };
+  return { show: true, tone, wide: X.chipWideFail, short: X.chipShortFail, title: X.chipTitleFail, drawer: X.drawerFail };
+};
+const deviceExportLine = ({ exp, today, changed, lang }) => {                 // R25 第 2 条
+  const X = devTxt(lang);
+  if (!validExp(exp)) return X.expNone;
+  const d = daysBetweenLocal(exp.at, today);
+  const rel = (d === null || d <= 0) ? X.relToday : devFill(X.relDays, { d });
+  return devFill(X.expLine, { t: fmtExpTime(exp.at), rel, chg: changed ? X.chgYes : X.chgNo });
+};
+const deviceModeKey = (env) => {                                              // R25 第 1 条的 {mode}
+  const e = env || {};
+  return e.ios && e.standalone ? "modeHome" : e.wechat ? "modeWechat" : e.ios ? "modeSafari" : "modeBrowser";
+};
+// ── F 组 · 启动 toast(R26;判的时刻只有挂载和退出员工模式两种,在 App 里)
+const startToastOf = ({ rem, staffMode, stale, toastDay, today, lang }) => {
+  if (staffMode || stale || toastDay === today) return null;
+  const X = devTxt(lang);
+  const lv = rem && rem.level;
+  let kind, msg;
+  if (lv === "overdue") { kind = "overdue"; msg = devFill(X.toastDays, { d: rem.days }); }
+  else if (lv === "noRecord") { kind = "noRecord"; msg = X.toastNoRec; }
+  else if (lv === "saveFail") { kind = "saveFail"; msg = X.toastFail; }
+  else return null;
+  return { kind, msg, actionLabel: X.toastBtn, ms: 8000 };
+};
 // ── H 组 · 设备环境、名字、文件名
-const deviceEnvOf = (args) => ({ ios: false, ipad: false, standalone: false, wechat: false, firefox: false });   // 空壳:R32
-const guessDeviceName = (env, ua) => "";               // 空壳:R33
-const safeDeviceName = (s) => "";                      // 空壳:R34
-const exportFileName = (date, device) => `patisserie_${localDateStr(date)}.json`;   // 空壳:今天的文件名(规格 1.3;D 线改成带时间和设备名)
-const effectiveDeviceName = (info, env, ua) => "";     // 空壳:R35
-// ── I / J 组 · 横幅、员工那一行(空壳)
-const safetyBannerOf = (args) => null;                 // 空壳:R37(规格 1.3)
-const emptyBackupsOf = (metas) => null;                // 空壳:R40
-const staffSafetyNoteOf = (args) => null;              // 空壳:R42(规格 1.3)
-// ── K 组 · 持久存储
-const askPersist = (storageApi, env) => Promise.resolve(null);   // 空壳:R44(规格 1.3)
-// ── 存储表盘:第 0 步 = 今天数据页表盘的算法(按 1 字 1 字节、上限 5 MB);D 线改成每字 2 字节、LS_QUOTA_CHARS_EST、算全部键
+const deviceEnvOf = (raw) => {                                                // R32(iPadOS 默认桌面版 UA:platform MacIntel + 多点触控)
+  const { ua, platform, maxTouchPoints, navStandalone, mmStandalone } = raw === undefined ? {} : raw;
+  const u = typeof ua === "string" ? ua : "";
+  const pf = typeof platform === "string" ? platform : "";
+  const mtp = (typeof maxTouchPoints === "number" && isFinite(maxTouchPoints)) ? maxTouchPoints : 0;
+  const ipad = /iPad/.test(u) || (pf === "MacIntel" && mtp > 1);
+  const ios = ipad || /iPhone|iPod/.test(u);
+  return { ios, ipad, standalone: navStandalone === true || mmStandalone === true, wechat: /MicroMessenger/i.test(u), firefox: /Firefox\//.test(u) };
+};
+const guessDeviceName = (env, ua) => {                                        // R33(只看 ua,不看 platform)
+  const e = env || {};
+  if (e.ipad) return "iPad";
+  if (e.ios) return "iPhone";
+  if (/Android/i.test(ua)) return "Android";
+  if (/Windows/i.test(ua)) return "Windows";
+  if (/Macintosh|Mac OS X/i.test(ua)) return "Mac";
+  return "电脑";
+};
+const safeDeviceName = (s) => {                                               // R34:控制字符 → 文件名不许的字 → trim → 空白换「-」→ 前 16 个码点
+  let x = s == null ? "" : String(s);
+  x = x.replace(/[\u0000-\u001F\u007F]/g, "").replace(/[\\/:*?"<>|]/g, "").trim().replace(/\s+/g, "-");
+  return Array.from(x).slice(0, 16).join("");
+};
+const exportFileName = (date, device) => {                                    // patisserie_2026-10-06_1432_iPad.json(本地时间)
+  const dn = safeDeviceName(device);
+  return `patisserie_${localDateStr(date)}_${_devP2(date.getHours())}${_devP2(date.getMinutes())}${dn ? "_" + dn : ""}.json`;
+};
+const _devNameOk = (info) => !!info && info.nameSet === true && typeof info.name === "string" && info.name.trim() !== "";
+const effectiveDeviceName = (info, env, ua) => (_devNameOk(info) ? info.name : guessDeviceName(env, ua));   // R35
+const renameDevicePatch = (input) => {                                        // R35 数据页「改名」:空 → 回到猜的名字;否则最多 16 个字
+  const t = String(input == null ? "" : input).trim();
+  return t === "" ? { name: "", nameSet: false } : { name: Array.from(t).slice(0, 16).join(""), nameSet: true };
+};
+// ── I / J 组 · 横幅、员工那一行
+const _devHides = (hide, today, empty) => {
+  const h = _devIsObj(hide) ? hide : {};
+  return {
+    hiddenHome: isDateStr(h.home) && isDateStr(today) && today < h.home,
+    hiddenStandalone: h.standalone === true,
+    hiddenEmpty: typeof h.empty === "string" && empty !== null && h.empty === empty.newest,
+  };
+};
+const safetyBannerOf = ({ env, hide, today, hasData, empty, stale, swUpdate, staffMode }) => {   // R37
+  if (staffMode || stale || swUpdate) return null;
+  const { hiddenHome, hiddenStandalone, hiddenEmpty } = _devHides(hide, today, empty);
+  if (empty !== null && !hasData && !hiddenEmpty) return "emptyBackups";
+  const e = env || {};
+  if (e.ios && e.wechat) return "wechat";
+  if (e.ios && !e.standalone && !hiddenHome) return "homeScreen";
+  if (e.ios && e.standalone && !hasData && !hiddenStandalone) return "standaloneFirst";
+  return null;
+};
+const emptyBackupsOf = (metas) => {                                           // R40:有她数据的自动备份(旧库、没摘要、只有预置的不算)
+  const list = (Array.isArray(metas) ? metas : []).filter(m => !!m && typeof m === "object" && !m.legacy
+    && typeof m.savedAt === "string" && m.savedAt !== "" && hasUserSummary(m.summary));
+  if (!list.length) return null;
+  let newest = list[0].savedAt;
+  list.forEach(m => { if (m.savedAt > newest) newest = m.savedAt; });
+  return { n: list.length, newest };
+};
+const closeBannerPatch = (kind, today, empty) => {                            // R41:点 × 写什么(微信横幅没有 ×)
+  if (kind === "homeScreen") return { hide: { home: addDaysStr(today, 7) } };
+  if (kind === "standaloneFirst") return { hide: { standalone: true } };
+  if (kind === "emptyBackups" && empty) return { hide: { empty: empty.newest } };
+  return null;
+};
+const staffSafetyNoteOf = ({ env, hide, today, hasData, empty, rem, lang }) => {   // R42:只说事、不给按钮、没有钱
+  const X = devTxt(lang);
+  const { hiddenHome, hiddenEmpty } = _devHides(hide, today, empty);
+  if (empty !== null && !hasData && !hiddenEmpty) return { kind: "empty", text: X.stEmpty };
+  const lv = rem && rem.level;
+  if (lv === "saveFail") return { kind: "saveFail", text: X.stFail };
+  if (lv === "due" || lv === "overdue") return { kind: "export", text: devFill(X.stDays, { d: rem.days }) };
+  if (lv === "noRecord") return { kind: "noRecord", text: X.stNoRec };
+  const e = env || {};
+  if (e.ios && !e.standalone && !e.wechat && !hiddenHome) return { kind: "safari", text: X.stSafari };
+  return null;
+};
+// ── K 组 · 持久存储(R44:已经答应过就不再问;Firefox 会弹框,不问;答不答应都不报错)
+const askPersist = async (st, env) => {
+  if (!st || (typeof st.persisted !== "function" && typeof st.persist !== "function")) return null;
+  let p = false;
+  if (typeof st.persisted === "function") { try { p = (await st.persisted()) === true; } catch (e) { p = false; } }
+  if (p) return true;
+  if (env.firefox || typeof st.persist !== "function") return false;
+  try { return (await st.persist()) === true; } catch (e) { return false; }
+};
+const persistLineOf = (info, lang) => {                                       // R47:有效的 persist 才画那一行
+  if (!_devIsObj(info) || !_devIsObj(info.persist) || typeof info.persist.ok !== "boolean") return null;
+  const X = devTxt(lang);
+  return info.persist.ok ? X.persistYes : X.persistNo;
+};
+// ── 存储表盘(plan 决定 40):每字 2 字节、配额按 LS_QUOTA_CHARS_EST(iPad Safari 约 5 MB 估),usedChars = 全部 localStorage 键的字数
 const storageMeterOf = (usedChars) => {
-  const used = typeof usedChars === "number" && isFinite(usedChars) ? usedChars : 0;
-  const usedMB = (used / 1024 / 1024);
-  const limitMB = 5; // 典型手机 localStorage 限额
-  const pct = Math.min(100, (usedMB / limitMB) * 100);
+  const used = typeof usedChars === "number" && isFinite(usedChars) && usedChars > 0 ? usedChars : 0;
+  const usedMB = used * 2 / 1048576;
+  const limitMB = LS_QUOTA_CHARS_EST * 2 / 1048576;
+  const pct = Math.min(100, used / LS_QUOTA_CHARS_EST * 100);
   return { used, usedMB, limitMB, pct, level: pct > 80 ? "danger" : pct > 60 ? "warning" : "ok" };
 };
 // ─── END device-safety helpers ───
@@ -4613,7 +4831,16 @@ SAFETY_TXT.imp = { zh: {}, ja: {} };   // I 线往这里加导入对比 / 结果
 const importFileInfo = (d, fileName) => null;                        // 空壳:R28
 const parseExportFileName = (name) => null;                          // 空壳:R29
 const localSavedAtOf = (raw) => null;                                // 空壳:R30
-const hasUserData = (cur) => null;                                   // 空壳:R31(spec_reminder R11 引用同一个口径)
+// R31(I 线名下;D 线 2026-10-07 先照 spec_merge_plan R31 写成真的,App 的导出提醒 / 横幅要它 —— I 线以自己的为准)。
+// 去掉预置 id 以后配方 / 组件 / 组合产品还有、或材料 / 本店原料 / 商品 / 两种记录有真值条目;知识、厂家、老价格表、家族不看
+const hasUserData = (cur) => {
+  if (cur == null) cur = {};   // spec_reminder R11:null / undefined 当 {}(R31 没说;两份规格只在这里和下面两处边角不一样,见 D 线结果的 oracleDisputes)
+  const arr = (v) => Array.isArray(v) ? v : [];
+  const ids = (list) => new Set(arr(list).map(x => x && x.id));
+  const nonSeed = (list, seeds) => { const s = ids(seeds); return arr(list).some(x => x && !s.has(x.id)); };
+  return nonSeed(cur.recipes, SEED_RECIPES) || nonSeed(cur.components, SEED_COMPONENTS) || nonSeed(cur.creations, SEED_CREATIONS)
+    || ["materials", "shopMaterials", "products", "salesLog", "productionLog"].some(k => arr(cur[k]).some(x => !!x));
+};
 const overwritePlan = (cur, d, opts) => null;                        // 空壳:R32
 const overwritePreviewView = (oplan, info, lang, opts) => null;      // 空壳:R34
 const mergePreviewView = (plan, info, lang, opts) => null;           // 空壳:R24
@@ -5649,32 +5876,40 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = 
 }
 
 // ─── 第 6 批第 0 步:数据页「💾 本地存储用量」卡(从 App 里原样抽出来,DOM 一样;D 线改主数字,extraRows 留给以后 E4「其中本机草稿 N 份」)───
-function StorageMeterCard({ lang, extraRows = null }) {
+// D 线(plan 决定 40):按实际算 —— 全部 localStorage 键的字数(主存档只算内容,LS_QUOTA_CHARS_EST 已经扣掉它的键名)、每字 2 字节、配额按 iPad Safari 约 5 MB 估;
+// 快满时写清该做什么;persistLine = 持久存储那一行(R47,App 传 persistLineOf 的结果,null 不画)
+function StorageMeterCard({ lang, extraRows = null, persistLine = null }) {
   let used = 0;
-  try { used = (localStorage.getItem(STORAGE_KEY) || "").length; } catch {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k === null || k === undefined) continue;
+      used += String(localStorage.getItem(k) || "").length + (k === STORAGE_KEY ? 0 : String(k).length);
+    }
+  } catch {}
   const { usedMB, limitMB, pct, level } = storageMeterOf(used);
   const color = level === "danger" ? T.danger : level === "warning" ? T.warning : T.success;
   const bg = level === "danger" ? T.dangerBg : level === "warning" ? T.warningBg : T.successBg;
+  const U = devUiTxt(lang), q = Math.round(limitMB);
   return (
     <div style={{ background: bg, border: `0.5px solid ${color}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>
           {lang === "zh" ? "💾 本地存储用量" : "💾 ローカル使用量"}
         </div>
-        <div style={{ fontSize: 12, color, fontWeight: 500 }}>
-          {usedMB.toFixed(2)} MB / ~{limitMB} MB ({pct.toFixed(0)}%)
+        <div data-b6="meter-main" style={{ fontSize: 12, color, fontWeight: 500, overflowWrap: "anywhere" }}>
+          {devFill(U.meterMain, { x: usedMB.toFixed(2), q, p: pct.toFixed(0) })}
         </div>
       </div>
       <div style={{ background: T.bgMuted, height: 6, borderRadius: 3, overflow: "hidden" }}>
         <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.3s" }} />
       </div>
       {pct > 80 && (
-        <div style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>
-          {lang === "zh"
-            ? "⚠️ 存储接近上限,建议:导出数据 → 清理用不到的配方/图片/旧材料 → 重新导入"
-            : "⚠️ 容量接近上限,バックアップ → 不要データ削除を推奨"}
+        <div data-b6="meter-full" style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>
+          {devFill(U.meterFull, { q })}
         </div>
       )}
+      {persistLine && <div data-b6="persist-line" style={{ fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.6 }}>{persistLine}</div>}
       {extraRows}
     </div>
   );
@@ -5709,12 +5944,171 @@ function ImportReportCard({ report: importReport, lang, onClose }) {
 // I 线:两个导入确认框的对比块(ConfirmDialog 的 body)
 function OverwritePreviewBody({ rows, lang }) { return null; }
 function MergePreviewBody({ rows, lang, onToggleSkipDeleted }) { return null; }
-// D 线:顶栏「💾」(DraftChip 左边)、横幅(现有两条横幅后面)、「怎么装」全屏说明、数据页导出卡按钮上面那两行、员工顶栏下面那一行灰字
-function ExportChip({ view, level, lang, onExport }) { return null; }
-function SafetyBanner({ kind, lang, empty, onClose, onHowTo, onExport, onOpenRestore, onGoData }) { return null; }
-function HomeScreenHowTo({ open, lang, onClose, onExport }) { return null; }
-function DeviceExportStatus({ lang, deviceInfo, env, changed, today, onRename }) { return null; }
-function StaffSafetyLine({ note, lang }) { return null; }
+// D 线(spec_reminder):顶栏「💾」(DraftChip 左边)、横幅(现有两条横幅后面)、「怎么装」全屏说明、数据页导出卡按钮上面那两行、员工顶栏下面那一行灰字。
+// 不要提醒 / 没有横幅 / 员工那一行是 null 时一律 return null(一个节点都不多,R51)
+// 顶栏「💾」:≥ 768 px 写 wide、600 到 767 px 写 short、< 600 px 不画(手机走「更多」抽屉那一行)。宽度看 window.innerWidth(GLOBAL_CSS 没有 768 这一档,只有 T1 能改它)
+function ExportChip({ view, level, lang, onExport }) {
+  if (!view || !view.show) return null;
+  return <ExportChipBody view={view} level={level} onExport={onExport} />;
+}
+// 窗口宽度(只给 D 线的两个浮层用:「💾」三种写法、「怎么装」手机上换底部面板);读不到当 1280
+function useDevWinWidth() {
+  const [w, setW] = useState(() => (typeof window !== "undefined" && typeof window.innerWidth === "number") ? window.innerWidth : 1280);
+  useEffect(() => {
+    const on = () => setW(window.innerWidth);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return w;
+}
+function ExportChipBody({ view, level, onExport }) {
+  const w = useDevWinWidth();
+  if (w < 600) return null;
+  const color = view.tone === "warning" ? T.warning : T.danger;
+  return (
+    <button type="button" className="k-tap" data-b6="export-chip" data-b6-level={level} title={view.title} onClick={onExport}
+      style={{ background: "transparent", border: `1px solid ${color}`, color, borderRadius: T.radius, padding: "3px 10px", cursor: "pointer", fontSize: 12, fontFamily: T.fontSans, whiteSpace: "nowrap", lineHeight: 1.5 }}>
+      {w >= 768 ? view.wide : view.short}
+    </button>
+  );
+}
+// 横幅(R36 到 R38):和「别的窗口改过」「新版本」两条老横幅同一个位置(sticky、data-app-banner,数据体检面板靠它定位),同一时间只出一条。
+// 存档空了 = 红底(同「别的窗口改过」);微信 / Safari 标签页 / 主屏幕版第一次 = 中性色(同「新版本」)。微信那条没有 ×
+function SafetyBanner({ kind, lang, empty, onClose, onHowTo, onExport, onOpenRestore, onGoData }) {
+  if (!kind) return null;
+  const X = devTxt(lang);
+  const red = kind === "emptyBackups";
+  const text = kind === "emptyBackups" ? devFill(X.bnEmpty, { n: empty ? empty.n : 0, t: fmtExpTime(empty && empty.newest) })
+    : kind === "wechat" ? X.bnWechat : kind === "homeScreen" ? X.bnHome : X.bnStandalone;
+  const buttons = kind === "emptyBackups" ? [[X.bnOpenRestore, onOpenRestore]] : kind === "homeScreen" ? [[X.bnHowTo, onHowTo], [X.bnExportFirst, onExport]]
+    : kind === "standaloneFirst" ? [[X.bnGoData, onGoData]] : [];
+  const btnStyle = red
+    ? { background: "#FFFFFF", color: T.danger, border: "none", borderRadius: T.radius, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }
+    : { background: T.ink, color: T.paper, border: "none", borderRadius: T.radius, padding: "5px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 };
+  return (
+    <div role={red ? "alert" : "status"} data-app-banner="" data-b6="safety-banner" data-b6-kind={kind}
+      style={red
+        ? { position: "sticky", top: 0, zIndex: T.z.toast - 1, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }
+        : { position: "sticky", top: 0, zIndex: T.z.toast - 1, background: T.sunken, color: T.ink, borderBottom: `1px solid ${T.line}`, padding: "8px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
+      <span style={{ flex: 1, minWidth: 220, overflowWrap: "anywhere" }}>{text}</span>
+      {buttons.map(([label, fn]) => (
+        <button key={label} type="button" className="k-tap" onClick={() => { if (fn) fn(); }} style={btnStyle}>{label}</button>
+      ))}
+      {kind !== "wechat" && (
+        <button type="button" className="k-tap" aria-label={X.bnClose} title={X.bnClose} onClick={() => { if (onClose) onClose(kind); }}
+          style={{ background: "transparent", color: red ? "#FFFFFF" : T.ink, border: "none", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: "4px 8px" }}>×</button>
+      )}
+    </div>
+  );
+}
+// 「怎么装」说明(plan §11:全屏、手机(< 600 px)是底部面板;层级 T.z.drawer —— 导出以后的「存进『文件』才算备份好」提示条是 T.z.toast,露在它上面;
+// Esc / 「知道了」关,手机上点面板外面的暗处也关)
+function HomeScreenHowTo({ open, lang, onClose, onExport }) {
+  if (!open) return null;
+  return <HomeScreenHowToBody lang={lang} onClose={onClose} onExport={onExport} />;
+}
+// 顶上正显示的横幅(data-app-banner;z 是 T.z.toast - 1,比这里高)的下沿:说明从它下面开始,横幅照样看得见、能点(同数据体检面板的 topInset)
+const devBannerBottom = () => {
+  try { const b = document.querySelector("[data-app-banner]"); return b ? Math.max(0, Math.ceil(b.getBoundingClientRect().bottom)) : 0; } catch (e) { return 0; }
+};
+function HomeScreenHowToBody({ lang, onClose, onExport }) {
+  const w = useDevWinWidth();
+  const [top, setTop] = useState(devBannerBottom);
+  useEffect(() => {
+    const m = () => setTop(devBannerBottom());
+    m(); window.addEventListener("resize", m);
+    return () => window.removeEventListener("resize", m);
+  }, []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && onClose) onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const U = devUiTxt(lang);
+  const steps = [U.howStep1, U.howStep2, U.howStep3, U.howStep4];
+  const sheet = w < 600;
+  return (
+    <div role="dialog" aria-modal="true" aria-label={U.howTitle} data-b6="howto" data-b6-sheet={sheet ? "1" : "0"}
+      onClick={sheet ? (e) => { if (e.target === e.currentTarget && onClose) onClose(); } : undefined}
+      style={sheet
+        ? { position: "fixed", top, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: "rgba(0,0,0,0.35)", display: "flex", flexDirection: "column", justifyContent: "flex-end" }
+        : { position: "fixed", top, left: 0, right: 0, bottom: 0, zIndex: T.z.drawer, background: T.paper, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+      <div style={sheet
+        ? { background: T.paper, borderTopLeftRadius: T.radiusLg, borderTopRightRadius: T.radiusLg, maxHeight: "88vh", overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "20px 16px calc(24px + env(safe-area-inset-bottom))", boxSizing: "border-box" }
+        : { maxWidth: 560, margin: "0 auto", padding: "24px 16px 40px" }}>
+        <div style={{ fontFamily: T.fontSerif, fontSize: 18, fontWeight: 500, color: T.ink, marginBottom: 16, overflowWrap: "anywhere" }}>{U.howTitle}</div>
+        <ol style={{ margin: 0, paddingLeft: 22, color: T.body, fontSize: 15, lineHeight: 1.8 }}>
+          {steps.map((s, i) => (
+            <li key={i} style={{ marginBottom: 10, overflowWrap: "anywhere" }}>
+              {s}
+              {i === 3 && <div style={{ color: T.subtle, fontSize: 13, marginTop: 4 }}>{U.howStep4b}</div>}
+            </li>
+          ))}
+        </ol>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 20 }}>
+          <Btn variant="primary" size="lg" onClick={() => { if (onExport) onExport(); }}>{U.howExport}</Btn>
+          <Btn size="lg" onClick={() => { if (onClose) onClose(); }}>{U.howOk}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+// 数据页「导出数据(完整备份)」卡片,按钮上面(R25):这台设备 [改名] / 上次在这台设备上导出。ua 给 guessDeviceName 用(D 线加的可选 prop)
+function DeviceExportStatus({ lang, deviceInfo, env, changed, today, onRename, ua }) {
+  const [editing, setEditing] = useState(null);   // null = 没在改;字符串 = 改名框里的字
+  if (!deviceInfo) return null;
+  const X = devTxt(lang), U = devUiTxt(lang), Ui = uiTxt(lang);
+  const devLine = devFill(X.devLine, { dev: effectiveDeviceName(deviceInfo, env, ua), mode: X[deviceModeKey(env)] });
+  const expLine = deviceExportLine({ exp: deviceInfo.exp, today, changed: !!changed, lang });
+  const commit = () => { const v = editing; setEditing(null); if (onRename) onRename(v); };
+  return (
+    <div data-b6="device-export-status" style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.7, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ overflowWrap: "anywhere" }}>{devLine}</span>
+        {editing === null && (
+          <button type="button" onClick={() => setEditing(_devNameOk(deviceInfo) ? deviceInfo.name : "")}
+            style={{ background: "transparent", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "2px 10px", cursor: "pointer", fontSize: 12, color: T.textPrimary, fontFamily: T.fontSans }}>{X.rename}</button>
+        )}
+      </div>
+      {editing !== null && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0" }}>
+          <input type="text" value={editing} aria-label={U.renameLabel} placeholder={guessDeviceName(env, ua)} autoFocus
+            onChange={e => setEditing(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Escape") { setEditing(null); return; }
+              if (e.key === "Enter" && !(e.nativeEvent && e.nativeEvent.isComposing) && e.keyCode !== 229) commit();
+            }}
+            style={{ fontSize: 16, padding: "4px 8px", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, minWidth: 0, width: 200, maxWidth: "100%", fontFamily: T.fontSans }} />
+          <Btn size="sm" variant="primary" onClick={commit}>{Ui.ok}</Btn>
+          <Btn size="sm" onClick={() => setEditing(null)}>{Ui.cancel}</Btn>
+          <div style={{ flexBasis: "100%", color: T.subtle, fontSize: 11 }}>{U.renameLabel}</div>
+        </div>
+      )}
+      <div style={{ overflowWrap: "anywhere" }}>{expLine}</div>
+    </div>
+  );
+}
+// 员工顶栏下面一行灰字(R43):没有按钮、没有链接、没有钱
+function StaffSafetyLine({ note, lang }) {
+  if (!note) return null;
+  return (
+    <div className="rc-container" data-b6="staff-safety" data-b6-kind={note.kind} style={{ color: T.subtle, fontSize: 13, lineHeight: 1.6, paddingTop: 8, paddingBottom: 2, overflowWrap: "anywhere" }}>
+      {note.text}
+    </div>
+  );
+}
+// 设备环境的五个原始值(R32 / 2.2):每个单独 try/catch,读不到依次是 "" / "" / 0 / false / false。App 第一次渲染时读一次
+function deviceNavRaw() {
+  const nav = (typeof navigator !== "undefined" && navigator) ? navigator : null;
+  const get = (f, d) => { try { const v = f(); return v === undefined ? d : v; } catch (e) { return d; } };
+  return {
+    ua: get(() => nav.userAgent, ""),
+    platform: get(() => nav.platform, ""),
+    maxTouchPoints: get(() => nav.maxTouchPoints, 0),
+    navStandalone: get(() => nav.standalone === true, false),
+    mmStandalone: get(() => !!(typeof window !== "undefined" && window.matchMedia && window.matchMedia("(display-mode: standalone)").matches), false),
+  };
+}
 // R 线:数据页「🗑 回收站(30 天)」卡(紧跟「🛟 恢复备份」卡)、回收站弹窗(层级 T.z.drawer,不带遮罩)
 function RecycleBinCard({ lang, onOpen }) { return null; }
 function RecycleBinDialog({ open, lang, onClose, onRestore, showToast, confirmDialog }) { return null; }
@@ -30345,8 +30739,92 @@ function App() {
   // ─── 第 6 批第 0 步:App 里的空壳状态(plan 裁决 16)。各线新加的监听各写在自己的 effect 里,不改已有的 flush / 多窗口监听 ───
   const [purchaseState, setPurchaseState] = useState(() => purchaseStateLoad(today));   // PB:本机采购状态 korora_purchase_v1(第 0 步只读、读出来是空状态)
   const orderReminders = [];                                                           // PB:「今日」页截单提醒(purchaseReminders 的结果)
-  const [deviceInfo, setDeviceInfo] = useState(() => initDeviceInfo(today));           // D:设备 key(第 0 步 initDeviceInfo 空壳 = {},不读不写)
-  const safetyBanner = null;                                                           // D:安全横幅的种类(safetyBannerOf 的结果)
+  // ─── 第 6 批 D 线(spec_reminder.md):设备 key、导出提醒、横幅、员工那一行、持久存储。全部只写设备 key(korora_device_v1),不碰主存档 ───
+  const [deviceInfo, setDeviceInfo] = useState(() => initDeviceInfo(today));           // D:设备 key 的内存副本(R9:第一次渲染的惰性初值里记 first,不放 effect)
+  const [devNav] = useState(() => { const raw = deviceNavRaw(); return { raw, env: deviceEnvOf(raw) }; });   // 2.2:设备环境每次挂载算一次
+  const devEnv = devNav.env, devUa = devNav.raw.ua;
+  // R7:写设备 key,不管写没写进去内存都跟着改(写不进去时这次打开里照样认)
+  const devWrite = (patch) => { const r = writeDeviceInfo(patch); setDeviceInfo(prev => mergeDevicePatch(prev, patch)); return r; };
+  // R20「导出以后改过」:这次打开以来 / 最后一次导出成功以来 16 个数据值换没换过对象(粘住;程序自己整理也算)。保存失败时提醒只看它
+  const devDataVals = [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings];
+  const devDataNowRef = useRef(devDataVals);
+  devDataNowRef.current = devDataVals;
+  const devDirtyBaseRef = useRef(null);
+  if (devDirtyBaseRef.current === null) devDirtyBaseRef.current = devDataVals;
+  const [expDirty, setExpDirty] = useState(false);
+  useEffect(() => {
+    if (devDataVals.some((v, i) => v !== devDirtyBaseRef.current[i])) setExpDirty(true);
+  }, devDataVals);
+  // R13 / R18 / R19:有没有她的数据、保存失败、存档内容的 hash(按 lastBodyRef 那一串缓存,240 万字算一次约几毫秒)
+  const hasData = hasUserData({ recipes, components, creations, materials, shopMaterials, products, salesLog, productionLog });
+  const devCurHashMemo = useRef({ body: null, hash: null });
+  const devCurHash = () => {
+    const b = lastBodyRef.current;
+    if (typeof b !== "string" || b === "") return null;
+    if (devCurHashMemo.current.body !== b) devCurHashMemo.current = { body: b, hash: backupHash(b) };
+    return devCurHashMemo.current.hash;
+  };
+  const devSaveFailed = saveState.status === "error" && !staleRef.current;
+  const devExpOk = validExp(deviceInfo.exp);
+  const devHashNow = devExpOk ? devCurHash() : null;
+  const exportRem = exportReminderOf({ today, stale: staleRef.current, hasData, saveFailed: devSaveFailed, dirty: expDirty, exp: deviceInfo.exp, curHash: devHashNow, first: deviceInfo.first });
+  const exportView = exportReminderView(exportRem, { lang, exp: deviceInfo.exp });
+  const expChanged = devSaveFailed ? expDirty : (devExpOk && devHashNow !== deviceInfo.exp.hash);   // R25:数据页「之后改过 / 没改过」
+  // R40 存档空了:第一次渲染没有她的数据时挂载后读一次备份列表;这次打开里只要有一次有了数据就不再出
+  const [emptyBackups, setEmptyBackups] = useState(null);
+  const devEmptyDoneRef = useRef(false);
+  if (hasData) devEmptyDoneRef.current = true;
+  const devFirstHasData = useRef(hasData).current;
+  const devHasDataRef = useRef(hasData);
+  devHasDataRef.current = hasData;
+  const emptyNow = devEmptyDoneRef.current ? null : emptyBackups;
+  const safetyBanner = safetyBannerOf({ env: devEnv, hide: deviceInfo.hide, today, hasData, empty: emptyNow, stale: staleWindow || staleRef.current, swUpdate: swUpdateReady, staffMode });   // D:安全横幅的种类(R37)
+  const safetyNote = staffMode ? staffSafetyNoteOf({ env: devEnv, hide: deviceInfo.hide, today, hasData, empty: emptyNow, rem: exportRem, lang }) : null;   // R42:员工顶栏下面那一行
+  const closeSafetyBanner = (kind) => { const p = closeBannerPatch(kind, today, emptyNow); if (p) devWrite(p); };   // R41
+  const renameDevice = (v) => devWrite(renameDevicePatch(v));                                                          // R35
+  // R26 启动 toast:只在挂载和退出员工模式两个时刻判;按钮调最新的 exportData(提示条停住以后再点,也导出那一刻的数据)
+  const devExportRef = useRef(null);
+  const runExport = () => { if (devExportRef.current) devExportRef.current(); };
+  const devStartJudgeRef = useRef(null);
+  devStartJudgeRef.current = () => {
+    const t = startToastOf({ rem: exportRem, staffMode, stale: staleRef.current, toastDay: deviceInfo.toastDay, today, lang });
+    if (!t) return;                                    // 推不出来时什么都不写(员工模式开机不写 toastDay)
+    showToast(t.msg, { undo: runExport, ms: t.ms, actionLabel: t.actionLabel });
+    devWrite({ toastDay: today });
+  };
+  const devMountedRef = useRef(false);
+  useEffect(() => {
+    if (devMountedRef.current) return;
+    devMountedRef.current = true;
+    if (devStartJudgeRef.current) devStartJudgeRef.current();   // 挂载时刻(这时自动保存还没跑:saveFailed / dirty 都是假)
+    if (!devFirstHasData) {
+      listBackupSnapshots().then(metas => {
+        if (devHasDataRef.current || devEmptyDoneRef.current) return;
+        const e = emptyBackupsOf(metas);
+        if (e) setEmptyBackups(e);
+      }).catch(() => {});
+    }
+    // R44 到 R46:每次挂载问一次持久存储;答不答应都不弹错,只记进设备 key(不支持 → 什么都不写)
+    let st;
+    try { st = (typeof navigator !== "undefined" && navigator) ? navigator.storage : undefined; } catch (e) { st = undefined; }
+    askPersist(st, devEnv).then(r => { if (r !== null) devWrite({ persist: { at: new Date().toISOString(), ok: r } }); }).catch(() => {});
+  }, []);
+  const devPrevStaffRef = useRef(staffMode);
+  useEffect(() => {
+    const was = devPrevStaffRef.current;
+    devPrevStaffRef.current = staffMode;
+    if (was && !staffMode && devStartJudgeRef.current) devStartJudgeRef.current();   // 退出员工模式(本窗口退出、别的窗口切的都算)
+  }, [staffMode]);
+  // R8:别的窗口写了设备 key → 整份重读(只保住本窗口的 first)。只认 DEVICE_KEY,和主存档的多窗口监听互不相干
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (!e || e.key !== DEVICE_KEY) return;
+      const r = readDeviceInfo();
+      setDeviceInfo(prev => isDateStr(r.first) ? r : { ...r, first: isDateStr(prev.first) ? prev.first : null });
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   const [binOpen, setBinOpen] = useState(false);                                       // R:回收站弹窗
   const [howToOpen, setHowToOpen] = useState(false);                                   // D:「怎么装」全屏说明
   // PC / KB 的打印入口:写 printTarget(对应的弹窗第 0 步是空壳,还没有地方调这两个)
@@ -31249,13 +31727,51 @@ function App() {
     { id: "data", zh: "数据", ja: "データ" },
   ];
 
+  // 第 6 批 D 线(spec_reminder R27 到 R31):导出完整备份。入口(数据页按钮、顶栏「💾」、抽屉那一行、启动提示条、Safari 横幅、「怎么装」)都是它,都不弹确认框。
+  // 员工模式不做;停止保存的窗口拦住(内存里是旧数据,也不能把两个窗口共用的「上次导出」改成刚才);先存没存的改动(存不进去也照样导出 —— 存储满了时这是唯一的办法);
+  // 文件内容的写法一个字不改,只换文件名(带时间和设备名);iPad / iPhone 走系统分享面板(点了取消不算导出过);成功后记设备 key 的 exp(hash 取导出的那份内容)
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, exportedAt: new Date().toISOString(), version: 17 }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    // 2026-09-29 体检第 2 批:文件名用北京本地日期(以前 UTC,早上 8 点前导出的名字是昨天)
-    const a = document.createElement("a"); a.href = url; a.download = `patisserie_${localDateStr()}.json`; a.click();
-    URL.revokeObjectURL(url); showToast("✓ 导出成功");
+    if (staffMode) return;
+    const X = devTxt(lang);
+    if (staleRef.current) { showToast(X.staleBlock); return; }
+    if (pendingRef.current && !staleRef.current) {
+      const res = saveNowRef.current();
+      if (res && res.ok) pendingRef.current = false;
+    }
+    const clickAt = new Date();
+    const snapArr = devDataVals;
+    const hash = backupHash(saveBodyOf({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings }));
+    const text = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, exportedAt: clickAt.toISOString(), version: 17 }, null, 2);
+    const file = exportFileName(clickAt, effectiveDeviceName(deviceInfo, devEnv, devUa));
+    const done = (via) => {
+      devWrite({ exp: { at: clickAt.toISOString(), hash, file, via } });
+      devDirtyBaseRef.current = snapArr;
+      setExpDirty(devDataNowRef.current.some((v, i) => v !== snapArr[i]));
+      showToast(devFill(via === "share" ? X.doneShare : X.doneDownload, { file }));
+    };
+    const download = () => {
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = file; a.click();
+      URL.revokeObjectURL(url);
+      done("download");
+    };
+    let share = null;
+    if (devEnv.ios) {
+      try {
+        const nav = (typeof navigator !== "undefined" && navigator) ? navigator : null;
+        if (nav && typeof nav.share === "function" && typeof nav.canShare === "function") {
+          const f = new File([text], file, { type: "application/json" });
+          if (nav.canShare({ files: [f] }) === true) share = { nav, f };
+        }
+      } catch (e) { share = null; }
+    }
+    if (!share) { download(); return; }
+    let p;
+    try { p = share.nav.share({ files: [share.f] }); } catch (e) { download(); return; }
+    Promise.resolve(p).then(() => done("share"), (err) => { if (err && err.name === "AbortError") return; download(); });
   };
+  devExportRef.current = exportData;
 
   // v11: 导出"仅 IP 分发包" — 剥离 shopMaterials 避免泄露本店采购价
   // 用于打包卖给买家,买家导入后自己录 shopMaterials
@@ -31739,8 +32255,8 @@ function App() {
         </div>
       )}
       {/* 第 6 批第 0 步:D 的安全横幅(存档空了 / 微信 / Safari 标签页 / 主屏幕版第一次;优先级在别的窗口改过、新版本之后)和「怎么装」说明,R 的回收站弹窗。空壳 */}
-      {!staffMode && safetyBanner && <SafetyBanner kind={safetyBanner} lang={lang} onClose={() => {}} onHowTo={() => setHowToOpen(true)} onExport={exportData} onOpenRestore={() => setShowBackupDialog(true)} onGoData={() => goTab("data")} />}
-      {!staffMode && <HomeScreenHowTo open={howToOpen} lang={lang} onClose={() => setHowToOpen(false)} onExport={exportData} />}
+      {!staffMode && safetyBanner && <SafetyBanner kind={safetyBanner} lang={lang} empty={emptyNow} onClose={closeSafetyBanner} onHowTo={() => setHowToOpen(true)} onExport={runExport} onOpenRestore={() => setShowBackupDialog(true)} onGoData={() => goTab("data")} />}
+      {!staffMode && <HomeScreenHowTo open={howToOpen} lang={lang} onClose={() => setHowToOpen(false)} onExport={runExport} />}
       {!staffMode && <RecycleBinDialog open={binOpen} lang={lang} onClose={() => setBinOpen(false)} showToast={showToast} confirmDialog={confirmDialog} />}
       {/* 第 5 批 E4:「没保存的修改」草稿列表浮层(第 0 步空壳;员工模式不出) */}
       {!staffMode && <DraftList lang={lang} />}
@@ -31890,7 +32406,7 @@ function App() {
           onClose={() => setShowDataHealth(false)}
           onJump={jumpToItem}
           fix={dataHealthFix}
-          topInset={staleWindow ? "stale" : swUpdateReady ? "sw" : ""}
+          topInset={staleWindow ? "stale" : swUpdateReady ? "sw" : safetyBanner ? "safety:" + safetyBanner : ""}
         />
       )}
 
@@ -32138,8 +32654,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <Wordmark size={22} />
           {/* 保存指示在按钮组左侧 —— 数据只在本地，老板要能确信东西没丢 */}
           <div style={{ display: "flex", alignItems: "center", gap: T.sp.l, flexShrink: 0 }}>
-            {/* 第 6 批第 0 步:D 的「💾 N 天没导出」(只在要提醒时;空壳),放在 DraftChip 左边 */}
-            <ExportChip view={null} lang={lang} onExport={exportData} />
+            {/* 第 6 批 D 线:「💾 N 天没导出」(只在要提醒时,R24),放在 DraftChip 左边 */}
+            <ExportChip view={exportView} level={exportRem.level} lang={lang} onExport={exportData} />
             {/* 第 5 批 E4:「📝 N」没保存的修改(第 0 步空壳),放在 SaveStatus 左边 */}
             <DraftChip lang={lang} />
             <SaveStatus state={saveState} lang={lang} onRetry={() => {
@@ -32217,6 +32733,19 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 <span style={{ color: T.muted }}>→</span>
               </button>
             ))}
+            {/* 第 6 批 D 线:手机上「💾 导出完整备份 · N 天没导出」在这里(只在要提醒时;不带角标、不进「更多」角标合计),点了先关抽屉再导出 */}
+            {exportView.show && (
+              <button type="button" data-b6="export-drawer" data-b6-level={exportRem.level} onClick={() => { setMoreOpen(false); exportData(); }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+                  minHeight: 56, padding: "0 16px", background: "transparent", cursor: "pointer",
+                  border: "none", borderBottom: `1px solid ${T.lineFaint}`, borderLeft: "3px solid transparent",
+                  color: exportView.tone === "warning" ? T.warning : T.danger, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
+                }}>
+                <span style={{ overflowWrap: "anywhere" }}>{exportView.drawer}</span>
+                <span style={{ color: T.muted }}>→</span>
+              </button>
+            )}
             {/* 审查 r1:手机上员工模式从这里进(顶栏那个按钮手机宽度下藏起来了) */}
             <button data-drawer-staff="1" onClick={() => { setMoreOpen(false); askStaffEnter(); }}
               style={{
@@ -33137,15 +33666,15 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
           <FxSettingCard appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
 
-          {/* v57: 本地存储用量(第 6 批第 0 步抽成 StorageMeterCard,DOM 一样;D 线改主数字) */}
-          <StorageMeterCard lang={lang} />
+          {/* v57: 本地存储用量(第 6 批第 0 步抽成 StorageMeterCard;D 线改成按实际算 + 持久存储那一行;位置不挪) */}
+          <StorageMeterCard lang={lang} persistLine={persistLineOf(deviceInfo, lang)} />
 
           {(() => {
             // v17: 数据管理页整理 — 6 张操作卡片按用途分 3 组 + 小标题(功能/handler 不变,仅重排+加层次)
             const card = (s, i) => (
               <div key={i} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "0.75rem" }}>
                 <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary, marginBottom: 4 }}>{s.title}</div>
-                <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>{s.desc}</p>
+                <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>{s.desc}{s.descNote || null}</p>
                 {s.action}
               </div>
             );
@@ -33153,8 +33682,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.2px", textTransform: "uppercase", fontWeight: 500, margin: "1.5rem 0 0.6rem" }}>{txt}</div>
             );
             const backupCards = [
-              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_HOURS} 小时每小时一份、最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
-              { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <>{/* 第 6 批第 0 步:D 的「这台设备 / 上次导出」两行放在按钮上面(空壳) */}<DeviceExportStatus lang={lang} deviceInfo={deviceInfo} /><Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn></> },
+              { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_HOURS} 小时每小时一份、最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, descNote: <span data-b6="restore-note">{devUiTxt(lang).restoreNote}</span>, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
+              { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <>{/* 第 6 批 D 线:「这台设备 [改名] / 上次在这台设备上导出」两行放在按钮上面(R25) */}<DeviceExportStatus lang={lang} deviceInfo={deviceInfo} env={devEnv} ua={devUa} changed={expChanged} today={today} onRename={renameDevice} /><Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn></> },
               { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             ];
             const exchangeCards = [
@@ -33267,7 +33796,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           rawPlan={appSettings.prodPlan} updatePlan={updateSheetPlan} onLogProduction={logProdFromSheet}
           prepStock={prepStock} prepOn={prepOn} onPrepOp={onPrepOp} onLogLine={logProdFromSheet}
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
-          onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit}
+          onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit} safetyNote={safetyNote}
           saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
             const res = doSave();
             setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
