@@ -4976,7 +4976,13 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
       async () => {
         // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
         let payload = await getBackupPayload(snap);
-        if (lsHasMovedTo(payload)) { try { payload = unfreeze(payload); } catch (e) { payload = null; } }   // 第 −1 步(R115):写回前去掉 movedTo
+        // 第 −1 步复查(R115):确认框开着的时候数据被搬走了 —— 在存「恢复备份之前」之前就停,不然会把搬家标记(157 字、条数全 0)存成一份固定备份
+        if (_movedAway) { movedAwayToast(); return; }
+        if (lsHasMovedTo(payload)) {   // 第 −1 步(R115):写回前去掉 movedTo
+          try { payload = unfreeze(payload); } catch (e) { payload = null; }
+          // 复查:去掉以后既没有配方也没有旧价格表(存成了备份的搬家小标记)= 读不出来 —— 写回去 loadData 会当成没有数据、换上预置数据
+          try { const o = payload && JSON.parse(payload); if (o && !o.recipes && !o.cats) payload = null; } catch (e) { payload = null; }
+        }
         if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
         const doRestore = () => {
           if (_movedAway) { movedAwayToast(); return; }   // 确认框开着的时候数据被搬走了
@@ -4994,6 +5000,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
         let pinned = true;
         try {
           const current = localStorage.getItem(STORAGE_KEY);
+          if (lsHasMovedTo(current)) { movedAwayToast(); return; }   // 别的窗口刚搬完家、storage 事件还没到:存档已经是搬家标记 / 冻结副本,不存、不写
           if (current && current !== payload) pinned = await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
         } catch (e) { pinned = false; }
         // 审查发现:以前固定备份没存上也照样覆盖,对话框却说「会先存一份」。和覆盖导入 / 清除全部一样,存不上先问
