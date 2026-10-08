@@ -1859,9 +1859,9 @@ const _ingContentKey = (ing, matIds) => {
   const ug = _normNum(ing.unitGrams);
   if (ug) k.push("ug:" + ug);
   // 审查 b4r1:组件已删的行(同「指向已删材料」)价就是快照本身,要算内容 —— 不比的话组件里刷新的快照 / 手改的价到不了跟组件库走的部分,组件一删两边成本悄悄不一样
-  // 第 5 批复查修(R3-DATA-1):matIds === null(只有锁定指纹 lockSeenKey 这样传)时也不看组件在不在 —— 同 R2-DATA-3 不看材料在不在:
-  // 删掉子组件时删除那一刻把同一份快照写进两边,内容没分开,指纹却变了,锁定的部分会冒「组件库有新版本」、把接受过的旧差异再列一遍
-  if (!mid && !(cid && (matIds === null || _componentsById.has(ing.componentId))) && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
+  // 锁定指纹(lockSeenKey,matIds 传 null)也照这条:组件已删的行快照就是内容,改了价要冒「组件库有新版本」(复查 recheck-md-2 撤回了 R3-DATA-1 的例外)。
+  // 删子组件那一刻指纹会变,不算出了新版本 —— 由组件仓库的删除(lockSeenShift)把看过删前那一版的锁定部分的 lockSeen 一起换成删后的
+  if (!mid && !(cid && _componentsById.has(ing.componentId)) && !ing.noCost) k.push(_normNum(ing.unitPrice), curOf(ing), _normNum(ing.cost));
   return k;
 };
 const layerContentKey = (x, matIds) => JSON.stringify(x ? [
@@ -2096,8 +2096,8 @@ const _hash32 = (s) => {   // FNV-1a 32 位 → 8 位十六进制(lockSeen 指�
 //   · 记号:MARK(l) = 部分是对象且 lockFrom 为真(有锁定标记);LK(l) = MARK 且 localVariant 为真(锁着的部分)。
 //     lockFrom 的值("follow" / "differs")只是记录,所有判定只看真假;lockSeen 只用 !== 和指纹比。
 //   · 三个新键都不进 layerContentKey —— 写它们不改内容、不改任何成本;锁定 / 解锁本身一分钱都不变。
-//   · 内容比较读渲染期注入的组件表(_ingContentKey 看「来自组件」行的组件在不在),调用前注入的组件表要和参数 components 是同一份。
-//     指纹(lockSeenKey)不看组件在不在、也不看材料在不在(复查修 R2-DATA-3 / R3-DATA-1),所以不靠注入的组件表。
+//   · 指纹 / 内容比较读渲染期注入的组件表(_ingContentKey 看「来自组件」行的组件在不在),调用前注入的组件表要和参数 components 是同一份。
+//     指纹(lockSeenKey)不看材料在不在(复查修 R2-DATA-3);子组件在不在要看(组件已删的行快照算内容,recheck-md-2)。
 const _lockIsObj = (x) => x !== null && typeof x === "object";
 const _lockMark = (l) => _lockIsObj(l) && !!l.lockFrom;
 const _lockLK = (l) => _lockMark(l) && !!l.localVariant;
@@ -2107,7 +2107,8 @@ const _lockCompOf = (l, components) => (_lockIsObj(l) && l.sourceComponentId)
 // 她最后看过 / 接受的组件库内容指纹(R2)。
 // 第 5 批复查修(R2-DATA-3):指纹不看材料还在不在(matIds 传 null:关联行留着材料 id、不加价快照)—— 以前删掉组件用到的任何一个材料,
 // 指纹就变,锁定时已经不一样 / 点过「保持现在的」的部分又冒「组件库有新版本」,还把她接受过的旧差异再列一遍。matIds 参数留着(调用方不用改)
-// 复查修 R3-DATA-1:「来自组件」行的子组件在不在也不看(_ingContentKey 收到 null 时不按组件在不在加价快照)—— 删子组件 / 撤销删除都不再让指纹变
+// 「来自组件」行的子组件在不在照旧看(复查 recheck-md-2 撤回 R3-DATA-1):子组件删了以后那一行的快照就是 X 的内容,改它的价 X 的指纹要变;
+// 删子组件本身让指纹变的那一下,由组件仓库的删除调 lockSeenShift 抵掉(不冒新版本、撤销删除也不冒)
 const lockSeenKey = (comp, matIds) => _hash32(layerContentKey(comp, null));
 const isCreationLocked = (c) => !!(c && c.lockedAt);
 // 锁定的产品里这一部分:组件库有没有她还没看过的新内容(R7)。内容和组件库一样时永远是 false(不管 lockSeen)
@@ -2164,6 +2165,16 @@ const lockMdOf = (lockedAt) => { const d = new Date(lockedAt); return isNaN(d.ge
 const layerUseLibLocked = (l, comp, matIds) => (!_lockIsObj(l) || !comp) ? l
   : { ...l, ...layerContentFromComponent(comp), follow: false, localVariant: true, lockFrom: l.lockFrom || "follow", lockSeen: lockSeenKey(comp, matIds) };
 const layerKeepLocked = (l, comp, matIds) => (!_lockIsObj(l) || !comp) ? l : { ...l, lockSeen: lockSeenKey(comp, matIds) };
+// 复查修(recheck-md-2):组件仓库删组件 Y 那一刻,X 里「来自 Y」的行改按快照算(快照算内容),X 的指纹跟着变 —— 这不算 X 出了新版本。
+// fps:组件 id → [删前指纹, 删后指纹](只放变了的)。dir 1 = 删除(前 → 后),-1 = 撤销删除(后 → 前)。
+// 锁着的部分(LK)lockSeen 正好是「前」(她看过的就是那一版)才换成「后」;本来就有没看过的新版本的不动。不用改时原样返回同一个对象
+const lockSeenShift = (l, fps, dir) => {
+  if (!_lockLK(l) || !(fps instanceof Map)) return l;
+  const e = fps.get(l.sourceComponentId);
+  if (!e) return l;
+  const from = dir < 0 ? e[1] : e[0], to = dir < 0 ? e[0] : e[1];
+  return l.lockSeen === from ? { ...l, lockSeen: to } : l;
+};
 // 显示用(R9):{ locked, at, md, newVer: [部分下标], byOld: [部分下标] }。没锁的产品里游离的锁定标记一律不显示
 const creationLockView = (c, components, matIds) => {
   const locked = isCreationLocked(c);
@@ -4621,6 +4632,20 @@ const packGramsOf = (ps, m) => {
   const cnt = parsePackCount(ps), gpp = _gramsNum(m && m.gramsPerPiece), pu = _normCountUnit(m && m.pieceUnit);
   return (cnt && isFinite(gpp) && gpp > 0 && pu !== "" && pu === _normCountUnit(cnt.unit)) ? cnt.n * gpp : g0;
 };
+// 复查修(recheck-md-1):采购页「几包」。按件的规格(packGramsOf 走「个数 × 每个克数」那条)数个数:和规格同一个计件单位的行按写的数量,
+// 其余行(克 / 千克 / 别的单位)按算进去的克数 ÷ 材料每个克数 —— 行上自己填的克重(R1 优先)和材料的不一样时拿总克数除会差出整包
+// (12 個 × 行上 50 g = 600 g,按材料 60 g/個 一包 600 g 算成 1 包,其实 12 個 要 2 包)。units = computeMaterialNeeds 结果上不可枚举的 unitNeeds[材料 id]。
+// 按克的规格 / 没有 units 时 = ceil(克数 ÷ 一包克数),和以前一样;一包几克读不出 → null(「规格未知」)
+const packsNeededOf = (ps, m, grams, units) => {
+  const packG = packGramsOf(ps, m);
+  if (!(packG > 0)) return null;
+  const cnt = parsePackSizeToGrams(ps) > 0 ? null : parsePackCount(ps);
+  if (!cnt || !units) return Math.ceil(grams / packG);
+  const gpp = _gramsNum(m && m.gramsPerPiece), k = _normCountUnit(cnt.unit);
+  let pcs = 0;
+  Object.keys(units).forEach(uk => { pcs += uk === k ? units[uk].q : units[uk].g / gpp; });
+  return Math.ceil(Number((pcs / cnt.n).toPrecision(12)));
+};
 
 // ─── UI primitives ───────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
@@ -6515,7 +6540,11 @@ function SaveStatus({ state, lang, onRetry }) {
     const hh = state.at ? `${String(state.at.getHours()).padStart(2, "0")}:${String(state.at.getMinutes()).padStart(2, "0")}` : "";
     return wrap(T.success, <>{dot(T.success)}{lang === "zh" ? "已保存" : "保存済み"} {hh}</>);
   }
-  return wrap(T.danger, <>{dot(T.danger)}{state.msg || (lang === "zh" ? "保存失败" : "保存失敗")}
+  // recheck-ui-print-2:停止保存的两种原因按当下的语言出字(以前在自动保存的 effect 里按那一刻的语言拼好存进 msg,切了语言不跟着换)
+  const msg = state.reason === "moved" ? (lang === "zh" ? "已停止保存:数据已搬到新版本,请刷新" : "保存停止:新しいバージョンに移行済み。再読み込みしてください")
+    : state.reason === "stale" ? (lang === "zh" ? "已停止保存:数据在别的窗口改过,请刷新" : "保存停止:別のウィンドウで変更されました。再読み込みしてください")
+    : state.msg;
+  return wrap(T.danger, <>{dot(T.danger)}{msg || (lang === "zh" ? "保存失败" : "保存失敗")}
     <button onClick={onRetry} style={{ background: "none", border: "none", borderBottom: `1px solid ${T.danger}`, color: T.danger, cursor: "pointer", padding: 0, font: "inherit" }}>
       {lang === "zh" ? "重试" : "再試行"}
     </button></>);
@@ -8150,12 +8179,44 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const rsR = new Map(), rsC = new Map(), rsL = new Map();
           (recipes || []).forEach(r => { const n = r && reSnap(r.ingredients); if (r && n !== r.ingredients) rsR.set(r.id, [r.ingredients, n]); });
           (components || []).forEach(c => { if (!c || c.id === snap.id) return; const n = reSnap(c.ingredients); if (n !== c.ingredients) rsC.set(c.id, [c.ingredients, n]); });
+          // 复查修 recheck-md-2:部分的来源组件 X 里有「来自这个组件」的行 → 删了以后那几行按快照算(快照算内容),X 的指纹变了。
+          // 先算好 X 删前 / 删后的指纹(删后 = 去掉这个组件、换好快照的组件库),看过删前那一版的锁定部分 lockSeen 一起换(lockSeenShift),不冒「组件库有新版本」。
+          // 没锁的部分的来源也算上:删着的时候才锁上的,撤销删除时要换回来
+          const srcIds = new Set();
+          (creations || []).forEach(cr => (cr && Array.isArray(cr.layers) ? cr.layers : []).forEach(l => { if (l && l.sourceComponentId) srcIds.add(l.sourceComponentId); }));
+          const fps = new Map();
+          if (srcIds.size) {
+            const compsAfter = (components || []).filter(x => x && x.id !== snap.id).map(x => rsC.has(x.id) ? { ...x, ingredients: rsC.get(x.id)[1] } : x);
+            const seen = new Set();
+            const xs = compsAfter.filter(x => srcIds.has(x.id) && !seen.has(x.id) && seen.add(x.id));   // 同 id 只看第一个(同 _lockCompOf)
+            const kbs = withComponentsLookup(components, () => xs.map(x => lockSeenKey(components.find(c => c && c.id === x.id))));
+            const kas = withComponentsLookup(compsAfter, () => xs.map(x => lockSeenKey(x)));
+            xs.forEach((x, i) => { if (kbs[i] !== kas[i]) fps.set(x.id, [kbs[i], kas[i]]); });
+          }
           (creations || []).forEach(cr => {
             if (!cr || !Array.isArray(cr.layers)) return;
             let ch = false;
-            const n = cr.layers.map(l => { const ni = l ? reSnap(l.ingredients) : null; if (!l || ni === l.ingredients) return l; ch = true; return { ...l, ingredients: ni }; });
+            const n = cr.layers.map(l => {
+              const ni = l ? reSnap(l.ingredients) : null;
+              const l2 = lockSeenShift((!l || ni === l.ingredients) ? l : { ...l, ingredients: ni }, fps, 1);
+              if (l2 !== l) ch = true;
+              return l2;
+            });
             if (ch) rsL.set(cr.id, [cr.layers, n]);
           });
+          // 撤销删除:上面按引用换不回去的(删了以后又动过的产品、删着的时候才锁上的),lockSeen 还是「删后」的锁定部分换回「删前」
+          const unshiftLocks = (prev) => {
+            if (fps.size === 0) return prev;
+            let any = false;
+            const next = prev.map(cr => {
+              if (!cr || !Array.isArray(cr.layers)) return cr;
+              let ch = false;
+              const ls = cr.layers.map(l => { const x = lockSeenShift(l, fps, -1); if (x !== l) ch = true; return x; });
+              if (!ch) return cr;
+              any = true; return { ...cr, layers: ls };
+            });
+            return any ? next : prev;
+          };
           const swap = (m, key, from, to) => (prev) => m.size === 0 ? prev : prev.map(x => { const e = x && m.get(x.id); return e && x[key] === e[from] ? { ...x, [key]: e[to] } : x; });
           const doDelete = () => {
             const idx = components.findIndex(x => x.id === snap.id);
@@ -8175,6 +8236,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
                 });
                 if (setRecipes && rsR.size) setRecipes(swap(rsR, "ingredients", 1, 0));
                 if (setCreations && rsL.size) setCreations(swap(rsL, "layers", 1, 0));
+                if (setCreations && fps.size) setCreations(unshiftLocks);
               },
             });
           };
@@ -9630,8 +9692,11 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       {ing._priceModified && (
                         <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + (
                           // 第 5 批复查修(r3-money-3):原价和输入框同一个口径 —— S1 起 kg / L 行、填了克重的计件行存的是「每这一行单位」的价,不能按每克 ×100 写成 /100g
+                          // recheck-ui-print-1:每单位的原价照 fmtUnitPrice 的写法 —— 人民币「¥800/kg」、日元「800円/kg」(円 在数字后),显示口径人民币时日元折算标 ≈;没有原价不写数
                           (basis.per100 || basis.label === "g") ? fmtUnitPrice(ing._originalPrice, curOf(ing))
-                            : `${curOf(ing) === "CNY" ? "¥" : "円"}${ingPriceShown(ing._originalPrice, false)}/${basis.label}`) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
+                            : ((v) => !v ? "" : curOf(ing) !== "JPY" ? `¥${v}/${basis.label}`
+                              : _displayCur === "CNY" ? ((c) => c > 0 ? `≈¥${c}/${basis.label}` : "")(Math.round(parseFloat(v) * _fxJpyToCny * 100) / 100)
+                              : `${v}円/${basis.label}`)(ingPriceShown(ing._originalPrice, false))) + ")"} style={{ padding: "2px 4px", fontSize: 11, background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }}>↺</button>
                       )}
                     </div>
                     )}
@@ -22388,14 +22453,15 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
       const pre = oh0.size ? computeMaterialNeeds(pLines, pCtx, { onHand: oh0 }).prepPlan || [] : [];
       ohWin = prepWindowUsable(oh0, pre, d0, d1, prepOnHandAt);
     }
-    const { grams, skipped, prepPlan } = computeMaterialNeeds(pLines, pCtx, ...(withPrep ? [{ onHand: ohWin }] : []));
+    const need = computeMaterialNeeds(pLines, pCtx, ...(withPrep ? [{ onHand: ohWin }] : []));
+    const { grams, skipped, prepPlan } = need;
     // 按 supplier 分组
-    const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm}]
+    const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm, units}](units:按单位分的数量,「几包」数个数用,recheck-md-1)
     Object.entries(grams).forEach(([materialId, g]) => {
       const sm = (shopMaterials || []).find(x => x.materialId === materialId);
       const supId = sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0] ? sm.supplierIds[0] : "";
       if (!bySupplier[supId]) bySupplier[supId] = [];
-      bySupplier[supId].push({ materialId, grams: g, sm });
+      bySupplier[supId].push({ materialId, grams: g, sm, units: (need.unitNeeds && need.unitNeeds[materialId]) || null });
     });
     // 每组排序: 按克数降序
     Object.values(bySupplier).forEach(arr => arr.sort((a, b) => b.grams - a.grams));
@@ -22578,8 +22644,8 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
                   <div style={{ display: "grid", gap: 4 }}>
                     {items.map(it => {
                       const mat = materials.find(m => m.id === it.materialId);
-                      const packG = it.sm && it.sm.packSize ? packGramsOf(it.sm.packSize, mat) : ((mat && mat.packSize) ? packGramsOf(mat.packSize, mat) : 0);   // 复查修 r3-money-4:按件的规格 × 每个克数
-                      const packs = packG > 0 ? Math.ceil(it.grams / packG) : null;
+                      // 复查修 r3-money-4:按件的规格 × 每个克数;recheck-md-1:按件的规格数个数(行上克重和材料的不一样时不拿克数除)
+                      const packs = it.sm && it.sm.packSize ? packsNeededOf(it.sm.packSize, mat, it.grams, it.units) : ((mat && mat.packSize) ? packsNeededOf(mat.packSize, mat, it.grams, it.units) : null);
                       const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
                       const subtotal = pricePerG > 0 ? pricePerG * it.grams : 0;
                       const approx = !!(it.sm && curOf(it.sm) === "JPY");
@@ -25301,6 +25367,16 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
   const prodMode = !!(opts && opts.production);
   const mLabel = (o) => o ? (lang === "zh" ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) : "";
   const grams = {}; // materialId -> 总克数
+  // 复查修(recheck-md-1):materialId → { 单位键 → { q: 这个单位写的数量合计, g: 这些行算进 grams 的克数合计 } }(按重量写的行单位键是 "\u0000w")。
+  // 采购页按件的规格(「20本」)数个数用(packsNeededOf);挂在结果上不可枚举(老测试逐字比结果对象,结果的可枚举键不变)
+  const unitNeeds = {};
+  const addGrams = (ing, q, g) => {
+    grams[ing.materialId] = (grams[ing.materialId] || 0) + g;
+    const k = ingWeightFactor(ing.unit) > 0 ? "\u0000w" : _normCountUnit(ing.unit);
+    const u = unitNeeds[ing.materialId] || (unitNeeds[ing.materialId] = {});
+    const e = u[k] || (u[k] = { q: 0, g: 0 });
+    e.q += q; e.g += g;
+  };
   // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
   // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
   const skipped = new Map();
@@ -25439,7 +25515,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       if (q <= 0) { skip("badQty", src, `${nm}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
       // 第 5 批 2.4(S1,R23):采购克数乘这一行的克重系数(kg / L ×1000、按个写填了克重的 × 每个几克;计件没克重的照旧「把个当克」= × 1)。
       // 生产模式的 addWeigh 不乘(厨房数个数)。求值顺序 ((q × 倍数) × 系数),系数 1 时和以前逐位相同
-      grams[ing.materialId] = (grams[ing.materialId] || 0) + q * multiplier * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1);
+      addGrams(ing, q * multiplier, q * multiplier * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1));
       if (prodMode) addWeigh(ing, q * multiplier, src);
     });
     (obj.layers || []).forEach(l => collect(l, multiplier, src, path));
@@ -25487,7 +25563,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
           if (!ing.materialId && !prodMode) { skip("unlinked", src, ingName(ing)); return; }
           if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
           // 第 5 批 2.4(S1,R23):组合产品分支自己的 grams 写入点,同样乘克重系数(采购页审查 M2)
-          if (ing.materialId) grams[ing.materialId] = (grams[ing.materialId] || 0) + qty * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1);
+          if (ing.materialId) addGrams(ing, qty, qty * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1));
           if (prodMode) addWeigh(ing, qty, src);
         });
       });
@@ -25575,6 +25651,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     });
   }
   const out = { grams, skipped: [...skipped.values()].map(x => ({ ...x, names: [...x.names] })) };
+  Object.defineProperty(out, "unitNeeds", { value: unitNeeds, enumerable: false });
   if (prodMode) {
     // 审查 r3:没关联百科的行并进同名(同单位)且只有一个的关联行 —— 以前「粉糖 1,978 g」「粉糖 1,800 g」分两行、按量排开,员工拿了一行就以为够了
     const vals = [...weigh.values()];
@@ -29162,8 +29239,12 @@ function App() {
   }, []);
   // 2026-09-29 体检第 2 批:覆盖导入 / 清除全部之前存一份「固定」备份(不参与自动轮换)。
   // 先把还没写进去的改动写掉,再拿存档里的内容备份。返回 true = 存上了
+  // big-2 第 −1 步复查(recheck-md-3):数据已经搬进新库的旧窗口(或存档已经是搬家标记、storage 事件还没到)—— 存档是标记,
+  // 存成固定备份只占一格、恢复了也读不出来;清掉 / 导入也存不进去。toast 后返回 "moved",三个调用方整件事不做
   const pinBackupNow = async (reason) => {
+    const moved = () => { showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再操作" : "このウィンドウは古いバージョンです。再読み込みしてから操作してください"); return "moved"; };
     try {
+      if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) return moved();
       if (pendingRef.current && !staleRef.current) {
         const res = saveNowRef.current();
         if (res && res.ok) pendingRef.current = false;
@@ -29176,7 +29257,8 @@ function App() {
 
   useEffect(() => {
     if (staleRef.current) {
-      setSaveState({ status: "error", at: null, msg: lang === "zh" ? "已停止保存:数据在别的窗口改过,请刷新" : "保存停止:別のウィンドウで変更されました。再読み込みしてください" });
+      // recheck-ui-print-2:只记原因(搬走了 / 别的窗口改过),文字由 SaveStatus 按当下的语言出 —— 一打开就搬走了的窗口这里跑在第一次渲染,lang 还是缺省中文
+      setSaveState({ status: "error", at: null, reason: _movedAway ? "moved" : "stale" });
       return;
     }
     setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
@@ -29188,7 +29270,7 @@ function App() {
         // 数据只存在浏览器本地，所以「已保存」必须显式给出时间 —— 老板要能确信东西没丢
         setSaveState({ status: "saved", at: new Date() });
       } else if (res && res.error === "stale") {
-        setSaveState({ status: "error", at: null, msg: lang === "zh" ? "已停止保存:数据在别的窗口改过,请刷新" : "保存停止:別のウィンドウで変更されました。再読み込みしてください" });
+        setSaveState({ status: "error", at: null, reason: _movedAway ? "moved" : "stale" });
       } else {
         const msg = (res && res.error && res.error.includes("uota"))
           ? (lang === "zh" ? "保存失败：本地空间不足，去「数据」页清理旧数据" : "保存失敗：容量不足。データ画面で整理してください")
@@ -29640,7 +29722,9 @@ function App() {
       if (dhClearCatsBusy.current) return;
       dhClearCatsBusy.current = true;
       try {
-        if (await pinBackupNow("clear-cats")) doClear(true);
+        const pb = await pinBackupNow("clear-cats");
+        if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
+        if (pb) doClear(true);
         else confirmDialog(
           zh ? "清之前的固定备份没存上(浏览器的数据库用不了)。仍然清掉旧价格表吗?清掉后 5 秒内还能撤销。" : "削除前の固定バックアップを保存できませんでした。それでも削除しますか?",
           () => doClear(false),
@@ -30481,7 +30565,9 @@ function App() {
           setImportReport({ kind: "overwrite", fileName: f.name, at: new Date(), lines: [...emptied, ...replaced, ...prepLines], skipped: [] });
         };
         confirmDialog(msg, async () => {
-          if (await pinBackupNow("import")) applyOverwrite();
+          const pb = await pinBackupNow("import");
+          if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不导入
+          if (pb) applyOverwrite();
           else confirmDialog(
             lang === "zh" ? "覆盖前的固定备份没存上(浏览器的数据库用不了)。仍然覆盖吗?建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できませんでした。それでも上書きしますか?",
             applyOverwrite,
@@ -32686,7 +32772,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
                 setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
                 showToast("已清除"); };
-              if (await pinBackupNow("clear")) doClear();
+              const pb = await pinBackupNow("clear");
+              if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
+              if (pb) doClear();
               else confirmDialog("清除前的固定备份没存上(浏览器的数据库用不了)。仍然清除吗?建议先点上面的「导出完整备份」存一份文件。", doClear, { title: "备份没存上", confirmText: "仍然清除" });
             })}>清除全部数据</Btn>
           </div>

@@ -661,6 +661,24 @@ These are user-authored import packages (recipes, components, knowledge, materia
 - **`PIPES` 常量是场馆 2×Ø235 横穿管道**(管底 2000,y=2445/2795,与 COLUMNS 同级"标死"):画成红色限高带,
   总高 >2000 的设备压进带内会在检查清单报红。现场实测后只改 `PIPES.ys` 两个数,其余自动跟。
 
+## 第 5 批：编辑和打印（2026-10-08 本地验收，待上线）
+
+本批只改 `src/App.jsx`，不加依赖、顶层存档键或 appSettings 键，存档版本仍为 17。E4 自动草稿尚未实现，排在主数据换 IndexedDB（big-2）之后；第 6、7 批也不在本次交付内。施工规格在主目录 `.claude/batch5/`，收尾事实见 `.claude/codex-resume-2026-10-08/STATUS.md`。
+
+- **计件与钱**：配料 `unitGrams` 优先，其次材料 `gramsPerPiece` + 同单位的 `pieceUnit`；没换算的关联行标「单位不符」，不把毛利显示成可靠的绿色。千克/升乘 1000，所有系数从 `ingGramFactor` 取。编辑页合计按未取整的实时成本加。保存到本店原料前除回每克价，同时写 CNY。材料的克重组三键按 `pieceAt` 合并，价格组仍按 `updatedAt`；不能把两组混为一组。
+- **采购包数**：`computeMaterialNeeds` 的不可枚举 `unitNeeds` 保留各单位的数量和克数；`packsNeededOf` 对计件包装按同单位数量算包数。行上每个克重与材料不同时，不能拿总克数直接除材料的一包克数。厨房仍按配方单位称数。
+- **部分用量**：`usedSpec = { per, n, note, serves? }` 供编辑，计算仍只读一批总量 `usedAmount`。写入口 `withUsedSpec` / `recomposeEachLayers`；空数的说明用 `〔说明〕`，读作 0。旧对象打开不改就保存不增加字段；规格拼不回原字符串即作废，不覆盖原用量。
+- **缩放**：`scaleFactorOf` 是四种方式的唯一倍数出口；`isScaleInfo` 校验形状。模具缩放保留计件产出数，厨房视图按钮禁用，改走厨房打印。打印入口保存原对象，只在 `printCopyOf` / `scaledCopyForPrint` 生成一次副本，禁止二次缩放。
+- **打印**：`korora_print_prefs_v1` 是本机偏好，不入导出。按模板和界面语言分别记语言；客户版所有勾选每次恢复默认，归档版保留价格不记。厨房只印 `kitchenNotesZh/Ja`，不自动印研究备注；`PrintRecordTable` 给四行生产记录。价格句经 `stripMoneyText`，与生产单 `PROD_MONEY_RE` 同口径。客户版全部核对完、无八类及可能含有且手写不矛盾时印「不含八大类过敏原」；未核对则提示询问店员。标签模板的原规则不变。
+- **新文字字段**：配方有厨房要点、`shelfLifeZh/Ja`、`storageCondZh/Ja`；组件有厨房要点。保存时空值删键，不写进 layers。新增录入实体可带这些字段；合并导入不会用它们覆写同名已有配方/组件。IP 包仍可能包含备注、配料备注和要点里的价格，打印过滤不等于导出过滤。
+- **锁定**：产品 `lockedAt`；锁定部分写 `follow:false, localVariant:true, lockFrom, lockSeen`。解锁不悄悄换成组件库内容。`layerTakesComponentStock` 保持锁定组件的备货扣减。`lockSeenKey` 不看材料是否还在，但子组件删除后快照属于内容；删除/撤销通过 `lockSeenShift` 调整已看过的指纹，之后真实改价仍提示新版本。不要恢复第三轮曾采用的「指纹完全不看子组件」修法。
+- **复制和组件影响**：配方/组件复制生成新版本预填，保存时才生成 id；不复制在售/在用/备货开关和本机图片引用，法文名留空。`copiedFrom` 记来源。编辑页用 key 区分对象；组件保存前提示影响，保存后首次渲染计算改后值并冻结，临时注入组件/本店价必须 finally 还原。
+- **知识与组件选择**：组件弹窗支持名字、风味、原料搜索和按选择顺序多选。知识修复只改名字数组，不改四档匹配规则；合并导入成功也检查失效按钮。标签可管理、合并并撤销。
+- **big-2 第 −1 步**：本批只预装旧窗口识别 `movedTo` 的保护，尚未迁移数据。搬走后的旧窗口停止保存，恢复、覆盖导入、清除全部和清旧价格表均被挡住；事件尚未送达也检查存档标记。自动原因的固定备份分池轮换，不挤占用户固定备份。真正 big-2 上线至少晚三天，仍需按 `.claude/big2/spec_big2.md` 施工验收。
+- **测试**：`bash .claude/scripts/batch5/regress5.sh` 包含前批回归、三套独立模型、成本/编辑/打印对照、六套窄屏检查；预迁移保护另跑 `node .claude/scripts/big2/b2_minus1_tests.cjs --quiet 1`。Windows 需允许 esbuild 启动子进程；不要把启动权限错误当成业务测试失败。
+
+已知边界按审查裁决保留：旧设备编辑仍可能产生旧版特有的层同步差异；材料价格组与克重组独立合并；不含金额的少量记账用语仍可能留在打印备注。这三项未宣称修复。
+
 ## README
 
 The user-facing README is Chinese-only and describes the product, not the code (rewritten 2026-10-02):
