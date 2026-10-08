@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import { createPortal } from "react-dom";   // 第 6 批第 0 步:TapTip 的气泡挂到 body(react-dom 是已有依赖)
 import { SEED_RECIPES, SEED_COMPONENTS, SEED_CREATIONS, SEED_KNOWLEDGE, SEED_FAMILIES } from "./seedData.js";
 
 const STORAGE_KEY = "patisserie_v4";
@@ -108,54 +109,8 @@ const T = {
   num: { fontVariantNumeric: "tabular-nums" },
 };
 
-// ═══════════════════════════════════════════════════════════════
-// 🌐 双语字典（UI 文字）
-// ═══════════════════════════════════════════════════════════════
-const I18N = {
-  // 通用按钮
-  edit:          { zh: "编辑",     ja: "編集" },
-  delete:        { zh: "删除",     ja: "削除" },
-  save:          { zh: "保存",     ja: "保存" },
-  cancel:        { zh: "取消",     ja: "キャンセル" },
-  back:          { zh: "← 返回",   ja: "← 戻る" },
-  confirm:       { zh: "确定",     ja: "確認" },
-  add:           { zh: "+ 追加",   ja: "+ 追加" },
-  all:           { zh: "全部",     ja: "すべて" },
-  print:         { zh: "🖨 打印",  ja: "🖨 印刷" },
-  search:        { zh: "搜索",     ja: "検索" },
-  // 新建按钮
-  newRecipe:     { zh: "+ 新建配方",     ja: "+ レシピ新規" },
-  newComponent:  { zh: "+ 新增组件",     ja: "+ コンポーネント追加" },
-  newCreation:   { zh: "+ 新建组合产品", ja: "+ 組立製品新規" },
-  newKnowledge:  { zh: "+ 新增知识点",   ja: "+ ナレッジ追加" },
-  newFamily:     { zh: "+ 新建家族",     ja: "+ ファミリー新規" },
-  newBrand:      { zh: "+ 新增厂家",     ja: "+ メーカー追加" },
-  newMaterial:   { zh: "+ 新增产品",     ja: "+ 製品追加" },
-  newLayer:      { zh: "+ 新建空白层",   ja: "+ 空白層追加" },
-  newCat:        { zh: "+ 新建分类...",  ja: "+ 新規カテゴリー..." },
-  // 视图 / 过滤
-  viewList:      { zh: "📋 列表",        ja: "📋 リスト" },
-  viewMatrix:    { zh: "📊 矩阵",        ja: "📊 マトリックス" },
-  viewFlat:      { zh: "📋 全部配方",    ja: "📋 全レシピ" },
-  viewFamily:    { zh: "🏷 家族模式",    ja: "🏷 ファミリー表示" },
-  viewDetail:    { zh: "📖 详细",        ja: "📖 詳細" },
-  viewRecipe:    { zh: "📘 配方",        ja: "📘 レシピ" },
-  viewMenu:      { zh: "📗 菜单",        ja: "📗 メニュー" },
-  // 页面标题 / 状态
-  saved:         { zh: "✓ 已保存",       ja: "✓ 保存済み" },
-  empty:         { zh: "暂无内容",       ja: "まだありません" },
-  // 区块标题
-  ingredients:   { zh: "原材料",         ja: "原材料" },
-  steps:         { zh: "制作流程",       ja: "作り方" },
-  notes:         { zh: "备注",           ja: "メモ" },
-  images:        { zh: "图片",           ja: "画像" },
-  tags:          { zh: "标签",           ja: "タグ" },
-  flavorTag:     { zh: "🏷 风味标签（可选）", ja: "🏷 風味タグ（任意）" },
-  scale:         { zh: "缩放计算",       ja: "スケール計算" },
-};
-
-// 简短访问
-const tr = (key, lang) => (I18N[key] ? (lang === "zh" ? I18N[key].zh : I18N[key].ja) : key);
+// 第 6 批第 0 步(plan 决定 62):原来这里的 I18N / tr 双语字典删掉了(全文件 0 次调用,和实际写法两套并存);
+// 新的共用文字放 touch-lang helpers 段的 UI_TXT / uiTxt(lang)。
 
 // ─── 共用样式生成器 ─────────────
 const styles = {
@@ -367,6 +322,147 @@ const toCNY = (v, currency) => {
   if (isNaN(n) || n <= 0) return 0;
   return currency === "CNY" ? n : n * _fxJpyToCny;
 };
+
+// ─── BEGIN device-safety helpers ───
+// 第 6 批 D 线(6.5 iPad 防丢,spec_reminder.md):设备 key korora_device_v1(每台设备自己的,不进存档 / 导出 / 备份 / IP 包)、导出提醒、横幅、
+// 员工那一行灰字、持久存储、存储表盘。第 0 步(规格 1.3):DEVICE_KEY、4.F 文字表(SAFETY_TXT.dev)、LS_QUOTA_CHARS_EST 写成真的;
+// storageMeterOf = 今天数据页表盘的算法(StorageMeterCard 用它,DOM 一样);其余空壳,返回值写在每一行旁边。
+// 段里不许有 React / setState;localStorage 只在 readDeviceInfo / writeDeviceInfo 里碰(第 0 步的空壳两个都不碰)。
+const DEVICE_KEY = "korora_device_v1";
+// iPad Safari 每个来源约 5 MB、每字 2 字节 ≈ 2,621,440 字;没在她的 iPad 上实测(plan 决定 40),实测后只改这个常量
+const LS_QUOTA_CHARS_EST = 2621427;
+// 第 6 批三条数据安全线共用的文字表:dev(D,本段)/ imp(I,import-preview 段里挂上)/ bin(R,recycle-bin 段里挂上)。各线只往自己那一块加键
+const SAFETY_TXT = {
+  dev: {
+    zh: {
+      chipWideDays: "💾 {d} 天没导出",
+      chipWideNoRec: "💾 没有导出记录",
+      chipWideFail: "💾 存不进去了,现在只能靠导出",
+      chipShortDays: "💾 {d}天",
+      chipShortNoRec: "💾 未记录",
+      chipShortFail: "💾 存不进去",
+      chipTitleDays: "这台设备上次导出完整备份:{t},之后改过 · 点一下导出",
+      chipTitleNoRec: "这台设备上没有导出记录(新版起开始记)· 点一下导出",
+      chipTitleFail: "存不进去了,现在只能靠导出 · 点一下导出",
+      drawerDays: "💾 导出完整备份 · {d} 天没导出",
+      drawerNoRec: "💾 导出完整备份 · 没有导出记录",
+      drawerFail: "💾 导出完整备份 · 存不进去了,现在只能靠导出",
+      toastDays: "这台设备 {d} 天没导出完整备份了",
+      toastNoRec: "这台设备上没有导出记录(新版起开始记)",
+      toastFail: "存不进去了,现在只能靠导出",
+      toastBtn: "导出",
+      doneDownload: "✓ 已导出 {file}",
+      doneShare: "✓ 已导出 {file} · 存进「文件」才算备份好",
+      staleBlock: "这个窗口已经停止保存,数据不是最新的,先刷新再导出",
+      devLine: "这台设备:{dev}({mode})",
+      modeHome: "主屏幕版", modeSafari: "Safari 标签页", modeWechat: "微信里", modeBrowser: "浏览器",
+      rename: "改名",
+      expLine: "上次在这台设备上导出:{t}({rel})· {chg}",
+      relToday: "今天", relDays: "{d} 天前",
+      chgYes: "之后改过", chgNo: "之后没改过",
+      expNone: "还没在这台设备上用新版导出过",
+      persistYes: "浏览器答应不自动清理这台设备的数据:是",
+      persistNo: "浏览器答应不自动清理这台设备的数据:没答应(很常见,不是出错;装到主屏幕、常用会更稳)",
+      bnEmpty: "这台设备上的存档是空的,但自动备份里还有 {n} 份(最新 {t})。可能是浏览器清掉了存档。",
+      bnOpenRestore: "打开恢复列表",
+      bnWechat: "在微信里打开的网页存不住数据,也不能装到主屏幕。请点右上角「…」→「在 Safari 中打开」。",
+      bnHome: "⚠ 你在用 Safari 打开 kororā。这台设备连续一周没打开这个网页,Safari 可能把数据连同自动备份一起清掉;装到主屏幕就不会。",
+      bnHowTo: "怎么装", bnExportFirst: "先导出一份",
+      bnStandalone: "这是主屏幕上的 kororā,和 Safari 里的数据分开存。搬过来:在 Safari 里「导出完整备份」,再到这里「数据 → 导入数据(覆盖)」。",
+      bnGoData: "去数据页",
+      bnClose: "关掉",
+      stEmpty: "这台设备的数据好像没了,请店长看一下",
+      stFail: "这台设备存不进去了,请店长退出员工模式导出一次",
+      stDays: "这台设备已经 {d} 天没备份,请店长退出员工模式导出一次",
+      stNoRec: "这台设备上没有备份记录,请店长退出员工模式导出一次",
+      stSafari: "这台设备是在 Safari 里打开的,请店长装到主屏幕",
+    },
+    ja: {
+      chipWideDays: "💾 {d} 日未出力",
+      chipWideNoRec: "💾 出力記録なし",
+      chipWideFail: "💾 保存できていません。今は書き出しだけが頼りです",
+      chipShortDays: "💾 {d}日",
+      chipShortNoRec: "💾 記録なし",
+      chipShortFail: "💾 保存不可",
+      chipTitleDays: "この端末の最後のフル出力:{t}(その後変更あり)· クリックで出力",
+      chipTitleNoRec: "この端末には出力記録がありません(新しい版から記録しています)· クリックで出力",
+      chipTitleFail: "保存できていません。今は書き出しだけが頼りです · クリックで出力",
+      drawerDays: "💾 フル出力 · {d} 日未出力",
+      drawerNoRec: "💾 フル出力 · 出力記録なし",
+      drawerFail: "💾 フル出力 · 保存できていません。今は書き出しだけが頼りです",
+      toastDays: "この端末は {d} 日間フル出力していません",
+      toastNoRec: "この端末には出力記録がありません(新しい版から記録しています)",
+      toastFail: "保存できていません。今は書き出しだけが頼りです",
+      toastBtn: "出力",
+      doneDownload: "✓ 書き出しました {file}",
+      doneShare: "✓ 書き出しました {file} ·「ファイル」に保存して完了",
+      staleBlock: "このウィンドウは保存を停止しています。データが最新ではないので、再読み込みしてから書き出してください",
+      devLine: "この端末:{dev}({mode})",
+      modeHome: "ホーム画面版", modeSafari: "Safari タブ", modeWechat: "WeChat 内", modeBrowser: "ブラウザ",
+      rename: "名前を変更",
+      expLine: "この端末での最後の出力:{t}({rel})· {chg}",
+      relToday: "今日", relDays: "{d} 日前",
+      chgYes: "その後変更あり", chgNo: "変更なし",
+      expNone: "この端末ではまだ新しい版で出力していません",
+      persistYes: "ブラウザによる自動削除の対象外:はい",
+      persistNo: "ブラウザによる自動削除の対象外:いいえ(よくあることで、エラーではありません。ホーム画面に追加してよく使うと安定します)",
+      bnEmpty: "この端末の保存データが空ですが、自動バックアップが {n} 件あります(最新 {t})。ブラウザに消された可能性があります。",
+      bnOpenRestore: "復元リストを開く",
+      bnWechat: "WeChat 内のブラウザではデータを保存できず、ホーム画面にも追加できません。右上の「…」→「Safari で開く」を押してください。",
+      bnHome: "⚠ Safari で開いています。この端末で 1 週間開かないと、Safari がデータを自動バックアップごと消すことがあります。ホーム画面に追加すると防げます。",
+      bnHowTo: "追加のしかた", bnExportFirst: "先に書き出す",
+      bnStandalone: "ホーム画面の kororā は Safari とは別にデータを保存します。移すには Safari で「フル出力」し、ここで「データ → 上書きインポート」してください。",
+      bnGoData: "データへ",
+      bnClose: "閉じる",
+      stEmpty: "この端末のデータが消えたようです。店長に確認してください",
+      stFail: "この端末は保存できていません。店長がスタッフモードを終了して書き出してください",
+      stDays: "この端末は {d} 日間バックアップされていません。店長がスタッフモードを終了して書き出してください",
+      stNoRec: "この端末にはバックアップの記録がありません。店長がスタッフモードを終了して書き出してください",
+      stSafari: "この端末は Safari で開いています。店長がホーム画面に追加してください",
+    },
+  },
+};
+// ── A 组 · 日期(空壳)
+const isDateStr = (s) => false;                       // 空壳:R1
+const dayDiff = (a, b) => null;                        // 空壳:R2
+const addDaysStr = (s, n) => null;                     // 空壳:R2
+const localDayOfIso = (iso) => null;                   // 空壳:R3
+const validExp = (e) => false;                         // 空壳:R3
+const daysBetweenLocal = (iso, today) => null;         // 空壳:R4
+const fmtExpTime = (iso) => "";                        // 空壳:R5
+// ── B 组 · 设备 key(第 0 步不读不写)
+const readDeviceInfo = () => ({});                      // 空壳:R6(真身要 try/catch 读 localStorage)
+const mergeDevicePatch = (cur, patch) => cur;          // 空壳:R6
+const writeDeviceInfo = (patch) => ({ ok: false, info: {} });   // 空壳:R6(真身写前重读、只改 patch 那几块)
+const initDeviceInfo = (today) => ({});                // 空壳:R9 —— 规格 1.3 定的「{}、不读不写」;App 的 deviceInfo 状态用它做初值
+// ── C 到 F 组 · 提醒(空壳)
+const hasUserSummary = (s) => false;                   // 空壳:R12
+const exportReminderOf = (args) => ({ level: "none", days: null });   // 空壳:R16(规格 1.3)
+const saveBodyOf = (t) => "";                          // 空壳:R21
+const exportReminderView = (rem, opts) => ({ show: false, tone: null, wide: null, short: null, title: null, drawer: null });   // 空壳:R23
+const deviceExportLine = (args) => "";                 // 空壳:R25
+const startToastOf = (args) => null;                   // 空壳:R26(规格 1.3)
+// ── H 组 · 设备环境、名字、文件名
+const deviceEnvOf = (args) => ({ ios: false, ipad: false, standalone: false, wechat: false, firefox: false });   // 空壳:R32
+const guessDeviceName = (env, ua) => "";               // 空壳:R33
+const safeDeviceName = (s) => "";                      // 空壳:R34
+const exportFileName = (date, device) => `patisserie_${localDateStr(date)}.json`;   // 空壳:今天的文件名(规格 1.3;D 线改成带时间和设备名)
+const effectiveDeviceName = (info, env, ua) => "";     // 空壳:R35
+// ── I / J 组 · 横幅、员工那一行(空壳)
+const safetyBannerOf = (args) => null;                 // 空壳:R37(规格 1.3)
+const emptyBackupsOf = (metas) => null;                // 空壳:R40
+const staffSafetyNoteOf = (args) => null;              // 空壳:R42(规格 1.3)
+// ── K 组 · 持久存储
+const askPersist = (storageApi, env) => Promise.resolve(null);   // 空壳:R44(规格 1.3)
+// ── 存储表盘:第 0 步 = 今天数据页表盘的算法(按 1 字 1 字节、上限 5 MB);D 线改成每字 2 字节、LS_QUOTA_CHARS_EST、算全部键
+const storageMeterOf = (usedChars) => {
+  const used = typeof usedChars === "number" && isFinite(usedChars) ? usedChars : 0;
+  const usedMB = (used / 1024 / 1024);
+  const limitMB = 5; // 典型手机 localStorage 限额
+  const pct = Math.min(100, (usedMB / limitMB) * 100);
+  return { used, usedMB, limitMB, pct, level: pct > 80 ? "danger" : pct > 60 ? "warning" : "ok" };
+};
+// ─── END device-safety helpers ───
 
 // v17.2: 切币种时把已填的数按汇率换算过去 —— 保住「这笔钱的真实价值」不变。
 // 只给币种按钮用(不是显示口径开关,那个不动存储)。切回去能原样还原,点错了再点一次即可。
@@ -4057,8 +4153,10 @@ function pickBackupsToDelete(metas, now) {
   return sorted.filter(m => !keep.has(m.id)).map(m => m.id);
 }
 
-// counts:保存时手上的数组(只取条数);没给就解析一遍 payload。opts = { pinned, reason: "import" | "clear" | "restore" }
+// counts:保存时手上的数组(只取条数);没给就解析一遍 payload。opts = { pinned, reason: "import" | "clear" | "restore", out }
 // 返回 true = 存上了(或和上一份一样不用存)
+// 第 6 批第 0 步(spec_merge_plan R36):opts.out 是对象时,存上了就写 out.id = 这一份(新存的,或内容一样、标成 / 本来就是固定的那一份)的 id;
+// 和上一份自动备份一样直接跳过的、存不上的不写。返回值照旧是布尔
 let _lastBackupHash = "";
 async function addBackupSnapshot(payload, counts, opts = {}) {
   if (!payload || typeof payload !== "string") return false;
@@ -4069,6 +4167,7 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
   let summary = null;
   try { summary = backupSummary(counts || JSON.parse(payload)); } catch (e) {}
   let db = null;
+  let outId;
   try {
     db = await openBackupDB2();
     const ok = await new Promise((resolve) => {
@@ -4084,11 +4183,13 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
         const metas = all.result || [];
         const now = Date.now();
         const finish = (list) => { pickBackupsToDelete(list, now).forEach(id => { metaStore.delete(id); payStore.delete(id); }); result = true; };
+        // 第 6 批第 0 步:out.id 只在事务真的提交以后写(onComplete 之后;中途失败不写)
         const newest = metas.reduce((a, m) => (!a || (m.savedAt || "") > (a.savedAt || "")) ? m : a, null);
         // 固定备份:库里任何一份内容一样就直接把那份标成固定(连着恢复几次找版本时,不再每次多存一份 1.8 MB 的重复)
         const same = (pinned && hash) ? (metas.find(m => m.hash === hash) || null) : ((newest && hash && newest.hash === hash) ? newest : null);
         if (same) {
           // 和已有的一份内容一样:不再多存一份;要固定就把那一份标成固定
+          outId = same.id;
           if (pinned && !same.pinned) {
             const upd = { ...same, pinned: true, reason: opts.reason || "" };
             metaStore.put(upd);
@@ -4100,12 +4201,14 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
         const addReq = metaStore.add(meta);
         addReq.onsuccess = () => {
           const id = addReq.result;
+          outId = id;
           payStore.put({ id, payload });
           finish([...metas, { ...meta, id }]);
         };
       };
     });
     if (ok && hash) _lastBackupHash = hash;
+    if (ok && opts.out && typeof opts.out === "object" && outId !== undefined) opts.out.id = outId;
     if (ok) pruneLegacyBackups();
     return ok;
   } catch (e) {
@@ -4189,6 +4292,75 @@ async function deleteBackupSnapshot(snap) {
     });
   } catch (e) {} finally { try { if (db) db.close(); } catch (e) {} }
 }
+
+// ─── BEGIN recycle-bin helpers ───
+// 第 6 批 R 线(6.7 删除统一「先删 + 撤销」+ 30 天回收站,spec_bin.md):IndexedDB 新库 korora_safety 的表 bin(I 线的 reports 表同库)。
+// 第 0 步:常量写成真的(spec_bin 2.1 / 2.2);binCanon 是一行(importCanon 第 0 步就是真的,见 import-preview 段);其余空壳,返回值写在旁边;
+// IndexedDB 函数什么都不做,**第 0 步不打开新库**(plan 裁决 17)。段里不许有 React / setState;indexedDB 只在段尾点名的读写函数里。
+const BIN_DB = "korora_safety";
+const BIN_STORE = "bin";
+const BIN_DAYS = 30;
+const BIN_DAY_MS = 86400000;
+const BIN_TTL_MS = 2592000000;     // = 30 × 86,400,000;过期:now − at ≥ BIN_TTL_MS
+const BIN_MAX_ITEMS = 500;
+const BIN_MAX_CHARS = 3000000;     // 一条的字数 = JSON.stringify(entry).length
+const BIN_RED_DAYS = 3;            // 「还剩 N 天」N ≤ 3 时红字
+// 顺序就是回收站筛选胶囊的顺序;view = 「去看看」用的 jumpToItem kind(null = 不给);clash = R11 名字撞车规则
+const BIN_KINDS = {
+  recipe:       { list: "recipes",         zh: "配方",     ja: "レシピ",     view: "recipeView",    clash: "N" },
+  component:    { list: "components",      zh: "组件",     ja: "パーツ",     view: "componentView", clash: "N" },
+  creation:     { list: "creations",       zh: "组合产品", ja: "組み合わせ", view: "creationView",  clash: "N" },
+  knowledge:    { list: "knowledge",       zh: "知识",     ja: "ナレッジ",   view: "knowledge",     clash: "T" },
+  material:     { list: "materials",       zh: "材料",     ja: "材料",       view: "materialView",  clash: "" },
+  brand:        { list: "brands",          zh: "厂家",     ja: "メーカー",   view: "brand",         clash: "" },
+  shopMaterial: { list: "shopMaterials",   zh: "本店原料", ja: "仕入れ原料", view: null,            clash: "" },
+  product:      { list: "products",        zh: "商品",     ja: "商品",       view: "productView",   clash: "N" },
+  supplier:     { list: "suppliers",       zh: "供货商",   ja: "仕入先",     view: null,            clash: "S" },
+  family:       { list: "productFamilies", zh: "家族",     ja: "ファミリー", view: null,            clash: "N" },
+  compCat:      { list: "customCompCats",  zh: "组件分类", ja: "パーツ分類", view: null,            clash: "" },
+};
+SAFETY_TXT.bin = { zh: {}, ja: {} };   // R 线往这里加回收站的字(SAFETY_TXT 在 device-safety 段)
+const _binZeroRefN = () => ({ products: 0, creations: 0, recipes: 0, components: 0, ingRows: 0, shopMaterials: 0, logs: 0, plan: 0 });
+const _binEmptySides = () => ({ familyOf: { recipes: [], creations: [] }, supplierOf: [], compCatOf: [], rowSnaps: [] });
+const _binEmptySkipped = () => ({ familyOf: 0, supplierOf: 0, compCatOf: 0, rowSnaps: 0 });
+const _binZeroCounts = () => ({ famR: 0, famC: 0, famSkip: 0, sup: 0, supSkip: 0, cat: 0, catSkip: 0, rows: 0, rowSkip: 0 });
+const binSameId = (a, b) => false;                                   // 空壳:R1
+const binCanon = (kind, x) => importCanon(BIN_KINDS[kind] ? BIN_KINDS[kind].list : kind, x);   // R2 那一行(importCanon 是真的)
+const binNameOf = (kind, item, materials) => ({ zh: "", ja: "" });  // 空壳:R3
+const binShowName = (entry, lang) => "";                             // 空壳:R3
+const binEntryOk = (e) => false;                                     // 空壳:R4
+const binPending = (e) => false;                                     // 空壳:R4
+const binKnown = (e) => false;                                       // 空壳:R4
+const binRefCounts = (kind, item, cur, ctx) => _binZeroRefN();       // 空壳:R5
+const binEntryOf = (kind, item, meta, nowIso) => null;               // 空壳:R6
+const binDaysLeft = (e, nowMs) => 0;                                 // 空壳:R7
+const binExistsSame = (e, cur) => false;                             // 空壳:R8
+const binVisible = (entries, cur) => [];                             // 空壳:R9
+const binPrune = (entries, nowMs, opts) => ({ keep: Array.isArray(entries) ? entries : [], drop: [], rewrite: [] });   // 空壳:R10(什么都不删)
+const binRestorePlan = (entry, cur, ctx) => ({ status: "blocked", why: "bad", list: null, index: -1, item: null, conflict: null,
+  sides: _binEmptySides(), skipped: _binEmptySkipped(), prep: null });   // 空壳:R11(一律还原不了;还原 / 每个撤销都先过它,R 线写成真的)
+const applyBinSides = (cur, entry, plan, nowIso) => ({ patches: {}, counts: _binZeroCounts() });   // 空壳:R12(挂回供货商时只调 smReattachSupplier)
+const binApplyRestore = (cur, entry, plan, nowIso) => ({ next: {}, counts: _binZeroCounts() });    // 空壳:R13
+const binSettle = (entries, pending, res, cur) => ({ drop: [], unhide: [], pending, toast: false });   // 空壳:R14(看到保存成功才真删 restoredAt 的条目)
+const binIndexOf = (entries) => null;                                // 空壳:R15(第 0 步 null = 合并导入当回收站是空的)
+const binMatchIncoming = (idx, kind, inc) => null;                   // 空壳:R15(认法必须等于 spec_merge_plan R16)
+// ── 本窗口的状态(不进存档、刷新就没了;spec_bin 2.6)
+let _binAvail = "loading";      // "loading" | "ok" | "off":库打开成功 → ok;没有 indexedDB / 打开出错 → off(第 0 步不打开,一直 loading)
+let _binCache = new Map();      // bid → entry
+let _binIdx = binIndexOf([]);   // 合并导入同步用;_binCache 变了就重算
+let _binPending = new Map();    // bid → restoredAt 的毫秒:本窗口放回去、等保存成功的
+let _binCancelled = false;      // 清空 / 永久删除的撤销用(R 线定)
+// ── IndexedDB 读写(只有下面这几个碰 korora_safety;第 0 步全是空壳、不打开库)
+const openSafetyDB = () => Promise.resolve(null);                    // 空壳:打开不带版本号、缺表就 +1 重开(plan「数据」§2)
+const binPut = (entries) => Promise.resolve(false);                  // 空壳
+const binAll = () => Promise.resolve([]);                            // 空壳
+const binDrop = (bids) => Promise.resolve(false);                    // 空壳
+const binClear = () => Promise.resolve(false);                       // 空壳
+// 导入结果表 reports(I 线;spec_merge_plan R41):同库,最近 10 次。第 0 步空壳:不持久
+const reportPut = (rep) => Promise.resolve();                        // 空壳
+const reportAll = () => Promise.resolve([]);                         // 空壳
+const reportPatch = (rid, patch) => Promise.resolve();               // 空壳
+// ─── END recycle-bin helpers ───
 
 // ─── 内容质量扫描 v13.1: 中日混杂 + 图片 markdown ───────────────
 // 假名(平假名 + 片假名) → 一定是日语
@@ -4458,6 +4630,441 @@ function remapImportedComponentRefs(list, idMap, compById, matIds) {
   return { list: out, ...stat };
 }
 
+// ─── BEGIN import-preview helpers ───
+// 第 6 批 I 线(6.2 导入前先看对比卡、导完留结果,spec_merge_plan.md)+ 第 0 步「把合并导入的计算抽成纯函数」。
+// 第 0 步写成真的:IMPORT_KINDS(IMPORT_ENTITY_LABELS 从它派生,字不变)、importCanon(spec_bin Q2 / spec_merge_plan R13,R 线先合并也要用)、
+// 六个 *Plan 和 planMergeImport(今天 mergeImportData 确认回调里的计算**原样**搬过来,A 组;detail = null、notes = []、deletedSkipped = [],
+// opts.binIdx / opts.skipDeleted 不看);其余空壳返回 null。段里不许有 React / setState(测试整段抽出来跑)。
+// 子步骤归别的线(plan 裁决 4):供货商那一步 mergeSupplierList / remapShopSupplierIds / mergeShopEntry(PA,purchase order helpers 段),
+// 知识那一步 mergeKnowledgeStaffMarks(KA,knowledge-training 段),都是空壳 = 今天的结果。今天的报告行 lines / skipped 一个字不改,各线的新行进 plan.notes。
+// 十四类(顺序就是所有列表、所有分项的先后);oldZh / oldJa = 今天 IMPORT_ENTITY_LABELS 的字(只给覆盖框的 refs 用,前 12 类);
+// zh / ja = 第 6 批新文字的标签;fam:W = 已有的整条跳过,B = 已有的按修改时间合并,L = 记录,C = 老价格表;bin = 回收站种类
+const IMPORT_KINDS = [
+  { key: "recipes",         zh: "配方",     ja: "レシピ",       oldZh: "配方",     oldJa: "レシピ",         fam: "W", bin: "recipe" },
+  { key: "components",      zh: "组件",     ja: "パーツ",       oldZh: "组件",     oldJa: "コンポーネント", fam: "W", bin: "component" },
+  { key: "creations",       zh: "组合产品", ja: "組み合わせ",   oldZh: "组合产品", oldJa: "組立製品",       fam: "W", bin: "creation" },
+  { key: "knowledge",       zh: "知识",     ja: "ナレッジ",     oldZh: "知识",     oldJa: "ナレッジ",       fam: "W", bin: "knowledge" },
+  { key: "brands",          zh: "厂家",     ja: "メーカー",     oldZh: "厂家",     oldJa: "メーカー",       fam: "B", bin: "brand" },
+  { key: "materials",       zh: "材料百科", ja: "材料事典",     oldZh: "材料百科", oldJa: "材料事典",       fam: "B", bin: "material" },
+  { key: "shopMaterials",   zh: "本店原料", ja: "仕入れ原料",   oldZh: "本店原料", oldJa: "仕入れ原料",     fam: "B", bin: "shopMaterial" },
+  { key: "products",        zh: "商品",     ja: "商品",         oldZh: "商品",     oldJa: "商品",           fam: "W", bin: "product" },
+  { key: "salesLog",        zh: "销售记录", ja: "売上記録",     oldZh: "销售记录", oldJa: "売上記録",       fam: "L", bin: null },
+  { key: "productionLog",   zh: "生产记录", ja: "生産記録",     oldZh: "生产记录", oldJa: "生産記録",       fam: "L", bin: null },
+  { key: "suppliers",       zh: "供货商",   ja: "仕入先",       oldZh: "供货商",   oldJa: "仕入先",         fam: "W", bin: "supplier" },
+  { key: "cats",            zh: "老价格表", ja: "旧価格表",     oldZh: "老价格表", oldJa: "旧価格表",       fam: "C", bin: null },
+  { key: "productFamilies", zh: "家族",     ja: "ファミリー",   fam: "W", bin: "family" },
+  { key: "customCompCats",  zh: "组件分类", ja: "パーツ分類",   fam: "W", bin: "compCat" },
+];
+// 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批):前 12 类、今天的字
+const IMPORT_ENTITY_LABELS = IMPORT_KINDS.slice(0, 12).map(k => [k.key, k.oldZh, k.oldJa]);
+SAFETY_TXT.imp = { zh: {}, ja: {} };   // I 线往这里加导入对比 / 结果卡的字(SAFETY_TXT 在 device-safety 段)
+// ── C 组(覆盖对比)和 B 组(合并预览)的显示:第 0 步空壳
+const importFileInfo = (d, fileName) => null;                        // 空壳:R28
+const parseExportFileName = (name) => null;                          // 空壳:R29
+const localSavedAtOf = (raw) => null;                                // 空壳:R30
+const hasUserData = (cur) => null;                                   // 空壳:R31(spec_reminder R11 引用同一个口径)
+const overwritePlan = (cur, d, opts) => null;                        // 空壳:R32
+const overwritePreviewView = (oplan, info, lang, opts) => null;      // 空壳:R34
+const mergePreviewView = (plan, info, lang, opts) => null;           // 空壳:R24
+const itemName = (key, x, lang, ctx) => null;                        // 空壳:R22
+const fmtWhen = (s, now) => null;                                    // 空壳:R23
+const fmtDay = (s, now) => null;                                     // 空壳:R23
+// R13「内容一样」的比法:键排序、只去顶层 updatedAt;本店原料没有 supplierIds 当 [];组合产品的部分去 follow / localVariant / _lid。
+// 第 0 步就是真的(spec_bin Q2:R 先于 I 合并,回收站「已经在了」要用它);spec_bin R2 和 spec_merge_plan R13 逐字一样,两份规格谁改另一份跟着改
+const _importSortDeep = (v) => Array.isArray(v) ? v.map(_importSortDeep)
+  : (v && typeof v === "object") ? Object.keys(v).sort().reduce((o, k) => { o[k] = _importSortDeep(v[k]); return o; }, {}) : v;
+function importCanon(key, obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return JSON.stringify(obj === undefined ? null : obj);
+  const o = { ...obj };
+  delete o.updatedAt;                                                    // 只去顶层的
+  if (key === "shopMaterials" && !Array.isArray(o.supplierIds)) o.supplierIds = [];   // 合并 / 载入都会补 [],不算改动
+  if (key === "creations" && Array.isArray(o.layers))
+    o.layers = o.layers.map(l => (l && typeof l === "object" && !Array.isArray(l)) ? (({ follow, localVariant, _lid, ...r }) => r)(l) : l);
+  return JSON.stringify(_importSortDeep(o));
+}
+// ── A 组:抽出来的合并计算(= pre_b6 的 mergeImportData 确认回调,一个字的行为都不改)
+const _mergeGenId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
+const _mergeGenRecipeId = () => Date.now() + Math.floor(Math.random() * 1000);
+const _mergeNameOf = (x) => (x && (x.nameZh || x.nameJa || x.nameFr || x.titleZh || x.titleJa || x.title || x.id)) || "";
+const _mergeSameName = (a, b) => (b.id && a.id === b.id) || (b.nameZh && a.nameZh && b.nameZh === a.nameZh) || (b.nameJa && a.nameJa && b.nameJa === a.nameJa);
+// 今天的 pickNew:按 isDup 去重,返回要追加的条目(文件里自己重复的也只加第一条);判重跳过的有 label 时记进 skipped
+function mergeNamedPlan(base, incoming, isDup, makeId, label, onDup, skipped) {
+  const add = [];
+  (incoming || []).forEach(inc => {
+    if (!inc || typeof inc !== "object") return;
+    const dup = (base || []).find(x => x && isDup(x, inc)) || add.find(x => isDup(x, inc));
+    if (dup) { if (label && skipped) skipped.push(`${label}「${_mergeNameOf(inc)}」`); if (onDup) onDup(inc, dup); return; }
+    add.push(makeId ? { ...inc, id: inc.id || makeId() } : inc);
+  });
+  return add;
+}
+// 厂家 / 材料:按 id 在结果里找第一条,没有 → 追加(skip 里的文件下标不追加),有 → mergeOne 合并(R9)
+function mergeByIdPlan(list, incoming, mergeOne, skip) {
+  const result = [...list];
+  incoming.forEach((inc, i) => {
+    const j = result.findIndex(b => b.id === inc.id);
+    if (j < 0) { if (!(skip && skip.has(i))) result.push(inc); } else result[j] = mergeOne(result[j], inc);
+  });
+  return result;
+}
+// 本店原料(R3 第 8 步):materialId 或 id 认同一条;已有的走 mergeShopEntry(PA;第 0 步 = 今天那一行),新的补 id 和 supplierIds。
+// o = { genId, nowIso, idMap };skip 只挡「会被追加」的文件下标
+function mergeShopPlan(list, incoming, o, skip) {
+  const result = [...list];
+  const idMap = (o && o.idMap) || {};
+  const gen = (o && o.genId) || _mergeGenId;
+  incoming.forEach((inc, i) => {
+    const key = inc.materialId || inc.id;
+    if (!key) return;
+    const existingIdx = result.findIndex(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id));
+    if (existingIdx < 0) {
+      if (skip && skip.has(i)) return;
+      const f = remapShopSupplierIds(inc, idMap);
+      result.push({ ...f, id: f.id || gen("sm_"), supplierIds: Array.isArray(f.supplierIds) ? f.supplierIds : [] });
+    } else {
+      result[existingIdx] = mergeShopEntry(result[existingIdx], inc, idMap, o && o.nowIso);
+    }
+  });
+  return result;
+}
+// 销售 / 生产记录(R3 第 10 步):按 id 去重;同一条两边都有时,修改时间(没有就用创建时间)晚的为准
+const _mergeLogTime = (x) => Date.parse((x && (x.updatedAt || x.createdAt)) || "") || 0;
+function mergeLogsPlan(base, incoming, prefix, genId) {
+  const add = [];
+  const replace = new Map();
+  const gen = genId || _mergeGenId;
+  (incoming || []).forEach(inc => {
+    if (!inc || typeof inc !== "object") return;
+    if (!inc.id) { add.push({ ...inc, id: gen(prefix) }); return; }
+    const inAdd = add.findIndex(x => x.id === inc.id);
+    if (inAdd >= 0) { if (_mergeLogTime(inc) > _mergeLogTime(add[inAdd])) add[inAdd] = inc; return; }
+    const dup = (base || []).find(s => s && s.id === inc.id);
+    if (!dup) { add.push(inc); return; }
+    const prevRep = replace.get(inc.id);
+    if (_mergeLogTime(inc) > _mergeLogTime(prevRep || dup)) replace.set(inc.id, inc);
+  });
+  return { add, replace };
+}
+// 把 { add, replace } 套到一张记录表上。strict(给 plan.next,R5):add 和 replace 都空 → 原数组,否则新数组;
+// 不 strict(applyMergePlan 兜底,= 今天的 applyLogs):什么都没变 → 原数组
+function applyLogOps(prev, ops, strict) {
+  if (strict && !ops.add.length && !ops.replace.size) return prev;
+  let changed = false;
+  let next = (prev || []).map(x => {
+    const r = x && ops.replace.get(x.id);
+    if (r && _mergeLogTime(r) > _mergeLogTime(x)) { changed = true; return r; }
+    return x;
+  });
+  const ids = new Set(next.map(x => x && x.id));
+  const a = ops.add.filter(x => !ids.has(x.id));
+  if (a.length) { next = [...next, ...a]; changed = true; }
+  return (changed || strict) ? next : prev;
+}
+// 老价格表(R3 第 1 步):按名字认大类,已有的只追加新品牌。rawCats 是没迁移的 d.cats;只有 .result 是对外的
+function mergeCatsPlan(list, rawCats, genId) {
+  const incomingCats = migrateCats(rawCats);
+  const gen = genId || _mergeGenId;
+  const result = [...(list || [])];
+  const rep = { catsNew: 0, catsUpdated: 0, brandsAdded: 0 };
+  incomingCats.forEach(inc => {
+    const existingIdx = result.findIndex(c =>
+      (inc.nameZh && c.nameZh && inc.nameZh === c.nameZh) ||
+      (inc.nameJa && c.nameJa && inc.nameJa === c.nameJa)
+    );
+    if (existingIdx < 0) {
+      result.push({ ...inc, id: inc.id || gen("c") });
+      rep.catsNew++;
+    } else {
+      const existing = result[existingIdx];
+      const newBrands = [...(existing.brands || [])];
+      let appended = 0;
+      (inc.brands || []).forEach(incBrand => {
+        const dup = newBrands.find(b =>
+          (incBrand.nameZh && b.nameZh && incBrand.nameZh === b.nameZh) ||
+          (incBrand.nameJa && b.nameJa && incBrand.nameJa === b.nameJa)
+        );
+        if (!dup) { newBrands.push(incBrand); appended++; }
+      });
+      if (appended > 0) {
+        result[existingIdx] = { ...existing, brands: newBrands };
+        rep.catsUpdated++;
+        rep.brandsAdded += appended;
+      }
+    }
+  });
+  return { result, catsNew: rep.catsNew, catsUpdated: rep.catsUpdated, brandsAdded: rep.brandsAdded };
+}
+// 打印设置(R3 第 14 步):只在本机还是默认值时才用文件的;标签的经营者三项本机空着的从文件补
+function mergePrintSettingsPlan(prev, filePs) {
+  const isDefault = !prev || (prev.brandName === "RURU" && !prev.logoUrl && prev.brandSubtitle === "PATISSERIE");
+  const base = isDefault ? filePs : prev;
+  const pick = {};
+  LABEL_SHOP_KEYS.forEach(k => { const v = _normTxt(prev && prev[k]) ? prev[k] : _normTxt(filePs[k]) ? filePs[k] : undefined; if (v !== undefined && v !== base[k]) pick[k] = v; });
+  return Object.keys(pick).length ? { ...base, ...pick } : base;
+}
+// R12:厂家 / 材料 / 本店原料 / 老价格表里有 null / undefined(含稀疏空位)→ 整次合并拒绝(文件那一类有才查;本机的一律查)
+const _mergeBadList = (L) => Array.isArray(L) && (L.some(x => x === null || x === undefined) || L.length !== Object.keys(L).filter(i => /^\d+$/.test(i)).length);
+const MERGE_W_KEYS = ["recipes", "components", "creations", "knowledge", "products", "suppliers", "productFamilies", "customCompCats"];
+// planMergeImport(cur, d, opts) → plan(spec_merge_plan 2.5)。cur = dataRef 的 14 张表 + printSettings + appSettings(只读);
+// opts = { lang, nowIso, genId, genRecipeId, prepItemsN, binIdx, skipDeleted }。纯函数:不改 cur / d,不碰 localStorage / IndexedDB / React
+function planMergeImport(cur, d, opts = {}) {
+  ["brands", "materials", "shopMaterials", "cats"].forEach(k => {
+    if (_mergeBadList(d[k])) throw new Error(`坏文件:${k} 里有空条目`);
+    if (_mergeBadList(cur[k])) throw new Error(`本机数据:${k} 里有空条目`);
+  });
+  const lang = opts.lang;
+  const zh = lang === "zh";
+  const nowIso = opts.nowIso || new Date().toISOString();
+  const genId = opts.genId || _mergeGenId;
+  const genRecipeId = opts.genRecipeId || _mergeGenRecipeId;
+  const prepItemsN = opts.prepItemsN || 0;
+  const lines = [];
+  const skipped = [];
+  const notes = [];
+  const sameName = _mergeSameName;
+  const has = (k) => Array.isArray(d[k]);
+  const next = {};
+  ["recipes", "cats", "components", "creations", "knowledge", "brands", "materials", "shopMaterials", "products", "salesLog", "productionLog",
+    "suppliers", "productFamilies", "customCompCats", "printSettings", "appSettings"].forEach(k => { next[k] = cur[k]; });
+  const add = {};
+  MERGE_W_KEYS.forEach(k => { add[k] = []; });
+  const logOps = { salesLog: null, productionLog: null };
+  const skipIdx = { brands: new Set(), materials: new Set(), shopMaterials: new Set() };
+
+  // 1. 合并 cats(按名字匹配大类,已有则只追加新品牌)
+  if (has("cats")) {
+    const r = mergeCatsPlan(cur.cats, d.cats, genId);
+    if (r.catsNew || r.brandsAdded) next.cats = r.result;
+    if (r.catsNew) lines.push((zh ? "+ 老价格表新大类 " : "+ 旧価格表カテゴリー ") + r.catsNew);
+    if (r.brandsAdded) lines.push((zh ? "+ 老价格表新品牌 " : "+ 旧価格表ブランド ") + r.brandsAdded);
+  }
+
+  // 2. 组件 / 3. 配方 / 4. 组合产品(按 id 或 nameZh / nameJa 去重,已有的不动)
+  // 文件里被跳过的组件 id 和本机那条不一样时记下「文件 id → 本机 id」,新加进来的条目里按 id 引用它的地方改写过去(remapImportedComponentRefs)
+  const compIdMap = new Map();
+  let compAdd = [];
+  let recipeAdd = [], creationAdd = [];
+  const refStat = { rows: 0, layers: 0, unfollowed: 0 };
+  const remap = (list) => {
+    if (!compIdMap.size) return list;
+    const compById = new Map();
+    [...(cur.components || []), ...compAdd].forEach(c => { if (c && c.id !== undefined && c.id !== null && !compById.has(c.id)) compById.set(c.id, c); });
+    const matIds = new Set([...(cur.materials || []), ...(Array.isArray(d.materials) ? d.materials : [])].map(m => m && m.id));
+    const r = remapImportedComponentRefs(list, compIdMap, compById, matIds);
+    refStat.rows += r.rows; refStat.layers += r.layers; refStat.unfollowed += r.unfollowed;
+    return r.list;
+  };
+  // 备货 G 线:被跳过的已有配方 / 组件,文件里那条的备货设置和本机不一样 → 报告里说一句(只提示,不改)
+  const PREP_CFG_KEYS = ["prepMode", "prepStore", "prepShelfDays", "prepMinStock", "prepThawZh", "prepThawJa"];
+  const prepSig = (o) => PREP_CFG_KEYS.map(k => { const v = o ? o[k] : undefined; return k === "prepMode" ? (v === "stock" ? "stock" : "") : (v === undefined || v === null ? "" : String(v).trim()); }).join("\u0001");
+  const prepCfgDiff = new Set();
+  const notePrepDiff = (kind, base) => (inc, dup) => {
+    if (dup && (base || []).includes(dup) && prepSig(inc) !== prepSig(dup)) prepCfgDiff.add(prepKeyOf(kind, dup.id));
+  };
+  if (has("components")) {
+    const onDupComp = notePrepDiff("component", cur.components);
+    const add0 = mergeNamedPlan(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ",
+      (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); onDupComp(inc, dup); }, skipped);
+    compAdd = add0;
+    const a = remap(add0);
+    compAdd = a;
+    add.components = a;
+    if (a.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + a.length);
+  }
+  if (has("recipes")) {
+    const a = remap(mergeNamedPlan(cur.recipes, d.recipes, sameName, genRecipeId, zh ? "配方" : "レシピ", notePrepDiff("recipe", cur.recipes), skipped));
+    recipeAdd = a;
+    add.recipes = a;
+    if (a.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + a.length);
+  }
+  if (has("creations")) {
+    const a = remap(mergeNamedPlan(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品", null, skipped));
+    creationAdd = a;
+    add.creations = a;
+    if (a.length) lines.push((zh ? "+ 新组合产品 " : "+ 組立製品 ") + a.length);
+  }
+  if (refStat.rows || refStat.layers) {
+    lines.push(zh
+      ? `· 文件里的组件本机已有同名的(id 不同):${refStat.rows ? `${refStat.rows} 行「来自组件」的配料` : ""}${refStat.rows && refStat.layers ? "、" : ""}${refStat.layers ? `${refStat.layers} 个组合产品部分` : ""}改指本机那个组件${refStat.unfollowed ? `;其中 ${refStat.unfollowed} 个部分和本机组件内容不一样,先不跟组件库走(组合产品详情页会提示你选)` : ""}`
+      : `· 同名パーツが既にあるため(id 違い):${refStat.rows ? `配合 ${refStat.rows} 行` : ""}${refStat.rows && refStat.layers ? "・" : ""}${refStat.layers ? `パーツ ${refStat.layers} 件` : ""}を既存パーツに付け替え${refStat.unfollowed ? `(内容が違う ${refStat.unfollowed} 件は連動を外しました。詳細ページで選べます)` : ""}`);
+  }
+
+  // 5. 知识:按 id,或中文 / 日文标题(去掉空格、全半角、大小写差别后)相同去重。
+  // KA(spec_ktrain R-K15):本机已有的那几条记下 [本机 id, 文件那条] 配对,员工必读的标记 / 要点按各自的时间戳取新(mergeKnowledgeStaffMarks;第 0 步空壳 = 不变)
+  let kPairs = [];
+  let kMarks = null;
+  if (has("knowledge")) {
+    const normT = (s) => typeof s === "string" ? s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() : "";
+    const sameT = (a, b) => { const x = normT(a), y = normT(b); return !!x && x === y; };
+    const isDupK = (k, inc) => (inc.id && k.id === inc.id) || sameT(k.titleZh, inc.titleZh) || sameT(k.titleJa, inc.titleJa) || sameT(k.title, inc.title);
+    const a = mergeNamedPlan(cur.knowledge, d.knowledge, isDupK, () => genId("k_"), zh ? "知识" : "ナレッジ",
+      (inc, dup) => { if (dup && (cur.knowledge || []).includes(dup)) kPairs.push([dup.id, inc]); }, skipped);
+    add.knowledge = a;
+    kMarks = mergeKnowledgeStaffMarks(cur.knowledge, kPairs);
+    if (a.length) lines.push((zh ? "+ 新知识点 " : "+ ナレッジ ") + a.length);
+  }
+
+  // 6. 合并 brands / materials(按 id 匹配;已存在时按修改时间取新的一边)
+  const countNewById = (base, incoming) => {
+    const ids = new Set((base || []).map(x => x && x.id));
+    let n = 0, m = 0;
+    (incoming || []).forEach(inc => { if (inc && ids.has(inc.id)) m++; else n++; });
+    return [n, m];
+  };
+  if (has("brands")) {
+    const [n, m] = countNewById(cur.brands, d.brands);
+    if (n) lines.push((zh ? "+ 新厂家 " : "+ メーカー ") + n);
+    if (m) lines.push(zh ? `· 已有厂家 ${m} 家:按修改时间取新的一边` : `· 既存メーカー ${m}:新しい方を採用`);
+    next.brands = mergeByIdPlan(cur.brands, d.brands, (l, x) => mergeByNewer(l, x, []), skipIdx.brands);
+  }
+  if (has("materials")) {
+    const [n, m] = countNewById(cur.materials, d.materials);
+    if (n) lines.push((zh ? "+ 新材料 " : "+ 材料 ") + n);
+    if (m) lines.push(zh ? `· 已有材料 ${m} 条:按修改时间取新的一边` : `· 既存材料 ${m}:新しい方を採用`);
+    // v11: priceRange 迁移;v14: imageUrls 格式升级;第 4 批:合并规则只在 mergeMaterialEntry 里写
+    const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
+    next.materials = mergeByIdPlan(cur.materials, migrated, (l, x) => mergeMaterialEntry(l, x, nowIso), skipIdx.materials);
+  }
+  // 供货商:PA 的 mergeSupplierList(spec_purchase_order R31)要在本店原料那一步之前算好 idMap;报告行和 skipped 照旧在第 10 步那个位置出
+  const supRes = has("suppliers") ? mergeSupplierList(cur.suppliers, d.suppliers, () => genId("sup_")) : null;
+  const supIdMap = (supRes && supRes.idMap) || {};
+  // v11: 合并 shopMaterials(按 materialId 去重;没 materialId 的孤立条目按 id 去重)
+  if (has("shopMaterials")) {
+    const base = cur.shopMaterials || [];
+    let n = 0, m = 0;
+    d.shopMaterials.forEach(inc => {
+      if (!inc || !(inc.materialId || inc.id)) return;
+      if (base.some(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id))) m++; else n++;
+    });
+    if (n) lines.push((zh ? "+ 新本店原料 " : "+ 仕入れ原料 ") + n);
+    if (m) lines.push(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
+    next.shopMaterials = mergeShopPlan(base, d.shopMaterials, { genId, nowIso, idMap: supIdMap }, skipIdx.shopMaterials);
+  }
+
+  // 7. 合并 products(商品,按 id / nameZh / nameJa 去重)
+  if (has("products")) {
+    const a = mergeNamedPlan(cur.products, d.products, sameName, () => genId("prod_"), zh ? "商品" : "商品", null, skipped);
+    add.products = a;
+    if (a.length) lines.push((zh ? "+ 新商品 " : "+ 商品 ") + a.length);
+  }
+
+  // 8 / 9. 销售 / 生产记录:按 id 去重;同一条两边都有时,修改时间(没有就用创建时间)晚的为准
+  let logsReplaced = 0, prodLogsReplaced = 0;
+  if (has("salesLog")) {
+    const r = mergeLogsPlan(cur.salesLog, d.salesLog, "sl_", genId);
+    logOps.salesLog = r;
+    next.salesLog = applyLogOps(cur.salesLog, r, true);
+    if (r.add.length) lines.push((zh ? "+ 新销售记录 " : "+ 売上記録 ") + r.add.length);
+    if (r.replace.size) { lines.push(zh ? `· 销售记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 売上記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
+  }
+  if (has("productionLog")) {
+    const r = mergeLogsPlan(cur.productionLog, d.productionLog, "pl_", genId);
+    logOps.productionLog = r;
+    next.productionLog = applyLogOps(cur.productionLog, r, true);
+    if (r.add.length) lines.push((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
+    if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; prodLogsReplaced += r.replace.size; }
+  }
+  // 备货 G 线:生产记录被换了、本机账上有备货时,那句后面加「备货库存也一样,去盘点」(账本不跟着生产记录合并)
+  if (logsReplaced) lines.push((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
+    + (prodLogsReplaced && prepItemsN > 0 ? prepTxt(lang).mergeLogsTail : ""));
+
+  // 10. 合并 suppliers(第 0 步 = 今天的 pickNew;PA 合并后按名字认同一家,两行新报告进 notes)
+  if (supRes) {
+    const label = zh ? "供货商" : "仕入先";
+    (supRes.keptLocal || []).forEach(f => skipped.push(`${label}「${_mergeNameOf(f)}」`));
+    add.suppliers = supRes.add;
+    if (supRes.added) lines.push((zh ? "+ 新供货商 " : "+ 仕入先 ") + supRes.added);
+  }
+
+  // 11. 合并 productFamilies(产品家族,按 id / nameZh / nameJa 去重)
+  if (has("productFamilies")) {
+    const a = mergeNamedPlan(cur.productFamilies, d.productFamilies, sameName, () => genId("fam_"), zh ? "家族" : "ファミリー", null, skipped);
+    add.productFamilies = a;
+    if (a.length) lines.push((zh ? "+ 新产品家族 " : "+ ファミリー ") + a.length);
+  }
+
+  // 12. 合并 customCompCats(自定义组件分类,按 id 去重)
+  if (has("customCompCats")) {
+    const a = mergeNamedPlan(cur.customCompCats, d.customCompCats, (x, b) => !!(b.id && x.id === b.id), null, null, null, skipped);
+    add.customCompCats = a;
+    if (a.length) lines.push((zh ? "+ 新组件分类 " : "+ コンポ分類 ") + a.length);
+  }
+
+  // 13. 合并 printSettings(对象;只在当前是默认值时才用导入的)
+  if (d.printSettings && typeof d.printSettings === "object") next.printSettings = mergePrintSettingsPlan(cur.printSettings, d.printSettings);
+
+  // W 类的 next(R5):按 id 挡一次(今天 appendTo 的那道挡);知识先套上员工必读标记(KA,第 0 步不变)
+  MERGE_W_KEYS.forEach(k => {
+    if (!has(k)) return;
+    const baseList = (k === "knowledge" && kMarks) ? kMarks.list : cur[k];
+    const ids = new Set((baseList || []).map(x => x && x.id));
+    const a = add[k].filter(x => !(x.id !== undefined && ids.has(x.id)));
+    next[k] = (a.length || baseList !== cur[k]) ? [...(baseList || []), ...a] : cur[k];
+  });
+  if (kMarks && kMarks.n > 0) notes.push(zh ? `· ${kMarks.n} 条已有知识的员工必读 / 要点用了文件里较新的` : `· 既存ナレッジ ${kMarks.n} 件のスタッフ必読・ポイントをファイルの新しい方に更新`);
+  if (supRes && supRes.notes) supRes.notes.forEach(l => notes.push(l));
+
+  // 提示条:一句话;完整结果(含因同名 / 同编号跳过的条目)留在数据页上
+  const added = lines.filter(l => l.startsWith("+"));
+  const toast = (added.length > 0
+    ? (zh ? "✓ 合并完成:" : "✓ マージ完了:") + added.map(l => l.slice(2)).join(" · ")
+    : lines.length > 0
+      ? (zh ? "✓ 合并完成(没有新增条目;已有的条目按修改时间比过,取了新的一边)" : "✓ マージ完了(新規なし)")
+      : (zh ? "没有新内容:文件里的条目这里都已经有了" : "新しい内容はありません(すべて既存)"))
+    + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : "");
+  // 备货 G 线:合并导入一个字都不碰 appSettings(库存账)和已有配方 / 组件的备货设置,只在数据页的结果里说清楚(放在提示条的判断之后)
+  const prepNotes = [];
+  if (d.appSettings && Object.keys(prepStockRead(d.appSettings.prepStock).items).length > 0) prepNotes.push(prepTxt(lang).mergeNotMerged);
+  if (prepCfgDiff.size) prepNotes.push(prepTxt(lang).mergeCfgDiff(prepCfgDiff.size));
+  return {
+    next, add, logOps, skipIdx,
+    lines: prepNotes.length ? [...lines, ...prepNotes] : lines,
+    skipped, toast, notes,
+    added: { recipes: recipeAdd, components: compAdd, creations: creationAdd },
+    prepCfgDiffN: prepCfgDiff.size,
+    detail: null,             // I 线:R21 的预览分组
+    deletedSkipped: [],       // I 线:「你删过的」这次没加回来的
+    kPairs,                   // KA:applyMergePlan 兜底时对 prev 重做标记合并要用
+    supIdMap,                 // PA:文件供货商 id → 本机 id(本店原料那一步、applyMergePlan 兜底都用)
+  };
+}
+// ─── END import-preview helpers ───
+// applyMergePlan(plan, base, set, d, opts):把计划写进 App 的状态(spec_merge_plan R9)。base = 算计划时用的 cur;set[key] = 那张表的 setter
+// (收 updater);opts = { nowIso, genId }。调哪个 setter 的条件和今天一样;setX(prev => prev === base[key] ? plan.next[key] : 兜底(prev)),
+// 兜底 = 算计划之后别处改过这张表:W 类照今天的 appendTo(按 id 过滤后追加,不重新按名字去重、不重做 remap);厂家 / 材料 / 本店原料 / 老价格表 / 打印设置
+// 按 prev 重算;记录把算好的 add / replace 套到 prev 上。段外:它调 React 的 setter(不是纯函数),但不用 hook,所以放模块顶层(测试直接调)
+function applyMergePlan(plan, base, set, d, opts = {}) {
+  const nowIso = opts.nowIso || new Date().toISOString();
+  const genId = opts.genId || _mergeGenId;
+  const go = (key, fallback) => { if (set && typeof set[key] === "function") set[key](prev => prev === base[key] ? plan.next[key] : fallback(prev)); };
+  const appendTo = (prev, a0) => {
+    const ids = new Set((prev || []).map(x => x && x.id));
+    const a = a0.filter(x => !(x.id !== undefined && ids.has(x.id)));
+    return a.length ? [...(prev || []), ...a] : prev;
+  };
+  if (plan.next.cats !== base.cats) go("cats", (prev) => mergeCatsPlan(prev, d.cats, genId).result);
+  if (plan.add.components.length > 0) go("components", (prev) => appendTo(prev, plan.add.components));
+  if (plan.add.recipes.length > 0) go("recipes", (prev) => appendTo(prev, plan.add.recipes));
+  if (plan.add.creations.length > 0) go("creations", (prev) => appendTo(prev, plan.add.creations));
+  if (plan.add.knowledge.length > 0 || plan.next.knowledge !== base.knowledge)
+    go("knowledge", (prev) => appendTo(mergeKnowledgeStaffMarks(prev, plan.kPairs || []).list, plan.add.knowledge));
+  if (Array.isArray(d.brands)) go("brands", (prev) => mergeByIdPlan(prev, d.brands, (l, x) => mergeByNewer(l, x, []), plan.skipIdx.brands));
+  if (Array.isArray(d.materials)) {
+    const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
+    go("materials", (prev) => mergeByIdPlan(prev, migrated, (l, x) => mergeMaterialEntry(l, x, nowIso), plan.skipIdx.materials));
+  }
+  if (Array.isArray(d.shopMaterials)) go("shopMaterials", (prev) => mergeShopPlan(prev, d.shopMaterials, { genId, nowIso, idMap: plan.supIdMap || {} }, plan.skipIdx.shopMaterials));
+  if (plan.add.products.length > 0) go("products", (prev) => appendTo(prev, plan.add.products));
+  ["salesLog", "productionLog"].forEach(key => {
+    const ops = plan.logOps[key];
+    if (ops && (ops.add.length || ops.replace.size)) go(key, (prev) => applyLogOps(prev, ops, false));
+  });
+  if (plan.add.suppliers.length > 0) go("suppliers", (prev) => appendTo(prev, plan.add.suppliers));
+  if (plan.add.productFamilies.length > 0) go("productFamilies", (prev) => appendTo(prev, plan.add.productFamilies));
+  if (plan.add.customCompCats.length > 0) go("customCompCats", (prev) => appendTo(prev, plan.add.customCompCats));
+  if (d.printSettings && typeof d.printSettings === "object") go("printSettings", (prev) => mergePrintSettingsPlan(prev, d.printSettings));
+}
+
 // ─── 编辑页「有没有没保存的改动」(2026-09-29 体检修)────────────────────────
 // 以前编辑页没保存就点顶部导航 / 手机底栏,内容当场丢,没有任何提醒。
 // 每个编辑页调用 useDirtyGuard(() => 要比较的状态),把返回的 bind 挂到根元素上;
@@ -4626,7 +5233,7 @@ const parsePackCount = (ps) => {
 };
 // 第 5 批复查修(r3-money-4):一包几克 —— 按规格读;读不出、又是计件规格(「20本」)、材料填了同一个计件单位的每个克重时 = 个数 × 每个克数
 // (同 PackPriceFields 件模式的 gramsOf)。材料没有克重时和 parsePackSizeToGrams 一样。采购页「几包」用;材料列表 / 详情的「箱价」按规格 §1.2 不改
-const packGramsOf = (ps, m) => {
+const legacyPackGramsOf = (ps, m) => {
   const g0 = parsePackSizeToGrams(ps);
   if (g0 > 0) return g0;
   const cnt = parsePackCount(ps), gpp = _gramsNum(m && m.gramsPerPiece), pu = _normCountUnit(m && m.pieceUnit);
@@ -4637,7 +5244,7 @@ const packGramsOf = (ps, m) => {
 // (12 個 × 行上 50 g = 600 g,按材料 60 g/個 一包 600 g 算成 1 包,其实 12 個 要 2 包)。units = computeMaterialNeeds 结果上不可枚举的 unitNeeds[材料 id]。
 // 按克的规格 / 没有 units 时 = ceil(克数 ÷ 一包克数),和以前一样;一包几克读不出 → null(「规格未知」)
 const packsNeededOf = (ps, m, grams, units) => {
-  const packG = packGramsOf(ps, m);
+  const packG = legacyPackGramsOf(ps, m);
   if (!(packG > 0)) return null;
   const cnt = parsePackSizeToGrams(ps) > 0 ? null : parsePackCount(ps);
   if (!cnt || !units) return Math.ceil(grams / packG);
@@ -4646,6 +5253,122 @@ const packsNeededOf = (ps, m, grams, units) => {
   Object.keys(units).forEach(uk => { pcs += uk === k ? units[uk].q : units[uk].g / gpp; });
   return Math.ceil(Number((pcs / cnt.n).toPrecision(12)));
 };
+
+// ─── BEGIN touch-lang helpers ───
+// 第 6 批 8.3 触控 / 8.4 中文化(design_touch-lang §4.1,spec_toast_hold §3.8)。第 0 步全部写成真的,但**没有一个调用处**(零变化)。
+// 之后:文字表和显示函数(UI_TXT / recipeCatLabel / creationStatusInfo / difficultyLabel / paramKeyLabel / newRecipeUnit / unitOr)归 L1;
+// toastQueuePush / toastHold / canHover / hoverOnly / tipPlace / fgClass 归 T1。段里不许有 React / setState / localStorage(测试整段抽出来跑)。
+// 共用文字表:中日键一一对应;只有第 0 步、T1、L1 往这里加键(plan 裁决 18)。uiTxt(lang):"ja" → 日文,其余一律中文
+const UI_TXT = {
+  zh: { ok: "确定", cancel: "取消", undo: "撤销", close: "关闭", tipLabel: "说明", add: "＋ 添加", delRow: "删掉这一行", moveUp: "上移", moveDown: "下移" },
+  ja: { ok: "確定", cancel: "キャンセル", undo: "元に戻す", close: "閉じる", tipLabel: "説明", add: "＋ 追加", delRow: "この行を削除", moveUp: "上へ", moveDown: "下へ" },
+};
+const uiTxt = (lang) => UI_TXT[lang === "ja" ? "ja" : "zh"];
+// 配方分类:存的值不变(下拉的 value 永远是存的值),只是显示查表;不认识的值原样显示(待看 4 的 A)
+const RECIPE_CATEGORIES = [
+  { v: "焼き菓子", zh: "烘焙点心", ja: "焼き菓子" },
+  { v: "生菓子", zh: "鲜制甜点", ja: "生菓子" },
+  { v: "パン・ヴィエノワズリー", zh: "面包 / 起酥", ja: "パン・ヴィエノワズリー" },
+  { v: "ショコラ", zh: "巧克力", ja: "ショコラ" },
+  { v: "アントルメ", zh: "整模蛋糕", ja: "アントルメ" },
+  { v: "タルト", zh: "挞", ja: "タルト" },
+  { v: "その他", zh: "其他", ja: "その他" },
+];
+const recipeCatLabel = (v, lang) => {
+  const c = RECIPE_CATEGORIES.find(x => x.v === v);
+  return c ? c[lang === "ja" ? "ja" : "zh"] : (v === undefined || v === null ? "" : v);
+};
+// 组合产品状态:三张表合一张(颜色用今天 CreationsView 列表那套设计色);不认识的按「試作」(同今天两张表)
+const CREATION_STATUS = [
+  { key: "試作",     emoji: "🧪", zh: "试作中",   ja: "試作中",   color: "#A05A1E", bg: "#FBF0E0" },
+  { key: "定番",     emoji: "⭐", zh: "常规款",   ja: "定番商品", color: "#2D6A4F", bg: "#E8F4EA" },
+  { key: "季節限定", emoji: "🌸", zh: "季节限定", ja: "季節限定", color: "#6B4568", bg: "#EDE4F0" },
+  { key: "下架",     emoji: "⏸",  zh: "已下架",   ja: "休止中",   color: "#7A5F4A", bg: "#F2F2EC" },
+  { key: "検討中",   emoji: "💭", zh: "考虑中",   ja: "検討中",   color: "#5B4A8C", bg: "#ECE8F4" },
+];
+const creationStatusInfo = (s, lang) => {
+  const c = CREATION_STATUS.find(x => x.key === s) || CREATION_STATUS[0];
+  return { ...c, label: c[lang === "ja" ? "ja" : "zh"] };
+};
+// 难度:存的仍是中文,日文界面只翻这 4 个标准值;中文界面原样;手写的原样
+const DIFFICULTY_LABELS = [
+  { v: "★ 简单", ja: "★ 簡単" },
+  { v: "★★ 普通", ja: "★★ 普通" },
+  { v: "★★★ 困难", ja: "★★★ 難しい" },
+  { v: "★★★★ 高难度", ja: "★★★★ 高難度" },
+];
+const difficultyLabel = (v, lang) => {
+  if (lang !== "ja") return v;
+  const d = DIFFICULTY_LABELS.find(x => x.v === v);
+  return d ? d.ja : v;
+};
+// 材料参数模板的两个参数名:key 就是存进材料 parameters 的名字,不能改,只改显示(design_touch-lang 决定 14)
+const PARAM_KEY_LABELS = {
+  "サイズ": { zh: "尺寸", ja: "サイズ" },
+  "ゼリー强度": { zh: "凝胶强度", ja: "ゼリー強度" },
+};
+const paramKeyLabel = (k, lang) => {
+  const p = Object.prototype.hasOwnProperty.call(PARAM_KEY_LABELS, k) ? PARAM_KEY_LABELS[k] : null;
+  return p ? p[lang === "ja" ? "ja" : "zh"] : k;
+};
+// 新建配方的默认单位跟界面语言;unitOr 只给屏幕上 5 处空单位兜底(打印 / printScaleText / recipeCostInfo 的「個」不动)
+const newRecipeUnit = (lang) => (lang === "ja" ? "個" : "个");
+const unitOr = (u, lang) => u || newRecipeUnit(lang);
+// 编辑页网格的手机两列:"1fr 1fr 1fr 1fr" → "k-fg k-fg-4"(按空白数列数;CSS 在 GLOBAL_CSS 的 599 断点,T1 加)
+const fgClass = (cols) => {
+  const n = typeof cols === "string" ? cols.trim().split(/\s+/).filter(Boolean).length : 0;
+  return n > 0 ? `k-fg k-fg-${n}` : "k-fg";
+};
+// 「ⓘ」气泡放哪:anchor = 按钮的 { left, top, right, bottom },pop = 气泡 { w, h },view = { w, h }(取 visualViewport)。
+// 下面放得下放下面,否则(上面放得下)放上面;左右夹在 12 px 边距里。返回 { left, top, above }
+const tipPlace = (anchor, pop, view) => {
+  const GAP = 6, M = 12;
+  const a = anchor || {}, p = pop || {}, v = view || {};
+  const num = (x) => (typeof x === "number" && isFinite(x) ? x : 0);
+  const pw = num(p.w), ph = num(p.h), vw = num(v.w), vh = num(v.h);
+  const below = num(a.bottom) + GAP, above = num(a.top) - GAP - ph;
+  const useAbove = below + ph > vh - M && above >= M;
+  const cx = (num(a.left) + num(a.right)) / 2;
+  const left = Math.max(M, Math.min(cx - pw / 2, vw - M - pw));
+  return { left, top: useAbove ? above : below, above: useAbove };
+};
+// 提示条队列(spec_toast_hold R3):满了先挤最早一条没停住的,全停住才挤最早的;t 自己不会被挤掉。
+// 不改 prev;返回新数组(留下的元素和 t 都是原来那个对象)。没有停住的、max = 3 时 = 今天的 [...prev.slice(-2), t]
+const toastQueuePush = (prev, t, max = 3) => {
+  const m = Number.isInteger(max) && max >= 1 ? max : 3;
+  const out = Array.isArray(prev) ? prev.slice() : [];
+  const isHeld = (x) => !!x && typeof x === "object" && !!x.held;
+  while (out.length >= m) {
+    let i = out.findIndex(x => !isHeld(x));
+    if (i < 0) i = 0;
+    out.splice(i, 1);
+  }
+  out.push(t);
+  return out;
+};
+// 停住一条(spec_toast_hold R4):找不到 / 已经停住 → 原样返回 prev 这个数组本身;否则那一条换成 { ...原对象, held: true }
+const toastHold = (prev, id) => {
+  const i = Array.isArray(prev) ? prev.findIndex(x => !!x && typeof x === "object" && x.id === id) : -1;
+  if (i < 0 || prev[i].held) return prev;
+  const out = prev.slice();
+  out[i] = { ...prev[i], held: true };
+  return out;
+};
+// 这台设备能不能悬停(spec_toast_hold R7):第一次用到时算一次并缓存到页面关掉 —— 没有 window.matchMedia 函数 → 真;调用抛错 → 真;
+// 否则 = matchMedia("(hover: hover)").matches 转布尔。canHover(mm) 传了函数就拿它现算、不缓存(只给测试)
+let _canHoverCache;
+const canHover = (mm) => {
+  const calc = (f) => { try { return typeof f === "function" ? !!f("(hover: hover)").matches : true; } catch (e) { return true; } };
+  if (typeof mm === "function") return calc(mm);
+  if (_canHoverCache === undefined) {
+    const w = typeof window !== "undefined" ? window : undefined;
+    _canHoverCache = calc(w && typeof w.matchMedia === "function" ? (q) => w.matchMedia(q) : undefined);
+  }
+  return _canHoverCache;
+};
+// 只给鼠标设备的悬停处理:包一层的写法 onMouseEnter={hoverOnly(fn)} —— 能悬停时返回 fn 本身,不能时返回 undefined(React 不挂这个处理函数)
+const hoverOnly = (fn, mm) => (canHover(mm) ? fn : undefined);
+// ─── END touch-lang helpers ───
 
 // ─── UI primitives ───────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
@@ -4802,7 +5525,10 @@ function Btn({ children, onClick, variant = "default", size = "md", style: s, di
 // 2a §09 · 只在「不可撤销 + 影响到别的数据」时才拦（其余破坏性操作走「先做 + 撤销 toast」）。
 // 标题直接写要删的东西的名字，不写「确认操作」；必须列出受影响的引用方。
 // Esc 关闭，默认焦点在「取消」。
-function ConfirmDialog({ message, onConfirm, onCancel, confirmText = "确定", cancelText = "取消", danger = true, kicker, title, refs = [] }) {
+// 第 6 批第 0 步:多三个可选 prop(不传时 DOM 一字不差;组件本身的缺省按钮字不改,L1 只在 App 渲染处跟语言):
+//   body  放在正文和黄线(refs)之间的一块(导入对比卡);wide 变宽(最宽 640,内容区最高 70vh 可滚,底栏 sticky);
+//   extra = { label, onClick, primary } 一个按钮,放在「取消」左边(「改用合并导入」)
+function ConfirmDialog({ message, onConfirm, onCancel, confirmText = "确定", cancelText = "取消", danger = true, kicker, title, refs = [], body, wide, extra }) {
   const cancelRef = useRef(null);
   useEffect(() => {
     cancelRef.current?.focus();
@@ -4814,18 +5540,20 @@ function ConfirmDialog({ message, onConfirm, onCancel, confirmText = "确定", c
     <div onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}
       style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", zIndex: T.z.confirm, display: "flex", alignItems: "center", justifyContent: "center", padding: T.sp.xl }}>
       <div role="dialog" aria-modal="true"
-        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 420, width: "100%", boxShadow: T.sh.overlay }}>
-        <div style={{ padding: "24px 24px 20px" }}>
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: wide ? 640 : 420, width: "100%", boxShadow: T.sh.overlay, ...(wide ? { maxHeight: "92vh", display: "flex", flexDirection: "column" } : {}) }}>
+        <div style={{ padding: "24px 24px 20px", ...(wide ? { maxHeight: "70vh", overflowY: "auto" } : {}) }}>
           {kicker && <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{kicker}</div>}
           {title && <div style={{ ...T.fs.titleS, marginTop: T.sp.m, color: T.ink, fontFamily: T.fontSans }}>{title}</div>}
           <div style={{ ...T.fs.small, color: T.body, marginTop: title ? 10 : 0, whiteSpace: "pre-wrap", fontFamily: T.fontSans, lineHeight: 1.65 }}>{message}</div>
+          {body !== undefined && body !== null && body !== false && <div data-b6="confirm-body" style={{ marginTop: 14 }}>{body}</div>}
           {refs.length > 0 && (
             <div style={{ marginTop: 14, borderLeft: `3px solid ${T.warning}`, paddingLeft: T.sp.m, ...T.fs.caption, color: T.body, lineHeight: 1.6 }}>
               {refs.map((x, i) => <div key={i}>{x}</div>)}
             </div>
           )}
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: T.sp.s, padding: "14px 24px", borderTop: `1px solid ${T.line}` }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: T.sp.s, padding: "14px 24px", borderTop: `1px solid ${T.line}`, ...(wide ? { position: "sticky", bottom: 0, background: T.paper, flexWrap: "wrap" } : {}) }}>
+          {extra && typeof extra === "object" && <Btn variant={extra.primary ? "primary" : "default"} onClick={extra.onClick}>{extra.label}</Btn>}
           <button ref={cancelRef} onClick={onCancel} className="k-btn k-btn-ghost"
             style={{ ...T.fs.caption, padding: "7px 14px", color: T.body, background: "transparent", border: "1px solid transparent", borderRadius: T.radius, cursor: "pointer", fontFamily: T.fontSans }}>
             {cancelText}
@@ -4943,6 +5671,138 @@ function fuzzyMatchMaterial(ing, materials, brands) {
 }
 
 // ═══ 备份恢复弹窗 (v13.1) ═══
+// ─── 第 6 批第 0 步:恢复一份备份(从 BackupRestoreDialog.handleRestore 原样抽出来,行为不变;I 线的「回到导入之前」也走它)───
+// opts = { lang, showToast, confirmDialog, note }:note(可选)接在确认框正文末尾(空一行),其余和恢复列表里点「恢复」完全一样:
+// 点确定才读整份备份 → 恢复前把当前状态存成「恢复之前」的固定备份(存不上再问一次)→ _suspendSaves → 写存档 → 0.8 秒后刷新
+const _backupTimeText = (iso) => {
+  try {
+    const d = new Date(iso);
+    const m = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${m(d.getMonth()+1)}-${m(d.getDate())} ${m(d.getHours())}:${m(d.getMinutes())}:${m(d.getSeconds())}`;
+  } catch { return iso || ""; }
+};
+function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = {}) {
+  const movedAwayToast = () => showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再恢复" : "このウィンドウは古いバージョンです。再読み込みしてから復元してください");
+  if (_movedAway) { movedAwayToast(); return; }
+  confirmDialog(
+    (lang === "zh"
+      ? `恢复到 ${_backupTimeText(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态存一份「固定」备份，不会被轮换掉，所以可以反悔）。\n\n刷新页面后生效。`
+      : `${_backupTimeText(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で固定バックアップとして保存されます。`) + (note ? "\n\n" + note : ""),
+    async () => {
+      // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
+      let payload = await getBackupPayload(snap);
+      // 第 −1 步复查(R115):确认框开着的时候数据被搬走了 —— 在存「恢复备份之前」之前就停,不然会把搬家标记(157 字、条数全 0)存成一份固定备份
+      if (_movedAway) { movedAwayToast(); return; }
+      if (lsHasMovedTo(payload)) {   // 第 −1 步(R115):写回前去掉 movedTo
+        try { payload = unfreeze(payload); } catch (e) { payload = null; }
+        // 复查:去掉以后既没有配方也没有旧价格表(存成了备份的搬家小标记)= 读不出来 —— 写回去 loadData 会当成没有数据、换上预置数据
+        try { const o = payload && JSON.parse(payload); if (o && !o.recipes && !o.cats) payload = null; } catch (e) { payload = null; }
+      }
+      if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
+      const doRestore = () => {
+        if (_movedAway) { movedAwayToast(); return; }
+        try {
+          _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
+          localStorage.setItem(STORAGE_KEY, payload);
+        } catch (e) {
+          _suspendSaves = false;
+          showToast((lang === "zh" ? "⚠️ 恢复失败:" : "⚠️ 復元失敗:") + (e && e.message ? e.message : String(e)));
+          return;
+        }
+        showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
+        setTimeout(() => location.reload(), 800);
+      };
+      let pinned = true;
+      try {
+        const current = localStorage.getItem(STORAGE_KEY);
+        if (lsHasMovedTo(current)) { movedAwayToast(); return; }
+        if (current && current !== payload) pinned = await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
+      } catch (e) { pinned = false; }
+      // 审查发现:以前固定备份没存上也照样覆盖,对话框却说「会先存一份」。和覆盖导入 / 清除全部一样,存不上先问
+      if (!pinned) {
+        confirmDialog(
+          lang === "zh" ? "恢复前的固定备份没存上(浏览器的数据库用不了)。仍然恢复吗?现在的数据会被覆盖,建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できません。それでも復元しますか?",
+          doRestore,
+          { title: lang === "zh" ? "备份没存上" : "バックアップ失敗", confirmText: lang === "zh" ? "仍然恢复" : "復元する" }
+        );
+        return;
+      }
+      doRestore();
+    }
+  );
+}
+
+// ─── 第 6 批第 0 步:数据页「💾 本地存储用量」卡(从 App 里原样抽出来,DOM 一样;D 线改主数字,extraRows 留给以后 E4「其中本机草稿 N 份」)───
+function StorageMeterCard({ lang, extraRows = null }) {
+  let used = 0;
+  try { used = (localStorage.getItem(STORAGE_KEY) || "").length; } catch {}
+  const { usedMB, limitMB, pct, level } = storageMeterOf(used);
+  const color = level === "danger" ? T.danger : level === "warning" ? T.warning : T.success;
+  const bg = level === "danger" ? T.dangerBg : level === "warning" ? T.warningBg : T.successBg;
+  return (
+    <div style={{ background: bg, border: `0.5px solid ${color}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>
+          {lang === "zh" ? "💾 本地存储用量" : "💾 ローカル使用量"}
+        </div>
+        <div style={{ fontSize: 12, color, fontWeight: 500 }}>
+          {usedMB.toFixed(2)} MB / ~{limitMB} MB ({pct.toFixed(0)}%)
+        </div>
+      </div>
+      <div style={{ background: T.bgMuted, height: 6, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.3s" }} />
+      </div>
+      {pct > 80 && (
+        <div style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>
+          {lang === "zh"
+            ? "⚠️ 存储接近上限,建议:导出数据 → 清理用不到的配方/图片/旧材料 → 重新导入"
+            : "⚠️ 容量接近上限,バックアップ → 不要データ削除を推奨"}
+        </div>
+      )}
+      {extraRows}
+    </div>
+  );
+}
+// ─── 第 6 批第 0 步:数据页「上次合并 / 覆盖导入的结果」卡(从 App 里原样抽出来,DOM 一样;I 线加持久、notes、备份行、更早的几次)───
+function ImportReportCard({ report: importReport, lang, onClose }) {
+  if (!importReport) return null;
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderLeft: `3px solid ${T.info}`, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>
+          {importReport.kind === "merge" ? (lang === "zh" ? "上次合并导入的结果" : "前回のマージ結果") : (lang === "zh" ? "上次覆盖导入的结果" : "前回の上書き結果")}
+          <span style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, marginLeft: 8 }}>{importReport.fileName} · {String(importReport.at.getHours()).padStart(2, "0")}:{String(importReport.at.getMinutes()).padStart(2, "0")}</span>
+        </div>
+        <button type="button" onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.subtle, fontSize: 16, padding: "0 4px" }} title={lang === "zh" ? "关掉" : "閉じる"}>×</button>
+      </div>
+      <div style={{ ...T.fs.caption, color: T.body, marginTop: 6, lineHeight: 1.7 }}>
+        {importReport.lines.length === 0
+          ? (lang === "zh" ? "没有新内容:文件里的条目这里都已经有了。" : "新しい内容はありませんでした。")
+          : importReport.lines.map((l, i) => <div key={i}>{l}</div>)}
+      </div>
+      {importReport.skipped.length > 0 && (
+        <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, lineHeight: 1.7 }}>
+          <div style={{ color: T.body }}>{lang === "zh" ? `因为这里已有同名或同编号的,跳过了 ${importReport.skipped.length} 条(已有的没动):` : `同名・同IDのため ${importReport.skipped.length} 件スキップ:`}</div>
+          <div>{importReport.skipped.slice(0, 30).join("、")}{importReport.skipped.length > 30 ? (lang === "zh" ? ` 等 ${importReport.skipped.length} 条` : ` ほか`) : ""}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+// ─── 第 6 批第 0 步:空壳组件(先 return null;位置是最终位置,props 见 .claude/batch6/api.md)───
+// I 线:两个导入确认框的对比块(ConfirmDialog 的 body)
+function OverwritePreviewBody({ rows, lang }) { return null; }
+function MergePreviewBody({ rows, lang, onToggleSkipDeleted }) { return null; }
+// D 线:顶栏「💾」(DraftChip 左边)、横幅(现有两条横幅后面)、「怎么装」全屏说明、数据页导出卡按钮上面那两行、员工顶栏下面那一行灰字
+function ExportChip({ view, level, lang, onExport }) { return null; }
+function SafetyBanner({ kind, lang, empty, onClose, onHowTo, onExport, onOpenRestore, onGoData }) { return null; }
+function HomeScreenHowTo({ open, lang, onClose, onExport }) { return null; }
+function DeviceExportStatus({ lang, deviceInfo, env, changed, today, onRename }) { return null; }
+function StaffSafetyLine({ note, lang }) { return null; }
+// R 线:数据页「🗑 回收站(30 天)」卡(紧跟「🛟 恢复备份」卡)、回收站弹窗(层级 T.z.drawer,不带遮罩)
+function RecycleBinCard({ lang, onOpen }) { return null; }
+function RecycleBinDialog({ open, lang, onClose, onRestore, showToast, confirmDialog }) { return null; }
+
 function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
   const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4990,57 +5850,8 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     rescue: lang === "zh" ? "数据库被清掉时抢救的" : "復旧時の保存",
   }[r] || "");
 
-  // big-2 第 −1 步(规格 R115):数据已经搬进新库的旧窗口不恢复 —— 写进 localStorage 的东西新版不读,恢复了等于没恢复
-  const movedAwayToast = () => showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再恢复" : "このウィンドウは古いバージョンです。再読み込みしてから復元してください");
-  const handleRestore = (snap) => {
-    if (_movedAway) { movedAwayToast(); return; }
-    confirmDialog(
-      lang === "zh"
-        ? `恢复到 ${formatTime(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态存一份「固定」备份，不会被轮换掉，所以可以反悔）。\n\n刷新页面后生效。`
-        : `${formatTime(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で固定バックアップとして保存されます。`,
-      async () => {
-        // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
-        let payload = await getBackupPayload(snap);
-        // 第 −1 步复查(R115):确认框开着的时候数据被搬走了 —— 在存「恢复备份之前」之前就停,不然会把搬家标记(157 字、条数全 0)存成一份固定备份
-        if (_movedAway) { movedAwayToast(); return; }
-        if (lsHasMovedTo(payload)) {   // 第 −1 步(R115):写回前去掉 movedTo
-          try { payload = unfreeze(payload); } catch (e) { payload = null; }
-          // 复查:去掉以后既没有配方也没有旧价格表(存成了备份的搬家小标记)= 读不出来 —— 写回去 loadData 会当成没有数据、换上预置数据
-          try { const o = payload && JSON.parse(payload); if (o && !o.recipes && !o.cats) payload = null; } catch (e) { payload = null; }
-        }
-        if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
-        const doRestore = () => {
-          if (_movedAway) { movedAwayToast(); return; }   // 确认框开着的时候数据被搬走了
-          try {
-            _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
-            localStorage.setItem(STORAGE_KEY, payload);
-          } catch (e) {
-            _suspendSaves = false;
-            showToast((lang === "zh" ? "⚠️ 恢复失败:" : "⚠️ 復元失敗:") + (e && e.message ? e.message : String(e)));
-            return;
-          }
-          showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、リロード中");
-          setTimeout(() => location.reload(), 800);
-        };
-        let pinned = true;
-        try {
-          const current = localStorage.getItem(STORAGE_KEY);
-          if (lsHasMovedTo(current)) { movedAwayToast(); return; }   // 别的窗口刚搬完家、storage 事件还没到:存档已经是搬家标记 / 冻结副本,不存、不写
-          if (current && current !== payload) pinned = await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
-        } catch (e) { pinned = false; }
-        // 审查发现:以前固定备份没存上也照样覆盖,对话框却说「会先存一份」。和覆盖导入 / 清除全部一样,存不上先问
-        if (!pinned) {
-          confirmDialog(
-            lang === "zh" ? "恢复前的固定备份没存上(浏览器的数据库用不了)。仍然恢复吗?现在的数据会被覆盖,建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できません。それでも復元しますか?",
-            doRestore,
-            { title: lang === "zh" ? "备份没存上" : "バックアップ失敗", confirmText: lang === "zh" ? "仍然恢复" : "復元する" }
-          );
-          return;
-        }
-        doRestore();
-      }
-    );
-  };
+  // 第 6 批第 0 步:恢复的整段挪到模块顶层 restoreBackupSnapshot(行为不变),I 线的「回到导入之前」也走它
+  const handleRestore = (snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog });
 
   const handleDelete = (snap) => {
     confirmDialog(
@@ -6553,6 +7364,85 @@ function SaveStatus({ state, lang, onRetry }) {
 // 空态 · 两型。空态永远给下一步动作，不写「暂无数据」了事。
 //   variant="first"  首次为空 —— 40px 方框占位 + 主副文案 + 1~2 个动作
 //   variant="filter" 筛选无结果 —— 摆出生效条件、能一个个摘掉，不给「新建」按钮
+// ─── 第 6 批第 0 步:三个共用原语(design_touch-lang §4.1;写成真的,第 0 步没有调用处)───
+// TapTip:唯一的说明不许只放 title —— 改成「ⓘ」点一下弹气泡(电脑上 title 照留)。气泡用 createPortal 挂到 body(卡片悬停有 transform,
+// fixed 放在里面会跑偏),**只在开着时才渲染 portal**(服务端渲染永远走不到)。再点 / 在外面按下 / Esc / 滚动或改尺寸收起;同一时间只开一个。
+// 点按钮 stopPropagation(放在可点的卡片 / 行里不会进详情)。触屏放大点的范围靠 GLOBAL_CSS 的 .k-tip::after(T1 加)
+let _tipCloseCurrent = null;
+function TapTip({ text, lang, label, children }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
+  const closeRef = useRef(null);
+  if (!closeRef.current) closeRef.current = () => setOpen(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = closeRef.current;
+    if (_tipCloseCurrent && _tipCloseCurrent !== close) _tipCloseCurrent();
+    _tipCloseCurrent = close;
+    const inside = (n) => { const b = btnRef.current, p = popRef.current; return !!((b && b.contains(n)) || (p && p.contains(n))); };
+    const onDown = (e) => { if (!inside(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    try {
+      const r = btnRef.current.getBoundingClientRect();
+      const vv = typeof window !== "undefined" ? window.visualViewport : null;
+      const pr = popRef.current ? popRef.current.getBoundingClientRect() : null;
+      setPos(tipPlace(r, { w: pr && pr.width ? pr.width : 280, h: pr && pr.height ? pr.height : 60 }, { w: vv ? vv.width : window.innerWidth, h: vv ? vv.height : window.innerHeight }));
+    } catch (e) { /* 量不出来就放在左上角的默认位置 */ }
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      if (_tipCloseCurrent === close) _tipCloseCurrent = null;
+    };
+  }, [open]);
+  const t = uiTxt(lang);
+  return (
+    <>
+      <button ref={btnRef} type="button" className="k-tip" data-tl-tip="" aria-label={label || t.tipLabel} aria-expanded={open ? "true" : "false"} title={text}
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, padding: 0, margin: "0 0 0 4px", border: `1px solid ${T.subtle}`,
+          borderRadius: "50%", background: "transparent", color: T.subtle, fontFamily: T.fontSerif, fontSize: 11, fontStyle: "italic", lineHeight: 1, cursor: "pointer", verticalAlign: "middle", flexShrink: 0 }}>i</button>
+      {open && typeof document !== "undefined" && document.body && createPortal(
+        <div ref={popRef} className="k-tip-pop" role="tooltip" onPointerDown={(e) => e.stopPropagation()}
+          style={{ position: "fixed", left: pos ? pos.left : 12, top: pos ? pos.top : 12, zIndex: T.z.popover, maxWidth: "min(320px, calc(100vw - 24px))", boxSizing: "border-box",
+            whiteSpace: "pre-line", overflowWrap: "anywhere", background: T.surface, border: `1px solid ${T.border}`, boxShadow: T.sh.popover, padding: "8px 12px",
+            ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
+          {children || text}
+        </div>, document.body)}
+    </>
+  );
+}
+// WhyNote:变灰按钮旁边 / 勾选框下面一行灰色小字,说原因(纯展示;员工看得到的说明一律直接写出来)
+function WhyNote({ children }) {
+  return <div className="k-why" data-tl-why="" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, lineHeight: 1.5, overflowWrap: "anywhere" }}>{children}</div>;
+}
+// TagAddInput:输入框 +「＋ 添加」按钮;回车也能加,但输入法选字时(isComposing / keyCode 229)不加;空串 / 只有空格不加。
+// 各调用处原来的去重 / trim 规则原样当 onAdd 传进来(不在这里改);list 给 datalist 的 id
+function TagAddInput({ value, onChange, onAdd, placeholder, lang, list }) {
+  const v = value === undefined || value === null ? "" : String(value);
+  const blank = v.trim() === "";
+  const add = () => { if (!blank && typeof onAdd === "function") onAdd(v); };
+  return (
+    <span data-tl-tagadd="" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0, maxWidth: "100%" }}>
+      <input className="k-input" value={v} list={list} placeholder={placeholder}
+        onChange={(e) => { if (typeof onChange === "function") onChange(e.target.value); }}
+        onKeyDown={(e) => { if (e.key !== "Enter") return; if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return; e.preventDefault(); add(); }}
+        style={{ ...T.fs.caption, padding: "5px 8px", border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, minWidth: 0, flex: "1 1 120px" }} />
+      <button type="button" className="k-btn k-tap" onClick={add} disabled={blank}
+        style={{ ...T.fs.caption, padding: "5px 10px", border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: blank ? "default" : "pointer", fontFamily: T.fontSans, whiteSpace: "nowrap" }}>
+        {uiTxt(lang).add}
+      </button>
+    </span>
+  );
+}
+
 function EmptyState({ variant = "first", title, hint, actions = [], chips = [], onClearAll, lang }) {
   return (
     <div style={{ padding: "40px 24px", textAlign: "center" }}>
@@ -12605,6 +13495,13 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           <LabelTemplate data={item} printSettings={printSettings} />
         ) : itemType === "creation" ? (
           <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
+        ) : itemType === "knowledge" ? (
+          // 第 6 批第 0 步:三种新打印的分发(模板第 0 步是空壳):知识(KB)/ 半成品标签(PC)/ 采购单(PB)。P 的部分和打印 CSS 一个字不改
+          <KnowledgePrintTemplate data={item} lang={lang} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />
+        ) : itemType === "prepLabel" ? (
+          <PrepLabelTemplate data={item} />
+        ) : itemType === "purchase" ? (
+          <PurchaseOrderTemplate data={item} lang={lang} />
         ) : (
           <>
             {template === "kitchen" && <KitchenTemplate item={item} itemType={itemType} lang={lang} sections={sections} logoSrc={logoSrc} brandName={brandName} brandSubtitle={brandSubtitle} />}
@@ -16393,7 +17290,8 @@ const _klDisplayName = (item, lang) => item ? (pickLang(item, "name", lang) || _
 // ─── 知识库 View ───────────────────────────────────────────────
 // 第 5 批 E3:顶上「🔗 关联按钮:N 个找不到 · M 个同名」(就地展开,同名的一键改成候选的全名)、「🏷 管理标签」(KnowledgeTagManager)、
 // 筛选条只显示常用的自定义标签(用过 ≥ 2 次,其余收进「更多」)、删知识 = 先删 + 撤销。getKnowledge = App 里最新的 knowledge(撤销时看「之后又改过没有」)
-function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, recipes, components, creations, onNavigate, confirmDialog, getKnowledge }) {
+// 第 6 批第 0 步:多可选 prop onPrintKnowledge(src)(KB 接;合本 / 单条打印)
+function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, recipes, components, creations, onNavigate, confirmDialog, getKnowledge, onPrintKnowledge }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTag, setFilterTag] = useState("all");
   const [linkOpen, setLinkOpen] = useState(false);   // 「关联按钮」那一行展开没有
@@ -17082,8 +17980,68 @@ const removeKnowledgeTag = (knowledge, tag, nowIso) => {
 };
 // ─── END knowledge-link repair helpers ───
 
+// ─── BEGIN knowledge-training helpers ───
+// 第 6 批 8.5「知识库当员工培训材料」(spec_ktrain.md、design_knowledge-training §4.1)。知识条目上的「员工必读」标记组(staffRead / staffOrder / staffAt)
+// 和要点组(staffPointsZh / staffPointsJa / staffPtsAt),两组都不写 updatedAt,合并导入时各按自己的时间戳整组取新。
+// 第 0 步写成真的:常量(含 KREAD_FX_RE)、isStaffRead(R-K1)、staffReadingList(R-K2)、stripPrivateKnowledgeFields(R-K16);其余空壳(规格 1.3)。
+// 段里不许有 React / setState / JSX(测试把整段抽出来、只给 PROD_MONEY_RE / pickLang / rawLang / pickGroupByStamp / dropBlankKeys 五个依赖就能跑)。
+// 之后:staffReadingLinks / knowledgePrintData / knowledgePrintPages / knowledgeMoneyCount 归 KB,其余 KA
+const STAFF_MARK_KEYS = ["staffRead", "staffOrder", "staffAt"];
+const STAFF_PTS_KEYS = ["staffPointsZh", "staffPointsJa", "staffPtsAt"];
+const KNOW_PRIVATE_KEYS = ["staffRead", "staffOrder", "staffAt", "staffPtsAt"];   // IP 分发包剥这四个(要点留着)
+const KREAD_TXT = { zh: {}, ja: {} };   // KA / KB 往这里加字(中日键一一对应)
+// 外币(审查 B6M-5):和第 5 批 P 的 PROD_MONEY_RE(本身不改)合起来用;码位 $ U+0024 ＄ U+FF04 € U+20AC £ U+00A3,不带 g / i / u
+const KREAD_FX_RE = /[$＄€£]\s*\d|\d[\d,，.]*\s*(?:美元|欧元|英镑|ドル|ユーロ|USD|EUR)/;
+const isStaffRead = (k) => !!k && typeof k === "object" && k.staffRead === true;   // R-K1:只认严格的 true
+// R-K2:必读列表 —— 按 staffOrder(有限数)升序,没编号 / 怪编号排最后;同号按数组里的先后(稳定)。元素是原对象
+const staffReadingList = (knowledge) => {
+  if (!Array.isArray(knowledge)) return [];
+  const key = (k) => (typeof k.staffOrder === "number" && Number.isFinite(k.staffOrder)) ? k.staffOrder : Infinity;
+  return knowledge.map((k, i) => ({ k, i })).filter(x => isStaffRead(x.k))
+    .sort((a, b) => { const ka = key(a.k), kb = key(b.k); return ka < kb ? -1 : ka > kb ? 1 : a.i - b.i; }).map(x => x.k);
+};
+const setStaffRead = (knowledge, id, on, nowIso) => ({ list: knowledge, changed: false });   // 空壳:R-K4 / R-K5
+const moveStaffRead = (knowledge, id, dir, nowIso) => knowledge;                          // 空壳:R-K6
+const restoreStaffMarks = (knowledge, id, before, after) => knowledge;                    // 空壳:R-K7(第四个参数可选)
+const staffPointsChanged = (before, form) => false;                                       // 空壳:R-K11
+// 空壳:R-M1 到 R-M10(给员工和打印的知识文字一律先过它;第 0 步原样返回)
+const stripMoneyClauses = (text) => ({ text: text === undefined || text === null ? "" : String(text), n: 0, cut: [] });
+const knowledgeStaffView = (k, lang) => ({ title: "—", titleOther: "", points: "", body: "", cut: [], n: 0, kana: 0 });   // 空壳:R-M11
+const knowledgeKanaRatio = (text) => 0;                     // 空壳:中文里日文假名的占比
+const knowledgeReadMinutes = (view, lang) => 0;             // 空壳:中文每分钟 450 字、日文 500 字,至少 1 分钟
+const knowledgeBlocks = (text) => [];                       // 空壳:正文版式(5 种写法),拼回去 = 原文
+const knowledgeBlocksText = (blocks) => "";                 // 空壳:knowledgeBlocks 拼回去
+const staffReadingLinks = (k, ctx) => [];                   // 空壳(KB):和这一条有关的、只通往厨房视图的关联
+const knowledgePrintData = (args) => null;                  // 空壳(KB):打印确认那一刻按 ids 从最新的 knowledge 重取、去好钱
+const knowledgePrintPages = (data) => 0;                    // 空壳(KB):每页约 1,100 字估
+const knowledgeMoneyCount = (entries, lang, pointsOnly = false) => 0;   // 空壳(KB):R-M12
+const mergeKnowledgeStaffMarks = (local, pairs) => ({ list: local, n: 0 });   // 空壳:R-K14(planMergeImport 知识那一步已经调它)
+// R-K16:IP 分发包剥标记和两个时间戳;一个都没有 → 原对象(IP 包 JSON 逐字节不变)
+const stripPrivateKnowledgeFields = (k) => {
+  if (!k || typeof k !== "object" || !KNOW_PRIVATE_KEYS.some(key => Object.prototype.hasOwnProperty.call(k, key))) return k;
+  const rest = { ...k };
+  KNOW_PRIVATE_KEYS.forEach(key => { delete rest[key]; });
+  return rest;
+};
+// ─── END knowledge-training helpers ───
+// ─── 第 6 批第 0 步:知识的界面组件 ───
+// KnowledgeBody:知识正文(老板详情页、员工阅读页、打印模板共用)。第 0 步空壳 = 今天详情页那个 <div>(DOM 逐字节一样);KA 按 knowledgeBlocks 排版
+function KnowledgeBody({ text, variant = "screen", lang }) {
+  return <div style={{ fontSize: 14, color: T.textPrimary, lineHeight: 1.95, whiteSpace: "pre-wrap", fontFamily: T.fontSans }}>{text}</div>;
+}
+// 下面都是空壳(先 return null),props 见 .claude/batch6/api.md
+function StaffPointsFields({ form, setForm, lang }) { return null; }                     // KA:知识编辑页「给员工的要点」
+function KnowledgeStaffPreview({ k, lang, isMarked, onEdit, ctx }) { return null; }       // KA:详情页「👁 员工看到的」
+function StaffKnowledgeBodyBlock({ view, lang, related, onOpenItem, images }) { return null; }   // KB:员工阅读页 / 老板预览的正文块
+function StaffReadingOverlay({ lang, list, open, onClose, onOpen, onOpenItem, onPrint, recipes, components, creations }) { return null; }   // KB
+function KitchenReadingLinks({ kind, id, reading, lang }) { return null; }               // KB:厨房视图「📚 先读」
+function KnowledgePrintModal({ src, knowledge, lang, staff, onClose, onConfirm, recipes, components, creations }) { return null; }   // KB
+function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle }) { return null; }   // KB
+function ReadSignTable({ lang }) { return null; }                                         // KB:阅读签字表
+
 // ─── 知识点详情 ─────────────────────────────────────────────
-function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, components, creations }) {
+// 第 6 批第 0 步:多可选 props staffNo(必读里第几条)/ onToggleStaff / onPrint(KA 接);正文换成 KnowledgeBody(第 0 步 DOM 一样)
+function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, components, creations, staffNo, onToggleStaff, onPrint }) {
   const title = pickLang(k, "title", lang);
   const content = pickLang(k, "content", lang);
   const titleOther = rawLang(k, "title", lang);
@@ -17137,7 +18095,7 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
         <div style={{ height: 1, background: T.borderSoft, margin: "20px 0" }}></div>
 
         {/* 内容 */}
-        <div style={{ fontSize: 14, color: T.textPrimary, lineHeight: 1.95, whiteSpace: "pre-wrap", fontFamily: T.fontSans }}>{content}</div>
+        <KnowledgeBody text={content} variant="screen" lang={lang} />
 
         {/* 📷 参考图片 */}
         {(k.imageUrls || []).length > 0 && (
@@ -21217,7 +22175,9 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 // 用户店里实际采购的原料清单,每条挂靠到一个材料百科 (materialId)
 // 本店价 pricePerG 会优先于百科 priceRange.mid 作为配方成本的依据
 // ═══════════════════════════════════════════════════════════════
-function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands, suppliers = [], recipes = [], components = [], creations = [], lang, showToast, confirmDialog }) {
+// 第 6 批第 0 步:多可选 props openTarget / onOpened / returnLabel / onReturn(PA 接:从采购页跳进来编辑某一条、返回键写「← 回采购单」)
+function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands, suppliers = [], recipes = [], components = [], creations = [], lang, showToast, confirmDialog,
+  openTarget, onOpened, returnLabel, onReturn }) {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState(null);
   const [picker, setPicker] = useState(false);
@@ -22178,7 +23138,8 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
           // 删 supplier + 从 shopMaterials 的 supplierIds 中剥离(以前注释这么写、代码没做,确认框的话不兑现)
           const sid = editTarget.id;
           setSuppliers(prev => prev.filter(x => x.id !== sid));
-          if (setShopMaterials) setShopMaterials(prev => prev.map(sm => Array.isArray(sm.supplierIds) && sm.supplierIds.includes(sid) ? { ...sm, supplierIds: sm.supplierIds.filter(x => x !== sid), updatedAt: new Date().toISOString() } : sm));
+          // 第 6 批第 0 步:剥 id 改调 stripSupplierRefs(第 0 步 = 今天的写法:剥 id + 写 updatedAt;PA 改成只写 orderAt)
+          if (setShopMaterials) { const nowIso = new Date().toISOString(); setShopMaterials(prev => stripSupplierRefs(prev, sid, nowIso).list); }
           showToast(lang === "zh" ? "已删除" : "削除しました");
           setEditTarget(null);
           setViewId(null);   // 同商品:不清掉会停在已删供货商的详情(白屏)
@@ -22387,13 +23348,177 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
   );
 }
 
+// ─── BEGIN purchase order helpers ───
+// 第 6 批 4.1「采购单做成能直接下单的单子」(spec_purchase_order.md、design_purchase §4)。第 4 节的签名和返回形状就是这里定死的签名。
+// 第 0 步写成真的(规格 1.3):SM_ORDER_KEYS / SM_ORDER_GROUP;supIsClosed / supNextDelivery(从 PurchaseView 原样搬出来,往后找 14 天,不改;
+// 第 6 批的新代码不调它们,送货日一律走 supDeliverySlots);normSupName(R30);stripSupplierRefs(**今天的写法**:剥 id + 写 updatedAt,
+// PA 改成只写 orderAt);smReattachSupplier(空壳 = 只加 id,PA 加写 orderAt);purchaseStateLoad(R27 的读法,读出来过 purchaseStateRead 空壳)。
+// 其余空壳,返回值写在每一行旁边(「没写的一律返回什么都没有」)。段里不许有 React / setState;localStorage 只在 purchaseStateLoad / purchaseStateSave 里碰。
+// 之后:SM_ORDER_GROUP / supplierFieldsForSave / smOrderFieldsForSave / smOrderGroupChanged / smWithSupplier / smReattachSupplier / stripSupplierRefs /
+// normSupName / mergeSupplierList / remapShopSupplierIds / mergeShopEntry 归 PA,其余 PB
+const PURCHASE_STATE_KEY = "korora_purchase_v1";
+const PURCHASE_TXT = { zh: {}, ja: {} };   // PA / PB 往这里加字
+// 本店原料「下单设置」一组(自带 orderAt);SM_ORDER_KEYS 只给 smOrderGroupChanged 判断变没变,合并只用 SM_ORDER_GROUP(时间戳在组里)
+const SM_ORDER_KEYS = ["supplierIds", "orderName", "orderUnit", "minOrder"];
+const SM_ORDER_GROUP = [...SM_ORDER_KEYS, "orderAt"];
+// ── 第 3 节:今天的闭店 / 下次送货日(原样搬出;窗口元素是 null 时抛错,同今天)
+const supIsClosed = (sup, dateStr) => {
+  return (sup.closureWindows || []).some(w => {
+    if (!w.start || !w.end) return false;
+    return dateStr >= w.start && dateStr <= w.end;
+  });
+};
+const supNextDelivery = (sup, fromDateStr) => {
+  const days = new Set((sup.deliveryDaysOfWeek || []).map(Number));
+  if (days.size === 0) return null;
+  // 2026-09-29 体检第 2 批:以前 new Date("YYYY-MM-DD") 是 UTC 零点、再用 UTC 取日期;改成按本地日历走(日期框清空时不再算)
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fromDateStr || "");
+  if (!ymd) return null;
+  let d = new Date(+ymd[1], +ymd[2] - 1, +ymd[3]);
+  for (let i = 0; i < 14; i++) {
+    const dayOfWeek = d.getDay();
+    const ds = localDateStr(d);
+    if (days.has(dayOfWeek) && !supIsClosed(sup, ds)) return ds;
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+};
+// ── §A 下单数量和钱
+const packSpecSegments = (ps) => [];                                 // 空壳:R2
+// 保留第 5 批的字符串调用口径；第 6 批按本店原料对象返回下单规格详情。
+const packGramsOf = (sm, mat) => typeof sm === "string" ? legacyPackGramsOf(sm, mat) : ({ g: 0, src: "", text: "", segs: [], liquid: false });   // 空壳:R3
+const specLabel = (pk) => "";                                        // 空壳:R3
+const casePackOf = (sm) => 0;                                        // 空壳:R4
+const minOrderOf = (sm) => 1;                                        // 空壳:R4
+// 空壳:R4 —— supId = 今天的分组 id(sm.supplierIds[0] 真值就是它,否则 "")
+const smOrderCfg = (sm, suppliers) => ({ supId: (sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0]) ? sm.supplierIds[0] : "", badSupIds: [], orderName: "", orderUnit: "pack", minOrder: 1, casePack: 0 });
+const haveInfo = (e, packG, needG, days, S, today) => ({ haveG: 0, stale: null, elapsed: 0 });   // 空壳:R5
+// 空壳:R6 —— 今天页面的算法(一包几克按本店原料 / 材料的规格读;包数 = ceil(要用 ÷ 一包);要付 = 本店价折人民币 × 要用),其余字段给缺省值
+const orderLineOf = (I) => {
+  const { mid, mat, sm, needG = 0, usedG = 0, srcs = [], unconv = [] } = I || {};
+  const g = sm && sm.packSize ? parsePackSizeToGrams(sm.packSize) : ((mat && mat.packSize) ? parsePackSizeToGrams(mat.packSize) : 0);
+  const L = { mid, mat, sm: sm || null, needG, usedG, srcs, unconv, pk: { g, src: "", text: "", segs: [], liquid: false }, packG: g, liquid: false,
+    haveG: 0, stale: null, elapsed: 0, restG: needG, status: sm ? (g > 0 ? "buy" : "noPack") : "noShop", packs0: 0, packs: 0, cases: null,
+    minApplied: false, buyG: 0, payCNY: null, approx: false, noPrice: false, leftG: 0, lastsWeeks: null, usedCNY: 0, usedApprox: false, usedNoPrice: true, incomplete: false };
+  if (g > 0) L.packs = Math.ceil(needG / g);
+  const p = sm ? toCNY(sm.pricePerG, curOf(sm)) : 0;
+  if (p > 0) { L.payCNY = p * needG; L.approx = curOf(sm) === "JPY"; }
+  return L;
+};
+// 空壳:R8 —— 只有商品那一段(和今天的 pLines 一样;没手改过的用建议数 = 过去 30 天日均 × 天数 × 1.2)
+const purchasePlanLines = (products, state, c) => (products || []).filter(Boolean).map(p => {
+  const q = state && state.qty && Object.prototype.hasOwnProperty.call(state.qty, p.id) ? state.qty[p.id]
+    : Math.ceil(avgDailySales(c && c.salesLog, p.id, c && c.today) * ((c && c.days) || 1) * 1.2);
+  return { kind: "product", id: p.id, qty: q, obj: p };
+});
+const sheetToPlan = (sheetLines, ctx, k) => ({ setQty: [], adds: [], notBrought: 0, ignored: 0 });   // 空壳:R9
+const applySheetImport = (state, imp, win, genUid) => ({ next: state, undo: null, a: 0, b: 0, n: 0 });   // 空壳:R10
+// 空壳:R13 —— 今天页面的分组(sm.supplierIds[0];「还没归到供货商」排最后,其余按第一次出现),每组 payCNY = 今天的 groupTotal,其余缺省
+const purchaseOrderGroups = (r1, r2, c) => {
+  const by = new Map();
+  Object.entries((r1 && r1.grams) || {}).forEach(([mid, grams]) => {
+    const sm = ((c && c.shopMaterials) || []).find(x => x && x.materialId === mid);
+    const mat = ((c && c.materials) || []).find(x => x && x.id === mid);
+    const supId = sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0] ? sm.supplierIds[0] : "";
+    if (!by.has(supId)) by.set(supId, []);
+    by.get(supId).push(orderLineOf({ mid, mat, sm, needG: grams }));
+  });
+  const ids = [...by.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : 0));
+  const groups = ids.map(supId => {
+    const lines = by.get(supId).sort((a, b) => b.needG - a.needG);
+    const payCNY = lines.reduce((s, L) => s + (L.payCNY || 0), 0);
+    return { supId, sup: supId !== "" ? ((c && c.suppliers) || []).find(s => s && s.id === supId) || null : null, slot: null, ordered: null, lines,
+      itemsN: lines.length, payCNY, approx: lines.some(L => L.approx), incompleteN: 0, minOrderCNY: 0, minGapCNY: 0, minState: "none" };
+  });
+  return { groups, totals: { payCNY: groups.reduce((s, g) => s + g.payCNY, 0), payApprox: groups.some(g => g.approx), incompleteN: 0,
+    itemsN: groups.reduce((s, g) => s + g.itemsN, 0), usedCNY: 0, usedApprox: false, usedMissingN: 0, orderedSupN: 0 } };
+};
+const purchaseOrderText = (group, opts) => "";                       // 空壳:R15
+// ── §B 送货和截单
+const supOrderCfg = (sup) => ({ leadDays: null, cutoff: "", minOrderCNY: 0, dows: [], closures: [] });   // 空壳:R16
+const supDeliverySlots = (sup, today, nowHm, horizon = 28) => [];   // 空壳:R18
+const supNextSlot = (sup, today, nowHm) => null;                     // 空壳:R19
+const orderKey = (supId, delivery) => "";                            // 空壳:R21
+const markOrdered = (supId, delivery, nowIso, E) => ({});            // 空壳:R21(补丁)
+const orderedActive = (state, supId, today) => null;                 // 空壳:R21
+const purchaseReminders = (suppliers, state, today, nowHm) => [];    // 空壳:R22
+const orderToastOf = (rows, state, today, lang) => null;             // 空壳:R23
+// ── §C 本机采购状态 korora_purchase_v1(只属于这台设备;封顶 1 万字,从不删 extra)
+const purchaseStateRead = (raw, today) => ({ v: 1, qty: {}, extra: [], onHand: {}, ordered: {}, textLang: {} });   // 空壳:R24 的空状态
+const purchaseStatePatch = (state, patch, nowIso) => state;          // 空壳:R25
+const purchaseStateCap = (state, today) => state;                    // 空壳:R26
+// R27 的读法(读出来过 purchaseStateRead,第 0 步是空状态);App 的 purchaseState 用它做初值(只读)
+const purchaseStateLoad = (today) => {
+  try { return purchaseStateRead(localStorage.getItem(PURCHASE_STATE_KEY), today); } catch (e) { return purchaseStateRead(null, today); }
+};
+const purchaseStateSave = (patch, today, nowIso) => ({ state: purchaseStateLoad(today), ok: false });   // 空壳:R27(第 0 步什么都不写)
+const planWindowOf = (state, today) => ({ S: today, E: today, days: 1, endBeforeStart: false, startPastDays: 0 });   // 空壳:R29
+// ── §D 供货商合并和 orderAt
+// R30:认同一家供货商只有这一个口径(合并导入、回收站、预览分组都用它);空串 = 没名字、不参与按名字认
+const normSupName = (s) => String(s === undefined || s === null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+// 空壳:R31 —— 今天的 pickNew(按 id / 中文名 / 日文名去重):add = 追加的(补 id),keptLocal = 判重跳过的(报告的 skipped 照旧对它们推);idMap 空
+const mergeSupplierList = (local, file, genId) => {
+  const add = [], keptLocal = [];
+  const gen = typeof genId === "function" ? genId : () => _mergeGenId("sup_");
+  (file || []).forEach(inc => {
+    if (!inc || typeof inc !== "object") return;
+    const dup = (local || []).find(x => x && _mergeSameName(x, inc)) || add.find(x => _mergeSameName(x, inc));
+    if (dup) { keptLocal.push(inc); return; }
+    add.push({ ...inc, id: inc.id || gen() });
+  });
+  return { list: [...(local || []), ...add], add, idMap: {}, added: add.length, updated: 0, keptLocal, nameMatched: 0 };
+};
+const remapShopSupplierIds = (sm, idMap) => sm;                      // 空壳:R32(原样返回)
+// 空壳:R34 —— 今天合并导入那一行(价格组跟 updatedAt、价格历史并集、补 supplierIds);PA 加 remap 和 orderAt 那一组
+const mergeShopEntry = (loc, inc, idMap, nowIso) => {
+  const merged = withMergedPriceHistory(loc, inc, mergeByNewer(loc, inc, ["pricePerG", "currency"]), "shop", nowIso);
+  return { ...merged, supplierIds: Array.isArray(merged.supplierIds) ? merged.supplierIds : [] };
+};
+const supplierFieldsForSave = (o) => o;                              // 空壳:R35(原样返回)
+const smOrderFieldsForSave = (o) => o;                               // 空壳:R35(原样返回)
+const smOrderGroupChanged = (prev, next, suppliers) => false;        // 空壳:R35
+const smWithSupplier = (sm, supId, nowIso) => sm;                    // 空壳:R36(原样返回)
+// R37 第 0 步版(今天删供货商的写法):supplierIds 里有这个 id 的本店原料去掉它、写 updatedAt;返回 { list, touched }(都没改 → 原数组)。
+// PA 改成写 orderAt、不写 updatedAt;R 线删供货商只调它
+const stripSupplierRefs = (list, supId, nowIso) => {
+  const arr = Array.isArray(list) ? list : [];
+  const touched = [];
+  const out = arr.map(sm => {
+    if (sm && typeof sm === "object" && Array.isArray(sm.supplierIds) && sm.supplierIds.includes(supId)) {
+      touched.push(sm.id);
+      return { ...sm, supplierIds: sm.supplierIds.filter(x => x !== supId), updatedAt: nowIso };
+    }
+    return sm;
+  });
+  return { list: touched.length ? out : arr, touched };
+};
+// R37 第 0 步空壳:把供货商 id 挂回本店原料(加在最后,别的键不动);已经有了 → 原对象。PA 另写 orderAt;回收站还原 / 删供货商的撤销只走它
+const smReattachSupplier = (sm, sid, nowIso) => (Array.isArray(sm.supplierIds) && sm.supplierIds.includes(sid)) ? sm
+  : { ...sm, supplierIds: [...(Array.isArray(sm.supplierIds) ? sm.supplierIds : []), sid] };
+// ── §F 撤销
+const undoSheetImport = (state, undo) => ({ next: state, did: 0 });  // 空壳:R39
+const undoAssign = (list, pairs) => ({ list, did: 0 });              // 空壳:R40
+// ── 小工具(名字以规格 1.1 为准;空壳)
+const isYmd = (s) => false;
+const md = (d) => "";
+const mdw = (d, lang) => "";
+const money = (v, approx) => "";
+const qtyText = (g, liquid) => "";
+const matName = (mat, mid, lang) => "";
+const stableEq = (a, b) => false;
+// ─── END purchase order helpers ───
+// 第 6 批第 0 步:采购单打印模板(PB;PrintView 的 purchase 支)。空壳
+function PurchaseOrderTemplate({ data, lang }) { return null; }
+
 // ═══════════════════════════════════════════════════════════════
 // 📦 采购清单 View (v13)
 // 给定窗口 → 按计划产量展开 ingredient 消耗 → 按 supplier 分组
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components,采购计算支持组件
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang,
-  prepOnHand = null, prepOnHandAt = null }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
+  prepOnHand = null, prepOnHandAt = null,
+  // 第 6 批第 0 步:PB 要的可选 props,先接上不用(today / now 在函数里另有同名的 const,这里换个名字收)
+  setShopMaterials, purchaseState, setPurchaseState, rawPlan, printSettings, onPrint, onJump, onGoTab, showToast, today: _todayProp, now: _nowProp }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
   // 终审 r1:prepOnHandAt(day) = 按那一天算的 prepOnHandMap;算的时候按结束日取(这段时间里会过期的批不算能用),没传照旧用 prepOnHand(今天的)
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
   const today = localDateStr();
@@ -22474,29 +23599,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
     if (computed) compute(v);
   };
 
-  // 闭店窗口判定(YYYY-MM-DD 绝对日期, v16+)
-  const isClosureAt = (sup, dateStr) => {
-    return (sup.closureWindows || []).some(w => {
-      if (!w.start || !w.end) return false;
-      return dateStr >= w.start && dateStr <= w.end;
-    });
-  };
-  // 某 supplier 下次送货日: 从某日起往后找 deliveryDaysOfWeek 且不在闭店窗口的第一天
-  const nextDelivery = (sup, fromDateStr) => {
-    const days = new Set((sup.deliveryDaysOfWeek || []).map(Number));
-    if (days.size === 0) return null;
-    // 2026-09-29 体检第 2 批:以前 new Date("YYYY-MM-DD") 是 UTC 零点、再用 UTC 取日期;改成按本地日历走(日期框清空时不再算)
-    const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fromDateStr || "");
-    if (!ymd) return null;
-    let d = new Date(+ymd[1], +ymd[2] - 1, +ymd[3]);
-    for (let i = 0; i < 14; i++) {
-      const dayOfWeek = d.getDay();
-      const ds = localDateStr(d);
-      if (days.has(dayOfWeek) && !isClosureAt(sup, ds)) return ds;
-      d.setDate(d.getDate() + 1);
-    }
-    return null;
-  };
+  // 闭店窗口判定 / 下次送货日:第 6 批第 0 步原样搬到模块顶层 supIsClosed / supNextDelivery(purchase order helpers 段)
 
   return (
     <div>
@@ -22520,7 +23623,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
         {suppliers.length > 0 && (
           <div style={{ marginTop: 10, display: "grid", gap: 5 }}>
             {suppliers.map(sup => {
-              const nextD = nextDelivery(sup, startDate);
+              const nextD = supNextDelivery(sup, startDate);
               const isInWindowClosure = (sup.closureWindows || []).some(w => {
                 if (!w.start || !w.end) return false;
                 // 窗口 [startDate, endDate] 与闭店窗口 [w.start, w.end] 有重叠
@@ -22619,7 +23722,7 @@ function PurchaseView({ products, salesLog, recipes, creations, components = [],
             {entries.length === 0 && <div style={{ background: T.bgSoft, padding: 40, textAlign: "center", borderRadius: T.radius, color: T.textSecondary }}>{lang === "zh" ? "按当前计划无原料需求" : "計画内の仕入不要"}</div>}
             {entries.map(([supId, items]) => {
               const sup = suppliers.find(s => s.id === supId);
-              const nextD = sup ? nextDelivery(sup, startDate) : null;
+              const nextD = sup ? supNextDelivery(sup, startDate) : null;
               // 本店价按各自币种折成人民币再相加(没写币种 = 日元,见 curOf);日元折算的标 ≈
               const groupTotal = items.reduce((acc, it) => {
                 const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
@@ -25377,6 +26480,15 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     const e = u[k] || (u[k] = { q: 0, g: 0 });
     e.q += q; e.g += g;
   };
+  // 第 6 批第 0 步(spec_purchase_order R1,写成真的、只收集):opts.detail === true 且不是生产模式时,每一处写 grams 之后紧跟一次记录(写入行本身一个字不改),
+  // 输出最后多一个键 detail = { srcs: { 材料 id: [用在哪…] }, unconv: { 材料 id: [{ name, qty, unit, src }] } }(按个写、没换成克、× 1 当克加进去的行)。
+  // 不传 detail 时输出逐字节和以前一样(连 detail 键都没有);采购页「要付」那一次传,「用掉」那一次不传。以后谁都不许改两处写入行
+  const det = (opts && opts.detail === true && !prodMode) ? { srcs: {}, unconv: {} } : null;
+  const detRec = (mid, ing, added, src) => {
+    (det.srcs[mid] || (det.srcs[mid] = []));
+    if (src && !det.srcs[mid].includes(src)) det.srcs[mid].push(src);
+    if (ingGramFactor(ing, materialMapOf(materials).get(mid)) === 0) (det.unconv[mid] || (det.unconv[mid] = [])).push({ name: ingName(ing), qty: added, unit: _normTxt(ing.unit), src: src || "" });
+  };
   // 2026-09-29 体检第 2 批:以前没关联百科的配料、用量不是数字的配料、没填用量的部分、没挂配方的商品、挂的配方已删除,
   // 全都悄悄跳过,页面像是算全了。现在收集起来,结果区末尾列「这些没算进来」。key = 原因 + 出处 → 名字集合(去重)
   const skipped = new Map();
@@ -25516,6 +26628,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
       // 第 5 批 2.4(S1,R23):采购克数乘这一行的克重系数(kg / L ×1000、按个写填了克重的 × 每个几克;计件没克重的照旧「把个当克」= × 1)。
       // 生产模式的 addWeigh 不乘(厨房数个数)。求值顺序 ((q × 倍数) × 系数),系数 1 时和以前逐位相同
       addGrams(ing, q * multiplier, q * multiplier * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1));
+      if (det) detRec(ing.materialId, ing, q * multiplier * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1), src);
       if (prodMode) addWeigh(ing, q * multiplier, src);
     });
     (obj.layers || []).forEach(l => collect(l, multiplier, src, path));
@@ -25564,6 +26677,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
           if (!(qty > 0)) { skip("badQty", src, `${ingName(ing)}${_normTxt(ing.qty) ? `(${ing.qty})` : ""}`); return; }
           // 第 5 批 2.4(S1,R23):组合产品分支自己的 grams 写入点,同样乘克重系数(采购页审查 M2)
           if (ing.materialId) addGrams(ing, qty, qty * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1));
+          if (det && ing.materialId) detRec(ing.materialId, ing, qty * (ingGramFactor(ing, materialMapOf(materials).get(ing.materialId)) || 1), src);
           if (prodMode) addWeigh(ing, qty, src);
         });
       });
@@ -25669,6 +26783,7 @@ const computeMaterialNeeds = (lines, ctx, opts = {}) => {
     if (flowOn) out.prepFlow = { takes: [...flowTakes.values()].map(t => ({ ...t, srcs: [...t.srcs] })), untaken: flowUntaken };
   }
   if (onHand) out.prepPlan = prepPlan;
+  if (det) out.detail = det;   // 第 6 批第 0 步:放在 out 的最后一个键
   return out;
 };
 
@@ -27430,10 +28545,30 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
   );
 }
 
+// ─── BEGIN prep label helpers ───
+// 第 6 批 4.3「半成品标签」(PC;design_purchase §1.7 / §1.8 / §4、plan 决定 17 到 24):自己的弹窗和 A4 不干胶模板,不复用顾客标签、不写任何数据、
+// 到期日只取 prepLotsView 的 expiresOn。第 0 步:PREP_LABEL_SIZES 写成真的,其余空壳。段里不许有 React / setState;
+// localStorage 只在 prepLabelPrefsRead / prepLabelPrefsWrite 里碰(本机偏好 korora_prep_label_v1:尺寸和三个勾选;第 0 步不读不写)
+const PREP_LABEL_KEY = "korora_prep_label_v1";
+// A4 去掉 15 mm 页边后放得下:3 × 57 + 2 × 3 = 177 ≤ 180,6 × 40 + 5 × 3 = 255 ≤ 267(待看 1:默认 57×40 每页 18 张,另给 88×48 每页 10 张)
+const PREP_LABEL_SIZES = { s: { w: 57, h: 40, cols: 3, rows: 6 }, m: { w: 88, h: 48, cols: 2, rows: 5 } };
+const PREP_LABEL_TXT = { zh: {}, ja: {} };   // PC 往这里加字
+const prepLabelLots = (item, cfg, today, preferLotId) => [];                 // 空壳:弹窗里的批(prepLotsView 原样 + printable + 默认勾哪批)
+const prepLabelRows = (args) => [];                                          // 空壳:每张标签的内容(expiresOn 只取 prepLotsView)
+const prepLabelDate = (ymd, lang) => "";                                     // 空壳:「2026-10-06(周二)」/「2026-10-06(火)」
+const prepLabelFit = (row, size) => null;                                    // 空壳:品名几行、取出后能放几个字
+const prepLabelPrefsRead = () => ({ v: 1, size: "s", thaw: true, allergen: false, made: false });   // 空壳:默认偏好(不读 localStorage)
+const prepLabelPrefsWrite = (p) => false;                                    // 空壳:什么都不写
+// ─── END prep label helpers ───
+// 第 6 批第 0 步:半成品标签的弹窗(printTarget stage "plopts",App 里那一块)和 A4 模板(PrintView 的 prepLabel 支)。空壳
+function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, components, materials, brands, creations, prepStock, onClose, onConfirm, onEdit }) { return null; }
+function PrepLabelTemplate({ data }) { return null; }
+
 // 一样东西的备货卡(备货页和配方 / 组件详情页共用;详情页 compact:只列最早 3 批 +「看全部备货 →」)。
-// props:{ kind, obj, cfg, item, lang, today, products, onPrepOp, staff, compact, focus, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly }
+// props:{ kind, obj, cfg, item, lang, today, products, onPrepOp, staff, compact, focus, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly, onPrintLabels }
 // cfg = prepCfgOf(kind, obj)(没标 = null);item = 账本里这一样(没开始记 = null)
-function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPrepOp, staff = false, compact = false, focus = false, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly = false }) {
+// 第 6 批第 0 步:多可选 prop onPrintLabels(key, lotId?)(PC 接「🏷 打标签」;没传时 DOM 一个节点不多)
+function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPrepOp, staff = false, compact = false, focus = false, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly = false, onPrintLabels }) {
   const X = prepTxt(lang);
   const t = today || localDateStr();
   const tracked = !!item && typeof item === "object";
@@ -27659,7 +28794,8 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
 // 今日 → 备货 / 员工外壳 → 备货。
 // props:{ lang, today, recipes, components, products, prepStock, productionLog, onPrepOp, staff, focusKey, onJump, onGoTab, confirmDialog, showToast }
 // 排序同提醒条(prepAlertsOf 的 all 模式):有事的 → 正常的 → 还没开始记的 → 已经没标、账上还有的。宽屏两栏,375 一栏
-function PrepStockView({ lang, today, recipes = [], components = [], products = [], prepStock = null, productionLog, onPrepOp, staff = false, focusKey = null, onJump, onGoTab, confirmDialog, showToast }) {
+// 第 6 批第 0 步:多可选 prop onPrintLabels,原样透传给每张备货卡
+function PrepStockView({ lang, today, recipes = [], components = [], products = [], prepStock = null, productionLog, onPrepOp, staff = false, focusKey = null, onJump, onGoTab, confirmDialog, showToast, onPrintLabels }) {
   const X = prepTxt(lang);
   const t = today || localDateStr();
   const stock = prepStock || prepStockRead(null);
@@ -27723,7 +28859,7 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
           {shown.map(r => (
             <PrepStockCard key={r.key} kind={r.cfg ? r.cfg.kind : (r.item && r.item.kind) || "recipe"} obj={r.obj} cfg={r.cfg} item={r.item} lang={lang} today={t}
               products={products} onPrepOp={onPrepOp} staff={staff} focus={!!focusKey && focusKey === r.key} onJump={staff ? undefined : onJump} onGoTab={staff ? undefined : onGoTab}
-              confirmDialog={confirmDialog} />
+              confirmDialog={confirmDialog} onPrintLabels={onPrintLabels} />
           ))}
         </div>
       )}
@@ -27733,6 +28869,7 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
 
 // 今日:生产单 | (备货) | 日结。子页状态提到 App(sub / onSubChange / prepFocusKey);没收到时用自己的状态(单独渲染的测试照旧)。
 // 「备货」子页只在 prepOn(有东西标了备货或账本不空)时有;她在备货页上清掉最后一样时留在备货页(prepOn || sub === "prep"),不掉到日结
+// 第 6 批第 0 步:props 多 orderReminders(PB 的截单提醒;[] / 不传 = 一个节点都不多),先不用
 function TodayView(props) {
   const { lang, today, confirmDialog } = props;
   const [ownSub, setOwnSub] = useState("sheet");
@@ -28036,7 +29173,8 @@ const staffTxt = (lang) => STAFF_TXT[lang === "ja" ? "ja" : "zh"];
 
 // 进入 / 设 PIN / 退出 三种对话框。mode: "setup" | "enter" | "exit"
 // onEnter(pin | null | undefined):pin = 新设的 PIN;null = 不设 PIN;undefined = 沿用已有的
-function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel }) {
+// 第 6 批第 0 步:多可选 prop extraHint(KB 接;不传时 DOM 一样)
+function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel, extraHint }) {
   const X = staffTxt(lang);
   const [mode, setMode] = useState(mode0);
   const [p1, setP1] = useState("");
@@ -28557,6 +29695,8 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
           </div>
         ) : null;
       })()}
+      {/* 第 6 批第 0 步:「📚 先读」(KB;和这一样有关的员工必读;第 0 步空壳) */}
+      <KitchenReadingLinks kind={kind} id={target ? target.id : undefined} reading={c.reading} lang={lang} />
       {prepRecipe && (
         <div role="group" data-kitchen-mode={mode} style={{ display: "inline-flex", flexWrap: "wrap", marginTop: 12, border: `1px solid ${T.ink}`, borderRadius: T.radius, overflow: "hidden", maxWidth: "100%" }}>
           {["take", "make"].map(m => (
@@ -28693,7 +29833,8 @@ function KitchenView({ kind, target, initialQty, lang, today, ctx, onBack, backL
 // 备货 D 线:「今天生产单上的」按 种类 + id + 块的 prep 合并(取出 60 和做一批 400 分两行;装烤好的块不列 —— 没什么要做,点进去还会被当成取出);
 // 行前小字加签(「配方 · 冷冻→烤」);在售中里标了备货的配方点开是取出模式;onOpen(kind, id, qty, stage, uid, fromLine):
 // 取出行只来自一行「取出烤」配方行 → 带那一行的 uid(「烤好了,记下」走那一行的记入);里面有商品行 / 组合产品行的块 → 带 fromLine(不给记,免得扣两遍)
-function KitchenListView({ lang, recipes = [], creations = [], components = [], sheet = [], onOpen }) {
+// 第 6 批第 0 步:多可选 props readingCount / onOpenReading(KB 接;没有必读时不画)
+function KitchenListView({ lang, recipes = [], creations = [], components = [], sheet = [], onOpen, readingCount, onOpenReading }) {
   const X = kitchenTxt(lang);
   const PX = prepTxt(lang);
   const [q, setQ] = useState("");
@@ -28791,9 +29932,10 @@ const STAFF_PAGES_PREP = ["sheet", "kitchen", "prep", "close"];
 // ⚠ 这一条按约定该放 GLOBAL_CSS;但 GLOBAL_CSS 的文字进每一页的 <style>,改一个字第 4 批 / 备货第 0 步的整页严格快照(step0_tests、prep_step0_tests)全变,
 //   所以先只在 4 格时由 StaffShell 自己渲染这一小段(3 格时 DOM 和以前一样)。以后有意更新那两套快照的基线时,把它挪进 GLOBAL_CSS 的 599px 段、删掉这里的 <style>
 const STAFF_NAV4_CSS = "@media (max-width: 599px) { .k-staffnav.k-staffnav4 button { font-size: 14px !important; } }";   // 不写「>」:服务端渲染会把 <style> 里的它转义成 &gt;
+// 第 6 批第 0 步:多可选 props onPrintLabels(PC)/ knowledge / onPrintKnowledge(KB)/ safetyNote(D;员工顶栏下面一行灰字)。不传时 DOM 逐字节一样
 function StaffShell({ lang, setLang, today, products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [],
   salesLog = [], productionLog = [], rawPlan, updatePlan, onLogProduction, onPrint, onDailyClose, confirmDialog, showToast, onExit, saveSlot = null,
-  prepStock = null, prepOn = false, onPrepOp, onLogLine }) {
+  prepStock = null, prepOn = false, onPrepOp, onLogLine, onPrintLabels, knowledge = [], onPrintKnowledge, safetyNote = null }) {
   // 备货(D 线):prepStock / prepOn / onPrepOp / onLogLine(uid, actualQty)从 App 接进来。prepOn 时多第四页「备货」(E 线的 PrepStockView staff),
   // tab 上的红色小数 = 已开始记的备货里有过期批或低于提醒线的样数(同一样只算 1,口径同顶栏「今日」角标);生产单提醒的「去处理」跳到这一页
   const X = staffTxt(lang);
@@ -28847,6 +29989,8 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
           ))}
         </div>
       </div>
+      {/* 第 6 批第 0 步:D 的一行灰字(这台设备几天没备份;只说事、不给按钮、没有钱;null 时一个节点都不多) */}
+      <StaffSafetyLine note={safetyNote} lang={lang} />
       <div className="rc-container k-staffmain">
         {page === "sheet" && (
           <ProductionSheetView staff lang={lang} today={today} products={products} recipes={recipes} creations={creations} components={components}
@@ -28862,7 +30006,7 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
         {page === "prep" && (
           <div data-staffprep="1">
             <PrepStockView staff lang={lang} today={today} recipes={recipes} components={components} products={products} prepStock={prepStock} productionLog={productionLog}
-              onPrepOp={onPrepOp} focusKey={prepFocus} confirmDialog={confirmDialog} showToast={showToast} />
+              onPrepOp={onPrepOp} focusKey={prepFocus} confirmDialog={confirmDialog} showToast={showToast} onPrintLabels={onPrintLabels} />
           </div>
         )}
         {page === "close" && (
@@ -29241,7 +30385,7 @@ function App() {
   // 先把还没写进去的改动写掉,再拿存档里的内容备份。返回 true = 存上了
   // big-2 第 −1 步复查(recheck-md-3):数据已经搬进新库的旧窗口(或存档已经是搬家标记、storage 事件还没到)—— 存档是标记,
   // 存成固定备份只占一格、恢复了也读不出来;清掉 / 导入也存不进去。toast 后返回 "moved",三个调用方整件事不做
-  const pinBackupNow = async (reason) => {
+  const pinBackupNow = async (reason, out) => {
     const moved = () => { showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再操作" : "このウィンドウは古いバージョンです。再読み込みしてから操作してください"); return "moved"; };
     try {
       if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) return moved();
@@ -29251,7 +30395,7 @@ function App() {
       }
       const cur = localStorage.getItem(STORAGE_KEY);
       if (!cur) return true;   // 本来就没有存档,没什么可备份的
-      return await addBackupSnapshot(cur, null, { pinned: true, reason });
+      return await addBackupSnapshot(cur, null, { pinned: true, reason, out });
     } catch (e) { return false; }
   };
 
@@ -29534,7 +30678,7 @@ function App() {
   };
 
   // 统一的确认对话框函数，替代 window.confirm
-  // opts 可给 { title, kicker, refs: [...], confirmText, cancelText, danger }
+  // opts 可给 { title, kicker, refs: [...], confirmText, cancelText, danger };第 6 批第 0 步起另可给 { body, wide, extra }(见 ConfirmDialog)
   const confirmDialog = (message, onConfirm, opts = {}) => {
     setConfirmState({ message, onConfirm, ...opts });
   };
@@ -29543,6 +30687,16 @@ function App() {
   dataRef.current = { recipes, cats, components, creations, knowledge, brands, materials, shopMaterials, products, salesLog, productionLog, suppliers, productFamilies, customCompCats };
   // 合并 / 覆盖导入的结果,留在数据页上(提示条 5 秒就没了)
   const [importReport, setImportReport] = useState(null);
+  // ─── 第 6 批第 0 步:App 里的空壳状态(plan 裁决 16)。各线新加的监听各写在自己的 effect 里,不改已有的 flush / 多窗口监听 ───
+  const [purchaseState, setPurchaseState] = useState(() => purchaseStateLoad(today));   // PB:本机采购状态 korora_purchase_v1(第 0 步只读、读出来是空状态)
+  const orderReminders = [];                                                           // PB:「今日」页截单提醒(purchaseReminders 的结果)
+  const [deviceInfo, setDeviceInfo] = useState(() => initDeviceInfo(today));           // D:设备 key(第 0 步 initDeviceInfo 空壳 = {},不读不写)
+  const safetyBanner = null;                                                           // D:安全横幅的种类(safetyBannerOf 的结果)
+  const [binOpen, setBinOpen] = useState(false);                                       // R:回收站弹窗
+  const [howToOpen, setHowToOpen] = useState(false);                                   // D:「怎么装」全屏说明
+  // PC / KB 的打印入口:写 printTarget(对应的弹窗第 0 步是空壳,还没有地方调这两个)
+  const openPrepLabel = (key, lotId, staff) => setPrintTarget({ type: "prepLabel", stage: "plopts", data: { key, lotId }, staff: !!staff });
+  const openKnowledgePrint = (src, staff) => setPrintTarget({ type: "knowledge", stage: "kopts", src, staff: !!staff });
 
   // ═══ 🩺 数据体检(2026-09-29 体检第 2 批 2c)═══ 数据 tab 打开面板;检查在 computeDataHealth,跳转和一键改在这里
   const [showDataHealth, setShowDataHealth] = useState(false);
@@ -29551,6 +30705,8 @@ function App() {
   const jumpToItem = ({ kind, id } = {}) => {
     // 备货(prepstock E 线):id = 账本 key("recipe:…" / "component:…")→ 今日 → 备货,展开那一张(东西删了也能看账上那一样)
     if (kind === "prep") { openPrep(id); return; }
+    // 第 6 批第 0 步:采购页要的三种(本店原料编辑页 / 新建本店原料 / 新建供货商;保存或取消后回采购单),PB 填;第 0 步先不跳
+    if (kind === "shopMaterial" || kind === "shopMaterialNew" || kind === "supplierNew") return;
     const byId = (arr) => (arr || []).find(x => x && x.id === id);
     // 第 4 批第 0 步:加了四种「打开查看页」(recipeView / componentView / creationView / productView),给毛利一览 / 材料使用情况 / 待换国产看板用
     const target = (kind === "recipe" || kind === "recipeView") ? byId(recipes) : (kind === "component" || kind === "componentView") ? byId(components)
@@ -30369,6 +31525,8 @@ function App() {
     setConfirmState(null);
     // 审查 r4:老板界面还没消失的 toast 也清掉 —— 以前「✓ 已添加到本店原料 ≈¥8.6/100g」这类带价的、带「撤销」的会留在员工界面上,员工点撤销就撤了老板的操作
     setToasts([]);
+    // 第 6 批第 0 步:回收站弹窗(条目带单价和进价)、「怎么装」说明也关
+    setBinOpen(false); setHowToOpen(false);
   };
   // 审查 r1:员工模式的开关只存在这台设备的 localStorage。同一台设备上别的标签页 / 已安装的 app 窗口进入或退出时,这一页跟着切
   // (以前只在打开时读一次:店里 iPad 一个标签页进了员工模式,另一个标签页还是老板界面,价格、编辑、删除都在)。
@@ -30452,7 +31610,8 @@ function App() {
     const payload = {
       // 备货 G 线:配方 / 组件上的 prepMinStock(店里想常备多少)不进分发包;prepMode / prepStore / prepShelfDays / prepThaw* 算做法,留着。
       // 没有这个键的对象原样返回,老数据导出逐字节不变。库存账在 appSettings 里,本来就不进包
-      recipes: recipes.map(stripPrivatePrepFields), components: components.map(stripPrivatePrepFields), creations, knowledge,
+      // 第 6 批第 0 步(spec_ktrain R-K16):知识剥 staffRead / staffOrder / staffAt / staffPtsAt(要点留着);没有这些键的条目原样
+      recipes: recipes.map(stripPrivatePrepFields), components: components.map(stripPrivatePrepFields), creations, knowledge: knowledge.map(stripPrivateKnowledgeFields),
       brands,
       // v15: 剥离 source='crawl' 来源（版权外溢防护）;第 4 批:每条材料的本店私有字段在 stripPrivateMaterialFields 里剥
       materials: (ms => Array.isArray(ms) ? ms.map(stripPrivateMaterialFields) : ms)(stripCrawlImages(materials)),
@@ -30490,13 +31649,7 @@ function App() {
     return null; // 校验通过
   };
 
-  // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批)
-  const IMPORT_ENTITY_LABELS = [
-    ["recipes", "配方", "レシピ"], ["components", "组件", "コンポーネント"], ["creations", "组合产品", "組立製品"],
-    ["knowledge", "知识", "ナレッジ"], ["brands", "厂家", "メーカー"], ["materials", "材料百科", "材料事典"],
-    ["shopMaterials", "本店原料", "仕入れ原料"], ["products", "商品", "商品"], ["salesLog", "销售记录", "売上記録"],
-    ["productionLog", "生产记录", "生産記録"], ["suppliers", "供货商", "仕入先"], ["cats", "老价格表", "旧価格表"],
-  ];
+  // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批):IMPORT_ENTITY_LABELS 第 6 批第 0 步挪到 import-preview 段(从 IMPORT_KINDS 派生,字不变)
   const importData = (e) => {
     const f = e.target.files[0];
     e.target.value = "";   // 2026-09-29 体检第 2 批:清空选择,同一个文件第二次选也能触发(以前取消后再选没反应)
@@ -30606,333 +31759,33 @@ function App() {
         confirmDialog(
           "合并导入:文件里的新条目追加进来。\n\n配方 / 组件 / 组合产品 / 知识按 id 或名字去重,已有的不动。\n材料百科、厂家、本店原料已有的,只有文件里那条的修改时间更晚才用文件的,否则保留本机的(价格和币种总是同一边的,不会拆开)。\n销售 / 生产记录同一条以修改时间晚的为准。\n\n确认继续？",
           () => {
-            // 2026-09-29 体检第 2 批:以前计数写在 setX(prev => …) 里面,点确定时确认框先关(App 已有待处理更新),
-            // 那些函数要等下次渲染才执行,拼提示时计数全是 0 —— 永远显示「无新内容可合并(都已存在)」,其实已经加进去了。
-            // 现在先用「点确定那一刻」的数据(dataRef)在外面算好要加的条目和计数,再 setX 追加;结果留在数据页上。
-            const cur = dataRef.current || {};
-            const lines = [];
-            const skipped = [];
+            // 2026-09-29 体检第 2 批:先用「点确定那一刻」的数据(dataRef)算好要加的条目和计数,再 setX;结果留在数据页上。
+            // 第 6 批第 0 步:计算整段抽成模块顶层的 planMergeImport(纯函数,预览和执行以后用同一套),写回走 applyMergePlan;行为和以前一模一样:
+            // 哪张表调不调 setX、追加 / 合并的结果、报告行 lines / skipped、提示条的字都没变(merge_plan_equiv 对 pre_b6 逐例比)。
+            // 打印设置 / appSettings / 备货账本样数用这个回调闭包里的值(和以前一样);别处在这之后又改过某张表时,applyMergePlan 照以前的写法兜底
+            const base = { ...(dataRef.current || {}), printSettings, appSettings };
+            const nowIso = new Date().toISOString();
             const genId = (prefix) => prefix + Date.now() + Math.random().toString(36).slice(2, 6);
-            const nameOf = (x) => (x && (x.nameZh || x.nameJa || x.nameFr || x.titleZh || x.titleJa || x.title || x.id)) || "";
-            // 按 isDup 去重,返回要追加的条目(文件里自己重复的也只加第一条)
-            const pickNew = (base, incoming, isDup, makeId, label, onDup) => {
-              const add = [];
-              (incoming || []).forEach(inc => {
-                if (!inc || typeof inc !== "object") return;
-                const dup = (base || []).find(x => x && isDup(x, inc)) || add.find(x => isDup(x, inc));
-                if (dup) { if (label) skipped.push(`${label}「${nameOf(inc)}」`); if (onDup) onDup(inc, dup); return; }
-                add.push(makeId ? { ...inc, id: inc.id || makeId() } : inc);
-              });
-              return add;
-            };
-            // 追加:再按 id 挡一次(万一这之间别处也加了同 id 的)
-            const appendTo = (setter, add) => {
-              if (!add.length) return;
-              setter(prev => {
-                const ids = new Set((prev || []).map(x => x && x.id));
-                const a = add.filter(x => !(x.id !== undefined && ids.has(x.id)));
-                return a.length ? [...(prev || []), ...a] : prev;
-              });
-            };
-            const sameName = (a, b) => (b.id && a.id === b.id) || (b.nameZh && a.nameZh && b.nameZh === a.nameZh) || (b.nameJa && a.nameJa && b.nameJa === a.nameJa);
-            const zh = lang === "zh";
-
-            // 1. 合并 cats(按名字匹配大类,已有则只追加新品牌)
-            if (Array.isArray(d.cats)) {
-              const incomingCats = migrateCats(d.cats);
-              const mergeCats = (prevCats) => {
-                const result = [...(prevCats || [])];
-                const rep = { catsNew: 0, catsUpdated: 0, brandsAdded: 0 };
-                incomingCats.forEach(inc => {
-                  const existingIdx = result.findIndex(c =>
-                    (inc.nameZh && c.nameZh && inc.nameZh === c.nameZh) ||
-                    (inc.nameJa && c.nameJa && inc.nameJa === c.nameJa)
-                  );
-                  if (existingIdx < 0) {
-                    result.push({ ...inc, id: inc.id || ("c" + Date.now() + Math.random().toString(36).slice(2,6)) });
-                    rep.catsNew++;
-                  } else {
-                    const existing = result[existingIdx];
-                    const newBrands = [...(existing.brands || [])];
-                    let appended = 0;
-                    (inc.brands || []).forEach(incBrand => {
-                      const dup = newBrands.find(b =>
-                        (incBrand.nameZh && b.nameZh && incBrand.nameZh === b.nameZh) ||
-                        (incBrand.nameJa && b.nameJa && incBrand.nameJa === b.nameJa)
-                      );
-                      if (!dup) { newBrands.push(incBrand); appended++; }
-                    });
-                    if (appended > 0) {
-                      result[existingIdx] = { ...existing, brands: newBrands };
-                      rep.catsUpdated++;
-                      rep.brandsAdded += appended;
-                    }
-                  }
-                });
-                return { result, rep };
-              };
-              const { rep } = mergeCats(cur.cats);
-              if (rep.catsNew || rep.brandsAdded) setCats(prev => mergeCats(prev).result);
-              if (rep.catsNew) lines.push((zh ? "+ 老价格表新大类 " : "+ 旧価格表カテゴリー ") + rep.catsNew);
-              if (rep.brandsAdded) lines.push((zh ? "+ 老价格表新品牌 " : "+ 旧価格表ブランド ") + rep.brandsAdded);
+            let plan;
+            try {
+              plan = planMergeImport(base, d, { lang, nowIso, genId, genRecipeId: () => Date.now() + Math.floor(Math.random() * 1000), prepItemsN: Object.keys(prepStock.items).length });
+            } catch (err) {
+              // spec_merge_plan R12:文件或本机的厂家 / 材料 / 本店原料 / 老价格表里有空条目 → 整次合并拒绝,什么都不写(以前在状态更新里抛错,整个 App 白屏)
+              showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + (err && err.message ? err.message : String(err)));
+              return;
             }
-
-            // 2. 组件 / 3. 配方 / 4. 组合产品(按 id 或 nameZh / nameJa 去重,已有的不动)
-            // 第 4 批 B4-6 第二段:文件里被跳过的组件,id 和本机那条不一样时记下「文件 id → 本机 id」,
-            // 新加进来的配方 / 组件 / 组合产品里按 id 引用它的地方(配料行 componentId、部分 sourceComponentId)改写过去(remapImportedComponentRefs)
-            const compIdMap = new Map();
-            let compAdd = [];
-            let recipeAdd = [], creationAdd = [];   // 第 5 批第 0 步:记下加进来的配方 / 组合产品,最后拼「合并之后」给 offerKnowledgeRepairs
-            const refStat = { rows: 0, layers: 0, unfollowed: 0 };
-            const remap = (list) => {
-              if (!compIdMap.size) return list;
-              const compById = new Map();
-              [...(cur.components || []), ...compAdd].forEach(c => { if (c && c.id !== undefined && c.id !== null && !compById.has(c.id)) compById.set(c.id, c); });
-              const matIds = new Set([...(cur.materials || []), ...(Array.isArray(d.materials) ? d.materials : [])].map(m => m && m.id));
-              const r = remapImportedComponentRefs(list, compIdMap, compById, matIds);
-              refStat.rows += r.rows; refStat.layers += r.layers; refStat.unfollowed += r.unfollowed;
-              return r.list;
-            };
-            // 备货 G 线:被跳过的已有配方 / 组件,文件里那条的备货设置(prep*)和本机不一样 → 报告里说一句(只提示,不改;
-            // 设置和库存都在店里那台设备的编辑页管)。缺省和空当同一个;文件里自己重复的那条不算(dup 不是本机的)
-            const PREP_CFG_KEYS = ["prepMode", "prepStore", "prepShelfDays", "prepMinStock", "prepThawZh", "prepThawJa"];
-            const prepSig = (o) => PREP_CFG_KEYS.map(k => { const v = o ? o[k] : undefined; return k === "prepMode" ? (v === "stock" ? "stock" : "") : (v === undefined || v === null ? "" : String(v).trim()); }).join("\u0001");
-            const prepCfgDiff = new Set();
-            const notePrepDiff = (kind, base) => (inc, dup) => {
-              if (dup && (base || []).includes(dup) && prepSig(inc) !== prepSig(dup)) prepCfgDiff.add(prepKeyOf(kind, dup.id));
-            };
-            if (Array.isArray(d.components)) {
-              const onDupComp = notePrepDiff("component", cur.components);
-              const add0 = pickNew(cur.components, d.components, sameName, () => genId("comp_"), zh ? "组件" : "コンポ",
-                (inc, dup) => { if (_hasCompId({ componentId: inc.id }) && dup && dup.id !== inc.id) compIdMap.set(inc.id, dup.id); onDupComp(inc, dup); });
-              compAdd = add0;
-              const add = remap(add0);
-              compAdd = add;
-              appendTo(setComponents, add);
-              if (add.length) lines.push((zh ? "+ 新组件 " : "+ コンポーネント ") + add.length);
-            }
-            if (Array.isArray(d.recipes)) {
-              const add = remap(pickNew(cur.recipes, d.recipes, sameName, () => Date.now() + Math.floor(Math.random() * 1000), zh ? "配方" : "レシピ", notePrepDiff("recipe", cur.recipes)));
-              recipeAdd = add;
-              appendTo(setRecipes, add);
-              if (add.length) lines.push((zh ? "+ 新配方 " : "+ レシピ ") + add.length);
-            }
-            if (Array.isArray(d.creations)) {
-              const add = remap(pickNew(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品"));
-              creationAdd = add;
-              appendTo(setCreations, add);
-              if (add.length) lines.push((zh ? "+ 新组合产品 " : "+ 組立製品 ") + add.length);
-            }
-            if (refStat.rows || refStat.layers) {
-              lines.push(zh
-                ? `· 文件里的组件本机已有同名的(id 不同):${refStat.rows ? `${refStat.rows} 行「来自组件」的配料` : ""}${refStat.rows && refStat.layers ? "、" : ""}${refStat.layers ? `${refStat.layers} 个组合产品部分` : ""}改指本机那个组件${refStat.unfollowed ? `;其中 ${refStat.unfollowed} 个部分和本机组件内容不一样,先不跟组件库走(组合产品详情页会提示你选)` : ""}`
-                : `· 同名パーツが既にあるため(id 違い):${refStat.rows ? `配合 ${refStat.rows} 行` : ""}${refStat.rows && refStat.layers ? "・" : ""}${refStat.layers ? `パーツ ${refStat.layers} 件` : ""}を既存パーツに付け替え${refStat.unfollowed ? `(内容が違う ${refStat.unfollowed} 件は連動を外しました。詳細ページで選べます)` : ""}`);
-            }
-
-            // 5. 知识:按 id,或中文 / 日文标题(去掉空格、全半角、大小写差别后)相同去重
-            // (2026-09-29 体检第 2 批:以前比的是 title 字段,知识条目根本没有这个字段,按标题去重从来没生效)
-            if (Array.isArray(d.knowledge)) {
-              const normT = (s) => typeof s === "string" ? s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase() : "";
-              const sameT = (a, b) => { const x = normT(a), y = normT(b); return !!x && x === y; };
-              const isDupK = (k, inc) => (inc.id && k.id === inc.id) || sameT(k.titleZh, inc.titleZh) || sameT(k.titleJa, inc.titleJa) || sameT(k.title, inc.title);
-              const add = pickNew(cur.knowledge, d.knowledge, isDupK, () => genId("k_"), zh ? "知识" : "ナレッジ");
-              appendTo(setKnowledge, add);
-              if (add.length) lines.push((zh ? "+ 新知识点 " : "+ ナレッジ ") + add.length);
-            }
-
-            // 6. 合并 brands/materials (材料百科,按 id 匹配;已存在时合并新字段)
-            const countNewById = (base, incoming) => {
-              const ids = new Set((base || []).map(x => x && x.id));
-              let n = 0, m = 0;
-              (incoming || []).forEach(inc => { if (inc && ids.has(inc.id)) m++; else n++; });
-              return [n, m];
-            };
-            if (Array.isArray(d.brands)) {
-              const [n, m] = countNewById(cur.brands, d.brands);
-              if (n) lines.push((zh ? "+ 新厂家 " : "+ メーカー ") + n);
-              if (m) lines.push(zh ? `· 已有厂家 ${m} 家:按修改时间取新的一边` : `· 既存メーカー ${m}:新しい方を採用`);
-              setBrands(prev => {
-                const result = [...prev];
-                d.brands.forEach(inc => {
-                  const existingIdx = result.findIndex(b => b.id === inc.id);
-                  if (existingIdx < 0) {
-                    result.push(inc);
-                  } else {
-                    // 已存在:修改时间更晚的一边为准,另一边只补缺的字段(2026-09-29,见 mergeByNewer)
-                    result[existingIdx] = mergeByNewer(result[existingIdx], inc, []);
-                  }
-                });
-                return result;
-              });
-            }
-            if (Array.isArray(d.materials)) {
-              const [n, m] = countNewById(cur.materials, d.materials);
-              if (n) lines.push((zh ? "+ 新材料 " : "+ 材料 ") + n);
-              if (m) lines.push(zh ? `· 已有材料 ${m} 条:按修改时间取新的一边` : `· 既存材料 ${m}:新しい方を採用`);
-              setMaterials(prev => {
-                // v11: priceRange 迁移；v14: imageUrls 格式升级
-                const migrated = migrateImageUrls(migrateMaterialsToPriceRange(d.materials));
-                const result = [...prev];
-                const nowIso = new Date().toISOString();
-                migrated.forEach(inc => {
-                  const existingIdx = result.findIndex(m => m.id === inc.id);
-                  if (existingIdx < 0) {
-                    result.push(inc);
-                  } else {
-                    // 已存在:修改时间更晚的一边为准;单价 / 参考价 / 币种三样永远同一边(以前字段级合并,
-                    // 旧文件没有 currency,本机的「人民币」标签留着、单价却换成文件里的日元数,成本错 20 到 50 倍)
-                    // 第 4 批:合并规则只在 mergeMaterialEntry 里写
-                    result[existingIdx] = mergeMaterialEntry(result[existingIdx], inc, nowIso);
-                  }
-                });
-                return result;
-              });
-            }
-            // v11: 合并 shopMaterials（按 materialId 去重；没 materialId 的孤立条目按 id 去重）
-            if (Array.isArray(d.shopMaterials)) {
-              const base = cur.shopMaterials || [];
-              let n = 0, m = 0;
-              d.shopMaterials.forEach(inc => {
-                if (!inc || !(inc.materialId || inc.id)) return;
-                if (base.some(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id))) m++; else n++;
-              });
-              if (n) lines.push((zh ? "+ 新本店原料 " : "+ 仕入れ原料 ") + n);
-              if (m) lines.push(zh ? `· 已有本店原料 ${m} 条:按修改时间取新的一边` : `· 既存仕入れ原料 ${m}:新しい方を採用`);
-              setShopMaterials(prev => {
-                const result = [...prev];
-                const nowIso = new Date().toISOString();
-                d.shopMaterials.forEach(inc => {
-                  const key = inc.materialId || inc.id;
-                  if (!key) return;
-                  const existingIdx = result.findIndex(sm => (sm.materialId && sm.materialId === inc.materialId) || (sm.id && sm.id === inc.id));
-                  if (existingIdx < 0) {
-                    result.push({ ...inc, id: inc.id || ("sm_" + Date.now() + Math.random().toString(36).slice(2,6)), supplierIds: Array.isArray(inc.supplierIds) ? inc.supplierIds : [] });
-                  } else {
-                    // 同材料百科:修改时间更晚的一边为准,本店价和币种同一边
-                    // 第 4 批 B4-3:价格历史同材料百科,取两边并集(见 mergePriceHistory)
-                    const merged = withMergedPriceHistory(result[existingIdx], inc, mergeByNewer(result[existingIdx], inc, ["pricePerG", "currency"]), "shop", nowIso);
-                    result[existingIdx] = { ...merged, supplierIds: Array.isArray(merged.supplierIds) ? merged.supplierIds : [] };
-                  }
-                });
-                return result;
-              });
-            }
-
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // [B1 修复] 补充 7 个被遗漏的字段合并(2026-05-01)
-            // products / salesLog / productionLog / suppliers / productFamilies / customCompCats / printSettings
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            // 7. 合并 products(商品,按 id/nameZh/nameJa 去重)
-            if (Array.isArray(d.products)) {
-              const add = pickNew(cur.products, d.products, sameName, () => genId("prod_"), zh ? "商品" : "商品");
-              appendTo(setProducts, add);
-              if (add.length) lines.push((zh ? "+ 新商品 " : "+ 商品 ") + add.length);
-            }
-
-            // 8 / 9. 销售 / 生产记录:按 id 去重;同一条(同 id)两边都有时,修改时间(没有就用创建时间)晚的为准
-            // (2026-09-29 体检第 2 批:以前同 id 整条跳过,另一台电脑下午在同一条上追加的销量合并不过来)
-            const logTime = (x) => Date.parse((x && (x.updatedAt || x.createdAt)) || "") || 0;
-            const mergeLogs = (base, incoming, prefix) => {
-              const add = [];
-              const replace = new Map();
-              (incoming || []).forEach(inc => {
-                if (!inc || typeof inc !== "object") return;
-                if (!inc.id) { add.push({ ...inc, id: genId(prefix) }); return; }
-                const inAdd = add.findIndex(x => x.id === inc.id);
-                if (inAdd >= 0) { if (logTime(inc) > logTime(add[inAdd])) add[inAdd] = inc; return; }
-                const dup = (base || []).find(s => s && s.id === inc.id);
-                if (!dup) { add.push(inc); return; }
-                const prevRep = replace.get(inc.id);
-                if (logTime(inc) > logTime(prevRep || dup)) replace.set(inc.id, inc);
-              });
-              return { add, replace };
-            };
-            const applyLogs = (setter, { add, replace }) => {
-              if (!add.length && !replace.size) return;
-              setter(prev => {
-                let changed = false;
-                let next = (prev || []).map(x => {
-                  const r = x && replace.get(x.id);
-                  if (r && logTime(r) > logTime(x)) { changed = true; return r; }
-                  return x;
-                });
-                const ids = new Set(next.map(x => x && x.id));
-                const a = add.filter(x => !ids.has(x.id));
-                if (a.length) { next = [...next, ...a]; changed = true; }
-                return changed ? next : prev;
-              });
-            };
-            let logsReplaced = 0, prodLogsReplaced = 0;
-            if (Array.isArray(d.salesLog)) {
-              const r = mergeLogs(cur.salesLog, d.salesLog, "sl_");
-              applyLogs(setSalesLog, r);
-              if (r.add.length) lines.push((zh ? "+ 新销售记录 " : "+ 売上記録 ") + r.add.length);
-              if (r.replace.size) { lines.push(zh ? `· 销售记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 売上記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; }
-            }
-            if (Array.isArray(d.productionLog)) {
-              const r = mergeLogs(cur.productionLog, d.productionLog, "pl_");
-              applyLogs(setProductionLog, r);
-              if (r.add.length) lines.push((zh ? "+ 新生产记录 " : "+ 生産記録 ") + r.add.length);
-              if (r.replace.size) { lines.push(zh ? `· 生产记录 ${r.replace.size} 条换成了修改时间更晚的那份` : `· 生産記録 ${r.replace.size} 件を新しい方に更新`); logsReplaced += r.replace.size; prodLogsReplaced += r.replace.size; }
-            }
-            // 备货 G 线:生产记录被换了、本机账上有备货时,那句后面加「备货库存也一样,去盘点」(账本不跟着生产记录合并)
-            const curPrepN = Object.keys(prepStock.items).length;
-            if (logsReplaced) lines.push((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
-              + (prodLogsReplaced && curPrepN > 0 ? prepTxt(lang).mergeLogsTail : ""));
-
-            // 10. 合并 suppliers(供应商,按 id/nameZh/nameJa 去重)
-            if (Array.isArray(d.suppliers)) {
-              const add = pickNew(cur.suppliers, d.suppliers, sameName, () => genId("sup_"), zh ? "供货商" : "仕入先");
-              appendTo(setSuppliers, add);
-              if (add.length) lines.push((zh ? "+ 新供货商 " : "+ 仕入先 ") + add.length);
-            }
-
-            // 11. 合并 productFamilies(产品家族,按 id/nameZh/nameJa 去重)
-            if (Array.isArray(d.productFamilies)) {
-              const add = pickNew(cur.productFamilies, d.productFamilies, sameName, () => genId("fam_"), zh ? "家族" : "ファミリー");
-              appendTo(setProductFamilies, add);
-              if (add.length) lines.push((zh ? "+ 新产品家族 " : "+ ファミリー ") + add.length);
-            }
-
-            // 12. 合并 customCompCats(自定义组件分类,按 id 去重)
-            if (Array.isArray(d.customCompCats)) {
-              const add = pickNew(cur.customCompCats, d.customCompCats, (a, b) => !!(b.id && a.id === b.id), null, null);
-              appendTo(setCustomCompCats, add);
-              if (add.length) lines.push((zh ? "+ 新组件分类 " : "+ コンポ分類 ") + add.length);
-            }
-
-            // 13. 合并 printSettings(对象;只在当前是默认值时才用导入的,避免覆盖用户配置)
-            if (d.printSettings && typeof d.printSettings === "object") {
-              setPrintSettings(prev => {
-                const isDefault = !prev || (prev.brandName === "RURU" && !prev.logoUrl && prev.brandSubtitle === "PATISSERIE");
-                const base = isDefault ? d.printSettings : prev;
-                // 审查 r2:标签的经营者名称 / 地址 / 电话:本机填过的不动,本机空着的从文件补(另一台电脑填过的,以前合并导入永远带不过来)
-                const pick = {};
-                LABEL_SHOP_KEYS.forEach(k => { const v = _normTxt(prev && prev[k]) ? prev[k] : _normTxt(d.printSettings[k]) ? d.printSettings[k] : undefined; if (v !== undefined && v !== base[k]) pick[k] = v; });
-                return Object.keys(pick).length ? { ...base, ...pick } : base;
-              });
-            }
-
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+            applyMergePlan(plan, base, {
+              cats: setCats, components: setComponents, recipes: setRecipes, creations: setCreations, knowledge: setKnowledge,
+              brands: setBrands, materials: setMaterials, shopMaterials: setShopMaterials, products: setProducts,
+              salesLog: setSalesLog, productionLog: setProductionLog, suppliers: setSuppliers, productFamilies: setProductFamilies,
+              customCompCats: setCustomCompCats, printSettings: setPrintSettings,
+            }, d, { nowIso, genId });
             // 报告:提示条给一句话,完整结果(含因同名 / 同编号跳过的条目)留在数据页上
-            const added = lines.filter(l => l.startsWith("+"));
-            const msg = added.length > 0
-              ? (zh ? "✓ 合并完成:" : "✓ マージ完了:") + added.map(l => l.slice(2)).join(" · ")
-              : lines.length > 0
-                ? (zh ? "✓ 合并完成(没有新增条目;已有的条目按修改时间比过,取了新的一边)" : "✓ マージ完了(新規なし)")
-                : (zh ? "没有新内容:文件里的条目这里都已经有了" : "新しい内容はありません(すべて既存)");
-            showToast(msg + (skipped.length ? (zh ? ` · 跳过 ${skipped.length} 条同名(详见数据页)` : ` · 同名スキップ ${skipped.length}`) : ""), { ms: 8000 });
-            // 备货 G 线:合并导入一个字都不碰 appSettings(库存账)和已有配方 / 组件的备货设置,只在数据页的结果里说清楚
-            // (放在提示条的判断之后:只有这两行时,提示条仍说「没有新内容」)
-            const prepNotes = [];
-            if (d.appSettings && Object.keys(prepStockRead(d.appSettings.prepStock).items).length > 0) prepNotes.push(prepTxt(lang).mergeNotMerged);
-            if (prepCfgDiff.size) prepNotes.push(prepTxt(lang).mergeCfgDiff(prepCfgDiff.size));
-            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines: prepNotes.length ? [...lines, ...prepNotes] : lines, skipped });
+            showToast(plan.toast, { ms: 8000 });
+            setImportReport({ kind: "merge", fileName: f.name, at: new Date(), lines: plan.lines, skipped: plan.skipped });
             // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(报告行不动)
-            offerKnowledgeRepairs({ recipes: cur.recipes || [], components: cur.components || [], creations: cur.creations || [] },
-              { recipes: [...(cur.recipes || []), ...recipeAdd], components: [...(cur.components || []), ...compAdd], creations: [...(cur.creations || []), ...creationAdd] }, null);
+            offerKnowledgeRepairs({ recipes: base.recipes || [], components: base.components || [], creations: base.creations || [] },
+              { recipes: [...(base.recipes || []), ...plan.added.recipes], components: [...(base.components || []), ...plan.added.components], creations: [...(base.creations || []), ...plan.added.creations] }, null);
           }
         );
       } catch (err) {
@@ -31238,6 +32091,10 @@ function App() {
           </button>
         </div>
       )}
+      {/* 第 6 批第 0 步:D 的安全横幅(存档空了 / 微信 / Safari 标签页 / 主屏幕版第一次;优先级在别的窗口改过、新版本之后)和「怎么装」说明,R 的回收站弹窗。空壳 */}
+      {!staffMode && safetyBanner && <SafetyBanner kind={safetyBanner} lang={lang} onClose={() => {}} onHowTo={() => setHowToOpen(true)} onExport={exportData} onOpenRestore={() => setShowBackupDialog(true)} onGoData={() => goTab("data")} />}
+      {!staffMode && <HomeScreenHowTo open={howToOpen} lang={lang} onClose={() => setHowToOpen(false)} onExport={exportData} />}
+      {!staffMode && <RecycleBinDialog open={binOpen} lang={lang} onClose={() => setBinOpen(false)} showToast={showToast} confirmDialog={confirmDialog} />}
       {/* 第 5 批 E4:「没保存的修改」草稿列表浮层(第 0 步空壳;员工模式不出) */}
       {!staffMode && <DraftList lang={lang} />}
 
@@ -31271,6 +32128,19 @@ function App() {
           src={printTarget.src} scale0={printTarget.scale} n0={printTarget.n} appLang={lang}
           ctx={{ materials, brands, components, recipes, creations, onEdit: (kind, id) => { setPrintTarget(null); jumpToItem({ kind, id }); } }}
         />
+      )}
+
+      {/* 第 6 批第 0 步:半成品标签(PC)/ 知识(KB)的打印设置弹窗,各用自己的 stage 名;弹窗第 0 步是空壳。员工也能打(不在 !staffMode 里) */}
+      {printTarget && printTarget.stage === "plopts" && printTarget.type === "prepLabel" && (
+        <PrepLabelModal printKey={printTarget.data && printTarget.data.key} lotId={printTarget.data && printTarget.data.lotId} lang={lang} staff={!!printTarget.staff} today={today}
+          recipes={recipes} components={components} materials={materials} brands={brands} creations={creations} prepStock={prepStock}
+          onClose={() => setPrintTarget(null)}
+          onConfirm={(data) => setPrintTarget({ type: "prepLabel", stage: "preview", data, lang: data && data.lang })} />
+      )}
+      {printTarget && printTarget.stage === "kopts" && printTarget.type === "knowledge" && (
+        <KnowledgePrintModal src={printTarget.src} knowledge={knowledge} lang={lang} staff={!!printTarget.staff} recipes={recipes} components={components} creations={creations}
+          onClose={() => setPrintTarget(null)}
+          onConfirm={(data) => setPrintTarget({ type: "knowledge", stage: "preview", data, lang: data && data.lang })} />
       )}
 
       {/* 🖨 打印预览 */}
@@ -31326,6 +32196,9 @@ function App() {
           confirmText={confirmState.confirmText || "确定"}
           cancelText={confirmState.cancelText || "取消"}
           danger={confirmState.danger !== false}
+          body={confirmState.body}
+          wide={confirmState.wide}
+          extra={confirmState.extra}
           onConfirm={() => {
             const fn = confirmState.onConfirm;
             setConfirmState(null);
@@ -31618,6 +32491,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <Wordmark size={22} />
           {/* 保存指示在按钮组左侧 —— 数据只在本地，老板要能确信东西没丢 */}
           <div style={{ display: "flex", alignItems: "center", gap: T.sp.l, flexShrink: 0 }}>
+            {/* 第 6 批第 0 步:D 的「💾 N 天没导出」(只在要提醒时;空壳),放在 DraftChip 左边 */}
+            <ExportChip view={null} lang={lang} onExport={exportData} />
             {/* 第 5 批 E4:「📝 N」没保存的修改(第 0 步空壳),放在 SaveStatus 左边 */}
             <DraftChip lang={lang} />
             <SaveStatus state={saveState} lang={lang} onRetry={() => {
@@ -32296,6 +33171,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           prepOn={prepOn}
           onJump={jumpToItem}
           onGoTab={goTab}
+          orderReminders={orderReminders}
         />
       )}
 
@@ -32314,6 +33190,16 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           lang={lang}
           prepOnHand={prepOnHand}
           prepOnHandAt={prepOnHandAt}
+          setShopMaterials={setShopMaterials}
+          purchaseState={purchaseState}
+          setPurchaseState={setPurchaseState}
+          rawPlan={appSettings.prodPlan}
+          printSettings={printSettings}
+          onPrint={(data) => setPrintTarget({ type: "purchase", stage: "preview", data, lang: data && data.lang })}
+          onJump={jumpToItem}
+          onGoTab={goTab}
+          showToast={showToast}
+          today={today}
         />
       )}
 
@@ -32610,38 +33496,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
 
           <FxSettingCard appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
 
-          {/* v57: 本地存储用量 */}
-          {(() => {
-            let used = 0;
-            try { used = (localStorage.getItem(STORAGE_KEY) || "").length; } catch {}
-            const usedMB = (used / 1024 / 1024);
-            const limitMB = 5; // 典型手机 localStorage 限额
-            const pct = Math.min(100, (usedMB / limitMB) * 100);
-            const color = pct > 80 ? T.danger : pct > 60 ? T.warning : T.success;
-            const bg = pct > 80 ? T.dangerBg : pct > 60 ? T.warningBg : T.successBg;
-            return (
-              <div style={{ background: bg, border: `0.5px solid ${color}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>
-                    {lang === "zh" ? "💾 本地存储用量" : "💾 ローカル使用量"}
-                  </div>
-                  <div style={{ fontSize: 12, color, fontWeight: 500 }}>
-                    {usedMB.toFixed(2)} MB / ~{limitMB} MB ({pct.toFixed(0)}%)
-                  </div>
-                </div>
-                <div style={{ background: T.bgMuted, height: 6, borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.3s" }} />
-                </div>
-                {pct > 80 && (
-                  <div style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>
-                    {lang === "zh"
-                      ? "⚠️ 存储接近上限,建议:导出数据 → 清理用不到的配方/图片/旧材料 → 重新导入"
-                      : "⚠️ 容量接近上限,バックアップ → 不要データ削除を推奨"}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          {/* v57: 本地存储用量(第 6 批第 0 步抽成 StorageMeterCard,DOM 一样;D 线改主数字) */}
+          <StorageMeterCard lang={lang} />
 
           {(() => {
             // v17: 数据管理页整理 — 6 张操作卡片按用途分 3 组 + 小标题(功能/handler 不变,仅重排+加层次)
@@ -32657,7 +33513,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             );
             const backupCards = [
               { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_HOURS} 小时每小时一份、最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, action: <Btn variant="primary" onClick={() => setShowBackupDialog(true)}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
-              { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn> },
+              { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <>{/* 第 6 批第 0 步:D 的「这台设备 / 上次导出」两行放在按钮上面(空壳) */}<DeviceExportStatus lang={lang} deviceInfo={deviceInfo} /><Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn></> },
               { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             ];
             const exchangeCards = [
@@ -32670,32 +33526,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             return (
               <>
                 {secTitle(lang === "zh" ? "备份与恢复（防数据丢失）" : "バックアップと復元（紛失防止）")}
-                {backupCards.map(card)}
+                {/* 第 6 批第 0 步:R 的「🗑 回收站(30 天)」卡紧跟「🛟 恢复备份」卡(空壳) */}
+                {backupCards.map((s, i) => <Fragment key={i}>{card(s, i)}{i === 0 && <RecycleBinCard lang={lang} onOpen={() => setBinOpen(true)} />}</Fragment>)}
                 {secTitle(lang === "zh" ? "内容交换（与 Claude / 买家）" : "データ交換")}
                 {exchangeCards.map(card)}
                 {/* 2026-09-29 体检第 2 批:导入结果留在页面上(以前只有 2.5 秒的提示条,而且合并导入的计数永远是 0) */}
-                {importReport && (
-                  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderLeft: `3px solid ${T.info}`, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ ...T.fs.small, fontWeight: 500, color: T.ink }}>
-                        {importReport.kind === "merge" ? (lang === "zh" ? "上次合并导入的结果" : "前回のマージ結果") : (lang === "zh" ? "上次覆盖导入的结果" : "前回の上書き結果")}
-                        <span style={{ ...T.fs.label, color: T.subtle, fontWeight: 400, marginLeft: 8 }}>{importReport.fileName} · {String(importReport.at.getHours()).padStart(2, "0")}:{String(importReport.at.getMinutes()).padStart(2, "0")}</span>
-                      </div>
-                      <button type="button" onClick={() => setImportReport(null)} style={{ background: "none", border: "none", cursor: "pointer", color: T.subtle, fontSize: 16, padding: "0 4px" }} title={lang === "zh" ? "关掉" : "閉じる"}>×</button>
-                    </div>
-                    <div style={{ ...T.fs.caption, color: T.body, marginTop: 6, lineHeight: 1.7 }}>
-                      {importReport.lines.length === 0
-                        ? (lang === "zh" ? "没有新内容:文件里的条目这里都已经有了。" : "新しい内容はありませんでした。")
-                        : importReport.lines.map((l, i) => <div key={i}>{l}</div>)}
-                    </div>
-                    {importReport.skipped.length > 0 && (
-                      <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, lineHeight: 1.7 }}>
-                        <div style={{ color: T.body }}>{lang === "zh" ? `因为这里已有同名或同编号的,跳过了 ${importReport.skipped.length} 条(已有的没动):` : `同名・同IDのため ${importReport.skipped.length} 件スキップ:`}</div>
-                        <div>{importReport.skipped.slice(0, 30).join("、")}{importReport.skipped.length > 30 ? (lang === "zh" ? ` 等 ${importReport.skipped.length} 条` : ` ほか`) : ""}</div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                {/* 第 6 批第 0 步:结果卡抽成 ImportReportCard(DOM 一样;I 线加持久、notes、备份行、更早的几次) */}
+                <ImportReportCard report={importReport} lang={lang} onClose={() => setImportReport(null)} />
                 {secTitle(lang === "zh" ? "维护工具" : "メンテナンス")}
                 {maintainCards.map(card)}
               </>
