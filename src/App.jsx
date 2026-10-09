@@ -261,11 +261,12 @@ const ING_COLS = "1fr 96px 132px 88px";
 // 分类标签型：灰底(sunken) + 色点。bg 一律 sunken，颜色只出现在圆点上。
 const COMPONENT_CATEGORIES = [
   { id: "base",     zh: "基础组件",        ja: "ベース",          color: "#77776E", bg: "#F2F2EC" },
-  { id: "biscuit",   zh: "生地・底",        ja: "生地・土台",     color: "#9A7B2E", bg: "#F2F2EC" },
-  { id: "mousse",    zh: "慕斯・奶油",      ja: "ムース・クリーム", color: "#7A4E9C", bg: "#F2F2EC" },
-  { id: "jelly",     zh: "果冻・果酱",      ja: "ジュレ・コンフィ", color: "#C1583D", bg: "#F2F2EC" },
-  { id: "accent",    zh: "脆片・口感重点",   ja: "アクセント",      color: "#35785C", bg: "#F2F2EC" },
-  { id: "glaze",     zh: "淋面・酱汁",      ja: "グラサージュ",    color: "#A6363F", bg: "#F2F2EC" },
+  // 第 6 批 L1(8.4):中文名去掉日文词和「・」,分隔统一「 / 」;id 不变(待看 16:biscuit 叫「面团 / 面糊 / 底」,不叫蛋糕坯)
+  { id: "biscuit",   zh: "面团 / 面糊 / 底", ja: "生地・土台",     color: "#9A7B2E", bg: "#F2F2EC" },
+  { id: "mousse",    zh: "慕斯 / 奶油",     ja: "ムース・クリーム", color: "#7A4E9C", bg: "#F2F2EC" },
+  { id: "jelly",     zh: "果冻 / 果酱",     ja: "ジュレ・コンフィ", color: "#C1583D", bg: "#F2F2EC" },
+  { id: "accent",    zh: "脆片 / 口感重点",  ja: "アクセント",      color: "#35785C", bg: "#F2F2EC" },
+  { id: "glaze",     zh: "淋面 / 酱汁",     ja: "グラサージュ",    color: "#A6363F", bg: "#F2F2EC" },
   { id: "decor",     zh: "装饰",            ja: "デコレーション",   color: "#4E7591", bg: "#F2F2EC" },
   { id: "other",     zh: "其他",            ja: "その他",         color: "#7B4A1E", bg: "#F2F2EC" },
 ];
@@ -963,7 +964,7 @@ function MatrixCell({ cellComps, fam, ct, lang, onViewComponent, onCreateNew }) 
     return (
       <button
         onClick={onCreateNew}
-        title={lang === "zh" ? "点击创建此风味 × 食感的组件" : "このコンポーネントを新規作成"}
+        title={lang === "zh" ? "点击创建此风味 × 食感的组件" : "このパーツを新規作成"}
         style={{
           background: "transparent",
           color: "#B8A38B",
@@ -2725,7 +2726,7 @@ const MATERIAL_SUBCATEGORIES = {
     { id: "semi_strong", zh: "准强力粉",     ja: "準強力粉",     icon: "🥖" },
     { id: "strong",      zh: "强力粉",       ja: "強力粉",       icon: "🍞" },
     { id: "medium",      zh: "中力粉",       ja: "中力粉",       icon: "🍜" },
-    { id: "whole",       zh: "全粒粉/ライ麦", ja: "全粒粉・ライ麦粉", icon: "🌾" },
+    { id: "whole",       zh: "全麦粉 / 黑麦粉", ja: "全粒粉・ライ麦粉", icon: "🌾" },
     { id: "rice",        zh: "米粉",         ja: "米粉",         icon: "🍚" },
     { id: "other",       zh: "其他",         ja: "その他",       icon: "📦" },
   ],
@@ -2767,7 +2768,7 @@ const MATERIAL_SUBCATEGORIES = {
     { id: "puree_japan",         zh: "果泥·国产",     ja: "ピューレ・国産",        icon: "🗾" },
     { id: "puree",               zh: "果泥·其他",     ja: "ピューレ・その他",      icon: "📦" },
     // 其他形态(不拆)
-    { id: "confit", zh: "蜜渍/コンフィ", ja: "コンフィ",     icon: "🍒" },
+    { id: "confit", zh: "蜜渍果",       ja: "コンフィ",     icon: "🍒" },
     { id: "dice",   zh: "小粒",         ja: "ダイス",       icon: "🔶" },
     { id: "whole",  zh: "冷冻整果",     ja: "冷凍ホール",   icon: "🫐" },
     { id: "other",  zh: "其他",         ja: "その他",       icon: "📦" },
@@ -2804,7 +2805,7 @@ const MATERIAL_SUBCATEGORIES = {
     { id: "leaf",   zh: "板吉利丁",     ja: "板ゼラチン",     icon: "🧊" },
     { id: "powder", zh: "粉状吉利丁",   ja: "パウダーゼラチン", icon: "❄️" },
     { id: "pectin", zh: "果胶",         ja: "ペクチン",       icon: "🍯" },
-    { id: "agar",   zh: "琼脂/アガー", ja: "寒天・アガー",   icon: "🌊" },
+    { id: "agar",   zh: "琼脂 / 吉利 T", ja: "寒天・アガー",   icon: "🌊" },
     { id: "other",  zh: "其他",         ja: "その他",         icon: "📦" },
   ],
   spice: [
@@ -2831,64 +2832,64 @@ const getSubcategoriesFor = (categoryId) => MATERIAL_SUBCATEGORIES[categoryId] |
 // ───────────── 材料百科：每个分类的参数模板 ─────────────
 const MATERIAL_PARAM_TEMPLATES = {
   flour: [
-    { key: "强度分类", placeholder: "薄力粉 / 中力粉 / 強力粉 / 全粒粉" },
+    { key: "强度分类", placeholder: "薄力粉 / 中力粉 / 强力粉 / 全麦粉" },
     { key: "粗蛋白", placeholder: "例：9.5%" },
     { key: "灰分", placeholder: "例：0.37%" },
-    { key: "产地", placeholder: "例：北海道 / フランス" },
-    { key: "小麦品种", placeholder: "例：春よ恋" },
+    { key: "产地", placeholder: "例：北海道 / 法国" },
+    { key: "小麦品种", placeholder: "例：济麦 44" },
   ],
   sugar: [
-    { key: "糖类型", placeholder: "グラニュー / 粉糖 / 三温糖 / 转化糖" },
+    { key: "糖类型", placeholder: "细砂糖 / 糖粉 / 三温糖 / 转化糖" },
     { key: "纯度", placeholder: "例：99.9%" },
     { key: "颗粒度", placeholder: "细 / 中 / 粗" },
     { key: "产地", placeholder: "例：日本" },
   ],
   chocolate: [
     { key: "可可含量", placeholder: "例：70%" },
-    { key: "种类", placeholder: "ダーク / ミルク / ホワイト / ブロンド" },
-    { key: "可可豆产地", placeholder: "例：エクアドル" },
+    { key: "种类", placeholder: "黑巧 / 牛奶 / 白巧 / 金色" },
+    { key: "可可豆产地", placeholder: "例：厄瓜多尔" },
     { key: "脂肪", placeholder: "例：38%" },
   ],
   egg: [
-    { key: "种类", placeholder: "全卵 / 卵白 / 卵黄 / 乾燥卵" },
+    { key: "种类", placeholder: "全蛋 / 蛋白 / 蛋黄 / 干燥蛋" },
     { key: "サイズ", placeholder: "M / L / LL" },
-    { key: "产地", placeholder: "例：国産" },
+    { key: "产地", placeholder: "例：国产" },
   ],
   fruit: [
-    { key: "种类", placeholder: "ピューレ / コンフィ / ダイス / 冷凍" },
+    { key: "种类", placeholder: "果泥 / 蜜渍 / 果丁 / 冷冻" },
     { key: "糖度", placeholder: "例：70% / 不加糖" },
     { key: "酸度", placeholder: "例：pH 3.5" },
-    { key: "产地", placeholder: "例：フランス" },
+    { key: "产地", placeholder: "例：法国" },
   ],
   nut: [
-    { key: "状态", placeholder: "ホール / スライス / ダイス / パウダー" },
-    { key: "烘焙", placeholder: "生 / ロースト" },
-    { key: "产地", placeholder: "例：カリフォルニア" },
+    { key: "状态", placeholder: "整粒 / 片 / 碎粒 / 粉" },
+    { key: "烘焙", placeholder: "生 / 烤过" },
+    { key: "产地", placeholder: "例：加州" },
   ],
   liquor: [
     { key: "酒精度", placeholder: "例：24%" },
-    { key: "种类", placeholder: "リキュール / 蒸留酒 / ブランデー" },
-    { key: "产地", placeholder: "例：スイス" },
+    { key: "种类", placeholder: "利口酒 / 蒸馏酒 / 白兰地" },
+    { key: "产地", placeholder: "例：瑞士" },
   ],
   gelatin: [
-    { key: "原料", placeholder: "豚 / 牛 / 魚" },
-    { key: "形态", placeholder: "板 / 顆粒 / パウダー" },
+    { key: "原料", placeholder: "猪 / 牛 / 鱼" },
+    { key: "形态", placeholder: "片 / 颗粒 / 粉" },
     { key: "ゼリー强度", placeholder: "例：180-210g" },
     { key: "溶解温度", placeholder: "例：60°C" },
   ],
   spice: [
-    { key: "种类", placeholder: "バニラ / シナモン / カルダモン" },
-    { key: "形态", placeholder: "ビーンズ / パウダー / エキストラクト" },
-    { key: "产地", placeholder: "例：マダガスカル" },
+    { key: "种类", placeholder: "香草 / 肉桂 / 小豆蔻" },
+    { key: "形态", placeholder: "香草荚 / 粉 / 提取液" },
+    { key: "产地", placeholder: "例：马达加斯加" },
   ],
   color: [
     { key: "种类", placeholder: "天然 / 合成" },
-    { key: "颜色", placeholder: "例：赤 / 黄色" },
-    { key: "形态", placeholder: "液体 / パウダー / ペースト" },
+    { key: "颜色", placeholder: "例：红 / 黄" },
+    { key: "形态", placeholder: "液体 / 粉 / 膏" },
   ],
   leavening: [
-    { key: "种类", placeholder: "BP / 重曹 / イースト" },
-    { key: "主要成分", placeholder: "例：リン酸" },
+    { key: "种类", placeholder: "泡打粉 / 小苏打 / 酵母" },
+    { key: "主要成分", placeholder: "例：磷酸盐" },
   ],
   other: [
     { key: "特性", placeholder: "" },
@@ -2909,7 +2910,7 @@ const KNOWLEDGE_TAGS = [
   { id: "temperature",   zh: "温度",          ja: "温度",         color: "#B0442F", bg: "#FFFFFF" },
   { id: "material",      zh: "材料",          ja: "材料",         color: "#C97A17", bg: "#FFFFFF" },
   { id: "technique",     zh: "技术要点",       ja: "技術ポイント",  color: "#35785C", bg: "#FFFFFF" },
-  { id: "process",       zh: "工程・时间管理",  ja: "工程・時間管理", color: "#4A5A9B", bg: "#FFFFFF" },
+  { id: "process",       zh: "工序 / 时间管理", ja: "工程・時間管理", color: "#4A5A9B", bg: "#FFFFFF" },
   { id: "philosophy",    zh: "主厨哲学",       ja: "シェフ哲学",    color: "#6E3E6B", bg: "#FFFFFF" },
   { id: "science",       zh: "科学原理",       ja: "科学原理",     color: "#77776E", bg: "#FFFFFF" },
   { id: "emulsification", zh: "乳化",         ja: "乳化",         color: "#4E7591", bg: "#FFFFFF" },
@@ -5259,9 +5260,18 @@ const packsNeededOf = (ps, m, grams, units) => {
 // 之后:文字表和显示函数(UI_TXT / recipeCatLabel / creationStatusInfo / difficultyLabel / paramKeyLabel / newRecipeUnit / unitOr)归 L1;
 // toastQueuePush / toastHold / canHover / hoverOnly / tipPlace / fgClass 归 T1。段里不许有 React / setState / localStorage(测试整段抽出来跑)。
 // 共用文字表:中日键一一对应;只有第 0 步、T1、L1 往这里加键(plan 裁决 18)。uiTxt(lang):"ja" → 日文,其余一律中文
+// L1(8.4)加的:固定中文 toast 跟语言(design_touch-lang §4.3 L1 表;删除类归 R,导出 / 导入 / 供货商和本店原料保存 / 采购页 / 知识标记归各自的线)
 const UI_TXT = {
-  zh: { ok: "确定", cancel: "取消", undo: "撤销", close: "关闭", tipLabel: "说明", add: "＋ 添加", delRow: "删掉这一行", moveUp: "上移", moveDown: "下移" },
-  ja: { ok: "確定", cancel: "キャンセル", undo: "元に戻す", close: "閉じる", tipLabel: "説明", add: "＋ 追加", delRow: "この行を削除", moveUp: "上へ", moveDown: "下へ" },
+  zh: { ok: "确定", cancel: "取消", undo: "撤销", close: "关闭", tipLabel: "说明", add: "＋ 添加", delRow: "删掉这一行", moveUp: "上移", moveDown: "下移",
+    savedRecipe: "✓ 配方已保存", savedComponent: "✓ 组件已保存", savedCreation: "✓ 组合产品已保存", savedKnowledge: "✓ 知识点已保存",
+    savedFamily: "✓ 家族已保存", savedBrand: "✓ 厂家已保存", savedMaterial: "✓ 材料已保存",
+    knowledgeAdded: "✓ 知识点已添加并关联", compCatAdded: "✓ 新分类已添加", cleared: "已清除",
+    layerNowLocal: (nm) => `「${nm}」改成了本产品专用，不再跟组件库。想让组件库也改，编辑这一部分时点「↻ 同步回组件库」。` },
+  ja: { ok: "確定", cancel: "キャンセル", undo: "元に戻す", close: "閉じる", tipLabel: "説明", add: "＋ 追加", delRow: "この行を削除", moveUp: "上へ", moveDown: "下へ",
+    savedRecipe: "✓ レシピを保存しました", savedComponent: "✓ パーツを保存しました", savedCreation: "✓ 組み合わせを保存しました", savedKnowledge: "✓ ナレッジを保存しました",
+    savedFamily: "✓ ファミリーを保存しました", savedBrand: "✓ ブランドを保存しました", savedMaterial: "✓ 材料を保存しました",
+    knowledgeAdded: "✓ ナレッジを追加して関連付けました", compCatAdded: "✓ 新しい分類を追加しました", cleared: "クリアしました",
+    layerNowLocal: (nm) => `「${nm}」はこの製品専用になり、パーツ庫とは連動しなくなりました。パーツ庫も変えるには、このパーツの編集で「↻ パーツ庫に反映」を押してください。` },
 };
 const uiTxt = (lang) => UI_TXT[lang === "ja" ? "ja" : "zh"];
 // 配方分类:存的值不变(下拉的 value 永远是存的值),只是显示查表;不认识的值原样显示(待看 4 的 A)
@@ -5886,7 +5896,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog }) {
     if (!d) return "";
     return lang === "zh"
       ? `配方 ${d.recipes || 0} · 组件 ${d.components || 0} · 组合 ${d.creations || 0} · 材料 ${d.materials || 0} · 品牌 ${d.brands || 0} · 知识 ${d.knowledge || 0}`
-      : `レシピ ${d.recipes || 0} · コンポ ${d.components || 0} · 組立製品 ${d.creations || 0} · 材料 ${d.materials || 0} · ブランド ${d.brands || 0}`;
+      : `レシピ ${d.recipes || 0} · パーツ ${d.components || 0} · 組み合わせ ${d.creations || 0} · 材料 ${d.materials || 0} · ブランド ${d.brands || 0}`;
   };
   const reasonLabel = (r) => ({
     import: lang === "zh" ? "覆盖导入之前" : "上書きインポート前",
@@ -8309,7 +8319,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
           {/* 第 5 批 E2:名字下面「⧉ 复制自「…」」(只有复制出来的新版本有;原版还在就能点过去) */}
           <CopiedFromNote obj={r} lang={lang} list={recipes} onOpen={onOpenSource} />
           <div style={{ ...T.fs.label, color: T.subtle, marginTop: T.sp.l }}>
-            {[r.mold, r.yield ? `${r.yield}${r.unit || "個"}` : null, r.temp, r.baketime, r.category].filter(Boolean).join("  ·  ")}
+            {[r.mold, r.yield ? `${r.yield}${unitOr(r.unit, lang)}` : null, r.temp, r.baketime, recipeCatLabel(r.category, lang)].filter(Boolean).join("  ·  ")}
           </div>
           {/* 备货(prepstock E 线):标了备货才有这个标签;已开始记时带「冷冻 · 现有 380 個」 */}
           {_prepCfg && (
@@ -8324,7 +8334,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         {r.price > 0 && (
           <div style={{ textAlign: "right" }}>
             <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>
-              {lang === "zh" ? `售价 / ${r.unit || "個"}` : `売価 / ${r.unit || "個"}`}
+              {lang === "zh" ? `售价 / ${unitOr(r.unit, lang)}` : `売価 / ${unitOr(r.unit, lang)}`}
             </div>
             <div style={{ fontFamily: T.fontSerif, fontSize: 38, fontWeight: 300, letterSpacing: "-0.02em", marginTop: 4, ...T.num, color: T.ink, lineHeight: 1.1 }}>
               {fmtSellPrice(r.price, r)}
@@ -8343,7 +8353,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
 
       {/* 🔢 缩放计算 —— 压成一行，底部一条发丝线(第 5 批第 0 步抽成 ScaleBar;S2 加缩放方式的下拉) */}
       {originalYield > 0 && (r.ingredients || []).length > 0 && (
-        <ScaleBar variant="recipe" lang={lang} originalYield={originalYield} unit={r.unit || "個"} targetYield={sc.target} setTargetYield={(v) => setSc(s => ({ ...s, target: v }))} target={target} scale={scale}
+        <ScaleBar variant="recipe" lang={lang} originalYield={originalYield} unit={unitOr(r.unit, lang)} targetYield={sc.target} setTargetYield={(v) => setSc(s => ({ ...s, target: v }))} target={target} scale={scale}
           sc={sc} setSc={setSc} info={info} obj={r} kind="recipe" ctx={scCtx} kitchenLocked={kitchenLocked && !!onKitchen} />
       )}
 
@@ -8439,13 +8449,13 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                 else if (src === "manual") badges.push({ t: lang === "zh" ? "手写" : "手入", c: T.info, tip: lang === "zh" ? "手写单价" : "手入力" });
                 // 第 4 批 B4-6(critic M1):不计价 / 来自组件。组件里有原料没价时组件徽章用警示色(这一行也算进「N 项没价」)
                 else if (src === "nocost") badges.push({ t: lang === "zh" ? "不计价" : "原価外", c: T.muted, tip: lang === "zh" ? "这一行不计价,成本按 0 算" : "原価に入れない行" });
-                else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "コンポ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "コンポーネント:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
+                else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "パーツ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "パーツ:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
                 else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? (ingLiveComp(ing, materials) ? "来自组件,但算不出单价(组件没填产出量 / 单位对不上 / 循环 / 没价)" : "无价格信息") : "価格情報なし" });
                 // 第 5 批 2.4(S1,R21):按个写、关联了按克计价的材料 —— 没填克重 →「单位不符」(警示色);填了 →「≈2.2g/本」(灰)
                 if (ingUnitUnconverted(ing, materials)) { const u = _normTxt(ing.unit); badges.push({ t: lang === "zh" ? "单位不符" : "単位不一致", c: T.warning, tip: lang === "zh" ? `按「${u}」写、关联了按克计价的材料,没填 1 ${u} 约几克 → 成本按 1 ${u} = 1 g 算,少算了` : `「${u}」単位で g 単価の材料と連動、1${u} あたりの g が未入力 → 1${u} = 1 g で計算(過少)` }); }
                 else if (linkedMat && ingWeightFactor(ing.unit) === 0 && ingPieceGrams(ing, linkedMat) > 0) { const u = _normTxt(ing.unit); badges.push({ t: `≈${fmtQty(ingPieceGrams(ing, linkedMat))}g/${u}`, c: T.muted, tip: lang === "zh" ? `按 1 ${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g 换算成克` : `1${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g で換算` }); }
                 if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
-                else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のコンポーネントは削除済み" });
+                else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のパーツは削除済み" });
                 const shown = badges.slice(0, 2), rest = badges.slice(2);
                 return (
                   <div
@@ -8911,12 +8921,12 @@ const E2_TXT = {
     copyBtn: "⧉ 新バージョンとして複製",
     copyTitle: (kind) => kind === "component" ? "コピーして別パーツとして編集(名前に「v1.1 北京」)。元のパーツと組み合わせはそのまま" : "コピーして別レシピとして編集(名前に「v1.1 北京」)。元のレシピと組み合わせはそのまま",
     copiedFrom: (n, md) => `⧉「${n}」から複製${md ? `(${md})` : ""}`,
-    banner: (kind, src, label) => `⧉「${src}」から複製した新バージョンです。保存するまで${kind === "component" ? "部品庫" : "レシピ一覧"}には追加されません。元の${kind === "component" ? "パーツ" : "レシピ"}と組み合わせは変わりません。` +
+    banner: (kind, src, label) => `⧉「${src}」から複製した新バージョンです。保存するまで${kind === "component" ? "パーツ庫" : "レシピ一覧"}には追加されません。元の${kind === "component" ? "パーツ" : "レシピ"}と組み合わせは変わりません。` +
       (label ? `名前に「${label}」を付けました(変更可)。` : "") + "フランス語名は空欄です(元と同名だとナレッジのボタンが区別できません)。",
     bannerImg: (n) => `元の写真 ${n} 枚は複製していません(写真はこの端末の画像ライブラリにあり、共有すると片方を消したときにもう片方も消えるため)。`,
     usersTitle: "🔗 このパーツの使用先",
-    uFollow: "保存すると連動して変わる:", uLocked: "ロック中で変わらない:", uLockedTail: "(「部品庫に新しい版があります」と表示)",
-    uLocal: "変わらない:", uLocalTail: "(この製品専用、または部品庫と相違)",
+    uFollow: "保存すると連動して変わる:", uLocked: "ロック中で変わらない:", uLockedTail: "(「パーツ庫に新しい版があります」と表示)",
+    uLocal: "変わらない:", uLocalTail: "(この製品専用、またはパーツ庫と相違)",
     uIng: "材料として使用:", uIngTail: "(原価が連動)", uProd: "商品に直接使用:",
     ingRef: (type, n) => `${type === "recipe" ? "レシピ" : type === "component" ? "パーツ" : "組み合わせ"}「${n}」`,
     saveAsNew: "⧉ 今回の変更を新バージョンとして保存(上の製品は変わりません)",
@@ -9104,7 +9114,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const isCopy = !existed && !!c.copiedFrom && typeof c.copiedFrom === "object";
           const head = isCopy
             ? (lang === "ja" ? `✓ 新バージョン「${pickLang(c, "name", lang) || c.nameFr || ""}」を保存しました(元はそのまま)` : `✓ 新版本「${pickLang(c, "name", lang) || c.nameFr || ""}」已保存,原版没动`)
-            : (lang === "ja" ? "✓ コンポーネントを保存しました" : "✓ 组件已保存");   // 复查修(ui-r1-05):日文界面以前是「✓ 组件已保存 · 在庫は…」中日混写
+            : uiTxt(lang).savedComponent;
           showToast(meta && meta.prepMsg ? `${head} · ${meta.prepMsg}` : head);
           impactSeq.current += 1;
           setImpact(before ? { compId: c.id, before, seq: impactSeq.current } : null);
@@ -9448,11 +9458,11 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组件仓库（${components.length}）` : `コンポーネント（${components.length}）`}</div>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组件仓库（${components.length}）` : `パーツ庫（${components.length}）`}</div>
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Btn variant="primary" onClick={() => openCompEditor("new")}>{lang === "zh" ? "+ 新增组件" : "+ コンポーネント追加"}</Btn>
+          <Btn variant="primary" onClick={() => openCompEditor("new")}>{lang === "zh" ? "+ 新增组件" : "+ パーツ追加"}</Btn>
         </div>
       </div>
 
@@ -9527,14 +9537,14 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
                 {lang === "zh" ? (
                   <>每个组件需要打「风味标签」才会显示在这里。<strong style={{ color: T.accent }}>点彩色方块</strong>看详情，<strong style={{ color: T.textTertiary }}>点空格</strong>快速创建新组件。</>
                 ) : (
-                  <>コンポーネントに「風味タグ」を付けると表示されます。<strong style={{ color: T.accent }}>カラーセル</strong>で詳細、<strong style={{ color: T.textTertiary }}>空セル</strong>で新規作成。</>
+                  <>パーツに「風味タグ」を付けると表示されます。<strong style={{ color: T.accent }}>カラーセル</strong>で詳細、<strong style={{ color: T.textTertiary }}>空セル</strong>で新規作成。</>
                 )}
               </div>
               {untaggedCount > 0 && (
                 <div style={{ marginTop: 8, padding: "6px 10px", background: T.warningBg, color: T.warning, borderRadius: T.radiusSm, fontSize: 11 }}>
                   ⚠ {lang === "zh"
                     ? <><strong>{untaggedCount}</strong> 个组件尚未打风味标签，切换到列表视图逐个补充。</>
-                    : <><strong>{untaggedCount}</strong> 個のコンポーネントに風味タグがありません。</>}
+                    : <><strong>{untaggedCount}</strong> 個のパーツに風味タグがありません。</>}
                 </div>
               )}
             </div>
@@ -9544,7 +9554,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
                 <div style={{ fontFamily: T.fontSerif, fontSize: 20, color: T.textTertiary, marginBottom: 8, fontStyle: "italic" }}>Empty Canvas</div>
                 {lang === "zh"
                   ? <>还没有打过风味标签的组件。<br /><span style={{ fontSize: 12, color: T.textTertiary }}>在组件编辑页填写「风味大类」字段即可显示在这里。</span></>
-                  : <>風味タグ付きコンポーネントがありません。<br /><span style={{ fontSize: 12, color: T.textTertiary }}>コンポーネント編集の「風味大類」に入力してください。</span></>
+                  : <>風味タグ付きパーツがありません。<br /><span style={{ fontSize: 12, color: T.textTertiary }}>パーツ編集の「風味大類」に入力してください。</span></>
                 }
               </div>
             ) : (
@@ -9670,7 +9680,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         className="k-input"
         value={compSearch}
         onChange={e => setCompSearch(e.target.value)}
-        placeholder={lang === "zh" ? "搜组件名或原料(中 / 日 / 法 / 品牌 / 别名)" : "コンポーネント名・材料で検索(中・日・仏・ブランド)"}
+        placeholder={lang === "zh" ? "搜组件名或原料(中 / 日 / 法 / 品牌 / 别名)" : "パーツ名・材料で検索(中・日・仏・ブランド)"}
         style={{ width: "100%", maxWidth: 360, padding: "8px 12px", marginBottom: 10, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary, boxSizing: "border-box" }}
       />
 
@@ -9735,10 +9745,12 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
       {components.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem", color: "#666666", fontSize: 13, lineHeight: 1.8 }}>
-          暂无组件。点「+ 新增组件」开始搭建你的配方积木库。<br/>
+          {lang === "ja" ? <>まだパーツがありません。「+ パーツ追加」からレシピの積み木を作りましょう。<br/>
+            <span style={{ fontSize: 12, color: "#999999" }}>生地・ムース・ジュレ・クランチ・グラサージュなどの基本配合をここに入れておくと、<br/>組み合わせを作るときにそのまま使えます。</span></>
+          : <>暂无组件。点「+ 新增组件」开始搭建你的配方积木库。<br/>
           <span style={{ fontSize: 12, color: "#999999" }}>
-            在这里存入生地・慕斯・果冻・脆片・淋面等基础配方，<br/>做组合产品时可以直接调用。
-          </span>
+            在这里存入面团、慕斯、果冻、脆片、淋面这些基础配方，<br/>做组合产品时可以直接调用。
+          </span></>}
         </div>
       )}
 
@@ -9746,14 +9758,14 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         filterCat === "inuse" && inUseCount === 0 && !compQuery ? (
           <EmptyState
             variant="first" lang={lang}
-            title={lang === "zh" ? "还没标记在用的组件" : "使用中のコンポーネントがありません"}
+            title={lang === "zh" ? "还没标记在用的组件" : "使用中のパーツがありません"}
             hint={lang === "zh" ? "点组件卡片最左边的小圆圈就标上了。标过的会排到最前面。" : "カード左端の丸をタップすると使用中になり、先頭に並びます。"}
             actions={[{ label: lang === "zh" ? "去全部组件" : "すべてへ", onClick: () => setFilterCat("all") }]}
           />
         ) : (
           <EmptyState
             variant="filter" lang={lang}
-            title={lang === "zh" ? "没有符合条件的组件" : "条件に合うコンポーネントがありません"}
+            title={lang === "zh" ? "没有符合条件的组件" : "条件に合うパーツがありません"}
             chips={emptyChips}
             onClearAll={() => { setFilterCat("all"); setCompSearch(""); }}
           />
@@ -9818,7 +9830,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
       {/* 第 5 批 E2:头部多了「⧉ 复制为新版本」,375 宽放不下一行 → 有这个按钮时(onCopy)外层和按钮组才允许折行;没有时样式和以前一字不差 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", ...(onCopy ? { flexWrap: "wrap", gap: 8 } : {}) }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          {lang === "zh" ? "组件详情" : "コンポーネント詳細"}
+          {lang === "zh" ? "组件详情" : "パーツ詳細"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", ...(onCopy ? { flexWrap: "wrap", justifyContent: "flex-end" } : {}) }}>
           {onPrint && <Btn size="sm" onClick={() => onPrint(info && info.factor !== 1 ? info : null)}>{lang === "zh" ? (scale !== 1 ? "🖨 打印（缩放后）" : "🖨 打印") : (scale !== 1 ? "🖨 印刷（換算後）" : "🖨 印刷")}</Btn>}
@@ -10057,21 +10069,21 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
 const ING_TABLE_TXT = {
   zh: {
     headers: ["🔗", "中文名", "日文名", "法文名", "用量", "单位", "品牌", "单价", "成本", "分组", "备注", ""],
-    nameZh: "中文名", nameJa: "日文名", brand: "品牌", cost: "自动", note: "备注・用途",
+    nameZh: "中文名", nameJa: "日文名", fr: "法文", brand: "品牌", cost: "自动", note: "备注 / 用途",
     bulkTitle: "扫描所有没关联材料百科的原料,推荐匹配", bulkLabel: "🤖 批量关联百科",
     pick: "从材料百科选择(自动填名 / 价 / 品牌)",
     linked: (n) => `✓ 关联:${n}\n点击修改或解除关联`,
     matTitle: (n) => `✓ 百科关联:${n}`,
     catTitle: (n) => `✓ 已关联「${n}」`,
     drift: "价格表已更新,点击同步",
-    priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、個、kg …)按每个单位填",
+    priceTh: "克 / 毫升的行按每 100g(100ml)填;其他单位(本、个、kg …)按每个单位填",
     // 第 5 批 2.4(S1,R31):指向下面的「⚖ 按个写的原料」面板;换算过的行另给一句
     unitMismatch: (u) => `这一行按「${u}」计量,关联的材料按克计价,成本会少算。在下面「⚖ 按个写的原料」填 1 ${u} 约几克;或者改成克;或者取消关联后直接填每${u}的价`,
     unitConverted: (u, g) => `按 1 ${u} ≈ ${g} g 换算成克(在下面改)`,
   },
   ja: {
     headers: ["🔗", "中国語名", "日本語名", "フランス語名", "分量", "単位", "ブランド", "単価", "原価", "グループ", "備考", ""],
-    nameZh: "中国語名", nameJa: "日本語名", brand: "ブランド", cost: "自動", note: "備考・用途メモ",
+    nameZh: "中国語名", nameJa: "日本語名", fr: "仏語", brand: "ブランド", cost: "自動", note: "備考・用途メモ",
     bulkTitle: "未関連の材料を材料事典と一括マッチ", bulkLabel: "🤖 一括関連",
     pick: "材料事典から選択(名前・単価・ブランドを自動入力)",
     linked: (n) => `✓ 連動中:${n}\nクリックで変更・解除`,
@@ -10092,7 +10104,7 @@ const ING_TABLE_VARIANTS = {
   },
   component: {
     listIds: { brand: "autoBrand" },
-    where: { zh: "本组件", ja: "このコンポーネント" },
+    where: { zh: "本组件", ja: "このパーツ" },
   },
   layer: {
     listIds: { brand: "autoBrand" },
@@ -10590,8 +10602,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     <button
                       onClick={() => onPickMaterial(ing._id)}
                       title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang))
-                        : liveComp ? (lang === "zh" ? `🧩 来自组件:${pickLang(liveComp, "name", lang)}\n点击换一个或取消` : `🧩 コンポーネント:${pickLang(liveComp, "name", lang)}\nクリックで変更・解除`)
-                        : compGone ? (lang === "zh" ? "这一行原来来自的组件已经删了,现在按上次存下的单价算。点击重新选" : "元のコンポーネントは削除済み。前回の単価で計算中")
+                        : liveComp ? (lang === "zh" ? `🧩 来自组件:${pickLang(liveComp, "name", lang)}\n点击换一个或取消` : `🧩 パーツ:${pickLang(liveComp, "name", lang)}\nクリックで変更・解除`)
+                        : compGone ? (lang === "zh" ? "这一行原来来自的组件已经删了,现在按上次存下的单价算。点击重新选" : "元のパーツは削除済み。前回の単価で計算中")
                         : ing.noCost ? (lang === "zh" ? "这一行不计价(成本按 0 算)。点击改回" : "原価に入れない行。クリックで変更")
                         : tx.pick}
                       style={{
@@ -10610,7 +10622,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     <IngNameInput placeholder={tx.nameZh} value={ing.nameZh||""} onChangeText={val=>onNameChange("nameZh", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameZh")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} title={linkedMat ? tx.matTitle(pickLang(linkedMat, "name", lang)) : (linked ? tx.catTitle(getCatName(linkedCat, lang)) : "")} />
                   </td>
                   <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="FR" value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder={tx.fr} value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : unitConverted ? tx.unitConverted(String(ing.unit).trim(), String(gf)) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
                   <td style={{ padding: "3px 4px" }}>
@@ -10622,8 +10634,8 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       </div>
                     ) : liveComp ? (
                       // 第 4 批 B4-6:来自组件 —— 品牌格只读写组件名
-                      <div title={lang === "zh" ? `来自组件:${pickLang(liveComp, "name", lang)}` : `コンポーネント:${pickLang(liveComp, "name", lang)}`} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: T.info, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        🧩 {lang === "zh" ? "组件" : "コンポ"} · {pickLang(liveComp, "name", lang)}
+                      <div title={lang === "zh" ? `来自组件:${pickLang(liveComp, "name", lang)}` : `パーツ:${pickLang(liveComp, "name", lang)}`} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: T.info, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        🧩 {lang === "zh" ? "组件" : "パーツ"} · {pickLang(liveComp, "name", lang)}
                       </div>
                     ) : linked ? (
                       <select value={typeof ing.brandIdx === "number" ? ing.brandIdx : ""} onChange={e => onBrandSelect(e.target.value)} style={{ ...ist, width: 78, padding: "4px 3px" }} title={lang === "zh" ? "从价格表选品牌" : "価格表から選ぶ"}>
@@ -10642,7 +10654,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                         {lang === "zh" ? "不计价" : "原価外"}
                       </button>
                     ) : liveComp ? (
-                      <div title={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "コンポーネント原価 ÷ 出来高(自動)"}
+                      <div title={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "パーツ原価 ÷ 出来高(自動)"}
                         style={{ fontSize: 11, color: compPrice && compPrice.perUnit > 0 ? T.info : "#92400E", whiteSpace: "nowrap", padding: "4px 2px" }}>
                         {compPrice && compPrice.perUnit > 0
                           ? (ingWeightFactor(ing.unit) > 0 ? fmtUnitPrice(compPrice.perUnit / ingWeightFactor(ing.unit), "CNY") : `${fmtCost(compPrice.perUnit)}/${_normTxt(ing.unit)}`)
@@ -11223,7 +11235,7 @@ function PriceChangeBanner({ ings, saveToShop, setSaveToShop, lang, materials })
         <div style={{ fontSize: 12, color: "#78350F", lineHeight: 1.5 }}>
           {zh
             ? (ok > 0 ? <>同时保存到本店原料（<b>{ok}</b> 项。存了以后，所有用到这个材料的配方 / 组件都按这个价算成本）</> : (nonGram ? nonGramText : <>单价要大于 0 才能保存到本店原料</>))
-            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / コンポーネントの原価がこの単価になります）</> : (nonGram ? nonGramText : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>))}
+            : (ok > 0 ? <>仕入れ原料にも保存（<b>{ok}</b> 件。この材料を使うすべてのレシピ / パーツの原価がこの単価になります）</> : (nonGram ? nonGramText : <>単価が 0 より大きい行だけ仕入れ原料に保存できます</>))}
         </div>
       </label>
       {ok > 0 && nonGram && (
@@ -11436,7 +11448,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
         />
       )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新增组件" : "コンポーネント追加") : (lang === "zh" ? "编辑组件" : "コンポーネント編集")}</div>
+        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? (lang === "zh" ? "新增组件" : "パーツ追加") : (lang === "zh" ? "编辑组件" : "パーツ編集")}</div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
           <Btn onClick={leave}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
@@ -11460,13 +11472,13 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             <input value={form.nameZh} onChange={f("nameZh")} placeholder={lang === "zh" ? "白巧克力焦糖慕斯" : "ホワイトチョコキャラメルムース"} style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>组件名（日本語）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>组件名（日文）</label>
             <input value={form.nameJa} onChange={f("nameJa")} placeholder={lang === "zh" ? "ムース ショコラブランキャラメル" : "ムース ショコラブランキャラメル"} style={inpStyle} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>组件名（FR）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>法文名</label>
             <input value={form.nameFr} onChange={f("nameFr")} placeholder="Mousse chocolat blanc" style={inpStyle} />
           </div>
           <div>
@@ -11483,9 +11495,9 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
               }}
               style={inpStyle}
             >
-              {COMPONENT_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.zh}</option>)}
+              {COMPONENT_CATEGORIES.map(c => <option key={c.id} value={c.id}>{lang === "zh" ? c.zh : (c.ja || c.zh)}</option>)}
               {customCompCats.length > 0 && <optgroup label="━ 自定义分类 ━">
-                {customCompCats.map(c => <option key={c.id} value={c.id}>{c.zh}</option>)}
+                {customCompCats.map(c => <option key={c.id} value={c.id}>{lang === "zh" ? c.zh : (c.ja || c.zh)}</option>)}
               </optgroup>}
               <option value="__new__">➕ 新建分类...</option>
             </select>
@@ -11507,7 +11519,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "模具" : "型"}</label>
-            <input value={form.mold || ""} onChange={f("mold")} placeholder="例：15cmセルクル、54×39cmテンパン" style={inpStyle} />
+            <input value={form.mold || ""} onChange={f("mold")} placeholder="例：15cm 慕斯圈、54×39cm 烤盘" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产出量" : "出来高"}</label>
@@ -11520,7 +11532,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           {/* v17.8: 备货 = 整批做好存着(千层面团、泡芙壳这类),组合产品的整体配方里只写「从库存取多少」 */}
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "备货" : "作り置き"}</label>
-            <label title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組立製品のレシピでは「ストックから何 g」だけ表示"}
+            <label title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組み合わせのレシピでは「ストックから何 g」だけ表示"}
               style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "8px 0", cursor: "pointer", color: T.textSecondary }}>
               <input type="checkbox" checked={form.prepMode === "stock"} onChange={e => setForm(prev => ({ ...prev, prepMode: e.target.checked ? "stock" : undefined }))} />
               {lang === "zh" ? "整批做好存着" : "まとめて仕込み"}
@@ -11617,15 +11629,15 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
 
       {/* 备注 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>备注 / メモ</div>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>备注</div>
         {/* 第 5 批 P:「厨房要点」(厨房版只印这个,3 到 5 行;第 0 步空壳),在备注卡最上面 */}
         <KitchenPointsFields form={form} setForm={setForm} lang={lang} inpStyle={inpStyle} />
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>中文</label>
-          <textarea value={form.notesZh || ""} onChange={f("notesZh")} placeholder="关键点・技术要点・风味特征等…" style={{...inpStyle, minHeight: 80, resize: "vertical"}} />
+          <textarea value={form.notesZh || ""} onChange={f("notesZh")} placeholder="关键点、技术要点、风味特征等…" style={{...inpStyle, minHeight: 80, resize: "vertical"}} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日本語</label>
+          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日文</label>
           <textarea value={form.notesJa || ""} onChange={f("notesJa")} placeholder="ポイント・技術的注意・風味特性など…" style={{...inpStyle, minHeight: 80, resize: "vertical"}} />
         </div>
       </div>
@@ -11655,7 +11667,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
         <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-        <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存组件" : "コンポーネント保存"}</Btn>
+        <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存组件" : "パーツ保存"}</Btn>
       </div>
 
       {/* 快速知识点浮层 */}
@@ -11677,7 +11689,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       {/* 底部留白,避免内容被浮动保存栏遮挡 */}
       <div style={{ height: 80 }} />
       {/* 浮动保存栏 */}
-      <StickySaveBar onSave={handleSave} label={lang === "zh" ? "保存组件" : "コンポーネント保存"} />
+      <StickySaveBar onSave={handleSave} label={lang === "zh" ? "保存组件" : "パーツ保存"} />
     </div>
   );
 }
@@ -11782,21 +11794,21 @@ function ImageUrlsEditor({ urls, onChange }) {
   const addImage = () => {
     const url = newUrl.trim();
     if (!url) {
-      setError("请输入图片URL");
+      setError("请填图片链接");
       return;
     }
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      setError("URL必须以 http:// 或 https:// 开头");
+      setError("链接要以 http:// 或 https:// 开头");
       return;
     }
     // v57:防止粘贴超大 base64 data URI 把 localStorage 撑爆
     // 正常图床 URL 不会超过 500 字符,超过就劝退
     if (url.length > 1000) {
-      setError("URL 过长 (>1000 字符),请先上传到图床 Imgur/Google Drive 再粘贴链接");
+      setError("链接太长(超过 1000 字),请换一个图片链接");
       return;
     }
     if (url.startsWith("data:")) {
-      setError("不支持 base64 data 链接,会把本地存储撑爆。请用图床链接");
+      setError("不能直接粘贴图片内容,会把这台设备的存储撑满,请用图片链接");
       return;
     }
     // v14: 推新格式（含 source 字段，按 host 自动判断）
@@ -11877,7 +11889,7 @@ function ImageUrlsEditor({ urls, onChange }) {
     <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
       <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 6 }}>🖼️ 图片链接</div>
       <div style={{ fontSize: 11, color: "#666666", marginBottom: 12, lineHeight: 1.6 }}>
-        点 <b>📷 上传图片</b> 选本地文件（自动压缩入库），或在下方粘贴远程 URL（<a href="https://imgur.com/upload" target="_blank" rel="noopener noreferrer" style={{ color: "#3B82F6", textDecoration: "underline" }}>Imgur</a> / Google Drive 分享链接 / 微信长按复制等图床链接）。
+        点 <b>📷 上传图片</b> 选这台设备上的照片（自动压缩，存在这台设备上），或者在下面粘贴网上图片的链接。
       </div>
 
       {/* 已添加的图片列表 */}
@@ -11888,7 +11900,7 @@ function ImageUrlsEditor({ urls, onChange }) {
             const imgUrl = typeof img === 'string' ? img : (img && img.url) || '';
             const imgCaption = typeof img === 'object' && img ? (img.caption || '') : '';
             const imgImageId = typeof img === 'object' && img ? img.imageId : null;
-            const displayLabel = imgImageId ? `[本地] image#${imgImageId}` : imgUrl;
+            const displayLabel = imgImageId ? `本机照片 #${imgImageId}` : imgUrl;
             return (
               <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: 8, background: "#F9FAFB", borderRadius: 8 }}>
                 <ImageThumb img={img} alt={imgCaption || `图片${i+1}`} style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 6, border: "0.5px solid #E5E5E5", flexShrink: 0 }} onError={(e) => { e.target.style.display = "none"; }} />
@@ -11948,7 +11960,7 @@ function ImageUrlsEditor({ urls, onChange }) {
         <input
           value={newUrl}
           onChange={e => setNewUrl(e.target.value)}
-          placeholder="https://i.imgur.com/xxx.jpg"
+          placeholder="图片链接(https://…)"
           style={inputStyle}
         />
         <input
@@ -12121,7 +12133,7 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
             <input value={form.nameZh} onChange={f("nameZh")} placeholder="例：巴斯克家族" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>家族名（日本語）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>家族名（日文）</label>
             <input value={form.nameJa} onChange={f("nameJa")} placeholder="例：バスクチーズケーキ系" style={inpStyle} />
           </div>
         </div>
@@ -12151,7 +12163,7 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "模具" : "型"}</label>
-            <input value={form.commonMold || ""} onChange={f("commonMold")} placeholder="15cm セルクル" style={inpStyle} />
+            <input value={form.commonMold || ""} onChange={f("commonMold")} placeholder="例：15cm 慕斯圈" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "温度" : "温度"}</label>
@@ -12254,7 +12266,7 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
             <div style={{ fontSize: 24, fontWeight: 500 }}>{famName}</div>
             {fam.nameFr && <div style={{ fontSize: 13, color: "#888", fontStyle: "italic" }}>{fam.nameFr}</div>}
           </div>
-          <div style={{ background: color.bg, color: color.color, padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500 }}>{familyRecipes.length} 个变体{familyCreations.length > 0 ? ` · ${familyCreations.length} 个组合产品` : ""}</div>
+          <div style={{ background: color.bg, color: color.color, padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500 }}>{lang === "ja" ? `バリエーション ${familyRecipes.length} 件${familyCreations.length > 0 ? ` · 組み合わせ ${familyCreations.length} 件` : ""}` : `${familyRecipes.length} 个变体${familyCreations.length > 0 ? ` · ${familyCreations.length} 个组合产品` : ""}`}</div>
         </div>
         {fam.description && <div style={{ marginTop: 10, padding: "10px 14px", background: "#F9FAFB", borderRadius: 8, fontSize: 13, lineHeight: 1.7, color: "#333", fontStyle: "italic" }}>「{fam.description}」</div>}
 
@@ -12266,17 +12278,17 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
 
         {(fam.commonMold || fam.commonTemp || fam.commonTime) && (
           <div style={{ marginTop: 12, padding: "8px 12px", background: color.bg, borderRadius: 8, fontSize: 12, color: color.color, display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <span>⚙ 通用参数：</span>
-            {fam.commonMold && <span>模具 {fam.commonMold}</span>}
+            <span>{lang === "ja" ? "⚙ 共通パラメータ：" : "⚙ 通用参数："}</span>
+            {fam.commonMold && <span>{lang === "ja" ? "型" : "模具"} {fam.commonMold}</span>}
             {fam.commonTemp && <span>温度 {fam.commonTemp}</span>}
-            {fam.commonTime && <span>时间 {fam.commonTime}</span>}
+            {fam.commonTime && <span>{lang === "ja" ? "時間" : "时间"} {fam.commonTime}</span>}
           </div>
         )}
       </div>
 
       {/* 变体列表 / 对比模式切换 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 500, fontSize: 14 }}>🧪 变体列表（{familyRecipes.length}）</div>
+        <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "ja" ? "🧪 バリエーション一覧" : "🧪 变体列表"}（{familyRecipes.length}）</div>
         {familyRecipes.length >= 2 && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {compareMode && compareLimitHit && (
@@ -12285,7 +12297,7 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
               </span>
             )}
             <Btn size="sm" variant={compareMode ? "primary" : "default"} onClick={() => { setCompareMode(!compareMode); setSelectedForCompare([]); setCompareLimitHit(false); }}>
-              {compareMode ? "退出对比" : "⚖ 对比模式"}
+              {compareMode ? (lang === "ja" ? "比較を終了" : "退出对比") : (lang === "ja" ? "⚖ 比較モード" : "⚖ 对比模式")}
             </Btn>
           </div>
         )}
@@ -12293,8 +12305,8 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
 
       {familyRecipes.length === 0 ? (familyCreations.length > 0 ? null : (
         <div style={{ background: "#F9FAFB", border: "1px dashed #CCC", borderRadius: 8, padding: "2rem", textAlign: "center", color: "#666", fontSize: 13 }}>
-          这个家族还没有变体。<br />
-          在配方一览里新建或编辑配方，选择归属到这个家族。
+          {lang === "ja" ? <>このファミリーにはまだバリエーションがありません。<br />レシピ一覧でレシピを新規作成・編集し、このファミリーを選んでください。</>
+            : <>这个家族还没有变体。<br />在配方一览里新建或编辑配方，选择归属到这个家族。</>}
         </div>
       )) : (
         <div style={{ display: "grid", gap: 8, marginBottom: "1rem" }}>
@@ -12325,12 +12337,12 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
       {/* v17.8: 这个家族里的组合产品 */}
       {familyCreations.length > 0 && (
         <div style={{ marginBottom: "1rem" }}>
-          <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10 }}>🧩 {lang === "zh" ? "组合产品" : "組立製品"}（{familyCreations.length}）</div>
+          <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10 }}>🧩 {lang === "zh" ? "组合产品" : "組み合わせ"}（{familyCreations.length}）</div>
           <div style={{ display: "grid", gap: 8 }}>
             {familyCreations.map(cr => (
               <div key={cr.id} onClick={() => onViewCreation && onViewCreation(cr.id)}
                 style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: 8, padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 10, color: T.info, border: `0.5px solid ${T.info}`, padding: "0 6px", borderRadius: T.radiusPill }}>{lang === "zh" ? "组合" : "組立"}</span>
+                <span style={{ fontSize: 10, color: T.info, border: `0.5px solid ${T.info}`, padding: "0 6px", borderRadius: T.radiusPill }}>{lang === "zh" ? "组合" : "組み合わせ"}</span>
                 <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{cr.nameFr && cr.nameFr !== pickLang(cr, "name", lang) ? `${cr.nameFr} · ` : ""}{pickLang(cr, "name", lang)}</span>
                 <span style={{ color: "#999", fontSize: 12 }}>→</span>
               </div>
@@ -12342,11 +12354,11 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
       {/* 对比视图 */}
       {compareMode && selectedForCompare.length >= 2 && (
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: 12, padding: "1rem", overflowX: "auto", marginTop: 10 }}>
-          <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 10, color: color.color }}>⚖ 原料对比（{compareRecipes.length}个变体）</div>
+          <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 10, color: color.color }}>{lang === "ja" ? `⚖ 材料比較（${compareRecipes.length} 件）` : `⚖ 原料对比（${compareRecipes.length}个变体）`}</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${color.color}` }}>
-                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 500, minWidth: 120 }}>原料</th>
+                <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 500, minWidth: 120 }}>{lang === "ja" ? "材料" : "原料"}</th>
                 {compareRecipes.map(r => {
                   const n = pickLang(r, "name", lang);
                   return <th key={r.id} style={{ textAlign: "center", padding: "6px 10px", fontWeight: 500, minWidth: 100 }}>{r.variantLabel || n}</th>;
@@ -12993,8 +13005,8 @@ const PRINT_TXT = {
 // 第 5 批 P 的小组件:编辑页「厨房要点」两格 / 配方编辑页「🏷 保质期 · 贮存条件」卡 / 详情页「厨房要点」块 / 配方详情「保质期 · 贮存条件」一行 / 打印的生产记录表。
 // 子组件一律定义在模块顶层(在渲染函数里定义,每敲一个字输入框重挂、光标丢)。新节点带 data-p5* 钩子(探针靠它剔掉后和改前比)
 const KP_TXT = {
-  zh: { title: "厨房要点(厨房版只印这个 · 3 到 5 行)", zh: "中文", ja: "日本語", lines: (n) => `${n} 行`, tooMany: "超过 5 行了,厨房版会挤;细节写在下面的备注里",
-    phZh: "例:\n・黄油降到 45℃ 以下再加\n・面糊冷藏一晚,烤前回温 10 分钟\n・出炉立刻脱模,网架上吹风冷却",
+  zh: { title: "厨房要点(厨房版只印这个 · 3 到 5 行)", zh: "中文", ja: "日文", lines: (n) => `${n} 行`, tooMany: "超过 5 行了,厨房版会挤;细节写在下面的备注里",
+    phZh: "例:\n· 黄油降到 45℃ 以下再加\n· 面糊冷藏一晚,烤前回温 10 分钟\n· 出炉立刻脱模,网架上吹风冷却",
     phJa: "例:\n・バターは 45℃ 以下に下げてから加える\n・生地は一晩冷蔵、焼く前に 10 分室温に戻す\n・焼き上がりはすぐ型から外し、網の上で風を当てて冷ます",
     blockTitle: "厨房要点" },
   ja: { title: "キッチンのポイント(キッチン用はこれだけ印刷・3〜5 行)", zh: "中文", ja: "日本語", lines: (n) => `${n} 行`, tooMany: "5 行を超えています。キッチン用が窮屈になるので、詳しくは下のメモへ",
@@ -13004,7 +13016,7 @@ const KP_TXT = {
 };
 const KEEP_TXT = {
   zh: { title: "🏷 保质期 · 贮存条件(客户版、标签用)", intro: "客户展示版和标签印这里。和「📦 备货」里的「能放多久」不是一回事:那是面团 / 半成品在冷冻冷藏里放多久,这里是成品交给客人以后。",
-    shelf: "保质期", cond: "贮存条件", zh: "中文", ja: "日本語", phShelfZh: "例:常温 5 天", phShelfJa: "例:常温 5 日", phCondZh: "例:密封,常温避光保存", phCondJa: "例:直射日光・高温多湿を避けて保存",
+    shelf: "保质期", cond: "贮存条件", zh: "中文", ja: "日文", phShelfZh: "例:常温 5 天", phShelfJa: "例:常温 5 日", phCondZh: "例:密封,常温避光保存", phCondJa: "例:直射日光・高温多湿を避けて保存",
     legacy: (s) => `上面「保存备忘」写的是:${s}(东京时期的写法,只印在归档版)。客户版和标签只印这张卡里的两格。`, row: "保质期 · 贮存条件" },
   ja: { title: "🏷 賞味期限・保存方法(お客様向け・ラベル用)", intro: "お客様向けとラベルに印刷します。「📦 作り置き」の保存日数(生地・半製品を冷凍冷蔵で置ける日数)とは別で、こちらは完成品をお客様に渡した後の目安です。",
     shelf: "賞味期限", cond: "保存方法", zh: "中文", ja: "日本語", phShelfZh: "例:常温 5 天", phShelfJa: "例:常温 5 日", phCondZh: "例:密封,常温避光保存", phCondJa: "例:直射日光・高温多湿を避けて保存",
@@ -14812,7 +14824,7 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
 // 跟结构有关的叫法全部从 creationWords 取,别在页面里散写「层」「台」。
 const CREATION_STRUCTURES = [
   { id: "stack",    zh: "叠层", ja: "積層",      hintZh: "一层压一层，自上而下（蛋糕类）",                       hintJa: "上から下へ積み重ねる（ケーキ類）" },
-  { id: "assembly", zh: "拼装", ja: "組み合わせ", hintZh: "壳、馅、顶各是一部分，不分上下（泡芙 / 塔 / 丹麦类）", hintJa: "殻・中身・トップの組み合わせ、上下なし（シュー / タルト類）" },
+  { id: "assembly", zh: "拼装", ja: "組み立て", hintZh: "壳、馅、顶各是一部分，不分上下（泡芙 / 塔 / 丹麦类）", hintJa: "殻・中身・トップの組み合わせ、上下なし（シュー / タルト類）" },
 ];
 const creationStructureOf = (c) => (c && c.structure === "assembly") ? "assembly" : "stack";
 const creationWords = (structure, lang = "zh") => {
@@ -14855,12 +14867,13 @@ const creationWords = (structure, lang = "zh") => {
 
 // v17.8: 部分和组件库的关系(layerLinkState)在页面上的标签。手搭的(manual)不打标签
 const LAYER_LINK_TAGS = {
-  follow:  { zh: "⟲ 跟组件库",   ja: "⟲ 部品庫と連動", color: T.success,       hint: "组件库一改，这一部分跟着变" },
-  local:   { zh: "本产品专用",    ja: "この製品専用",    color: T.info,          hint: "在这个产品里单独改过，不再跟组件库" },
-  differs: { zh: "和组件库不一样", ja: "部品庫と相違",    color: T.danger,        hint: "老数据：和组件库现在的内容不一样，在详情页选用哪个" },
-  orphan:  { zh: "组件已删除",    ja: "部品は削除済み",  color: T.textTertiary,  hint: "原组件已从组件库删除，这里保留当时的内容" },
+  // 第 6 批 L1:日文叫法统一(部品庫 → パーツ庫),四句说明补日文 hintJa(T3 的「ⓘ」用)
+  follow:  { zh: "⟲ 跟组件库",   ja: "⟲ パーツ庫と連動", color: T.success,       hint: "组件库一改，这一部分跟着变", hintJa: "パーツ庫が変わると、このパーツも変わります" },
+  local:   { zh: "本产品专用",    ja: "この製品専用",    color: T.info,          hint: "在这个产品里单独改过，不再跟组件库", hintJa: "この製品の中で個別に変更したため、パーツ庫とは連動しません" },
+  differs: { zh: "和组件库不一样", ja: "パーツ庫と相違",    color: T.danger,        hint: "老数据：和组件库现在的内容不一样，在详情页选用哪个", hintJa: "古いデータ：パーツ庫の今の内容と違います。詳細ページでどちらを使うか選んでください" },
+  orphan:  { zh: "组件已删除",    ja: "パーツは削除済み",  color: T.textTertiary,  hint: "原组件已从组件库删除，这里保留当时的内容", hintJa: "元のパーツはパーツ庫から削除済み。ここには当時の内容を残しています" },
   // 第 5 批 E1:锁定的产品里锁着的部分(layerLinkState 是 local、带 lockFrom)。没锁的产品不用这个标签
-  locked:  { zh: "🔒 锁定",       ja: "🔒 ロック",       color: T.textSecondary, hint: "配方已锁定：组件库改了不跟着变" },
+  locked:  { zh: "🔒 锁定",       ja: "🔒 ロック",       color: T.textSecondary, hint: "配方已锁定：组件库改了不跟着变", hintJa: "レシピはロック中：パーツ庫が変わってもこの製品は変わりません" },
 };
 // 锁定产品里部分下面那几行的长按钮(日文「部品庫に合わせる（ロック継続）」):375 宽下允许折行,不撑宽整列
 const LOCK_BTN_WRAP = { whiteSpace: "normal", textAlign: "left" };
@@ -14876,30 +14889,30 @@ const creationLockTxt = (lang, structure) => {
   const u = W.isStack ? "台" : "個";
   const perUnit = creationWords(structure, "zh").perUnitCost;   // 单台成本 / 单个成本
   if (ja) return {
-    lock: (name, n) => `🔒「${name}」をロックしました。部品庫を変えても変わりません（原価は材料の現在価格）。` + (n >= 1 ? `うち ${n} 件の${pj}は部品庫と異なりますが、今の内容のままロックしました。` : ""),
-    unlock: (n) => n >= 1 ? `ロック解除 · 部品庫と異なる${pj}が ${n} 件あります。下で選んでください` : "ロック解除",
+    lock: (name, n) => `🔒「${name}」をロックしました。パーツ庫を変えても変わりません（原価は材料の現在価格）。` + (n >= 1 ? `うち ${n} 件の${pj}はパーツ庫と異なりますが、今の内容のままロックしました。` : ""),
+    unlock: (n) => n >= 1 ? `ロック解除 · パーツ庫と異なる${pj}が ${n} 件あります。下で選んでください` : "ロック解除",
     noUndo: "その後変更されたため、元に戻しませんでした",
-    useLib1: (part, a, b) => `「${part}」を部品庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
-    useLibN: (n, a, b) => `${n} 件を部品庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
+    useLib1: (part, a, b) => `「${part}」をパーツ庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
+    useLibN: (n, a, b) => `${n} 件をパーツ庫の最新にしました（ロック継続）。1 ${u}の原価 ¥${a} → ¥${b}`,
     keep: (part) => `「${part}」は今のまま（この版はお知らせしません）`,
     relock1: (part) => `「${part}」をロックし直しました`,
     relockN: (n) => `${n} 件をロックし直しました`,
-    edited: (nm) => `「${nm}」はロック中の製品で変更されました。今後はこの製品専用で、ロックを解除しても部品庫とは連動しません`,
-    h7: (label) => `「${label}」を部品庫の最新にしました（ロック継続）`,
+    edited: (nm) => `「${nm}」はロック中の製品で変更されました。今後はこの製品専用で、ロックを解除してもパーツ庫とは連動しません`,
+    h7: (label) => `「${label}」をパーツ庫の最新にしました（ロック継続）`,
     btnLock: "🔒 レシピをロック",
-    btnLockTitle: "ロックすると部品庫を変えてもこの製品は変わらず、「部品庫に新しい版があります」とだけ表示します。原価は材料の現在価格で計算されます",
+    btnLockTitle: "ロックするとパーツ庫を変えてもこの製品は変わらず、「パーツ庫に新しい版があります」とだけ表示します。原価は材料の現在価格で計算されます",
     btnUnlock: "🔓 ロック解除",
     cover: (md) => md ? `🔒 レシピ固定中 · ${md}` : "🔒 レシピ固定中",
-    newVerRow: (d) => `部品庫に新しい版があります（${d}）`,
-    newVerBar: (n) => `${n} 件の${pj}に部品庫の新しい版があります。ロック中のため自動では変わりません。`,
-    byOldFollow: (part) => `「${part}」がロックされていません（更新前の別の端末で変更、現在は部品庫に連動）`,
-    byOldDiffers: (part) => `「${part}」がロックされておらず、部品庫と異なります`,
+    newVerRow: (d) => `パーツ庫に新しい版があります（${d}）`,
+    newVerBar: (n) => `${n} 件の${pj}にパーツ庫の新しい版があります。ロック中のため自動では変わりません。`,
+    byOldFollow: (part) => `「${part}」がロックされていません（更新前の別の端末で変更、現在はパーツ庫に連動）`,
+    byOldDiffers: (part) => `「${part}」がロックされておらず、パーツ庫と異なります`,
     byOldBar: (n) => `${n} 件のロックが外れています（更新前の別の端末で変更）。`,
-    btnUseLib: "部品庫に合わせる", btnKeep: "今のまま", btnUseLibAll: "すべて部品庫に合わせる",
+    btnUseLib: "パーツ庫に合わせる", btnKeep: "今のまま", btnUseLibAll: "すべてパーツ庫に合わせる",
     btnRelock: "ロックし直す", btnRelockAll: "すべてロックし直す",
-    btnUseLibLocked: "部品庫に合わせる（ロック継続）", btnRevertLocked: "↺ 部品庫に合わせる（ロック継続）",
+    btnUseLibLocked: "パーツ庫に合わせる（ロック継続）", btnRevertLocked: "↺ パーツ庫に合わせる（ロック継続）",
     card: (n) => n >= 1 ? `🔒 新しい版 ${n} 件` : "🔒",
-    editorNote: (md) => `🔒 レシピ固定中${md ? `（${md}）` : ""}：部品庫の変更は反映されません。ここでの編集は可能で、追加したパーツも保存時にロックされます。解除は詳細画面で。`,
+    editorNote: (md) => `🔒 レシピ固定中${md ? `（${md}）` : ""}：パーツ庫の変更は反映されません。ここでの編集は可能で、追加したパーツも保存時にロックされます。解除は詳細画面で。`,
   };
   return {
     lock: (name, n) => `🔒 已锁定「${name}」：组件库再改不会跟着变，有新版本会提示。成本仍按材料实时价算。` + (n >= 1 ? `其中 ${N(n)}和组件库不一样，已按现在的样子锁上。` : ""),
@@ -14971,7 +14984,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
             const found = prev.find(x => x.id === c.id);
             return found ? prev.map(x => x.id === c.id ? c : x) : [...prev, c];
           });
-          showToast("✓ 组合产品已保存");
+          showToast(uiTxt(lang).savedCreation);
           setViewId(c.id);
           setEditTarget(null);
           if (onKnowledgeCheck) onKnowledgeCheck("creation", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮
@@ -15057,22 +15070,22 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组合产品（${creations.length}）` : `組立製品（${creations.length}）`}</div>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组合产品（${creations.length}）` : `組み合わせ（${creations.length}）`}</div>
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新建组合产品" : "+ 組立製品新規"}</Btn>
+          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新建组合产品" : "+ 組み合わせ新規"}</Btn>
         </div>
       </div>
 
       {creations.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem", color: T.textSecondary, fontSize: 13, lineHeight: 1.8 }}>
-          {lang === "zh" ? "还没有组合产品。" : "まだ組立製品がありません。"}<br />
+          {lang === "zh" ? "还没有组合产品。" : "まだ組み合わせがありません。"}<br />
           <span style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>
             {lang === "zh" ? (
               <>从「组件仓库」挑选组件像搭积木一样创建新产品（蛋糕、泡芙、塔……），<br />记录试吃反馈与改进方向。</>
             ) : (
-              <>コンポーネントを組み合わせて新しい製品（ケーキ、シュー、タルト…）を作成し、<br />試食フィードバックと改善方向を記録します。</>
+              <>パーツを組み合わせて新しい製品（ケーキ、シュー、タルト…）を作成し、<br />試食フィードバックと改善方向を記録します。</>
             )}
           </span>
         </div>
@@ -15094,15 +15107,8 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           // 2026-09-29 体检第 2 批:列表上以前看不出哪款的用量没填 / 读不准(成本按 0 或只按开头的数算)
           const usedWarnCount = layers.filter(l => l && ((parseFloat(l.yield) > 0 && !(parseUsedAmount(l.usedAmount, l.unit) > 0)) || usedAmountAmbiguous(l.usedAmount))).length;
 
-          // 状态映射(key 和编辑页的下拉框一致:季節限定是日文汉字「節」;以前写成「节」、又漏了検討中,这两个状态都被显示成試作)
-          const statusMap = {
-            "試作":     { emoji: "🧪", label: lang === "zh" ? "试作" : "試作", color: "#A05A1E", bg: "#FBF0E0" },
-            "定番":     { emoji: "⭐", label: lang === "zh" ? "定番" : "定番", color: "#2D6A4F", bg: "#E8F4EA" },
-            "季節限定": { emoji: "🌸", label: lang === "zh" ? "季限" : "季限", color: "#6B4568", bg: "#EDE4F0" },
-            "下架":     { emoji: "⏸",  label: lang === "zh" ? "下架" : "休止", color: "#7A5F4A", bg: T.bgMuted },
-            "検討中":   { emoji: "💭", label: lang === "zh" ? "考虑中" : "検討中", color: "#5B4A8C", bg: "#ECE8F4" },
-          };
-          const statusInfo = statusMap[c.status] || statusMap["試作"];
+          // 状态(key 和编辑页的下拉框一致:季節限定是日文汉字「節」)。第 6 批 L1:三张表合成 CREATION_STATUS,认不出的按「試作」
+          const statusInfo = creationStatusInfo(c.status, lang);
           const avatarLetter = (c.nameFr || name || "?").charAt(0).toUpperCase();
 
           return (
@@ -15649,21 +15655,14 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
   // 关联知识点(反向查找,和知识页按钮同一套规则,见 makeKnowledgeLinkResolver)
   const relatedKnowledge = knowledgeLinksTo("creation", c.id, knowledge, recipes, components, creations);
 
-  // 状态对应emoji
-  const statusInfo = {
-    "試作": { emoji: "🧪", color: "#F59E0B", bg: "#FEF3C7", label: "試作中" },
-    "定番": { emoji: "⭐", color: "#059669", bg: "#D1FAE5", label: "定番商品" },
-    "季節限定": { emoji: "🌸", color: "#EC4899", bg: "#FCE7F3", label: "季节限定" },
-    "下架": { emoji: "⏸", color: "#6B7280", bg: "#F3F4F6", label: "已下架" },
-    "検討中": { emoji: "💭", color: "#8B5CF6", bg: "#EDE9FE", label: "検討中" },
-  };
-  const currentStatus = statusInfo[c.status] || statusInfo["試作"];
+  // 状态标签:第 6 批 L1 起三张表合成 CREATION_STATUS(列表那套设计色;存的值不变,显示跟语言;认不出的按「試作」)
+  const currentStatus = creationStatusInfo(c.status, lang);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          {lang === "zh" ? "组合产品详情" : "組立製品詳細"}
+          {lang === "zh" ? "组合产品详情" : "組み合わせ詳細"}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {onKitchen && <Btn size="sm" onClick={() => onKitchen()}>{lang === "zh" ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン表示"}</Btn>}
@@ -15892,10 +15891,10 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
             <span style={{ flex: 1, minWidth: 200 }}>
               {lang === "zh"
                 ? `${differsIdx.length} 个${W.isStack ? "层" : "部分"}和组件库现在的内容不一样（老数据）。现在显示的还是这个产品里存的版本，在下面逐个选用哪个。`
-                : `${differsIdx.length} 件が部品庫の現在の内容と異なります（旧データ）。下で個別に選択してください。`}
+                : `${differsIdx.length} 件がパーツ庫の現在の内容と異なります（旧データ）。下で個別に選択してください。`}
             </span>
             {differsIdx.length >= 2 && onUpdateCreation && (
-              <Btn size="sm" onClick={() => (locked ? useLibLocked(differsIdx) : applyLib(differsIdx))}>{lang === "zh" ? "全部用组件库的" : "すべて部品庫に合わせる"}</Btn>
+              <Btn size="sm" onClick={() => (locked ? useLibLocked(differsIdx) : applyLib(differsIdx))}>{lang === "zh" ? "全部用组件库的" : "すべてパーツ庫に合わせる"}</Btn>
             )}
           </div>
         )}
@@ -15961,7 +15960,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                               <span style={{ color: "#CA8A04" }}>⚠ {noteOnlyUsed(l, c.serves) !== null ? `未填用量${noteOnlyUsed(l, c.serves) ? `（说明：${noteOnlyUsed(l, c.serves)}）` : ""}` : usedAmountNote(l.usedAmount) ? `用量读不出数字（${l.usedAmount}）` : "未填用量"}</span>
                             )}
                             <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
-                            <span>🧪 {(l.ingredients || []).length}种原料</span>
+                            <span>🧪 {lang === "zh" ? `${(l.ingredients || []).length}种原料` : `材料 ${(l.ingredients || []).length} 種`}</span>
                             {LAYER_LINK_TAGS[tagKeys[i]] && tagKeys[i] !== "differs" && (
                               <span title={LAYER_LINK_TAGS[tagKeys[i]].hint} style={{ color: LAYER_LINK_TAGS[tagKeys[i]].color }}>
                                 {lang === "zh" ? LAYER_LINK_TAGS[tagKeys[i]].zh : LAYER_LINK_TAGS[tagKeys[i]].ja}
@@ -15972,7 +15971,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                         {viewMode === "recipe" && (
                           <>
                             {usedAmount > 0 && <span>📏 <strong>{usedAmount}{usedUnit}</strong></span>}
-                            <span>🧪 {(l.ingredients || []).length}种原料</span>
+                            <span>🧪 {lang === "zh" ? `${(l.ingredients || []).length}种原料` : `材料 ${(l.ingredients || []).length} 種`}</span>
                           </>
                         )}
                       </div>
@@ -16002,7 +16001,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                     {viewMode === "detail" && onUpdateCreation && linkStates[i] === "differs" && (
                       <div style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.danger}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <span style={{ flex: 1, minWidth: 160, color: T.danger }}>
-                          {lang === "zh" ? "和组件库现在的内容不一样" : "部品庫と相違"}
+                          {lang === "zh" ? "和组件库现在的内容不一样" : "パーツ庫と相違"}
                           {(() => { const comp = components.find(x => x && x.id === l.sourceComponentId); const d = layerDiffLabels(l, comp, matIds, lang); return d.length ? (lang === "zh" ? `（差在：${d.join("、")}）` : `（${d.join("・")}）`) : ""; })()}
                         </span>
                         {locked ? (
@@ -16012,7 +16011,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                           </>
                         ) : (
                           <>
-                            <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "部品庫に合わせる"}</Btn>
+                            <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "パーツ庫に合わせる"}</Btn>
                             <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocal(i); }}>{lang === "zh" ? "保留（本产品专用）" : "この製品専用で残す"}</Btn>
                           </>
                         )}
@@ -16022,7 +16021,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                       <div style={{ marginTop: 8, marginLeft: 22 }}>
                         {locked
                           ? <Btn size="sm" variant="ghost" style={LOCK_BTN_WRAP} onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnRevertLocked}</Btn>
-                          : <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ 部品庫に戻す"}</Btn>}
+                          : <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ パーツ庫に戻す"}</Btn>}
                       </div>
                     )}
 
@@ -16127,7 +16126,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: "1rem" }}>
           {(c.tasting.notes || c.tasting.feedback) && (
             <div style={{ background: "#ECFDF5", border: "0.5px solid #86EFAC", borderRadius: "12px", padding: "1.25rem" }}>
-              <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>✨ 好评点 / 整体感想</div>
+              <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#166534" }}>{lang === "zh" ? "✨ 好评点 / 整体感想" : "✨ 好評点・全体の感想"}</div>
               {c.tasting.date && <div style={{ fontSize: 11, color: "#166534", marginBottom: 8 }}>📅 {c.tasting.date}</div>}
               {c.tasting.notes && (
                 <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: c.tasting.feedback ? 10 : 0, color: "#052e16" }}>{c.tasting.notes}</div>
@@ -16141,7 +16140,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           )}
           {c.tasting.improvement && (
             <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "12px", padding: "1.25rem" }}>
-              <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#92400E" }}>🔧 改进方向 TODO</div>
+              <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10, color: "#92400E" }}>{lang === "zh" ? "🔧 改进方向" : "🔧 改善方向"}</div>
               <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", color: "#78350F" }}>{c.tasting.improvement}</div>
             </div>
           )}
@@ -16154,7 +16153,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
       {/* 📚 关联知识点（菜单模式隐藏） */}
       {viewMode !== "menu" && relatedKnowledge.length > 0 && (
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E5E5E5", borderRadius: "12px", padding: "1.25rem" }}>
-          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📚 相关知识点（点击跳转）</div>
+          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>{lang === "zh" ? "📚 相关知识点（点击跳转）" : "📚 関連ナレッジ（タップで移動）"}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {relatedKnowledge.map(k => {
               const kTitle = pickLang(k, "title", lang);
@@ -16494,7 +16493,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           next = { ...updatedLayer, follow: false, localVariant: true };
           if (layerLinkState(form.layers[idx], components, matIds) === "follow" && showToast) {
             const nm = updatedLayer.customName || updatedLayer.nameZh || updatedLayer.nameJa || "";
-            showToast(`「${nm}」改成了本产品专用，不再跟组件库。想让组件库也改，编辑这一部分时点「↻ 同步回组件库」。`, { ms: 6000 });
+            showToast(uiTxt(lang).layerNowLocal(nm), { ms: 6000 });
           }
         }
       }
@@ -16577,18 +16576,18 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <input value={form.nameZh} onChange={f("nameZh")} placeholder="热带水果白巧克力慕斯蛋糕" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（日本語）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（日文）</label>
             <input value={form.nameJa} onChange={f("nameJa")} placeholder="アグレアブル トロピカル" style={inpStyle} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（FR）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>法文名</label>
             <input value={form.nameFr} onChange={f("nameFr")} placeholder="Tropique Blanc" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>原作者 / 师承</label>
-            <input value={form.chef || ""} onChange={f("chef")} placeholder="例：マプリエール 猿館シェフ" style={inpStyle} />
+            <input value={form.chef || ""} onChange={f("chef")} placeholder="例：书名或主厨名" style={inpStyle} />
           </div>
         </div>
         <div>
@@ -16603,7 +16602,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>尺寸/模具</label>
-            <input value={form.size || form.mold || ""} onChange={f("size")} placeholder="15cm セルクル" style={inpStyle} />
+            <input value={form.size || form.mold || ""} onChange={f("size")} placeholder="例：15cm 慕斯圈" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{W.servesLabel}</label>
@@ -16624,20 +16623,17 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>制作时间</label>
-            <input value={form.prepTime || ""} onChange={f("prepTime")} placeholder="例：3日（冷冻+組立）" style={inpStyle} />
+            <input value={form.prepTime || ""} onChange={f("prepTime")} placeholder="例：3 天（冷冻 + 组装）" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>保存期限</label>
-            <input value={form.shelfLife || ""} onChange={f("shelfLife")} placeholder="例：冷藏2日" style={inpStyle} />
+            <input value={form.shelfLife || ""} onChange={f("shelfLife")} placeholder="例：冷藏 2 天" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>售卖状态</label>
             <select value={form.status || "試作"} onChange={f("status")} style={inpStyle}>
-              <option value="試作">🧪 試作中</option>
-              <option value="定番">⭐ 定番商品</option>
-              <option value="季節限定">🌸 季节限定</option>
-              <option value="下架">⏸ 已下架</option>
-              <option value="検討中">💭 検討中</option>
+              {/* 第 6 批 L1:选项文字走 CREATION_STATUS(跟语言),value 仍是存的值 */}
+              {CREATION_STATUS.map(st => <option key={st.key} value={st.key}>{st.emoji} {lang === "ja" ? st.ja : st.zh}</option>)}
             </select>
           </div>
         </div>
@@ -16791,7 +16787,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                     {/* 顶部：序号+类别+原组件名+来源+按钮 */}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
-                        <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {cat.zh}</span>
+                        <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {lang === "zh" ? cat.zh : (cat.ja || cat.zh)}</span>
                         <span style={{ fontSize: 13, color: cat.color }}>{name}</span>
                         {linkTag && <span title={linkTag.hint} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{linkTag.zh}</span>}
                       </div>
@@ -16832,7 +16828,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>整体感想（风味平衡・结构感・想法）</label>
+          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>整体感想（风味平衡、结构感、想法）</label>
           <textarea value={form.tasting?.notes || ""} onChange={fTasting("notes")} placeholder="这个组合尝起来如何？有什么值得记录的？" style={{...inpStyle, minHeight: 80, resize: "vertical"}} />
         </div>
         <div style={{ marginBottom: 12 }}>
@@ -17187,12 +17183,12 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem", borderLeft: `4px solid ${cat.color}` }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>名（中文）</label><input value={form.nameZh || ""} onChange={f("nameZh")} style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>名（日本語）</label><input value={form.nameJa || ""} onChange={f("nameJa")} style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>名（日文）</label><input value={form.nameJa || ""} onChange={f("nameJa")} style={inpStyle} /></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "分类" : "カテゴリー"}</label>
             <select value={form.componentCategory} onChange={f("componentCategory")} style={inpStyle}>
-              {getAllCompCats().map(c => <option key={c.id} value={c.id}>{c.zh}</option>)}
+              {getAllCompCats().map(c => <option key={c.id} value={c.id}>{lang === "zh" ? c.zh : (c.ja || c.zh)}</option>)}
             </select>
           </div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产出量" : "出来高"}</label><input type="number" value={form.yield || ""} onChange={f("yield")} style={inpStyle} /></div>
@@ -17268,7 +17264,7 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {layer.sourceComponentId && linkState !== "orphan" ? (
-          <Btn variant="success" onClick={handleSyncBackToComponent}>↻ 同步回组件库</Btn>
+          <Btn variant="success" onClick={handleSyncBackToComponent}>{lang === "ja" ? "↻ パーツ庫に反映" : "↻ 同步回组件库"}</Btn>
         ) : <div />}
         <div style={{ display: "flex", gap: 8 }}>
           <Btn onClick={leave}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
@@ -17409,7 +17405,7 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             const found = prev.find(x => x.id === k.id);
             return found ? prev.map(x => x.id === k.id ? k : x) : [...prev, k];
           });
-          showToast("✓ 知识点已保存");
+          showToast(uiTxt(lang).savedKnowledge);
           setViewId(k.id);
           setEditTarget(null);
         }}
@@ -18191,7 +18187,7 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
         {/* 关联配方 - 可点击跳转 */}
         {(k.relatedRecipes || []).length > 0 && (
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: "0.5px solid #E5E5E5" }}>
-            <div style={{ fontSize: 12, color: "#666666", marginBottom: 8, fontWeight: 500 }}>📎 关联配方 / 関連レシピ（点击跳转）</div>
+            <div style={{ fontSize: 12, color: "#666666", marginBottom: 8, fontWeight: 500 }}>{lang === "ja" ? "📎 関連レシピ（タップで移動）" : "📎 关联配方（点一下跳过去）"}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {k.relatedRecipes.flatMap(splitLinkNames).map((r, i) => {
                 const match = resolveLink(r);
@@ -18298,7 +18294,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
 
       {/* 💡 懒人模式提示 */}
       <div style={{ background: "#FEF3C7", border: "0.5px solid #FDE68A", borderRadius: "8px", padding: "8px 14px", marginBottom: "1rem", fontSize: 12, color: "#854F0B" }}>
-        💡 提示：中文标题必填，日文可以不填。内容中日文任一填写即可。
+        💡 提示：中文标题和中文内容必填，日文可以不填。
       </div>
 
       {/* 标题 */}
@@ -18306,10 +18302,10 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>标题（中文）</label>
-            <input value={form.titleZh} onChange={f("titleZh")} placeholder="例：板ゼラチン温度带资料" style={inpStyle} />
+            <input value={form.titleZh} onChange={f("titleZh")} placeholder="例：板状吉利丁温度带资料" style={inpStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>标题（日本語）</label>
+            <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>标题（日文）</label>
             <input value={form.titleJa} onChange={f("titleJa")} placeholder="例：板ゼラチンの温度帯" style={inpStyle} />
           </div>
         </div>
@@ -18374,7 +18370,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
       {/* 📷 参考图片 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>{lang === "zh" ? "📷 参考图片" : "📷 参考画像"}</div>
-        <div style={{ fontSize: 11, color: "#666", marginBottom: 10 }}>支持粘贴图片 URL（Instagram/Imgur/自己云盘的链接）。每张图可加说明。</div>
+        <div style={{ fontSize: 11, color: "#666", marginBottom: 10 }}>可以粘贴网上图片的链接。每张图可加说明。</div>
         <ImageUrlsEditor
           urls={form.imageUrls || []}
           onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))}
@@ -18735,7 +18731,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
           const found = prev.find(x => x.id === b.id);
           return found ? prev.map(x => x.id === b.id ? b : x) : [...prev, b];
         });
-        showToast("✓ 厂家已保存");
+        showToast(uiTxt(lang).savedBrand);
         setBrandViewId(b.id);
         setBrandEditTarget(null);
       }}
@@ -18760,7 +18756,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
           const found = prev.find(x => x.id === m.id);
           return found ? prev.map(x => x.id === m.id ? m : x) : [...prev, m];
         });
-        showToast("✓ 产品已保存");
+        showToast(uiTxt(lang).savedMaterial);
         setMaterialViewId(m.id);
         setMaterialEditTarget(null);
       }}
@@ -18995,7 +18991,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
           </div>
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span>{brands.length} {lang === "zh" ? "家厂商" : "社"} · {materials.length} {lang === "zh" ? "产品" : "製品"}</span>
+          <span>{brands.length} {lang === "zh" ? "家厂商" : "社"} · {materials.length} {lang === "zh" ? "材料" : "製品"}</span>
           {onManageBrands && <Btn size="sm" onClick={onManageBrands}>{lang === "zh" ? "管理厂家" : "メーカー管理"}</Btn>}
         </div>
       </div>
@@ -19026,7 +19022,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
           type="text"
           value={searchQ}
           onChange={(e) => setSearchQ(e.target.value)}
-          placeholder={lang === "zh" ? "🔍 搜索厂家或产品(名称/原产地/法语名 任选)..." : "🔍 メーカー・製品 検索..."}
+          placeholder={lang === "zh" ? "🔍 搜索厂家或材料(名称/原产地/法文名 任选)..." : "🔍 メーカー・製品 検索..."}
           style={{
             width: "100%",
             padding: "10px 14px",
@@ -19059,7 +19055,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
         <div style={{ marginBottom: "1.5rem" }}>
           <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 10, fontWeight: 500 }}>
             {lang === "zh"
-              ? `🔎 搜索 「${searchQ}」· 匹配 ${searchResults.brandTotal} 厂家、${searchResults.materialTotal} 产品`
+              ? `🔎 搜索 「${searchQ}」· 匹配 ${searchResults.brandTotal} 厂家、${searchResults.materialTotal} 材料`
               : `🔎 「${searchQ}」· ${searchResults.brandTotal} 社 · ${searchResults.materialTotal} 製品`
             }
             {searchTruncated && (
@@ -19116,7 +19112,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
           {searchResults.materials.length > 0 && (
             <div>
               <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "0.5px", marginBottom: 6 }}>
-                {lang === "zh" ? "产品" : "製品"}
+                {lang === "zh" ? "材料" : "製品"}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 6 }}>
                 {searchResults.materials.map(m => {
@@ -19184,7 +19180,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
 
       {!q && (
         <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: "1.25rem", lineHeight: 1.7, fontStyle: "italic", padding: "10px 14px", background: T.bgMuted, borderRadius: T.radius, borderLeft: `2px solid ${T.accentSoft}` }}>
-          {lang === "zh" ? "按分类 → 厂家 → 产品 三层结构管理原材料库，查看使用场景和横向对比。" : "カテゴリー → メーカー → 製品の3階層で材料を管理。"}
+          {lang === "zh" ? "按分类 → 厂家 → 材料 三层结构管理原材料库，查看使用场景和横向对比。" : "カテゴリー → メーカー → 製品の3階層で材料を管理。"}
         </div>
       )}
 
@@ -19220,7 +19216,7 @@ function MaterialsHomeView({ brands, materials, lang, setCategoryFilter, setBran
               <div style={{ fontSize: 28, marginBottom: 6 }}>{cat.icon}</div>
               <div style={{ fontFamily: T.fontSerif, fontSize: 15, fontWeight: 500, color: cat.color, marginBottom: 4 }}>{lang === "zh" ? cat.zh : cat.ja}</div>
               <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.5px" }}>
-                {brandCount} {lang === "zh" ? "家" : "社"} · {productCount} {lang === "zh" ? "产品" : "製品"}
+                {brandCount} {lang === "zh" ? "家" : "社"} · {productCount} {lang === "zh" ? "材料" : "製品"}
               </div>
             </div>
           );
@@ -19823,7 +19819,7 @@ function PickerComponentList({ lang, materials, selfCompId, rowUnit, currentComp
   const rowWeight = ingWeightFactor(rowUnit) > 0;
   return (
     <>
-      <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder={zh ? "🔍 搜索组件名..." : "🔍 コンポーネント名検索..."}
+      <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder={zh ? "🔍 搜索组件名..." : "🔍 パーツ名検索..."}
         style={{ padding: "8px 12px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radius, outline: "none", fontFamily: T.fontSans }} />
       <div style={{ fontSize: 11, color: T.textTertiary }}>
         {zh ? `${shown.length} / ${all.length} 个组件` : `${shown.length} / ${all.length}`}
@@ -19832,7 +19828,7 @@ function PickerComponentList({ lang, materials, selfCompId, rowUnit, currentComp
       <div style={{ overflowY: "auto", flex: 1, border: `0.5px solid ${T.border}`, borderRadius: T.radius }}>
         {shown.length === 0 && (
           <div style={{ padding: "2rem", textAlign: "center", color: T.textTertiary, fontSize: 12 }}>
-            {all.length === 0 ? (zh ? "组件库还是空的" : "コンポーネントがありません") : (zh ? "没有对得上的组件" : "一致なし")}
+            {all.length === 0 ? (zh ? "组件库还是空的" : "パーツがありません") : (zh ? "没有对得上的组件" : "一致なし")}
           </div>
         )}
         {shown.map(c => {
@@ -19865,7 +19861,7 @@ function PickerComponentList({ lang, materials, selfCompId, rowUnit, currentComp
                 </div>
                 {unitOff && (
                   <div style={{ fontSize: 10, color: "#92400E", marginTop: 2 }}>
-                    {zh ? `这一行按「${_normTxt(rowUnit) || "g"}」计量,组件按「${unit}」,对不上算不出价。选了以后把这一行的单位改成和组件一样的口径` : `単位が合いません(行「${_normTxt(rowUnit) || "g"}」/ コンポーネント「${unit}」)`}
+                    {zh ? `这一行按「${_normTxt(rowUnit) || "g"}」计量,组件按「${unit}」,对不上算不出价。选了以后把这一行的单位改成和组件一样的口径` : `単位が合いません(行「${_normTxt(rowUnit) || "g"}」/ パーツ「${unit}」)`}
                   </div>
                 )}
               </div>
@@ -19951,7 +19947,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.brand }}>
-            {tab === "comp" ? (lang === "zh" ? "🧩 这一行来自组件" : "🧩 コンポーネントから") : (lang === "zh" ? "🔗 从材料百科选择" : "🔗 材料事典から選択")}
+            {tab === "comp" ? (lang === "zh" ? "🧩 这一行来自组件" : "🧩 パーツから") : (lang === "zh" ? "🔗 从材料百科选择" : "🔗 材料事典から選択")}
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
@@ -19959,7 +19955,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
         {/* 第 4 批 B4-6:材料百科 | 组件 */}
         {compMode && (
           <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {[["mat", lang === "zh" ? "材料百科" : "材料事典"], ["comp", lang === "zh" ? "组件(自家做的半成品)" : "コンポーネント(自家製)"]].map(([k, label]) => (
+            {[["mat", lang === "zh" ? "材料百科" : "材料事典"], ["comp", lang === "zh" ? "组件(自家做的半成品)" : "パーツ(自家製)"]].map(([k, label]) => (
               <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                 style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: T.radius, fontFamily: T.fontSans,
                   background: tab === k ? T.brand : T.bgCard, color: tab === k ? "#FFFFFF" : T.textSecondary,
@@ -19977,7 +19973,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
             type="text"
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
-            placeholder={lang === "zh" ? "🔍 搜索产品名..." : "🔍 製品名検索..."}
+            placeholder={lang === "zh" ? "🔍 搜索材料名..." : "🔍 製品名検索..."}
             autoFocus
             style={{
               flex: "2 1 200px", padding: "8px 12px", fontSize: 12,
@@ -20021,7 +20017,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
 
         <div style={{ fontSize: 11, color: T.textTertiary }}>
           {lang === "zh"
-            ? `匹配 ${filtered.length} / ${materials.length} 产品 ${filtered.length === 100 ? "(仅显示前 100)" : ""}`
+            ? `匹配 ${filtered.length} / ${materials.length} 材料 ${filtered.length === 100 ? "(仅显示前 100)" : ""}`
             : `${filtered.length} / ${materials.length} ${filtered.length === 100 ? "(上限 100)" : ""}`}
         </div>
 
@@ -20080,7 +20076,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: compMode ? "wrap" : undefined }}>
           <div style={{ fontSize: 10, color: T.textTertiary, fontStyle: "italic" }}>
             {tab === "comp"
-              ? (lang === "zh" ? "💡 单价 = 组件现在的成本 ÷ 产出量,组件改了价这里自动跟着变" : "💡 単価 = コンポーネントの原価 ÷ 出来高(自動連動)")
+              ? (lang === "zh" ? "💡 单价 = 组件现在的成本 ÷ 产出量,组件改了价这里自动跟着变" : "💡 単価 = パーツの原価 ÷ 出来高(自動連動)")
               : (lang === "zh" ? "💡 选中后自动填入名称、品牌、单价;百科价格变动时配方成本自动更新" : "💡 選択で自動入力、百科更新時に自動連動")}
           </div>
           {compMode && typeof onToggleNoCost === "function" && (
@@ -20375,13 +20371,13 @@ function CategoryDetailView({
           <Btn onClick={() => { setCategoryFilter(null); setSubcategoryFilter(null); }}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
           <div style={{ fontSize: 16, fontWeight: 500 }}>{cat.icon} {lang === "zh" ? cat.zh : cat.ja}</div>
           <div style={{ fontSize: 11, color: T.textTertiary }}>
-            · {allProducts.length} {lang === "zh" ? "产品" : "製品"}
+            · {allProducts.length} {lang === "zh" ? "材料" : "製品"}
             · {brandsInCategory.length} {lang === "zh" ? "家" : "社"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn onClick={() => setBrandEditTarget("new")}>{lang === "zh" ? "+ 新厂家" : "+ メーカー"}</Btn>
-          <Btn variant="primary" onClick={() => setMaterialEditTarget("new")}>{lang === "zh" ? "+ 新产品" : "+ 製品追加"}</Btn>
+          <Btn variant="primary" onClick={() => setMaterialEditTarget("new")}>{lang === "zh" ? "+ 新增材料" : "+ 製品追加"}</Btn>
         </div>
       </div>
 
@@ -20392,7 +20388,7 @@ function CategoryDetailView({
             type="text"
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
-            placeholder={lang === "zh" ? `🔍 在 ${cat.zh} 中搜索产品...` : `🔍 ${cat.ja} 内検索...`}
+            placeholder={lang === "zh" ? `🔍 在 ${cat.zh} 中搜索材料...` : `🔍 ${cat.ja} 内検索...`}
             style={{
               width: "100%",
               padding: "8px 12px",
@@ -20505,24 +20501,24 @@ function CategoryDetailView({
       <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 10, fontStyle: "italic" }}>
         {hasActiveFilter
           ? (lang === "zh"
-              ? `📊 筛选结果:${productWithUsage.length} / ${allProducts.length} 产品`
+              ? `📊 筛选结果:${productWithUsage.length} / ${allProducts.length} 材料`
               : `📊 ${productWithUsage.length} / ${allProducts.length} 製品`)
           : (productWithUsage.length > 1
-              ? (lang === "zh" ? "📊 按使用频次排序(高频在前),⭐ 标注主力,🏆 标注クーベルチュール" : "📊 使用頻度順、⭐ メイン、🏆 クーベルチュール")
+              ? (lang === "zh" ? "📊 按使用频次排序(高频在前),⭐ 标注主力,🏆 标注调温巧克力" : "📊 使用頻度順、⭐ メイン、🏆 クーベルチュール")
               : "")
         }
       </div>
 
       {allProducts.length === 0 && (
         <div style={{ textAlign: "center", padding: "3rem", color: "#666666", fontSize: 13, lineHeight: 1.8 }}>
-          {lang === "zh" ? "暂无产品" : "製品なし"}<br />
-          <Btn variant="primary" size="sm" onClick={() => setMaterialEditTarget("new")}>{lang === "zh" ? "+ 新增第一个产品" : "+ 最初の製品を追加"}</Btn>
+          {lang === "zh" ? "暂无材料" : "製品なし"}<br />
+          <Btn variant="primary" size="sm" onClick={() => setMaterialEditTarget("new")}>{lang === "zh" ? "+ 新增第一个材料" : "+ 最初の製品を追加"}</Btn>
         </div>
       )}
 
       {productWithUsage.length === 0 && allProducts.length > 0 && (
         <div style={{ textAlign: "center", padding: "2rem", color: T.textTertiary, fontSize: 12 }}>
-          {lang === "zh" ? "当前筛选条件下无产品" : "該当製品なし"}
+          {lang === "zh" ? "当前筛选条件下没有材料" : "該当製品なし"}
         </div>
       )}
 
@@ -20565,7 +20561,7 @@ function CategoryDetailView({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: T.fontSerif, fontSize: 14, fontWeight: 500, lineHeight: 1.3, color: T.textPrimary }}>
                     {m.isBest && <span style={{ color: "#059669", marginRight: 4 }}>⭐</span>}
-                    {m.isCouverture && <span style={{ color: "#B45309", marginRight: 4 }} title="クーベルチュール">🏆</span>}
+                    {m.isCouverture && <span style={{ color: "#B45309", marginRight: 4 }} title={lang === "zh" ? "调温巧克力" : "クーベルチュール"}>🏆</span>}
                     {pName}
                   </div>
                   {bName && (
@@ -20645,7 +20641,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="よつ葉乳业" style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="例：四叶乳业" style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家名（日文）</label><input value={form.nameJa} onChange={f("nameJa")} placeholder="よつ葉乳業" style={inpStyle} /></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -20680,7 +20676,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
           <textarea value={form.storyZh || ""} onChange={f("storyZh")} placeholder="厂家历史、特色、哲学等..." style={{...inpStyle, minHeight: 100, resize: "vertical"}} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日本語</label>
+          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日文</label>
           <textarea value={form.storyJa || ""} onChange={f("storyJa")} placeholder="メーカーの歴史・特色・理念など..." style={{...inpStyle, minHeight: 100, resize: "vertical"}} />
         </div>
       </div>
@@ -20757,7 +20753,7 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
 
           <div style={{ marginTop: 10, fontSize: 12, color: T.textTertiary, display: "flex", gap: 8, flexWrap: "wrap" }}>
             {brand.origin && <span>📍 {brand.origin}</span>}
-            {brand.foundedYear && <span style={{ fontFamily: T.fontSerif, fontStyle: "italic" }}>est. {brand.foundedYear}</span>}
+            {brand.foundedYear && <span style={{ fontFamily: T.fontSerif, fontStyle: "italic" }}>{lang === "zh" ? "创立于" : "創業"} {brand.foundedYear}</span>}
           </div>
 
           {story && (
@@ -20771,14 +20767,14 @@ function BrandDetail({ brand, materials, allMaterials, recipes, components, crea
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.textPrimary }}>
-            📦 {lang === "zh" ? `产品列表 · ${materials.length}` : `製品リスト · ${materials.length}`}
+            📦 {lang === "zh" ? `材料列表 · ${materials.length}` : `製品リスト · ${materials.length}`}
           </div>
-          <Btn variant="primary" size="sm" onClick={onAddMaterial}>{lang === "zh" ? "+ 新增产品" : "+ 製品追加"}</Btn>
+          <Btn variant="primary" size="sm" onClick={onAddMaterial}>{lang === "zh" ? "+ 新增材料" : "+ 製品追加"}</Btn>
         </div>
 
         {materials.length === 0 && (
           <div style={{ fontSize: 13, color: T.textTertiary, padding: "1.5rem 0", textAlign: "center", fontStyle: "italic" }}>
-            {lang === "zh" ? "暂无产品，点击「+ 新增产品」开始" : "まだ製品がありません"}
+            {lang === "zh" ? "暂无材料，点击「+ 新增材料」开始" : "まだ製品がありません"}
           </div>
         )}
 
@@ -20884,7 +20880,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>
-          {lang === "zh" ? "产品详情" : "製品詳細"}
+          {lang === "zh" ? "材料详情" : "製品詳細"}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
@@ -21133,7 +21129,7 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
             {Object.entries(material.parameters).filter(([k, v]) => v).map(([k, v]) => (
               <div key={k} style={{ background: T.bgMuted, borderRadius: T.radiusSm, padding: "8px 12px" }}>
-                <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.3px", textTransform: "uppercase" }}>{k}</div>
+                <div style={{ fontSize: 10, color: T.textTertiary, letterSpacing: "0.3px", textTransform: "uppercase" }}>{paramKeyLabel(k, lang)}</div>
                 <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2, color: T.textPrimary }}>{v}</div>
               </div>
             ))}
@@ -21177,12 +21173,12 @@ function MaterialDetail({ material, brand, allMaterials, recipes, components, cr
       {/* 横向对比 */}
       {compareWith.length > 0 && (
         <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
-          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>🔄 同分类其他产品（横向对比）</div>
+          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>🔄 同分类其他材料（横向对比）</div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ background: "#F5F5F5" }}>
-                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 400, color: "#666" }}>产品</th>
+                  <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 400, color: "#666" }}>材料</th>
                   <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 400, color: "#666" }}>{lang === "zh" ? "单价/100g" : "単価/100g"}</th>
                   <th style={{ textAlign: "center", padding: "6px 10px", fontWeight: 400, color: "#666" }}>评分</th>
                 </tr>
@@ -21695,7 +21691,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 
   const handleSave = () => {
     if (!form.nameZh.trim()) {
-      setErrorMsg("请输入产品名称");
+      setErrorMsg("请输入材料名称");
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
@@ -21763,7 +21759,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
   return (
     <div {...dirtyBind}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新增产品" : "编辑产品"}</div>
+        <div style={{ fontSize: 16, fontWeight: 500 }}>{isNew ? "新增材料" : "编辑材料"}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {!isNew && <Btn variant="danger" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
           <Btn onClick={onBack}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
@@ -21776,8 +21772,8 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
 
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="よつ葉発酵黄油（无盐）" style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>产品名（日文）</label><input value={form.nameJa} onChange={f("nameJa")} placeholder="北海道よつ葉 発酵ポンドバター（食塩不使用）" style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>材料名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="例：四叶发酵黄油（无盐）" style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>材料名（日文）</label><input value={form.nameJa} onChange={f("nameJa")} placeholder="北海道よつ葉 発酵ポンドバター（食塩不使用）" style={inpStyle} /></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "法文名" : "フランス語名"}</label><input value={form.nameFr || ""} onChange={f("nameFr")} placeholder="(可选)" style={inpStyle} /></div>
@@ -21824,7 +21820,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
           <div style={{ marginTop: 12, padding: "8px 12px", background: "#FEF3C7", borderRadius: T.radiusSm, border: "0.5px solid #FDE68A" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", color: "#854F0B" }}>
               <input type="checkbox" checked={!!form.isCouverture} onChange={e => setForm(prev => ({ ...prev, isCouverture: e.target.checked }))} />
-              <span style={{ fontWeight: 500 }}>🏆 クーベルチュール(专业级,可可脂 ≥ 31%)</span>
+              <span style={{ fontWeight: 500 }}>🏆 调温巧克力(专业级,可可脂 ≥ 31%)</span>
             </label>
           </div>
         )}
@@ -21851,14 +21847,14 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {templateParams.map(p => (
             <div key={p.key}>
-              <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{p.key}</label>
+              <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{paramKeyLabel(p.key, lang)}</label>
               <input value={form.parameters[p.key] || ""} onChange={e => updateParam(p.key, e.target.value)} placeholder={p.placeholder} style={inpStyle} />
             </div>
           ))}
           {customKeys.map(k => (
             <div key={k} style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
               <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{k}</label>
+                <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{paramKeyLabel(k, lang)}</label>
                 <input value={form.parameters[k] || ""} onChange={e => updateParam(k, e.target.value)} style={inpStyle} />
               </div>
               <button onClick={() => removeParam(k)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999", fontSize: 18, padding: "4px 8px" }}>×</button>
@@ -21881,7 +21877,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>推荐用途（中文）</label>
-            <textarea value={form.usesZh || ""} onChange={f("usesZh")} placeholder="慕斯、饼底、ガナッシュ等" style={{...inpStyle, minHeight: 60, resize: "vertical"}} />
+            <textarea value={form.usesZh || ""} onChange={f("usesZh")} placeholder="慕斯、饼底、甘纳许等" style={{...inpStyle, minHeight: 60, resize: "vertical"}} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>推荐用途（日文）</label>
@@ -21905,7 +21901,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>标记</label>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={form.isBest || false} onChange={e => setForm(prev => ({ ...prev, isBest: e.target.checked }))} />
-              ⭐ 最優（本分类中最推荐）
+              ⭐ 最优（本分类中最推荐）
             </label>
           </div>
         </div>
@@ -21926,7 +21922,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
         <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
-        <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存产品" : "製品保存"}</Btn>
+        <Btn variant="primary" onClick={handleSave}>{lang === "zh" ? "保存材料" : "製品保存"}</Btn>
       </div>
     </div>
   );
@@ -21948,7 +21944,8 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const [showKnowledgeModal, setShowKnowledgeModal] = useState(false);
   const [pickerTargetIngId, setPickerTargetIngId] = useState(null); // 当前要选材料的 ing._id
   const [showBulkMatch, setShowBulkMatch] = useState(false); // 🤖 批量关联弹窗
-  const empty = { nameZh: "", nameJa: "", nameFr: "", category: "焼き菓子", mold: "", yield: "", unit: "個", time: "", temp: "", baketime: "", price: "", priceCurrency: "CNY", difficulty: "★★ 普通", storage: "", allergens: "", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [], familyId: "", variantLabel: "", variantNotes: "" };
+  // 第 6 批 L1:新建配方的默认单位跟界面语言(中文「个」、日文「個」);分类仍存「焼き菓子」(下拉的值,显示时查表)
+  const empty = { nameZh: "", nameJa: "", nameFr: "", category: "焼き菓子", mold: "", yield: "", unit: newRecipeUnit(lang), time: "", temp: "", baketime: "", price: "", priceCurrency: "CNY", difficulty: "★★ 普通", storage: "", allergens: "", notesZh: "", notesJa: "", ingredients: [], stepsZh: [], stepsJa: [], imageUrls: [], familyId: "", variantLabel: "", variantNotes: "" };
   const [form, setForm] = useState(src0 ? { familyId: "", variantLabel: "", variantNotes: "", ...src0 } : empty);
   // 🔗 打开时有 materialId 的行按材料百科最新价刷新,同时记 _originalPrice(改价 → 保存到本店原料的判定用)
   // 第 5 批第 0 步:三个编辑页共用 openIngRow(写法和以前一样)
@@ -22046,11 +22043,14 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
   const inp = (key, placeholder, type = "text", extra = {}) => (
     <input type={type} placeholder={placeholder} value={form[key] || ""} onChange={f(key)} style={{ width: "100%", padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", fontFamily: "system-ui, sans-serif", ...extra }} />
   );
-  const sel = (key, options) => (
+  // 第 6 批 L1:labelOf 给显示名(分类 / 难度查表);显示名和存的值一样时不写 value(DOM 和以前一样),不一样时 value = 存的值
+  const sel = (key, options, labelOf) => (
     <select value={form[key] || ""} onChange={f(key)} style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans }}>
-      {options.map(o => <option key={o}>{o}</option>)}
+      {options.map(o => { const lb = labelOf ? labelOf(o) : o; return <option key={o} value={lb !== o ? o : undefined}>{lb}</option>; })}
     </select>
   );
+  // 分类下拉:7 个标准值 + 当前值不在里面时(导入包写的「蛋糕」之类)多一项原样显示,保存不改它
+  const catOptions = RECIPE_CATEGORIES.map(c => c.v).concat(form.category && !RECIPE_CATEGORIES.some(c => c.v === form.category) ? [form.category] : []);
 
   const card = (children) => <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>{children}</div>;
   // 子元素按位置给 key(以前直接塞数组,控制台一直报「列表缺 key」)
@@ -22091,12 +22091,12 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       </div>
 
       {card(<>
-        {grid("1fr 1fr", [fld("配方名（中文）*", <>{inp("nameZh", "费南雪", "text", nameZhMissing && !(form.nameZh || "").trim() ? { border: `1px solid ${T.danger}` } : {})}{nameZhMissing && !(form.nameZh || "").trim() && <div style={{ color: T.danger, fontSize: 12, marginTop: 4 }}>⚠ {lang === "zh" ? "中文名必填,填好再保存" : "中国語名は必須です"}</div>}</>), fld("配方名（日本語）", inp("nameJa", "フィナンシェ"))])}
-        {grid("1fr 1fr", [fld("配方名（Français）", inp("nameFr", "Financier")), fld("分类", sel("category", ["焼き菓子","生菓子","パン・ヴィエノワズリー","ショコラ","アントルメ","タルト","その他"]))])}
-        {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "SN1648 25連")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", "個")), fld("制作时间（分）", inp("time", "60", "number"))])}
-        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "10分→反転→4分")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"]))])}
+        {grid("1fr 1fr", [fld("配方名（中文）*", <>{inp("nameZh", "费南雪", "text", nameZhMissing && !(form.nameZh || "").trim() ? { border: `1px solid ${T.danger}` } : {})}{nameZhMissing && !(form.nameZh || "").trim() && <div style={{ color: T.danger, fontSize: 12, marginTop: 4 }}>⚠ {lang === "zh" ? "中文名必填,填好再保存" : "中国語名は必須です"}</div>}</>), fld("配方名（日文）", inp("nameJa", "フィナンシェ"))])}
+        {grid("1fr 1fr", [fld("法文名", inp("nameFr", "Financier")), fld("分类", sel("category", catOptions, (v) => recipeCatLabel(v, lang)))])}
+        {grid("1fr 1fr 1fr 1fr", [fld("模具/规格", inp("mold", "例：SN1648 25 连")), fld("产出数量", inp("yield", "25", "number")), fld("单位", inp("unit", newRecipeUnit(lang))), fld("制作时间（分）", inp("time", "60", "number"))])}
+        {grid("1fr 1fr 1fr 1fr", [fld("烘烤温度", inp("temp", "190°C")), fld("烘烤时间", inp("baketime", "例：10 分钟 → 掉头 → 4 分钟")), fld(<>{lang === "zh" ? "销售单价" : "販売単価"}{priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}</>, inp("price", "0", "number")), fld("难度", sel("difficulty", ["★ 简单","★★ 普通","★★★ 困难","★★★★ 高难度"], (v) => difficultyLabel(v, lang)))])}
         {/* 第 5 批 P:「保存方法」改名「保存备忘(归档版印)」—— 客户版和标签印下面「🏷 保质期 · 贮存条件」卡里的两格,这一格(字段仍是 storage)只印在归档版 */}
-        {grid("1fr 1fr", [fld(lang === "ja" ? "保存メモ(アーカイブ版に印刷)" : "保存备忘(归档版印)", inp("storage", "常温3日")), fld("过敏原", inp("allergens", "小麦・卵・乳"))])}
+        {grid("1fr 1fr", [fld(lang === "ja" ? "保存メモ(アーカイブ版に印刷)" : "保存备忘(归档版印)", inp("storage", "例：常温 3 天")), fld("过敏原", inp("allergens", "例：小麦、鸡蛋、乳"))])}
       </>)}
 
       {/* 📦 备货(prepstock E 线):没勾时只有标题 + 勾选框一行;设置只在这里写,库存数不在编辑页显示也不能改 */}
@@ -22123,7 +22123,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
               <option value="">— 不归属任何家族 —</option>
               {/* 2026-09-29 体检第 2 批:挂的家族已经不存在(5/1 丢的那几个)时,下拉看着是「不归属」,其实还挂着旧编号。补一项照实显示,保存也不会悄悄清掉 */}
               {form.familyId && !productFamilies.some(fm => fm.id === form.familyId) && (
-                <option value={form.familyId}>⚠ 已丢失的家族（{form.familyId}）</option>
+                <option value={form.familyId}>⚠ 已丢失的家族（编号 {form.familyId}）</option>
               )}
               {productFamilies.map(fm => (
                 <option key={fm.id} value={fm.id}>{fm.nameZh || fm.nameJa}</option>
@@ -22132,7 +22132,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>变体标签（例：v2.0、柚子版）</label>
-            <input value={form.variantLabel || ""} onChange={f("variantLabel")} placeholder="v1.0 経典版 / v2.0 柚子版..." style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans }} />
+            <input value={form.variantLabel || ""} onChange={f("variantLabel")} placeholder="v1.0 经典版 / v2.0 柚子版..." style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans }} />
           </div>
         </div>
         <div>
@@ -22189,15 +22189,15 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       </>)}
 
       {card(<>
-        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>备注 / メモ</div>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>备注</div>
         {/* 第 5 批 P:「厨房要点」(厨房版只印这个,3 到 5 行;第 0 步空壳),在备注卡最上面 */}
         <KitchenPointsFields form={form} setForm={setForm} lang={lang} />
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>中文备注</label>
-          <textarea value={form.notesZh || ""} onChange={f("notesZh")} placeholder="改良方案・季节展开・注意事项等…" style={{ width: "100%", minHeight: 120, padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", resize: "vertical", fontFamily: "system-ui, sans-serif", boxSizing: "border-box" }} />
+          <textarea value={form.notesZh || ""} onChange={f("notesZh")} placeholder="改良方案、季节变化、注意事项等…" style={{ width: "100%", minHeight: 120, padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", resize: "vertical", fontFamily: "system-ui, sans-serif", boxSizing: "border-box" }} />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日本語メモ</label>
+          <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日文备注</label>
           <textarea value={form.notesJa || ""} onChange={f("notesJa")} placeholder="改良案・季節展開・注意点など…" style={{ width: "100%", minHeight: 120, padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", resize: "vertical", fontFamily: "system-ui, sans-serif", boxSizing: "border-box" }} />
         </div>
       </>)}
@@ -22379,7 +22379,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
             {editing._new ? (lang === "zh" ? "+ 新增本店原料" : "+ 仕入れ原料を追加") : (lang === "zh" ? "编辑本店原料" : "仕入れ原料を編集")}
           </div>
           <div style={{ fontSize: 14, color: T.textSecondary, marginBottom: 4 }}>
-            {mat ? mLabel(mat) : (lang === "zh" ? `(材料不存在: ${editing.materialId})` : `(材料なし: ${editing.materialId})`)}
+            {mat ? mLabel(mat) : (lang === "zh" ? "(关联的材料已经删掉了)" : "(関連の材料は削除済み)")}
             {brand && <span style={{ marginLeft: 8, color: T.textTertiary }}>· {bLabel(brand)}</span>}
           </div>
           {refPrice && (
@@ -22524,7 +22524,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
               <div key={sm.id} onClick={() => setEditing({ ...sm })} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>
-                    {mat ? mLabel(mat) : <span style={{ color: T.danger }}>{lang === "zh" ? `⚠️ 材料不存在(${sm.materialId})` : `⚠️ 材料なし`}</span>}
+                    {mat ? mLabel(mat) : <span style={{ color: T.danger }}>{lang === "zh" ? `⚠️ 关联的材料已经删掉了(编号 ${sm.materialId})` : `⚠️ 材料なし`}</span>}
                   </div>
                   <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {brand && <span>{bLabel(brand)}</span>}
@@ -22811,7 +22811,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
       </div>
       {products.length === 0 ? (
         <div style={{ background: T.bgSoft, borderRadius: T.radius, padding: "40px 20px", textAlign: "center", fontSize: 13, color: T.textSecondary, lineHeight: 1.8 }}>
-          {lang === "zh" ? <>还没有商品。<br/>商品 = 对外销售的单品或礼盒,绑定你的配方/组合产品后<br/>可以管理库存、看每天该做什么、记销售。</> : <>商品未登録。<br/>販売するSKUとレシピを紐付けて在庫管理。</>}
+          {lang === "zh" ? <>还没有商品。<br/>商品 = 对外销售的单品或礼盒,绑定你的配方/组合产品后<br/>可以管理库存、看每天该做什么、记销售。</> : <>商品未登録。<br/>販売する品番とレシピを紐付けて在庫管理。</>}
         </div>
       ) : (
         <>
@@ -22959,7 +22959,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
             {pool.map(item => (
               <div key={type + item.id} onClick={() => onPick(item.id, type)} style={{ padding: "10px 14px", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>{item.name}</div>
-                {item.cat && <div style={{ fontSize: 11, color: T.textTertiary }}>{item.cat}</div>}
+                {item.cat && <div style={{ fontSize: 11, color: T.textTertiary }}>{type === "recipe" ? recipeCatLabel(item.cat, lang) : item.cat}</div>}
               </div>
             ))}
           </div>
@@ -22985,8 +22985,8 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
         style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, marginBottom: 16, fontFamily: T.fontSans }}
       />
       <Section title={lang === "zh" ? "配方" : "レシピ"} emoji="🧁" pool={recipePool} type="recipe" color="#a87b3e" originCount={recipes.length} />
-      <Section title={lang === "zh" ? "组件" : "部品"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
-      <Section title={lang === "zh" ? "组合产品" : "組立製品"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
+      <Section title={lang === "zh" ? "组件" : "パーツ"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
+      <Section title={lang === "zh" ? "组合产品" : "組み合わせ"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
     </div>
   );
 }
@@ -24354,16 +24354,16 @@ const MO_TXT = {
   },
   ja: {
     title: "粗利一覧", hint: "原材料だけで計算(人件費・家賃は含まない)。推奨売価 = 1 個あたり原価(商品は包装費込み)÷ 目標原価率、切り上げ。",
-    segItems: "レシピと組立製品", segProducts: "商品",
+    segItems: "レシピと組み合わせ", segProducts: "商品",
     all: "すべて", onSale: "販売中", hasPrice: "売価あり", family: "ファミリー", allFamilies: "全ファミリー", noFamily: "未所属", problems: "問題ありのみ",
     sort: "並び順", sortMargin: "粗利率 低→高", sortMarginDesc: "粗利率 高→低", sortCostRate: "原価率 高→低", sortPrice: "売価 高→低", sortName: "名前",
     name: "名前", cost: "1 個原価", price: "売価", costRate: "原価率", margin: "原材料粗利率", suggested: "推奨売価", gap: "差額", issues: "問題",
     pack: "包装費", costWithPack: "包装込み原価", afterPack: "包装後粗利率",
-    per: (u) => `1 ${u}あたり`, perPortion: "1 カット", perItem: "1 個", combo: "組立", jpyTag: "円", jpyTitle: "売価の通貨が未設定のため円として換算(≈)",
+    per: (u) => `1 ${u}あたり`, perPortion: "1 カット", perItem: "1 個", combo: "組み合わせ", jpyTag: "円", jpyTitle: "売価の通貨が未設定のため円として換算(≈)",
     unpricedCell: "未設定", atLeast: "最低 ", atLeastTitle: "単価のない材料があり、実際の原価はもっと高い",
     roundedTitle: "切り上げた推奨売価との差。粗利率は目標に達しているので値上げ不要",
-    empty: "該当なし", emptyFirst: "レシピ / 組立製品がありません", emptyProducts: "商品がありません",
-    prodHint: "商品の原価は構成から計算(組立製品は 1 台)。通貨未設定の売価は円として換算(≈)。包装費は商品編集で入力。マージインポートでは既存商品の売価・包装費は同期されません。",
+    empty: "該当なし", emptyFirst: "レシピ / 組み合わせがありません", emptyProducts: "商品がありません",
+    prodHint: "商品の原価は構成から計算(組み合わせは 1 台)。通貨未設定の売価は円として換算(≈)。包装費は商品編集で入力。マージインポートでは既存商品の売価・包装費は同期されません。",
     wholeNote: (p) => `1 台(${p} カット)で計算`,
     iss: { noPrice: (n) => `単価なし ${n}`, unit: (n) => `単位不一致 ${n}`, noYield: "出来数なし", noCost: "原価なし", noUsed: (n) => `使用量未入力 ${n}`, ambiguous: (n) => `使用量要確認 ${n}`,
       unpriced: "売価未設定", jpyPrice: "円の売価", belowTarget: "目標未達", noItems: "構成なし", missingLink: "関連先削除済み" },
@@ -24429,7 +24429,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   }).map(o => o.r);
   const open = (r) => onOpen && onOpen(r.kind === "recipe" ? "recipeView" : r.kind === "creation" ? "creationView" : "productView", r.id);
   const unitText = (r) => r.kind === "product" ? X.perItem : r.unitKind === "portion" ? X.perPortion
-    : X.per(r.kind === "creation" ? creationWords(r.structure, lang).unit : (r.x.unit || "個"));
+    : X.per(r.kind === "creation" ? creationWords(r.structure, lang).unit : unitOr(r.x.unit, lang));
   const priceCell = (r) => r.mi.priceCNY > 0
     ? <span>{fmtSellPrice(r.kind === "product" ? r.x.sellPrice : r.x.price, r.x)}{r.mi.approx && <span data-jpytag="1" title={X.jpyTitle} style={{ ...T.fs.micro, color: T.warning, border: `1px solid ${T.warning}`, padding: "0 4px", marginLeft: 4, textTransform: "none", letterSpacing: 0 }}>{X.jpyTag}</span>}</span>
     : <span style={{ color: T.muted }}>{X.unpricedCell}</span>;
@@ -24568,7 +24568,7 @@ function ProductCostNote({ uc, lang }) {
   if (!uc || uc.noItems || (!uc.incomplete && !uc.noYield.length && !(uc.wholeCreation || []).length)) return null;
   const zh = lang !== "ja";
   const nm = (o) => o ? (pickLang(o, "name", lang) || o.nameFr || "") : "";
-  const kindName = { recipe: zh ? "配方" : "レシピ", creation: zh ? "组合产品" : "組立製品", component: zh ? "组件" : "パーツ" };
+  const kindName = { recipe: zh ? "配方" : "レシピ", creation: zh ? "组合产品" : "組み合わせ", component: zh ? "组件" : "パーツ" };
   // 第 5 批 2.4(S1,R21):有单位不符(m.unit > 0)的条目把「单位不符」另写一项;没有的逐字节同以前
   const unitTxt = (n) => zh ? `${n} 项单位不符` : `単位不一致 ${n}`;
   const reasons = uc.missing.map(m => m.reason === "missing" ? (zh ? `挂的${kindName[m.type]}已删除` : `関連の${kindName[m.type]}が削除済み`)
@@ -27287,9 +27287,9 @@ const PROD_TXT = {
     kitchen: "👩‍🍳 厨房视图", staffEmptyTitle: "今天的生产单还是空的", staffEmptyHint: "生产单由店长排;排好以后这里就会出现。",
   },
   ja: {
-    title: "製造リスト", kinds: { product: "商品", recipe: "レシピ", creation: "組立", component: "パーツ" },
-    addProducts: "＋ 商品から", addPick: "＋ レシピ / 組立製品", addOnSale: "＋ 販売中", print: "🖨 印刷", clearAll: "クリア",
-    emptyTitle: "本日の製造リストは空です", emptyHint: "商品(在庫と販売実績から推奨数)・レシピ / 組立製品・販売中から追加。数量はいつでも変更でき、すぐ保存されます。",
+    title: "製造リスト", kinds: { product: "商品", recipe: "レシピ", creation: "組み合わせ", component: "パーツ" },
+    addProducts: "＋ 商品から", addPick: "＋ レシピ / 組み合わせ", addOnSale: "＋ 販売中", print: "🖨 印刷", clearAll: "クリア",
+    emptyTitle: "本日の製造リストは空です", emptyHint: "商品(在庫と販売実績から推奨数)・レシピ / 組み合わせ・販売中から追加。数量はいつでも変更でき、すぐ保存されます。",
     lead: (n) => `${n} 日前から仕込み`, done: "完了", logBtn: (n) => `製造記録 +${n}`, logged: (n) => `✓ 記録済み ${n}`, logMore: (n) => `追加記録 +${n}`,
     logHint: "製造記録 = 商品ページの「製造記録」と同じ(在庫に加算)",
     todayLogged: (n) => `⚠ 本日すでに製造記録 ${n}(商品ページ・削除した行の分)。押すとさらに加算`,
@@ -27309,7 +27309,7 @@ const PROD_TXT = {
     reasons: { noItems: "レシピ未関連の商品", missing: "関連先が削除済み", missingDirect: "削除済み", noUsed: "使用量未入力のパーツ", badQty: "分量が数字でない", unlinked: "百科未関連", ...PURCHASE_COMP_SKIP.ja },
     close: "閉じる", pickProducts: "商品から追加", lowAll: (n) => `＋ 在庫不足をすべて追加(${n} 件)`, stockOf: (s, t) => `在庫 ${s} · 補充ライン ${t}`, avg: (a, n = 30) => `${n} 日平均 ${a}/日`,
     addRestock: (n) => `＋ ${n}(補充)`, addAvg: (n) => `＋ ${n}(平均)`, addOne: "＋ 追加", onSheet: "追加済み",
-    noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組立製品", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
+    noProducts: "商品が未登録です", onSaleTitle: "販売中のレシピ / 組み合わせ", noOnSale: "販売中のものがありません(レシピ一覧の丸印)",
     sources: "使用先", unitPiece: "個",
     kitchen: "👩‍🍳 キッチン表示", staffEmptyTitle: "本日の製造リストは空です", staffEmptyHint: "製造リストは店長が作成します。作成されるとここに表示されます。",
   },
@@ -29226,15 +29226,15 @@ const STAFF_TXT = {
     enterBtn: "员工模式", badge: "员工模式", exitBtn: "退出员工模式",
     pages: { sheet: "生产单", kitchen: "厨房视图", close: "日结", prep: "备货" },   // 备货 D 线:prep 是第四页(只在 prepOn 时有)
     entered: "已进入员工模式", exited: "已退出员工模式",
-    setupTitle: "设一个员工模式 PIN", setupKicker: "员工模式",
+    setupTitle: "设一个员工模式退出密码", setupKicker: "员工模式",
     setupHint: "4 位数字。退出员工模式时要输;忘了可以用 app 的进入密码退出。",
-    pin1: "PIN(4 位数字)", pin2: "再输一次", badPin: "要 4 位数字", mismatch: "两次输的不一样",
-    setupOk: "设好并进入", skipPin: "不设 PIN,直接进入", cancel: "取消", changePin: "换一个 PIN",
+    pin1: "退出密码(4 位数字)", pin2: "再输一次", badPin: "要 4 位数字", mismatch: "两次输的不一样",
+    setupOk: "设好并进入", skipPin: "不设退出密码,直接进入", cancel: "取消", changePin: "换一个退出密码",
     enterTitle: "进入员工模式", enterOk: "进入",
-    enterHint: "员工模式下看不到价格、成本和利润,不能改配方、不能删东西。能看「生产单 / 厨房视图 / 日结(今天和昨天)」;有东西标了备货时还有「备货」页(能登记、取出、盘点、报废,都能撤销,不能改设置)。退出要输 PIN。\n\n开关只记在这台设备上,别的设备不受影响。",
-    noPinNote: "还没设 PIN:谁都能直接退出。",
-    exitTitle: "退出员工模式", exitHint: "输 4 位 PIN", wrongPin: "PIN 不对,再试一次",
-    forgot: "忘了 PIN?用 app 进入密码", pwd: "app 进入密码", pwdOk: "退出", wrongPwd: "密码不对", backToPin: "← 用 PIN",
+    enterHint: "员工模式下看不到价格、成本和利润,不能改配方、不能删东西。能看「生产单 / 厨房视图 / 日结(今天和昨天)」;有东西标了备货时还有「备货」页(能登记、取出、盘点、报废,都能撤销,不能改设置)。退出要输退出密码。\n\n开关只记在这台设备上,别的设备不受影响。",
+    noPinNote: "还没设退出密码:谁都能直接退出。",
+    exitTitle: "退出员工模式", exitHint: "输 4 位退出密码", wrongPin: "退出密码不对,再试一次",
+    forgot: "忘了退出密码?用 app 进入密码", pwd: "app 进入密码", pwdOk: "退出", wrongPwd: "密码不对", backToPin: "← 用退出密码",
     del: "删一位",
   },
   ja: {
@@ -29444,7 +29444,7 @@ const KITCHEN_TXT = {
     missing: "这一样已经删掉了", inUse: "在用",
   },
   ja: {
-    kinds: { recipe: "レシピ", creation: "組立製品", component: "パーツ" },
+    kinds: { recipe: "レシピ", creation: "組み合わせ", component: "パーツ" },
     make: "仕込み", stepBatch: "1 バッチ", reset: "チェックをクリア", resetDone: (n) => `${n} 件のチェックをクリア`,
     back: "← 一覧へ", close: "✕ キッチン表示を閉じる",
     ings: "材料", steps: "作り方", assembly: "組み立て", current: "▶ 作業中", next: "次へ →", doneAll: "✓ 全工程終了",
@@ -29457,8 +29457,8 @@ const KITCHEN_TXT = {
     wakeOn: "☀ 画面点灯中", wakeNo: "この端末では画面を点けたままにできません。iPad の設定 → 画面表示と明るさ → 自動ロック を「なし」にしてください(終わったら戻す)。",
     allergen: "アレルゲン(お客様に聞かれたら)", contains: "含む", may: "コンタミ", none: "なし(全材料確認済み)",
     unknown: (n) => `未確認の材料が ${n} 件 ——「含まない」とは言えません。店長に確認してください`, noneKnown: "確認済みの材料にはなし",
-    search: "レシピ / 組立製品 / パーツを検索", secToday: "本日の製造リスト", secOnSale: "販売中", secComp: "パーツ",
-    noOnSale: "販売中のレシピ / 組立製品はありません", noComp: "パーツがありません", noMatch: "見つかりません", searchChip: (q) => `検索:${q}`,
+    search: "レシピ / 組み合わせ / パーツを検索", secToday: "本日の製造リスト", secOnSale: "販売中", secComp: "パーツ",
+    noOnSale: "販売中のレシピ / 組み合わせはありません", noComp: "パーツがありません", noMatch: "見つかりません", searchChip: (q) => `検索:${q}`,
     missing: "削除済みです", inUse: "使用中",
   },
 };
@@ -30106,44 +30106,56 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
 const RURU_V1_PWD = "ruru2026";
 const RURU_V1_PWD_KEY = "ruru_v1_test_pwd_ok";
 
+// 第 6 批 L1(8.4,design_touch-lang 决定 12):按这台设备的系统语言只显示一种(navigator.language 以「ja」开头 → 日文,其余中文),
+// 右上角「日本語 / 中文」可以切 —— 只改这一页的显示,不写任何 key;「内部测试」去掉(11 月开业后员工的新设备第一次看到的就是这一页)
+const PWD_TXT = {
+  zh: { kicker: "配方管理 · 店内使用", intro: "这是 kororā 店里用的系统,请输入密码", ph: "密码", enter: "进入", foot: "密码请向 LuLu 要 · 这台设备输入一次,下次就不用再输", wrong: "密码不对", switchTo: "日本語" },
+  ja: { kicker: "レシピ管理・店内用", intro: "kororā の店内用システムです。パスワードを入力してください", ph: "パスワード", enter: "入る", foot: "パスワードは LuLu に聞いてください · この端末では次回から入力不要です", wrong: "パスワードが違います", switchTo: "中文" },
+};
+const pwdGateLang = (nav) => {
+  try { const l = nav && (nav.language || (nav.languages && nav.languages[0])); return typeof l === "string" && /^ja\b/i.test(l) ? "ja" : "zh"; } catch (e) { return "zh"; }
+};
+
 function PasswordGate({ onUnlock }) {
   const [input, setInput] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(false);
+  const [lang, setLang] = useState(() => pwdGateLang(typeof navigator !== "undefined" ? navigator : null));
+  const X = PWD_TXT[lang];
+  // 和 App 一样把语言写到 <html> 上(只为字体栈 --k-cjk;进了 App 由 App 的 effect 接管)
+  useEffect(() => {
+    try { document.documentElement.setAttribute("data-lang", lang); document.documentElement.lang = lang === "ja" ? "ja" : "zh-CN"; } catch (e) { /* 没有 document 就算了 */ }
+  }, [lang]);
   const submit = (e) => {
     e.preventDefault();
     if (input === RURU_V1_PWD) {
       try { localStorage.setItem(RURU_V1_PWD_KEY, "true"); } catch {}
       onUnlock();
     } else {
-      setError("密码不正确 / パスワードが正しくありません");   // 2026-09-29 体检第 2 批:密码页改中文在前(以前日文为主,北京员工看不懂)
+      setError(true);
       setInput("");
     }
   };
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.paper, padding: 20, fontFamily: T.fontSans, colorScheme: "light" }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: T.paper, padding: 20, fontFamily: T.fontSans, colorScheme: "light", position: "relative" }}>
       <style>{GLOBAL_CSS}</style>
+      <button type="button" data-tl-pwd-lang="1" className="k-btn k-btn-ghost k-tap" onClick={() => setLang(l => (l === "ja" ? "zh" : "ja"))}
+        style={{ position: "absolute", top: 12, right: 12, background: "transparent", border: `1px solid ${T.border}`, borderRadius: T.radius, color: T.muted, cursor: "pointer", padding: "4px 10px", ...T.fs.caption, fontFamily: "inherit" }}>{X.switchTo}</button>
       <form onSubmit={submit} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: "40px 32px", maxWidth: 380, width: "100%", textAlign: "center" }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 28 }}><Wordmark size={26} /></div>
-        <div style={{ ...T.fs.micro, color: T.subtle, marginBottom: 24, fontFamily: T.fontSerif }}>配方管理 · v1 内部测试</div>
-        <div style={{ ...T.fs.small, color: T.body, marginBottom: 18, lineHeight: 1.7 }}>
-          这个 app 正在内部测试中<br/>
-          <span style={{ ...T.fs.caption, color: T.subtle }}>このアプリは内部テスト中です</span>
-        </div>
+        <div style={{ ...T.fs.micro, color: T.subtle, marginBottom: 24, fontFamily: T.fontSerif }}>{X.kicker}</div>
+        <div style={{ ...T.fs.small, color: T.body, marginBottom: 18, lineHeight: 1.7 }}>{X.intro}</div>
         <input
           type="password"
           className="k-input"
           value={input}
-          onChange={e => { setInput(e.target.value); setError(""); }}
-          placeholder="密码 / パスワード"
+          onChange={e => { setInput(e.target.value); setError(false); }}
+          placeholder={X.ph}
           autoFocus
           style={{ width: "100%", padding: "10px 14px", fontSize: 14, border: `1px solid ${T.border}`, borderRadius: T.radius, marginBottom: 10, fontFamily: "inherit", boxSizing: "border-box", outline: "none", background: T.surface, color: T.ink }}
         />
-        {error && <div style={{ ...T.fs.caption, color: T.danger, marginBottom: 8 }}>{error}</div>}
-        <button type="submit" className="k-btn k-btn-primary" style={{ width: "100%", padding: "12px 14px", background: T.ink, color: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontSize: 14, fontWeight: 400, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>进入 / 入る</button>
-        <div style={{ ...T.fs.label, color: T.muted, marginTop: 22, lineHeight: 1.7 }}>
-          密码请向 LuLu 要 · 输入一次,下次就不用再输<br/>
-          パスワードは LuLu から · 一度入力すれば次回は不要
-        </div>
+        {error && <div role="alert" style={{ ...T.fs.caption, color: T.danger, marginBottom: 8 }}>{X.wrong}</div>}
+        <button type="submit" className="k-btn k-btn-primary" style={{ width: "100%", padding: "12px 14px", background: T.ink, color: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, fontSize: 14, fontWeight: 400, cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>{X.enter}</button>
+        <div style={{ ...T.fs.label, color: T.muted, marginTop: 22, lineHeight: 1.7 }}>{X.foot}</div>
       </form>
     </div>
   );
@@ -30894,7 +30906,7 @@ function App() {
         ? { ...c, layers: c.layers.map(l => l === l0 ? (lockedCr ? nl : { ...l0, follow: true, localVariant: false }) : l) } : c));
       const nm = zh ? item.labelZh : (item.labelJa || item.labelZh);
       showToast(lockedCr ? creationLockTxt(lang, creationStructureOf(cr0)).h7(nm)
-        : (zh ? `「${nm}」改成跟组件库走,内容换成组件库现在的` : `「${nm}」を部品庫と連動させました`), { undo: () => {
+        : (zh ? `「${nm}」改成跟组件库走,内容换成组件库现在的` : `「${nm}」をパーツ庫と連動させました`), { undo: () => {
         let back = false;
         setCreations(prev => prev.map(c => {
           if (!c || c.id !== cr0.id) return c;
@@ -31091,7 +31103,7 @@ function App() {
     setRecipes(prev => prev.find(x => x.id === r.id) ? prev.map(x => x.id === r.id ? r : x) : [...prev, r]);
     showToast(isCopy
       ? (lang === "ja" ? `✓ 新バージョン「${pickLang(r, "name", lang) || r.nameFr || ""}」を保存しました(元はそのまま)` : `✓ 新版本「${pickLang(r, "name", lang) || r.nameFr || ""}」已保存,原版没动`)
-      : "✓ 配方已保存");
+      : uiTxt(lang).savedRecipe);
     // 保存后跳到该配方详情页 (LuLu UX: 不要跳回列表)
     setViewId(r.id);
     setTab("view");
@@ -31674,8 +31686,8 @@ function App() {
     { id: "products", zh: "商品", ja: "商品", mZh: "商品", mJa: "商品", badge: () => products.filter(p => (p.currentStock || 0) <= (p.threshold || 0)).length },
     { id: "purchase", zh: "采购", ja: "仕入" },
     { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
-    { id: "components", zh: "组件仓库", ja: "コンポーネント", mZh: "组件", mJa: "パーツ" },
-    { id: "creations", zh: "组合产品", ja: "組立製品" },
+    { id: "components", zh: "组件仓库", ja: "パーツ庫", mZh: "组件", mJa: "パーツ" },
+    { id: "creations", zh: "组合产品", ja: "組み合わせ" },
     { id: "knowledge", zh: "知识库", ja: "ナレッジ" },
     { id: "shopMaterials", zh: "本店原料", ja: "仕入れ原料" },
     { id: "suppliers", zh: "供货商", ja: "仕入先" },
@@ -32281,8 +32293,8 @@ function App() {
           title={confirmState.title}
           kicker={confirmState.kicker}
           refs={confirmState.refs || []}
-          confirmText={confirmState.confirmText || "确定"}
-          cancelText={confirmState.cancelText || "取消"}
+          confirmText={confirmState.confirmText || uiTxt(lang).ok}
+          cancelText={confirmState.cancelText || uiTxt(lang).cancel}
           danger={confirmState.danger !== false}
           body={confirmState.body}
           wide={confirmState.wide}
@@ -32514,7 +32526,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   const found = prev.find(x => x.id === fm.id);
                   return found ? prev.map(x => x.id === fm.id ? fm : x) : [...prev, fm];
                 });
-                showToast("✓ 家族已保存");
+                showToast(uiTxt(lang).savedFamily);
                 setFamilyEditTarget(null);
               }}
               onDelete={() => {
@@ -32805,7 +32817,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                             <span style={{ ...T.fs.caption, color: T.subtle }}>{cSub}</span>
                           )}
                           <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>
-                            {lang === "zh" ? "组合" : "組立"}
+                            {lang === "zh" ? "组合" : "組み合わせ"}
                           </span>
                           {cFamily && (
                             <span style={{ ...T.fs.micro, color: cFamColor.color, border: `1px solid ${cFamColor.color}`, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>
@@ -32901,7 +32913,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       </div>
                       {/* 规格行 */}
                       <div style={{ ...T.fs.label, color: T.muted, marginTop: 5, letterSpacing: "0.04em" }}>
-                        {[r.mold, r.yield ? `${r.yield} ${r.unit || "個"}` : null, r.temp, r.baketime ? `${r.baketime}` : (r.time ? `${r.time}分` : null)].filter(Boolean).join("  ·  ")}
+                        {[r.mold, r.yield ? `${r.yield} ${unitOr(r.unit, lang)}` : null, r.temp, r.baketime ? `${r.baketime}` : (r.time ? `${r.time}分` : null)].filter(Boolean).join("  ·  ")}
                       </div>
                     </div>
 
@@ -32964,7 +32976,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       </div>
                       <span style={{ ...T.fs.label, color: T.muted, ...T.num }}>
                         {famRecipes.length} {lang === "zh" ? "个变体" : "バリエーション"}
-                        {famCreations.length > 0 && ` · ${famCreations.length} ${lang === "zh" ? "个组合" : "組立"}`}
+                        {famCreations.length > 0 && ` · ${famCreations.length} ${lang === "zh" ? "个组合" : "組み合わせ"}`}
                       </span>
                     </div>
                     {fm.description && (
@@ -32993,7 +33005,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: T.sp.s }}>
                         {famCreations.slice(0, 5).map(c => (
                           <span key={c.id} style={{ background: T.sunken, color: T.body, padding: "3px 10px", borderRadius: T.radius, ...T.fs.label }}>
-                            <span style={{ color: T.info, marginRight: 4 }}>{lang === "zh" ? "组合" : "組立"}</span>{pickLang(c, "name", lang)}
+                            <span style={{ color: T.info, marginRight: 4 }}>{lang === "zh" ? "组合" : "組み合わせ"}</span>{pickLang(c, "name", lang)}
                           </span>
                         ))}
                         {famCreations.length > 5 && (
@@ -33033,7 +33045,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                         <div key={"creation_row_" + c.id} className="k-row"
                           onClick={() => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); }}
                           style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
-                          <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "1px 5px", marginRight: 8, textTransform: "none", letterSpacing: "0.06em" }}>{lang === "zh" ? "组合" : "組立"}</span>
+                          <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "1px 5px", marginRight: 8, textTransform: "none", letterSpacing: "0.06em" }}>{lang === "zh" ? "组合" : "組み合わせ"}</span>
                           {pickLang(c, "name", lang)}
                         </div>
                       ))}
@@ -33084,7 +33096,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           if (editTarget && editTarget.id) { setViewId(editTarget.id); setTab("view"); }
           else if (!editTarget && copyTarget && copyTarget.copiedFrom && recipes.some(x => x && x.id === copyTarget.copiedFrom.id)) { setViewId(copyTarget.copiedFrom.id); setTab("view"); }
           else { setTab("list"); }
-        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast("✓ 知识点已添加并关联"); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog}
+        }} onQuickAddKnowledge={(k) => { setKnowledge(prev => [...prev, k]); showToast(uiTxt(lang).knowledgeAdded); }} productFamilies={productFamilies} onUpdateCats={setCats} showToast={showToast} confirmDialog={confirmDialog}
           prepStock={prepStock} products={products} onGoTab={goTab} />
       )}
 
@@ -33399,13 +33411,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })}
           onQuickAddKnowledge={(k) => {
             setKnowledge(prev => [...prev, k]);
-            showToast("✓ 知识点已添加并关联");
+            showToast(uiTxt(lang).knowledgeAdded);
           }}
           onPrintComponent={(comp, s) => setPrintTarget({ type: "component", src: comp, scale: isScaleInfo(s) ? s : null, stage: "settings" })}
           customCompCats={customCompCats}
           onAddCustomCompCat={(newCat) => {
             setCustomCompCats(prev => [...prev, newCat]);
-            showToast("✓ 新分类已添加");
+            showToast(uiTxt(lang).compCatAdded);
           }}
           prepStock={prepStock}
           onPrepOp={onPrepOp}
@@ -33447,7 +33459,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             if (loopRows.length) {
               const nm = (i) => { const c = components.find(x => x && x.id === i.componentId); return (c && (pickLang(c, "name", lang) || c.nameFr)) || pickLang(i, "name", lang) || ""; };
               const names = [...new Set(loopRows.map(nm))].map(n => `「${n}」`).join("、");
-              showToast(lang === "zh" ? `没有同步:${names} 已经用到了这个组件,同步回去会互相引用。可以先存成本产品专用` : `同期していません:${names} がすでにこのコンポーネントを使っているため、相互参照になります`);
+              showToast(lang === "zh" ? `没有同步:${names} 已经用到了这个组件,同步回去会互相引用。可以先存成本产品专用` : `同期していません:${names} がすでにこのパーツを使っているため、相互参照になります`);
               return;
             }
             // v17.8: 组件一改,「跟组件库走」的组合产品跟着变 —— 按 2a §09 把受影响的产品列出来
@@ -33505,11 +33517,11 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             }
             // 第 5 批 E2:确认文字补「锁定了配方的也不变,只提示有新版本」(design_edit §3.3);日文界面给日文(以前永远中文)
             confirmDialog(zhL ? "确定将此修改同步回组件库吗？\n\n会更新组件的中日文名、分类、产出量、单位、原料（含每一行的备注、法文名）和步骤；组件自己的风味、模具、图片、整体备注、法文名不会动。\n\n用到这个组件、并且「跟组件库走」的组合产品会一起变；标了「本产品专用」的不变，锁定了配方的也不变，只提示有新版本。" + (lockedHere ? "这个产品已锁定：这一部分换成同步后的内容，仍然锁定（组件库以后再改，只提示有新版本）。" : "这一部分之后也跟组件库走。")
-              : "この変更を部品庫に反映しますか？\n\nコンポーネントの中国語名・日本語名・分類・出来高・単位・材料（各行のメモ・フランス語名を含む）・工程を更新します。コンポーネント自身の風味・型・画像・全体メモ・フランス語名は変わりません。\n\nこのコンポーネントを使っていて「部品庫と連動」している組み合わせも一緒に変わります。「この製品専用」のものは変わらず、レシピをロックした製品も変わらず、新しい版をお知らせします。" + (lockedHere ? "この製品はロック中：このパーツは反映後の内容のままロックを続けます（今後の部品庫の変更はお知らせのみ）。" : "このパーツも今後は部品庫と連動します。"), () => {
+              : "この変更をパーツ庫に反映しますか？\n\nパーツの中国語名・日本語名・分類・出来高・単位・材料（各行のメモ・フランス語名を含む）・工程を更新します。パーツ自身の風味・型・画像・全体メモ・フランス語名は変わりません。\n\nこのパーツを使っていて「パーツ庫と連動」している組み合わせも一緒に変わります。「この製品専用」のものは変わらず、レシピをロックした製品も変わらず、新しい版をお知らせします。" + (lockedHere ? "この製品はロック中：このパーツは反映後の内容のままロックを続けます（今後のパーツ庫の変更はお知らせのみ）。" : "このパーツも今後はパーツ庫と連動します。"), () => {
               // 按字段合并到原组件上,不整体替换:层里只带这一页能改的字段,
               // 风味 / 模具 / 图片 / 备注 / 在用这些组件自己的东西原样保留(以前整体替换,同步一次全被清掉)
               setComponents(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-              showToast((zhL ? "✓ 已更新回组件库" : "✓ 部品庫を更新しました") + (othersN > 0 ? (zhL ? ` · 另外 ${othersN} 个组合产品跟着变了` : ` · ほかに ${othersN} 件の組み合わせも変わりました`) : ""));
+              showToast((zhL ? "✓ 已更新回组件库" : "✓ パーツ庫を更新しました") + (othersN > 0 ? (zhL ? ` · 另外 ${othersN} 个组合产品跟着变了` : ` · ほかに ${othersN} 件の組み合わせも変わりました`) : ""));
               if (onDone) onDone();
               // 第 5 批(E3):部分里改了中 / 日文名再同步回组件库 → 检查知识按钮
               { const orig = components.find(c => c && c.id === updated.id); if (orig) knowledgeCheckOnSave("component", { ...orig, ...updated }); }
@@ -33631,7 +33643,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               {lang === "zh" ? "⚙ 自定义组件分类" : "⚙ カスタムカテゴリー"}
             </div>
             <p style={{ fontSize: 12, color: T.textSecondary, marginBottom: 12, lineHeight: 1.7 }}>
-              {lang === "zh" ? "在编辑组件时点击分类下拉里的「➕ 新建分类...」可自定义食感分类。" : "コンポーネント編集時の「➕ 新規カテゴリー」から追加できます。"}
+              {lang === "zh" ? "在编辑组件时点击分类下拉里的「➕ 新建分类...」可自定义食感分类。" : "パーツ編集時の「➕ 新規カテゴリー」から追加できます。"}
             </p>
             {customCompCats.length === 0 ? (
               <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>
@@ -33671,8 +33683,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 8 }}>{lang === "zh" ? "当前数据" : "現在のデータ"}</div>
             <div style={{ fontSize: 13, color: "#666666", lineHeight: 2 }}>
               {lang === "zh" ? "配方" : "レシピ"}：<strong>{recipes.length}</strong> {lang === "zh" ? "个" : "件"}<br />
-              {lang === "zh" ? "组件" : "コンポーネント"}：<strong>{components.length}</strong> {lang === "zh" ? "个" : "件"}<br />
-              {lang === "zh" ? "组合产品" : "組立製品"}：<strong>{creations.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "组件" : "パーツ"}：<strong>{components.length}</strong> {lang === "zh" ? "个" : "件"}<br />
+              {lang === "zh" ? "组合产品" : "組み合わせ"}：<strong>{creations.length}</strong> {lang === "zh" ? "个" : "件"}<br />
               {lang === "zh" ? "知识点" : "ナレッジ"}：<strong>{knowledge.length}</strong> {lang === "zh" ? "条" : "件"}<br />
               {lang === "zh" ? "厂家" : "ブランド"}：<strong>{brands.length}</strong> {lang === "zh" ? "家" : "社"}<br />
               {lang === "zh" ? "材料百科" : "材料事典"}：<strong>{materials.length}</strong> {lang === "zh" ? "条" : "件"}<br />
@@ -33696,7 +33708,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
                 // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
                 setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
-                showToast("已清除"); };
+                showToast(uiTxt(lang).cleared); };
               const pb = await pinBackupNow("clear");
               if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
               if (pb) doClear();
