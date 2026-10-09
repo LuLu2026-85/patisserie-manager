@@ -13581,9 +13581,10 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
       )}
 
       {/* 打印区域（实际打印内容） */}
-      <div className={itemType === "label" ? "print-area k-label-area" : "print-area"} style={{ padding: itemType === "label" ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
+      {/* 第 6 批 PC:半成品标签(prepLabel)和顾客标签同一类 —— 不加页内边距、不印水印 */}
+      <div className={itemType === "label" || itemType === "prepLabel" ? "print-area k-label-area" : "print-area"} style={{ padding: itemType === "label" || itemType === "prepLabel" ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
         {/* 水印(标签不印) */}
-        {itemType !== "label" && <div className="watermark">{brandName}</div>}
+        {itemType !== "label" && itemType !== "prepLabel" && <div className="watermark">{brandName}</div>}
 
         {itemType === "prodSheet" ? (
           <ProductionSheetTemplate data={item} lang={lang} brandName={brandName} />
@@ -27552,9 +27553,13 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
   const prepArea = prep && !isProduct && s.obj ? (() => {
     const u = pUnit;
     const blockedTxt = prep.blocked === "noYield" ? PX.blockedNoYield : prep.blocked === "unit" ? PX.blockedUnit : prep.blocked === "readOnly" ? PX.readOnly : null;
+    // 第 6 批 PC:记入以后「✓ 已记入 · 实际 390 個」后面「🏷 标签」,打今天这一行记进去的那批(prepLabelLineLot:还在、没过期的最新那批;找不到就不出)
+    const pLabelLot = pMake && prep.logged > 0 && prepView && prepView.onPrintLabels && prepView.get(prep.key)
+      ? prepLabelLineLot(prepView.get(prep.key).item, prepView.get(prep.key).cfg, l.uid, prepView.today) : null;
     if (pMake) return (
       <div data-prep-log="make" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         {prep.logged > 0 && <span data-prep-logged="1" style={{ ...T.fs.caption, color: T.success, ...T.num }}>{PX.loggedActual(fmtQty(prep.actual) || "0", u)}</span>}
+        {pLabelLot && <span data-prep-label-btn="sheet" style={{ display: "contents" }}><Btn size="sm" onClick={() => prepView.onPrintLabels(prep.key, pLabelLot.id)}>{_plTxt(lang).sheetBtn}</Btn></span>}
         {blockedTxt ? (<>
           <Btn key="pblocked" size="sm" disabled>{PX.makeBtn(fmtQty(prep.pending), u)}</Btn>
           <span data-prep-blocked={prep.blocked} style={{ ...T.fs.caption, color: T.warning }}>{blockedTxt}</span>
@@ -27942,7 +27947,8 @@ function PrepReminder({ rows, lang, staff, lines, onAddMake, onRaiseMake, onOpen
 // 生产单页面。plan 的读写都在 App(updatePlan),这里只拿今天的那份来显示
 function ProductionSheetView({ products = [], recipes = [], creations = [], components = [], materials = [], brands = [], productFamilies = [], salesLog = [], productionLog = [],
   rawPlan, today, updatePlan, onLogProduction, onPrint, lang, showToast, staff = false, onOpenKitchen,
-  prepStock = null, onPrepOp, onOpenPrep, prepOn = false }) {
+  prepStock = null, onPrepOp, onOpenPrep, prepOn = false, onPrintLabels }) {
+  // 第 6 批 PC:onPrintLabels(key, lotId)(可选)放进 prepView,「做一批」行记入后出「🏷 标签」;不传时一个节点都不多
   // 备货第 0 步:prepStock(prepStockRead 的结果)/ onPrepOp(ops, meta)/ onOpenPrep(key?)/ prepOn 先不用,C 线接上;prepOn 为 false 时一个节点都不多
   // staff = 员工模式(F4):只看、打勾、记入生产、打印;不能加 / 删 / 清空 / 改数量,也不给「照那天的再来一份」
   const X = prodTxt(lang);
@@ -27973,7 +27979,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
     // 第 5 批第 0 步(裁决 6):生产单块上「本产品专用,没扣备货」那句和 computeMaterialNeeds 扣不扣同一个判断 ——
     // 这一部分照样从组件备货扣(layerTakesComponentStock:跟组件库走,或锁定了、内容仍和组件库一样)时报 "follow";没有锁定数据时和以前一模一样
     const mids = () => matIds || (matIds = new Set((materials || []).map(m => m && m.id)));
-    return { items, get: (k) => items.get(k) || null, today, staff, onOpenPrep,
+    return { items, get: (k) => items.get(k) || null, today, staff, onOpenPrep, onPrintLabels: typeof onPrintLabels === "function" ? onPrintLabels : null,
       linkOf: (l) => (layerTakesComponentStock(l, components, mids()) ? "follow" : layerLinkState(l, components, mids())) };
   })() : null;
   const prepRows = prepOn ? prepAlertsOf({ recipes, components, stock, pending, today }, { forReminder: true }) : null;
@@ -28631,22 +28637,554 @@ function PrepCountPanel({ cfg, item, lang, today, onSubmit, onCancel, confirmDia
 
 // ─── BEGIN prep label helpers ───
 // 第 6 批 4.3「半成品标签」(PC;design_purchase §1.7 / §1.8 / §4、plan 决定 17 到 24):自己的弹窗和 A4 不干胶模板,不复用顾客标签、不写任何数据、
-// 到期日只取 prepLotsView 的 expiresOn。第 0 步:PREP_LABEL_SIZES 写成真的,其余空壳。段里不许有 React / setState;
-// localStorage 只在 prepLabelPrefsRead / prepLabelPrefsWrite 里碰(本机偏好 korora_prep_label_v1:尺寸和三个勾选;第 0 步不读不写)
+// 到期日只取 prepLotsView 的 expiresOn。段里不许有 React / setState;只依赖备货段的 prepLotsView / prepCfgOf / prepItemName / prepTxt().storeName / PREP_STORES、
+// allergenSummaryOf / allergenShort、stripMoneyText、localDateStr、fmtQty、_normTxt、_labelUnits(顾客标签那段的「字宽」估法,只调用不改)。
+// localStorage 只在 prepLabelPrefsRead / prepLabelPrefsWrite 里碰(本机偏好 korora_prep_label_v1:尺寸和三个勾选;语言、品名不记)
 const PREP_LABEL_KEY = "korora_prep_label_v1";
 // A4 去掉 15 mm 页边后放得下:3 × 57 + 2 × 3 = 177 ≤ 180,6 × 40 + 5 × 3 = 255 ≤ 267(待看 1:默认 57×40 每页 18 张,另给 88×48 每页 10 张)
 const PREP_LABEL_SIZES = { s: { w: 57, h: 40, cols: 3, rows: 6 }, m: { w: 88, h: 48, cols: 2, rows: 5 } };
-const PREP_LABEL_TXT = { zh: {}, ja: {} };   // PC 往这里加字
-const prepLabelLots = (item, cfg, today, preferLotId) => [];                 // 空壳:弹窗里的批(prepLotsView 原样 + printable + 默认勾哪批)
-const prepLabelRows = (args) => [];                                          // 空壳:每张标签的内容(expiresOn 只取 prepLotsView)
-const prepLabelDate = (ymd, lang) => "";                                     // 空壳:「2026-10-06(周二)」/「2026-10-06(火)」
-const prepLabelFit = (row, size) => null;                                    // 空壳:品名几行、取出后能放几个字
-const prepLabelPrefsRead = () => ({ v: 1, size: "s", thaw: true, allergen: false, made: false });   // 空壳:默认偏好(不读 localStorage)
-const prepLabelPrefsWrite = (p) => false;                                    // 空壳:什么都不写
+const PREP_LABEL_MAX = 60;   // 一次最多 60 张(决定 22;每批 1 到 60)
+// 模板和 prepLabelFit 共用的尺寸(mm / pt):估算和印出来的是同一组数。品名最多 2 行;「取出后」小号 1 行、大号 2 行(design §1.8)。
+// 到期那一行:动词 9pt + 日期 12pt 粗,放不下时日期换到第二行(冷冻的「冷冻放到」+ 带星期的全日期在 57 宽上刚好一行)
+const PREP_LABEL_LAYOUT = {
+  padV: 1.4, padH: 1.8, border: 0.25, gap: 0.4,
+  name: { pt: 11, lh: 1.15, bold: 1.05, maxLines: 2 },
+  store: { pt: 7.5, lh: 1.25 },
+  made: { pt: 8.5, lh: 1.25 },
+  untilLabel: { pt: 9, lh: 1.25 },
+  until: { pt: 12, lh: 1.25, bold: 1.05 },
+  takeOut: { pt: 8, lh: 1.35 },
+  opt: { pt: 7, lh: 1.25 },
+  maker: { pt: 8, lh: 1.4 },
+  thawLines: { s: 1, m: 2 },
+  blankUntilMm: 20,   // 没写能放多久:「____年__月__日」三段横线合计约 20 mm
+};
+const PREP_LABEL_TXT = {
+  zh: {
+    // 入口
+    cardBtn: "🏷 打标签",
+    justDone: (md) => `✓ ${md} 做的这批已登记`,
+    justBtn: "🏷 打这批的标签",
+    sheetBtn: "🏷 标签",
+    // 弹窗
+    title: "🏷 打半成品标签",
+    titleNote: "店里自己用的标签,不是给顾客的",
+    storeNone: "没选存在哪",
+    shelf: (n) => `能放 ${n} 天`,
+    shelfNone: "没写能放多久",
+    lotsHead: "选要打的批",
+    lotRow: (md, left, u, until, st) => `${md} 做的 · 剩 ${left}${u ? " " + u : ""}${until ? ` · 放到 ${until}` : ""}(${st})`,
+    stToday: "今天到期,还能用",
+    stLeft: (k) => `还能放 ${k} 天`,
+    stNoDate: "没写能放多久",
+    lotExpired: (md, k) => `${md} 做的 · 已过期 ${k} 天(不打,去报废)`,
+    lotCount: "(盘点时补记的,日期是那时填的)",
+    copies: "张数",
+    noLots: "现在没有能打的批(都用完了或过期了)",
+    noItem: "这一样现在没有备货记录",
+    printWhat: "标签上印",
+    nameLabel: "品名(只改这一次)",
+    optThaw: "取出后怎么处理", optAllergen: "过敏原", optMade: "这一批做了多少",
+    makerNote: "制作人:印一条横线手写(App 不记是谁做的)",
+    size: "尺寸", sizeS: "57×40 mm · 每页 18 张", sizeM: "88×48 mm · 每页 10 张(和顾客标签同一种纸)",
+    langHead: "语言", langZh: "中文", langJa: "日本語",
+    warnNoShelf: "还没写「能放多久」:标签上「放到」那一格留空,手写。",
+    warnNoStore: "还没选存在哪:标签上印「冷冻 · 冷藏 · 常温」,手写圈一个。",
+    askOwner: "请老板在配方 / 组件里填。",
+    goFill: "去填",
+    warnAllergen: (n) => `过敏原还有 ${n} 项原料没核对,标签上会写「还有 ${n} 项原料没核对」。`,
+    warnThaw: (n) => `「取出后」的说明太长,这个尺寸只印前 ${n} 个字。`,
+    warnFull: "勾的内容太多,这个尺寸印不下最后几行:换 88×48,或者少勾一项。",
+    warnName: "品名太长,这个尺寸印两行,后面用「…」。",
+    tipExpiry: (n) => `💡 到期日按现在写的「能放 ${n} 天」算;以后改了天数,贴好的标签不会跟着变,要重打。`,
+    tipPrintPc: "💡 打印时缩放选「实际大小 / 100%」,别选「适合页面」。",
+    tipPrintIos: "💡 印出来先量一下纸边那条刻度线:应该正好 50 mm;不对就告诉老板。",
+    tooMany: (max) => `一次最多 ${max} 张`,
+    nothing: "先勾要打的批",
+    total: (n) => `共 ${n} 张`,
+    cancel: "取消", go: "🖨 打印预览", close: "关闭",
+    // 印在标签上的字(按标签的语言)
+    madeL: (s) => (s === "freeze" ? "冻入" : "制作"),
+    untilL: (s) => (s === "freeze" ? "冷冻放到" : "放到"),
+    takeOutL: "取出",
+    thawL: "取出后:",
+    allergenL: "过敏原:",
+    allergenNone: "没有八大类",
+    allergenUnchecked: "没核对完",
+    allergenMay: (s) => `可能含有${s}`,
+    allergenJoin: ";",
+    allergenMore: (n) => `(还有 ${n} 项原料没核对)`,
+    madeQty: (n, u) => `本批 ${n}${u ? " " + u : ""}`,
+    makerL: "制作人",
+    ymd: ["年", "月", "日"],
+    week: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
+    ruler: "量一下:这条线应该正好 50 mm(短了 = 打印时被缩小了)",
+  },
+  ja: {
+    cardBtn: "🏷 ラベル",
+    justDone: (md) => `✓ ${md} 仕込み分を登録しました`,
+    justBtn: "🏷 このロットのラベル",
+    sheetBtn: "🏷 ラベル",
+    title: "🏷 仕込み品ラベル",
+    titleNote: "店内用・お客様向けではありません",
+    storeNone: "保存場所未選択",
+    shelf: (n) => `保存 ${n} 日`,
+    shelfNone: "保存期間未設定",
+    lotsHead: "印刷するロット",
+    lotRow: (md, left, u, until, st) => `${md} 仕込み・残 ${left}${u}${until ? `・${until} まで` : ""}(${st})`,
+    stToday: "本日期限・使用可",
+    stLeft: (k) => `あと ${k} 日`,
+    stNoDate: "保存期間未設定",
+    lotExpired: (md, k) => `${md} 仕込み・期限切れ ${k} 日(印刷不可・廃棄へ)`,
+    lotCount: "(棚卸し時の追加記録。日付は入力時のもの)",
+    copies: "枚数",
+    noLots: "印刷できるロットがありません(使い切りか期限切れ)",
+    noItem: "この品目の作り置き記録がありません",
+    printWhat: "ラベルに印刷する内容",
+    nameLabel: "品名(この回のみ)",
+    optThaw: "取り出し後の扱い", optAllergen: "アレルゲン", optMade: "仕込み量",
+    makerNote: "担当:手書き欄(アプリには記録しません)",
+    size: "サイズ", sizeS: "57×40 mm・1 ページ 18 枚", sizeM: "88×48 mm・1 ページ 10 枚(お客様用ラベルと同じ用紙)",
+    langHead: "言語", langZh: "中文", langJa: "日本語",
+    warnNoShelf: "保存期間が未入力:期限欄は空欄になります。手書きしてください。",
+    warnNoStore: "保存場所が未選択:ラベルに「冷凍・冷蔵・常温」を印刷します。手書きで丸をつけてください。",
+    askOwner: "店長にレシピ/パーツで入力してもらってください。",
+    goFill: "入力する",
+    warnAllergen: (n) => `アレルゲン未確認の原料が ${n} 件あります。ラベルに「未確認の原料 ${n} 件」と印刷されます。`,
+    warnThaw: (n) => `「取り出し後」の説明が長いため、このサイズでは最初の ${n} 文字だけ印刷します。`,
+    warnFull: "内容が多く、このサイズでは最後の数行が入りません。88×48 にするか、項目を減らしてください。",
+    warnName: "品名が長いため、このサイズでは 2 行にして末尾を「…」にします。",
+    tipExpiry: (n) => `💡 期限は現在の保存日数(${n} 日)で計算します。日数を変えても貼ったラベルは変わらないので、印刷し直してください。`,
+    tipPrintPc: "💡 印刷時の倍率は「実際のサイズ / 100%」を選び、「ページに合わせる」は選ばないでください。",
+    tipPrintIos: "💡 印刷したら、紙の端の目盛り線を測ってください:ちょうど 50 mm のはずです。違ったら店長に伝えてください。",
+    tooMany: (max) => `一度に最大 ${max} 枚まで`,
+    nothing: "印刷するロットを選んでください",
+    total: (n) => `計 ${n} 枚`,
+    cancel: "キャンセル", go: "🖨 印刷プレビュー", close: "閉じる",
+    madeL: (s) => (s === "freeze" ? "冷凍日" : "製造日"),
+    untilL: (s) => (s === "freeze" ? "冷凍期限" : "使用期限"),
+    takeOutL: "取り出し",
+    thawL: "取り出し後:",
+    allergenL: "アレルゲン:",
+    allergenNone: "該当なし(8 分類)",
+    allergenUnchecked: "未確認",
+    allergenMay: (s) => `${s}(可能性あり)`,
+    allergenJoin: " / ",
+    allergenMore: (n) => `(未確認の原料 ${n} 件)`,
+    madeQty: (n, u) => `仕込み量 ${n}${u}`,
+    makerL: "担当",
+    ymd: ["年", "月", "日"],
+    week: ["日", "月", "火", "水", "木", "金", "土"],
+    ruler: "この線はちょうど 50 mm のはずです(短い = 縮小印刷されています)",
+  },
+};
+const _plTxt = (lang) => PREP_LABEL_TXT[lang === "ja" ? "ja" : "zh"];
+const _PL_PT = 0.3528;   // 1 pt = 0.3528 mm
+// 「2026-10-06(周二)」/「2026-10-06(火)」:日期写全(冷冻 60 天会跨年),星期写「周二」不写「(二)」(审查 U12)。读不出 → ""
+const prepLabelDate = (ymd, lang) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd === undefined || ymd === null ? "" : ymd));
+  if (!m) return "";
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return "";
+  return `${m[0]}(${_plTxt(lang).week[d.getDay()]})`;
+};
+// 弹窗里的批:prepLotsView 的结果原样(同一刻备货卡上的批,含过期),每批多 printable(没过期、id 能用、同 id 只认第一批)、counted(盘点时补记的)、
+// def(默认勾不勾,最多一批)。默认勾:preferLotId 是能打的批 →那一批(从「刚登记」/ 生产单点进来);否则最新做的、不是盘点补记的那批;
+// 只有盘点补记的批时勾最新的那批(决定 22,审查 B6M-8)
+const prepLabelLots = (item, cfg, today, preferLotId) => {
+  const seen = new Set();
+  const lots = prepLotsView(item, cfg, today).map(l => {
+    const okId = l.id !== undefined && l.id !== null && l.id !== "" && !seen.has(l.id);
+    if (okId) seen.add(l.id);
+    return { ...l, printable: okId && l.status !== "expired", counted: l.via === "count", def: false };
+  });
+  const pr = lots.filter(l => l.printable);
+  let pick = null;
+  if (preferLotId !== undefined && preferLotId !== null && preferLotId !== "") pick = pr.find(l => l.id === preferLotId) || null;
+  if (!pick) { const nc = pr.filter(l => !l.counted); const pool = nc.length ? nc : pr; pick = pool.length ? pool[pool.length - 1] : null; }
+  if (pick) pick.def = true;
+  return lots;
+};
+// 过敏原那一行(勾了才印):allergenSummaryOf 的汇总;没核对完绝不说「没有」(同第 3 批的规矩)。东西删了 → 「没核对完」
+const prepLabelAllergenText = (kind, obj, ctx, lang) => {
+  const L = _plTxt(lang);
+  if (!obj || typeof obj !== "object") return L.allergenL + L.allergenUnchecked;
+  const c = ctx || {};
+  const s = allergenSummaryOf(kind === "component" ? "component" : "recipe", obj, { materials: c.materials || [], components: c.components || [], recipes: c.recipes || [], creations: c.creations || [], brands: c.brands || [] });
+  const sep = lang === "ja" ? "・" : "、";
+  const names = s.contains.map(x => allergenShort(x, lang)).join(sep);
+  const may = s.mayContain.map(x => allergenShort(x, lang)).join(sep);
+  const parts = [];
+  if (names) parts.push(names);
+  if (may) parts.push(L.allergenMay(may));
+  if (!parts.length) parts.push(s.complete ? L.allergenNone : L.allergenUnchecked);
+  return L.allergenL + parts.join(L.allergenJoin) + (s.complete ? "" : L.allergenMore(s.unknown.length));
+};
+// 每张标签的内容(一张一行,按 sel 的顺序、每批 copies 张,合计封顶 PREP_LABEL_MAX)。args = { kind, obj, item, sel: [{ lotId, copies }],
+// opts: { name, thaw, allergen, made }, today, lang, ctx }。**到期日只取 prepLotsView(item, prepCfgOf(kind, obj), today) 的 expiresOn**(和备货卡同一刻同一个数;
+// 没写能放多久 = null → untilText 空、模板画横线手写,绝不印猜的日期)。「存在哪」只看 obj.prepStore 本身(决定 23a:配方没选时 prepCfgOf 给的 "freeze" 不算);
+// 冷冻的写「冻入 / 冷冻放到」+ 手写取出日(决定 18);过期的批、找不到的批不出;「取出后」先过 stripMoneyText(多行并成一行)
+const prepLabelRows = (args) => {
+  const a = args && typeof args === "object" ? args : {};
+  const lang = a.lang === "ja" ? "ja" : "zh";
+  const L = _plTxt(lang);
+  const kind = a.kind === "component" ? "component" : "recipe";
+  const obj = a.obj && typeof a.obj === "object" ? a.obj : null;
+  const item = a.item && typeof a.item === "object" ? a.item : null;
+  const today = a.today || localDateStr();
+  const cfg = obj ? prepCfgOf(kind, obj) : null;
+  const lots = prepLotsView(item, cfg, today);
+  const o = a.opts && typeof a.opts === "object" ? a.opts : {};
+  const store = obj && PREP_STORES.includes(obj.prepStore) ? obj.prepStore : null;
+  const X = prepTxt(lang);
+  const unit = _normTxt((item && item.unit) || (cfg && cfg.unit) || "");
+  const thawRaw = obj ? (lang === "ja" ? (_normTxt(obj.prepThawJa) || _normTxt(obj.prepThawZh)) : (_normTxt(obj.prepThawZh) || _normTxt(obj.prepThawJa))) : "";
+  const base = {
+    name: _normTxt(o.name) || prepItemName(obj, item, lang),
+    store, storeText: store ? X.storeName(store) : PREP_STORES.map(s => X.storeName(s)).join(" · "),
+    madeLabel: L.madeL(store), untilLabel: L.untilL(store), takeOut: store === "freeze",
+    thaw: o.thaw && thawRaw ? stripMoneyText(thawRaw).text.replace(/\s*\n+\s*/g, " ").trim() : "",
+    allergen: o.allergen ? prepLabelAllergenText(kind, obj, a.ctx, lang) : "",
+    lang,
+  };
+  const rows = [];
+  (Array.isArray(a.sel) ? a.sel : []).forEach(s => {
+    if (!s || typeof s !== "object" || rows.length >= PREP_LABEL_MAX) return;
+    const lot = lots.find(l => l.id === s.lotId);
+    if (!lot || lot.status === "expired") return;
+    const c = Math.floor(Number(s.copies));
+    const n = Math.min(isFinite(c) && c >= 1 ? c : 1, PREP_LABEL_MAX - rows.length);
+    const row = { ...base, lotId: lot.id, madeAt: lot.madeAt, madeText: prepLabelDate(lot.madeAt, lang), expiresOn: lot.expiresOn || null,
+      untilText: lot.expiresOn ? prepLabelDate(lot.expiresOn, lang) : "", madeQty: o.made ? L.madeQty(fmtQty(lot.made) || "0", unit) : "" };
+    for (let i = 0; i < n; i++) rows.push({ ...row });
+  });
+  return rows;
+};
+// 按「字宽」截断(_labelUnits 的估法:汉字 1、数字 / 英文 / 空格 0.55)
+const _plCut = (s, maxUnits) => { let u = 0, out = ""; for (const ch of String(s)) { const w = _labelUnits(ch); if (u + w > maxUnits + 1e-9) break; u += w; out += ch; } return out; };
+// 一张标签在这个尺寸上怎么排(弹窗按它提醒,模板按它截字):{ name(截过的)、nameLines、nameCut、untilLines、thaw(截过的,不含「取出后:」)、thawCut、thawChars(印几个字)、
+// thawLines、allergenLines、madeLines、optLines(放得下几行小字)、optNeed、overflow(小字放不下)}。品名、日期、制作人这几行永远放得下(57×40 最坏 34 mm < 36.7 mm),
+// 放不下的只有最下面那块小字(模板里它可以被裁)。常数见 PREP_LABEL_LAYOUT,估法同顾客标签 labelIngFits(宁可估小)
+const prepLabelFit = (row, size) => {
+  const S = PREP_LABEL_SIZES[size === "m" ? "m" : "s"];
+  const Y = PREP_LABEL_LAYOUT;
+  const r = row && typeof row === "object" ? row : {};
+  const W = S.w - 2 * Y.padH - 2 * Y.border;
+  const Hin = S.h - 2 * Y.padV - 2 * Y.border;
+  const per = (f) => W / (f.pt * _PL_PT * (f.bold || 1));
+  const linesOf = (units, f) => Math.max(1, Math.ceil(units / per(f) - 1e-9));
+  const lineH = (f) => f.pt * f.lh * _PL_PT;
+  const nameStr = _normTxt(r.name);
+  let name = nameStr, nameLines = linesOf(_labelUnits(nameStr), Y.name), nameCut = false;
+  if (nameLines > Y.name.maxLines) { name = _plCut(nameStr, per(Y.name) * Y.name.maxLines - 1) + "…"; nameLines = Y.name.maxLines; nameCut = true; }
+  const uw = _labelUnits(r.untilLabel || "") * Y.untilLabel.pt * _PL_PT + 1
+    + (r.untilText ? _labelUnits(r.untilText) * Y.until.pt * _PL_PT * Y.until.bold : Y.blankUntilMm + 3 * Y.until.pt * _PL_PT * Y.until.bold);
+  const untilLines = uw > W ? 2 : 1;
+  const blocks = [nameLines * lineH(Y.name), lineH(Y.store), lineH(Y.made), untilLines === 1 ? lineH(Y.until) : lineH(Y.untilLabel) + lineH(Y.until)];
+  if (r.takeOut) blocks.push(lineH(Y.takeOut));
+  blocks.push(lineH(Y.maker));
+  const fixedH = blocks.reduce((x, y) => x + y, 0) + (blocks.length - 1) * Y.gap;
+  const optLH = lineH(Y.opt);
+  const optLines = Math.max(0, Math.floor((Hin - fixedH - Y.gap) / optLH + 0.02));
+  const optPer = per(Y.opt);
+  const thawMax = Y.thawLines[size === "m" ? "m" : "s"];
+  const L = _plTxt(r.lang);
+  const thawStr = _normTxt(r.thaw);
+  let thaw = thawStr, thawCut = false, thawLines = 0;
+  if (thawStr) {
+    const lab = _labelUnits(L.thawL);
+    if (lab + _labelUnits(thawStr) > thawMax * optPer + 1e-9) { thaw = _plCut(thawStr, thawMax * optPer - lab - 1) + "…"; thawCut = true; }
+    thawLines = linesOf(lab + _labelUnits(thaw), Y.opt);
+  }
+  const allergenLines = r.allergen ? linesOf(_labelUnits(r.allergen), Y.opt) : 0;
+  const madeLines = r.madeQty ? linesOf(_labelUnits(r.madeQty), Y.opt) : 0;
+  const optNeed = thawLines + allergenLines + madeLines;
+  return { name, nameLines, nameCut, untilLines, thaw, thawCut, thawChars: Array.from(thawCut ? thaw.slice(0, -1) : thaw).length, thawLines,
+    allergenLines, madeLines, optLines, optNeed, overflow: optNeed > optLines, fixedMm: fixedH, innerMm: Hin };
+};
+// 生产单「做一批」行记入后的「🏷 标签」打哪一批:今天挂这一行 uid 的 make move 新建的批里,还在、没过期的最新那批(读法同 _prepMakeCap;不改账本)。没有 → null
+const prepLabelLineLot = (item, cfg, uid, today) => {
+  if (!item || typeof item !== "object" || uid === undefined || uid === null || uid === "") return null;
+  const ids = [];
+  (Array.isArray(item.moves) ? item.moves : []).forEach(m => {
+    if (!m || typeof m !== "object" || m.type !== "make" || m.date !== today || m.uid !== uid) return;
+    (Array.isArray(m.newLots) ? m.newLots : (m.lotId ? [m.lotId] : [])).forEach(id => ids.push(id));
+  });
+  if (!ids.length) return null;
+  const lots = prepLotsView(item, cfg, today).filter(l => l.status !== "expired");
+  for (let i = ids.length - 1; i >= 0; i--) { const l = lots.find(x => x.id === ids[i]); if (l) return l; }
+  return null;
+};
+// iPad / iPhone(打印提示按设备说两句,审查 U11):同 spec_reminder R32 的认法,传进来的是读好的三个值(段里不碰 navigator)
+const prepLabelIsIOS = (nav) => {
+  const n = nav && typeof nav === "object" ? nav : {};
+  const ua = typeof n.ua === "string" ? n.ua : "", platform = typeof n.platform === "string" ? n.platform : "";
+  const tp = Number.isFinite(n.maxTouchPoints) ? n.maxTouchPoints : 0;
+  return /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && tp > 1);
+};
+// 本机偏好 { v: 1, size: "s" | "m", thaw, allergen, made }:读不到 / 坏 JSON / 不是对象 → 默认;认得的键不对 → 那一项用默认;v > 1 只读认得的部分
+const _PL_PREF_DEF = { v: 1, size: "s", thaw: true, allergen: false, made: false };
+const prepLabelPrefsRead = () => {
+  try {
+    const o = JSON.parse(localStorage.getItem(PREP_LABEL_KEY) || "null");
+    if (!o || typeof o !== "object" || Array.isArray(o)) return { ..._PL_PREF_DEF };
+    return { v: 1, size: o.size === "m" ? "m" : "s", thaw: typeof o.thaw === "boolean" ? o.thaw : true, allergen: o.allergen === true, made: o.made === true };
+  } catch (e) { return { ..._PL_PREF_DEF }; }
+};
+// 写 = 重读 → 只改尺寸和三个勾选 → 写回(不认识的键、更新版本的 v 原样留着);写不进去返回 false,不报错(只是记不住)
+const prepLabelPrefsWrite = (p) => {
+  try {
+    let cur = {};
+    try { const o = JSON.parse(localStorage.getItem(PREP_LABEL_KEY) || "null"); if (o && typeof o === "object" && !Array.isArray(o)) cur = o; } catch (e) { cur = {}; }
+    const next = { ...cur, v: typeof cur.v === "number" && cur.v > 1 ? cur.v : 1 };
+    const q = p && typeof p === "object" ? p : {};
+    if (q.size === "s" || q.size === "m") next.size = q.size;
+    ["thaw", "allergen", "made"].forEach(k => { if (typeof q[k] === "boolean") next[k] = q[k]; });
+    localStorage.setItem(PREP_LABEL_KEY, JSON.stringify(next));
+    return true;
+  } catch (e) { return false; }
+};
 // ─── END prep label helpers ───
-// 第 6 批第 0 步:半成品标签的弹窗(printTarget stage "plopts",App 里那一块)和 A4 模板(PrintView 的 prepLabel 支)。空壳
-function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, components, materials, brands, creations, prepStock, onClose, onConfirm, onEdit }) { return null; }
-function PrepLabelTemplate({ data }) { return null; }
+// 第 6 批 PC:半成品标签的弹窗(printTarget stage "plopts",App 里那一块;员工也能打)。按 printKey 从**最新的**账本和配方 / 组件里取(打开期间别处登记 /
+// 报废了,列表跟着变)。不写任何数据:只在确认时写本机偏好(尺寸 + 三个勾选);语言每次回到中文、品名每次回到原名(决定 21)。
+// onConfirm({ labels, size, lang }) → App 设预览;onEdit(kind, id) 只有老板有(员工看到的是「请老板在配方 / 组件里填」)
+function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, components, materials, brands, creations, prepStock, onClose, onConfirm, onEdit }) {
+  const ui = lang === "ja" ? "ja" : "zh";
+  const U = _plTxt(ui);
+  const t = today || localDateStr();
+  const key = String(printKey || "");
+  const ci = key.indexOf(":");
+  const kind = key.slice(0, ci) === "component" ? "component" : "recipe";
+  const idStr = ci >= 0 ? key.slice(ci + 1) : "";
+  const obj = ((kind === "component" ? components : recipes) || []).find(x => x && String(x.id) === idStr) || null;
+  const stock = prepStock && prepStock.items ? prepStock : null;
+  const item = stock && !stock.readOnly && stock.items[key] && typeof stock.items[key] === "object" ? stock.items[key] : null;
+  const cfg = obj ? prepCfgOf(kind, obj) : null;
+  const lots = prepLabelLots(item, cfg, t, lotId);
+  const [prefs] = useState(() => prepLabelPrefsRead());
+  const [size, setSize] = useState(prefs.size === "m" ? "m" : "s");
+  const [opt, setOpt] = useState({ thaw: prefs.thaw !== false, allergen: prefs.allergen === true, made: prefs.made === true });
+  const [labelLang, setLabelLang] = useState("zh");
+  const [nameText, setNameText] = useState(null);   // null = 没改过(跟着标签的语言取原名)
+  const [sel, setSel] = useState(() => { const o = {}; lots.forEach(l => { if (l.def) o[String(l.id)] = "1"; }); return o; });
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && onClose) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  // 账本变了、刚才默认勾的那批没了(撤销了登记 / 报废了)而她还没动过勾选:按现在的批重选默认
+  const lotSig = lots.map(l => [l.id, l.status, l.left].join("|")).join("~");
+  useEffect(() => {
+    if (touched) return;
+    const o = {}; lots.forEach(l => { if (l.def) o[String(l.id)] = "1"; });
+    setSel(prev => (JSON.stringify(prev) === JSON.stringify(o) ? prev : o));
+  }, [lotSig]);   // eslint-disable-line
+  const printable = lots.filter(l => l.printable);
+  const chosen = printable.filter(l => Object.prototype.hasOwnProperty.call(sel, String(l.id)));
+  const copiesOf = (l) => { const n = Math.floor(parseFloat(String(sel[String(l.id)]).normalize("NFKC"))); return isFinite(n) && n >= 1 ? n : 1; };
+  const total = chosen.reduce((s, l) => s + copiesOf(l), 0);
+  const nameAuto = prepItemName(obj, item, labelLang);
+  const nameShown = nameText === null ? nameAuto : nameText;
+  const ctx = { materials, components, recipes, creations, brands };
+  const buildRows = (sl) => prepLabelRows({ kind, obj, item, today: t, lang: labelLang, ctx,
+    sel: sl, opts: { name: nameText === null ? "" : nameText, thaw: opt.thaw, allergen: opt.allergen, made: opt.made } });
+  // 提示行按「印出来的第一张」估(同一次打印每张的品名 / 取出后 / 过敏原一样,只差日期)
+  const sample = chosen.length ? buildRows([{ lotId: chosen[0].id, copies: 1 }])[0] : null;
+  const fit = sample ? prepLabelFit(sample, size) : null;
+  const allergenSum = opt.allergen && obj ? allergenSummaryOf(kind, obj, { ...ctx }) : null;
+  const noStore = !obj || !PREP_STORES.includes(obj.prepStore);
+  const noShelf = !cfg || !cfg.shelfDays;
+  let ios = false;
+  try { const n = typeof navigator !== "undefined" ? navigator : {}; ios = prepLabelIsIOS({ ua: n.userAgent, platform: n.platform, maxTouchPoints: n.maxTouchPoints }); } catch (e) { ios = false; }
+  const tooMany = total > PREP_LABEL_MAX;
+  const canGo = !!item && chosen.length > 0 && !tooMany;
+  const X = prepTxt(ui);
+  const storeTxt = noStore ? U.storeNone : X.storeName(obj.prepStore);
+  const unit = (item && item.unit) || (cfg && cfg.unit) || "";
+  const confirm = () => {
+    if (!canGo) return;
+    const labels = buildRows(chosen.map(l => ({ lotId: l.id, copies: copiesOf(l) })));
+    if (!labels.length) return;
+    prepLabelPrefsWrite({ size, thaw: opt.thaw, allergen: opt.allergen, made: opt.made });
+    if (onConfirm) onConfirm({ labels, size, lang: labelLang });
+  };
+  const toggle = (l) => { setTouched(true); setSel(prev => { const o = { ...prev }; const k = String(l.id); if (Object.prototype.hasOwnProperty.call(o, k)) delete o[k]; else o[k] = "1"; return o; }); };
+  const setCopies = (l, v) => { setTouched(true); setSel(prev => ({ ...prev, [String(l.id)]: v })); };
+  const head = { fontSize: 13, fontWeight: 500, marginBottom: 8, color: T.ink };
+  const pill = (on) => ({ padding: "6px 12px", minHeight: 36, fontSize: 12, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
+    border: `1px solid ${on ? T.ink : T.border}`, background: on ? T.ink : T.paper, color: on ? T.paper : T.body, textAlign: "left" });
+  const chkRow = (k, label) => (
+    <label key={k} data-plabel-opt={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", color: T.ink, minHeight: 36 }}>
+      <input type="checkbox" checked={!!opt[k]} onChange={e => setOpt(o => ({ ...o, [k]: e.target.checked }))} style={{ flexShrink: 0 }} />
+      <span>{label}</span>
+    </label>
+  );
+  const hint = (txt, color, attr, extra) => <div data-plabel-hint={attr} style={{ fontSize: 12, color, lineHeight: 1.6, marginTop: 6, overflowWrap: "anywhere" }}>{txt}{extra}</div>;
+  const fillLink = (!staff && typeof onEdit === "function" && obj) ? (
+    <button type="button" className="k-btn k-tap" data-plabel-fill="1" onClick={() => onEdit(kind, obj.id)}
+      style={{ background: "none", border: "none", padding: 0, marginLeft: 6, cursor: "pointer", fontSize: 12, color: T.info, textDecoration: "underline", fontFamily: T.fontSans }}>{U.goFill}</button>
+  ) : staff ? <span data-plabel-askowner="1"> {U.askOwner}</span> : null;
+  const inp16 = { padding: "6px 8px", fontSize: 16, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
+  return (
+    <div data-plabel-modal="1" onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(22,22,15,0.32)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: T.z.modal, padding: 16, boxSizing: "border-box" }}>
+      <div role="dialog" aria-modal="true" aria-label={U.title} onClick={e => e.stopPropagation()}
+        style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 600, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: T.sh.overlay, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, padding: "16px 20px 8px", flexShrink: 0 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 500, color: T.ink }}>{U.title}</div>
+            <div style={{ fontSize: 12, color: T.subtle, marginTop: 2 }}>{U.titleNote}</div>
+          </div>
+          <button type="button" className="k-tap-l" aria-label={U.close} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, lineHeight: 1, flexShrink: 0 }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: "4px 20px 12px", flex: "1 1 auto", minHeight: 0 }}>
+          <div data-plabel-sub="1" style={{ fontSize: 13, color: T.body, marginBottom: 14, overflowWrap: "anywhere" }}>
+            {[prepItemName(obj, item, ui), storeTxt, noShelf ? U.shelfNone : U.shelf(cfg.shelfDays)].filter(Boolean).join(" · ")}
+          </div>
+          {!item ? hint(U.noItem, T.warning, "noitem") : (
+            <div data-plabel-lots="1" style={{ marginBottom: 16 }}>
+              <div style={head}>{U.lotsHead}</div>
+              {lots.length === 0 || printable.length === 0 ? hint(U.noLots, T.subtle, "nolots") : null}
+              {lots.map((l, i) => {
+                const k = String(l.id);
+                if (!l.printable) return (
+                  <div key={k + "#" + i} data-plabel-lot={k} data-plabel-lotstate="off" style={{ fontSize: 13, color: l.status === "expired" ? T.danger : T.muted, padding: "6px 0", overflowWrap: "anywhere", ...T.num }}>
+                    {l.status === "expired" ? `─ ${U.lotExpired(X.md(l.madeAt), -l.daysLeft)}` : `─ ${U.lotRow(X.md(l.madeAt), fmtQty(l.left) || "0", unit, "", U.stNoDate)}`}
+                  </div>
+                );
+                const on = Object.prototype.hasOwnProperty.call(sel, k);
+                const st = l.status === "today" ? U.stToday : l.status === "nodate" ? U.stNoDate : U.stLeft(l.daysLeft);
+                return (
+                  <div key={k} data-plabel-lot={k} data-plabel-lotstate={on ? "on" : "off"} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "4px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 220px", minWidth: 0, cursor: "pointer", minHeight: 40, fontSize: 13, color: T.ink, ...T.num }}>
+                      <input type="checkbox" checked={on} onChange={() => toggle(l)} style={{ flexShrink: 0 }} />
+                      <span style={{ overflowWrap: "anywhere" }}>
+                        {U.lotRow(X.md(l.madeAt), fmtQty(l.left) || "0", unit, l.expiresOn ? X.md(l.expiresOn) : "", st)}
+                        {l.counted && <span data-plabel-counted="1" style={{ color: T.warning }}>{U.lotCount}</span>}
+                      </span>
+                    </label>
+                    {on && (
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.subtle }}>
+                        {U.copies}
+                        <input type="text" inputMode="numeric" data-plabel-copies={k} value={sel[k]} onChange={e => setCopies(l, e.target.value)}
+                          style={{ ...inp16, width: 64, textAlign: "right", ...T.num }} />
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
+              {tooMany && <div data-plabel-err="toomany" style={{ fontSize: 12, color: T.danger, marginTop: 6 }}>{U.tooMany(PREP_LABEL_MAX)}</div>}
+              {printable.length > 0 && chosen.length === 0 && <div data-plabel-err="nothing" style={{ fontSize: 12, color: T.subtle, marginTop: 6 }}>{U.nothing}</div>}
+              {chosen.length > 0 && !tooMany && <div data-plabel-total={String(total)} style={{ fontSize: 12, color: T.subtle, marginTop: 6, ...T.num }}>{U.total(total)}</div>}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={head}>{U.printWhat}</div>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: T.subtle, marginBottom: 8 }}>
+              {U.nameLabel}
+              <input type="text" data-plabel-name="1" value={nameShown} onChange={e => setNameText(e.target.value)} style={{ ...inp16, width: "100%" }} />
+            </label>
+            <div style={{ display: "flex", columnGap: 16, flexWrap: "wrap" }}>
+              {chkRow("thaw", U.optThaw)}
+              {chkRow("allergen", U.optAllergen)}
+              {chkRow("made", U.optMade)}
+            </div>
+            <div style={{ fontSize: 12, color: T.subtle, marginTop: 4 }}>{U.makerNote}</div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={head}>{U.size}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {["s", "m"].map(z => <button key={z} type="button" className="k-tap" data-plabel-size={z} aria-pressed={size === z} onClick={() => setSize(z)} style={pill(size === z)}>{z === "s" ? U.sizeS : U.sizeM}</button>)}
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={head}>{U.langHead}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {["zh", "ja"].map(z => <button key={z} type="button" className="k-tap" data-plabel-lang={z} aria-pressed={labelLang === z} onClick={() => setLabelLang(z)} style={pill(labelLang === z)}>{z === "zh" ? U.langZh : U.langJa}</button>)}
+            </div>
+          </div>
+
+          {item && noShelf && hint("⚠ " + U.warnNoShelf, T.warning, "noshelf", fillLink)}
+          {item && noStore && hint("⚠ " + U.warnNoStore, T.warning, "nostore", fillLink)}
+          {allergenSum && !allergenSum.complete && hint("⚠ " + U.warnAllergen(allergenSum.unknown.length), T.warning, "allergen")}
+          {fit && fit.nameCut && hint("⚠ " + U.warnName, T.warning, "name")}
+          {fit && fit.thawCut && hint("⚠ " + U.warnThaw(fit.thawChars), T.warning, "thaw")}
+          {fit && fit.overflow && hint("⚠ " + U.warnFull, T.warning, "full")}
+          {item && !noShelf && hint(U.tipExpiry(cfg.shelfDays), T.subtle, "expiry")}
+          {hint(ios ? U.tipPrintIos : U.tipPrintPc, T.subtle, ios ? "print-ios" : "print-pc")}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", padding: "12px 20px 16px", borderTop: `0.5px solid ${T.border}`, flexShrink: 0, background: T.paper, position: "sticky", bottom: 0 }}>
+          <Btn onClick={onClose}>{U.cancel}</Btn>
+          <Btn variant="primary" onClick={confirm} disabled={!canGo}>{U.go}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+// A4 不干胶整张(印完自己剪):57×40 每页 3 × 6 / 88×48 每页 2 × 5;每张细边框当裁切线;不印 logo / 水印 / 价格(决定 17 到 20)。
+// data = { labels: prepLabelRows 的结果, size, lang }。第一页标签格子下面印一段 50 mm 刻度线(打出来量它就知道有没有被缩放,审查 U11)
+function PrepLabelTemplate({ data }) {
+  const d = data && typeof data === "object" ? data : {};
+  const size = d.size === "m" ? "m" : "s";
+  const S = PREP_LABEL_SIZES[size];
+  const Y = PREP_LABEL_LAYOUT;
+  const labels = Array.isArray(d.labels) ? d.labels.slice(0, PREP_LABEL_MAX) : [];
+  const per = S.cols * S.rows;
+  const pages = [];
+  for (let i = 0; i < labels.length; i += per) pages.push(labels.slice(i, i + per));
+  const L = _plTxt(d.lang);
+  const blank = (w) => <span style={{ display: "inline-block", minWidth: w, borderBottom: "0.2mm solid #000" }}>{" "}</span>;
+  const f = (x, extra) => ({ fontSize: x.pt + "pt", lineHeight: x.lh, flexShrink: 0, ...(extra || {}) });
+  const one = (r, k) => {
+    const fit = prepLabelFit(r, size);
+    const LL = _plTxt(r.lang || d.lang);
+    return (
+      <div key={k} className="k-plabel" style={{ width: S.w + "mm", height: S.h + "mm", boxSizing: "border-box", border: Y.border + "mm solid #000", padding: `${Y.padV}mm ${Y.padH}mm`,
+        overflow: "hidden", display: "flex", flexDirection: "column", gap: Y.gap + "mm", breakInside: "avoid", pageBreakInside: "avoid", color: "#000", overflowWrap: "anywhere" }}>
+        <div style={f(Y.name, { fontWeight: 700, maxHeight: (Y.name.pt * Y.name.lh * Y.name.maxLines * _PL_PT).toFixed(2) + "mm", overflow: "hidden" })}>{fit.name || blank("30mm")}</div>
+        <div style={f(Y.store)}>{r.storeText}</div>
+        <div style={f(Y.made)}>{r.madeLabel} {r.madeText}</div>
+        {/* 动词和日期放在同一个行内排版里(行框把两种字号都包住,不会顶出去);日期不拆开,放不下整个换到下一行 */}
+        <div style={f(Y.until)}>
+          <span style={{ fontSize: Y.untilLabel.pt + "pt" }}>{r.untilLabel}</span>{" "}
+          <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
+            {r.untilText || <>{blank("10mm")}{LL.ymd[0]}{blank("5mm")}{LL.ymd[1]}{blank("5mm")}{LL.ymd[2]}</>}
+          </span>
+        </div>
+        {r.takeOut && <div style={f(Y.takeOut)}>{LL.takeOutL} {blank("5mm")}{LL.ymd[1]}{blank("5mm")}{LL.ymd[2]}</div>}
+        {/* 小字那块只放得下 fit.optLines 整行:按整行裁(不出半行字),放不下的弹窗里已经提示过 */}
+        <div style={{ flex: "0 1 auto", minHeight: 0, maxHeight: (fit.optLines * Y.opt.pt * Y.opt.lh * _PL_PT).toFixed(2) + "mm", overflow: "hidden", fontSize: Y.opt.pt + "pt", lineHeight: Y.opt.lh }}>
+          {fit.thaw && <div>{LL.thawL}{fit.thaw}</div>}
+          {r.allergen && <div>{r.allergen}</div>}
+          {r.madeQty && <div>{r.madeQty}</div>}
+        </div>
+        <div style={f(Y.maker, { marginTop: "auto" })}>{LL.makerL} {blank("24mm")}</div>
+      </div>
+    );
+  };
+  return (
+    <div className="k-plabel-sheet" data-plabel-sheet={size}>
+      {pages.map((pg, pi) => (
+        <div key={pi} className="k-label-page" style={{ breakAfter: pi < pages.length - 1 ? "page" : "auto", pageBreakAfter: pi < pages.length - 1 ? "always" : "auto", marginBottom: pi < pages.length - 1 ? "10mm" : 0 }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${S.cols}, ${S.w}mm)`, gridAutoRows: S.h + "mm", gap: "3mm 3mm", justifyContent: "center" }}>
+            {pg.map((r, i) => one(r, pi * per + i))}
+          </div>
+          {pi === 0 && (
+            <div data-plabel-ruler="1" style={{ marginTop: "3mm", display: "flex", alignItems: "flex-end", gap: "3mm", justifyContent: "center", color: "#000" }}>
+              <div style={{ position: "relative", width: "50mm", height: "3mm", borderBottom: "0.2mm solid #000", flexShrink: 0 }}>
+                {[0, 10, 20, 30, 40, 50].map(x => <span key={x} style={{ position: "absolute", left: x + "mm", bottom: 0, width: 0, height: x % 50 === 0 ? "3mm" : "1.5mm", borderLeft: "0.2mm solid #000" }} />)}
+              </div>
+              <span style={{ fontSize: "7pt", lineHeight: 1.2 }}>{L.ruler}</span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // 一样东西的备货卡(备货页和配方 / 组件详情页共用;详情页 compact:只列最早 3 批 +「看全部备货 →」)。
 // props:{ kind, obj, cfg, item, lang, today, products, onPrepOp, staff, compact, focus, onOpenPrep, onJump, onGoTab, confirmDialog, readOnly, onPrintLabels }
@@ -28671,7 +29209,9 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     if (ref.current && ref.current.scrollIntoView) { try { ref.current.scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { /* 老浏览器 */ } }
   }, [focus]);
   const toggleLog = () => { const n = !logOpen; setLogOpen(n); const lo = { ...(prepUiRead().logOpen || {}) }; if (n) lo[key] = 1; else delete lo[key]; prepUiWrite({ logOpen: lo }); };
-  const open = (type) => setPanel({ type, opId: prepNewOpId(), lotId: "lot_" + prepNewOpId() });
+  // 第 6 批 PC:「＋ 登记一批」成功后批次列表下面「✓ … 做的这批已登记 · 🏷 打这批的标签」(只在传了 onPrintLabels 时记;打开任何面板 / 离开这一页就清掉)
+  const [justLot, setJustLot] = useState(null);
+  const open = (type) => { setJustLot(null); setPanel({ type, opId: prepNewOpId(), lotId: "lot_" + prepNewOpId() }); };
   const meta = (toast) => ({ toast, staff });
   const doOp = (ops, toast) => (typeof onPrepOp === "function" ? onPrepOp(ops, meta(toast)) : false);
   const storeName = X.storeName(cfg ? cfg.store : null);
@@ -28682,7 +29222,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
     // 审查 ps2:账本会从这一批里补扣今天取出时差的数(同生产单做一批),toast 写出来
     const st = tracked ? Math.min(prepShortTodayOf(item, t), op.qty) : 0;
     const r = doOp([op], X.toastRegister(name, q(op.qty), unit, X.md(op.madeAt)) + (st > 0 ? X.toastSettled(q(st), unit, storeName, q(_r3(op.qty - st))) : ""));
-    if (r) setPanel(null);
+    if (r) { setPanel(null); if (typeof onPrintLabels === "function") setJustLot(op.lotId); }
     return r;
   };
   const submitTake = (op, qty) => {
@@ -28716,6 +29256,14 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
   const lotColor = (l) => l.status === "expired" ? T.danger : (l.status === "today" || l.status === "soon") ? T.warning : T.line;
   const lotStatus = (l) => l.status === "expired" ? X.lotExpired(-l.daysLeft) : l.status === "today" ? X.lotToday : l.status === "nodate" ? X.lotNoDate : X.lotLeft(l.daysLeft);
   const unmarked = !cfg;
+  // 第 6 批 PC:「🏷 打标签」—— 传了 onPrintLabels、已开始记、有没用完也没过期的批、不是只读、还标着备货时才有(没传时 DOM 一个节点不多)。
+  // 外面包一层 data-prep-label-btn(Btn 不收 data-*;display: contents 不影响按钮行的排版),判官按它把整个按钮剥掉再和老快照比
+  const LT = _plTxt(lang);
+  const canLabel = typeof onPrintLabels === "function" && !readOnly && !unmarked && tracked && lots.some(l => l.status !== "expired");
+  const labelBtn = canLabel ? (st) => (
+    <span data-prep-label-btn="card" style={st}><Btn size="sm" onClick={() => onPrintLabels(key)}>{LT.cardBtn}</Btn></span>
+  ) : null;
+  const justView = canLabel && justLot !== null ? (lots.find(l => l.id === justLot && l.status !== "expired") || null) : null;
   // backdate_spec §2.6:fix 是记账用的(按重放撤销时记差额),最近记录里不列;带 reint 的 fix(没法按日期重算、照记下的数撤了)列出来叫她盘点
   const moves = tracked && Array.isArray(item.moves) ? item.moves.filter(m => m && typeof m === "object" && (m.type !== "fix" || m.reint)).slice(-10).reverse() : [];
   // §2.7:上次盘点之后有补记 / 撤销没法完全对上 → 批次上面一行「建议盘点」(从 moves 现推,盘点之后消失)
@@ -28794,7 +29342,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
       ) : oh.unitMismatch ? (
         <>
           <div data-prep-unitmismatch="1" style={{ ...T.fs.caption, color: T.warning, border: `1px solid ${T.warning}`, padding: T.sp.s, marginTop: T.sp.s }}>{X.unitMismatch(item.unit || "", cfg.unit)}</div>
-          {!busy && <div style={{ marginTop: T.sp.m }}><Btn size="sm" onClick={() => open("count")}>{X.btnCount}</Btn></div>}
+          {!busy && <div style={{ marginTop: T.sp.m }}><Btn size="sm" onClick={() => open("count")}>{X.btnCount}</Btn>{labelBtn && labelBtn({ display: "inline-block", marginLeft: T.sp.s })}</div>}
         </>
       ) : (
         <>
@@ -28824,11 +29372,20 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
               {compact && lots.length > shownLots.length && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 4 }}>…</div>}
             </div>
           )}
+          {/* 第 6 批 PC:刚登记的那一批(还在、没过期)→ 一行「✓ … 做的这批已登记 · 🏷 打这批的标签」 */}
+          {justView && !busy && (
+            <div data-plabel-just={String(justView.id)} style={{ ...T.fs.caption, color: T.success, marginTop: T.sp.s, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "baseline", ...T.num }}>
+              <span>{LT.justDone(X.md(justView.madeAt))} ·</span>
+              <button type="button" className="k-btn k-tap" onClick={() => onPrintLabels(key, justView.id)}
+                style={{ ...T.fs.caption, background: "none", border: "none", color: T.info, cursor: "pointer", fontFamily: T.fontSans, padding: 0, textDecoration: "underline" }}>{LT.justBtn}</button>
+            </div>
+          )}
           {!busy && (
             <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", marginTop: T.sp.m }}>
               <Btn size="sm" onClick={() => open("register")}>{X.btnRegister}</Btn>
               {oh.usable > 0 && <Btn size="sm" onClick={() => open("take")}>{X.btnTake}</Btn>}
               <Btn size="sm" onClick={() => open("count")}>{X.btnCount}</Btn>
+              {labelBtn && labelBtn({ display: "contents" })}
               {oh.expiredLots.length > 0 && <Btn size="sm" variant="danger" onClick={() => discard(oh.expiredLots, "expired")}>{X.btnDiscardExpired(oh.expiredLots.length)}</Btn>}
             </div>
           )}
@@ -28983,7 +29540,7 @@ function TodayView(props) {
       {sub === "sheet" ? <ProductionSheetView {...props} />
         : sub === "prep" ? <PrepStockView lang={lang} today={today} recipes={props.recipes} components={props.components} products={props.products}
             prepStock={props.prepStock} productionLog={props.productionLog} onPrepOp={props.onPrepOp} staff={false} focusKey={props.prepFocusKey || null}
-            onJump={props.onJump} onGoTab={props.onGoTab} confirmDialog={confirmDialog} showToast={props.showToast} />
+            onJump={props.onJump} onGoTab={props.onGoTab} confirmDialog={confirmDialog} showToast={props.showToast} onPrintLabels={props.onPrintLabels} />
         : <DailyCloseView {...props} onSave={props.onDailyClose} />}
     </div>
   );
@@ -30080,7 +30637,7 @@ function StaffShell({ lang, setLang, today, products = [], recipes = [], creatio
           <ProductionSheetView staff lang={lang} today={today} products={products} recipes={recipes} creations={creations} components={components}
             materials={materials} brands={brands} productFamilies={productFamilies} salesLog={salesLog} productionLog={productionLog}
             rawPlan={rawPlan} updatePlan={updatePlan} onLogProduction={onLogProduction} onPrint={onPrint} showToast={showToast} onOpenKitchen={openKitchen}
-            prepStock={prepStock} onPrepOp={onPrepOp} prepOn={prepOn} onOpenPrep={openPrepStaff} />
+            prepStock={prepStock} onPrepOp={onPrepOp} prepOn={prepOn} onOpenPrep={openPrepStaff} onPrintLabels={onPrintLabels} />
         )}
         {page === "kitchen" && (kitchenItem
           ? <KitchenView key={`${kitchenItem.kind}:${kitchenItem.id}${kitchenItem.stage ? ":" + kitchenItem.stage : ""}`} kind={kitchenItem.kind} target={kitchenTarget} initialQty={kitchenItem.qty} lang={lang} today={today}
@@ -32232,8 +32789,9 @@ function App() {
 
       {/* 第 6 批第 0 步:半成品标签(PC)/ 知识(KB)的打印设置弹窗,各用自己的 stage 名;弹窗第 0 步是空壳。员工也能打(不在 !staffMode 里) */}
       {printTarget && printTarget.stage === "plopts" && printTarget.type === "prepLabel" && (
-        <PrepLabelModal printKey={printTarget.data && printTarget.data.key} lotId={printTarget.data && printTarget.data.lotId} lang={lang} staff={!!printTarget.staff} today={today}
+        <PrepLabelModal printKey={printTarget.data && printTarget.data.key} lotId={printTarget.data && printTarget.data.lotId} lang={lang} staff={!!printTarget.staff || staffMode} today={today}
           recipes={recipes} components={components} materials={materials} brands={brands} creations={creations} prepStock={prepStock}
+          onEdit={printTarget.staff || staffMode ? undefined : (kind, id) => confirmLeaveEditor(confirmDialog, lang, () => { setPrintTarget(null); jumpToItem({ kind, id }); })}
           onClose={() => setPrintTarget(null)}
           onConfirm={(data) => setPrintTarget({ type: "prepLabel", stage: "preview", data, lang: data && data.lang })} />
       )}
@@ -33269,6 +33827,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onPrepOp={onPrepOp}
           onOpenPrep={openPrep}
           prepOn={prepOn}
+          onPrintLabels={(key, lotId) => openPrepLabel(key, lotId, false)}
           onJump={jumpToItem}
           onGoTab={goTab}
           orderReminders={orderReminders}
@@ -33727,6 +34286,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           salesLog={salesLog} productionLog={productionLog}
           rawPlan={appSettings.prodPlan} updatePlan={updateSheetPlan} onLogProduction={logProdFromSheet}
           prepStock={prepStock} prepOn={prepOn} onPrepOp={onPrepOp} onLogLine={logProdFromSheet}
+          onPrintLabels={(key, lotId) => openPrepLabel(key, lotId, true)}
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit}
           saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
