@@ -5790,7 +5790,7 @@ const IMPORT_KINDS = [
   { key: "products",        zh: "商品",     ja: "商品",         oldZh: "商品",     oldJa: "商品",           fam: "W", bin: "product" },
   { key: "salesLog",        zh: "销售记录", ja: "売上記録",     oldZh: "销售记录", oldJa: "売上記録",       fam: "L", bin: null },
   { key: "productionLog",   zh: "生产记录", ja: "生産記録",     oldZh: "生产记录", oldJa: "生産記録",       fam: "L", bin: null },
-  { key: "suppliers",       zh: "供货商",   ja: "仕入先",       oldZh: "供货商",   oldJa: "仕入先",         fam: "W", bin: "supplier" },
+  { key: "suppliers",       zh: "供货商",   ja: "仕入先",       oldZh: "供货商",   oldJa: "仕入先",         fam: "B", bin: "supplier" },
   { key: "cats",            zh: "老价格表", ja: "旧価格表",     oldZh: "老价格表", oldJa: "旧価格表",       fam: "C", bin: null },
   { key: "productFamilies", zh: "家族",     ja: "ファミリー",   fam: "W", bin: "family" },
   { key: "customCompCats",  zh: "组件分类", ja: "パーツ分類",   fam: "W", bin: "compCat" },
@@ -6455,7 +6455,8 @@ function planMergeImport(cur, d, opts = {}) {
     next.materials = mergeByIdPlan(cur.materials, migrated, (l, x) => mergeMaterialEntry(l, x, nowIso), skipIdx.materials, newTr("materials"));
   }
   // 供货商:PA 的 mergeSupplierList(spec_purchase_order R31)要在本店原料那一步之前算好 idMap;报告行和 skipped 照旧在第 10 步那个位置出
-  const supRes = has("suppliers") ? mergeSupplierList(cur.suppliers, d.suppliers, () => genId("sup_")) : null;
+  const supRes = has("suppliers") ? mergeSupplierList(cur.suppliers, d.suppliers, () => genId("sup_"), newTr("suppliers")) : null;
+  if (supRes) next.suppliers = supRes.list;
   const supIdMap = (supRes && supRes.idMap) || {};
   // v11: 合并 shopMaterials(按 materialId 去重;没 materialId 的孤立条目按 id 去重)
   if (has("shopMaterials")) {
@@ -6496,16 +6497,12 @@ function planMergeImport(cur, d, opts = {}) {
   if (logsReplaced) fixed((zh ? "⚠ 商品的当前库存没有跟着这些记录改,请到「商品」页核对一下库存" : "⚠ 在庫数は自動で変わりません。商品画面で確認してください")
     + (prodLogsReplaced && prepItemsN > 0 ? prepTxt(lang).mergeLogsTail : ""));
 
-  // 10. 合并 suppliers(第 0 步 = 今天的 pickNew;PA 合并后按名字认同一家,两行新报告进 notes)
+  // 10. 合并 suppliers(PA:mergeSupplierList 按 id、再按名字认同一家,同一家时修改时间新的一边为准;两行新报告进 notes,见下面 KA 那行之后)
   if (supRes) {
     const label = zh ? "供货商" : "仕入先";
     (supRes.keptLocal || []).forEach(f => skipped.push(`${label}「${_mergeNameOf(f)}」`));
     add.suppliers = supRes.add;
-    // 记账:第 0 步的 mergeSupplierList 就是今天的 pickNew(按 _mergeSameName),这里照同一个认法再走一遍记下谁对上谁,
-    // 新单位换成 mergeSupplierList 加进来的那几条(顺序一一对应)。**PA 把认法换成 R31 的两遍查找时,这几行跟着换**(spec_merge_plan R27)
-    const tr = newTr("suppliers");
-    mergeNamedPlan(cur.suppliers, d.suppliers, _mergeSameName, null, null, null, null, tr);
-    tr.units.forEach((u, k) => { if (supRes.add[k] !== undefined) u.item = supRes.add[k]; });
+    // 预览归属由 mergeSupplierList 的实际 id / 名字匹配直接记录。
     plusW("suppliers", (n) => (zh ? "+ 新供货商 " : "+ 仕入先 ") + n);
   }
 
@@ -6587,7 +6584,8 @@ function planMergeImport(cur, d, opts = {}) {
   // W 类的 next(R5):按 id 挡一次(今天 appendTo 的那道挡);知识先套上员工必读标记(KA,第 0 步不变)
   MERGE_W_KEYS.forEach(k => {
     if (!has(k)) return;
-    const baseList = wBase(k);
+    // suppliers 的已有条目已按 PA 取新，新增部分仍须经过 I 的回收站筛选。
+    const baseList = k === "suppliers" && supRes && supRes.updated ? supRes.list.slice(0, (cur.suppliers || []).length) : wBase(k);
     const ids = new Set((baseList || []).map(x => x && x.id));
     const a = finalAdd[k].filter(x => !(x.id !== undefined && ids.has(x.id)));
     next[k] = (a.length || baseList !== cur[k]) ? [...(baseList || []), ...a] : cur[k];
@@ -6632,7 +6630,9 @@ function planMergeImport(cur, d, opts = {}) {
 
   // notes 的顺序(R19):KA 的行 → PA 的行 → 删过不加那一行
   if (kMarks && kMarks.n > 0) notes.push(zh ? `· ${kMarks.n} 条已有知识的员工必读 / 要点用了文件里较新的` : `· 既存ナレッジ ${kMarks.n} 件のスタッフ必読・ポイントをファイルの新しい方に更新`);
-  if (supRes && supRes.notes) supRes.notes.forEach(l => notes.push(l));
+  // PA(spec_purchase_order R31):已有的供货商按修改时间换成了文件的 / 同名的合成一家 —— 各一行,放在 KA 那行后面(spec_merge_plan R19 的顺序)
+  if (supRes && supRes.updated > 0) notes.push(zh ? `· 已有供货商 ${supRes.updated} 家:按修改时间取新的一边` : `· 既存仕入先 ${supRes.updated} 社:新しい方を採用`);
+  if (supRes && supRes.nameMatched > 0) notes.push(zh ? `· 同名供货商 ${supRes.nameMatched} 家合成一家(本店原料的归属跟着换)` : `· 同名の仕入先 ${supRes.nameMatched} 社を 1 社にまとめました(仕入れ原料の仕入先も付け替え)`);
   const S = deletedSkipped.length;
   if (S > 0) notes.push(_impTxt(lang).notesDeleted(S, fmtNames(deletedSkipped, lang, { kind: true })));
 
@@ -6694,7 +6694,15 @@ function applyMergePlan(plan, base, set, d, opts = {}) {
     const ops = plan.logOps[key];
     if (ops && (ops.add.length || ops.replace.size)) go(key, (prev) => applyLogOps(prev, ops, false));
   });
-  if (plan.add.suppliers.length > 0) go("suppliers", (prev) => appendTo(prev, plan.add.suppliers));
+  // 供货商(PA 合并后是 B 类):调 setSuppliers 的条件多一个「已有的那家换成了文件的」(没有同名 / 同 id 时和今天一样只看 add);
+  // 兜底 = 今天的 appendTo + 这次换掉的那几家按 id 换上(只换 prev 里还是算计划时那一份的,之后别处改过的不盖)。id 都不变,
+  // 本店原料那一步按 plan.supIdMap 换过去的 id 在结果里都还在
+  if (plan.add.suppliers.length > 0 || plan.next.suppliers !== base.suppliers) go("suppliers", (prev) => {
+    const baseById = new Map((base.suppliers || []).filter(s => s && typeof s === "object").map(s => [s.id, s]));
+    const upd = new Map((plan.next.suppliers || []).filter(s => s && typeof s === "object" && baseById.has(s.id) && baseById.get(s.id) !== s).map(s => [s.id, s]));
+    const out = upd.size ? (prev || []).map(x => (x && typeof x === "object" && upd.has(x.id) && x === baseById.get(x.id)) ? upd.get(x.id) : x) : prev;
+    return appendTo(out, plan.add.suppliers);
+  });
   if (plan.add.productFamilies.length > 0) go("productFamilies", (prev) => appendTo(prev, plan.add.productFamilies));
   if (plan.add.customCompCats.length > 0) go("customCompCats", (prev) => appendTo(prev, plan.add.customCompCats));
   if (d.printSettings && typeof d.printSettings === "object") go("printSettings", (prev) => mergePrintSettingsPlan(prev, d.printSettings));
@@ -24002,13 +24010,137 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 // 用户店里实际采购的原料清单,每条挂靠到一个材料百科 (materialId)
 // 本店价 pricePerG 会优先于百科 priceRange.mid 作为配方成本的依据
 // ═══════════════════════════════════════════════════════════════
+// ── 第 6 批 PA:本店原料编辑页的两块(design_purchase §1.5),都在 PackPriceFields 下面(那块一个字不变)
+// 多规格提示:规格写了几种(packSpecSegments ≥ 2 段)→ 一排「点你实际买的那一种」,点了只把规格框换成那一段的 fix(没写单位的段带上借来的单位),本店价不动。
+// 看哪一份规格照 packGramsOf 的先后:本店原料自己的读得出就用它,否则材料百科的(采购单也是这么取的)
+function ShopMatMultiSpec({ editing, setEditing, mat, lang }) {
+  const pt = _supTxt(lang);
+  const own = String(editing.packSize === undefined || editing.packSize === null ? "" : editing.packSize).trim();
+  const src = parsePackSizeToGrams(own) > 0 ? own : ((mat && parsePackSizeToGrams(mat.packSize) > 0) ? String(mat.packSize).trim() : own);
+  const segs = packSpecSegments(src);
+  if (segs.length < 2) return null;
+  return (
+    <div data-pur="sm-multispec" style={{ padding: "10px 12px", background: T.warningBg, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusSm, fontSize: 12, color: T.textPrimary, lineHeight: 1.6 }}>
+      <div style={{ color: T.warning, overflowWrap: "anywhere" }}>{pt.smMultiSpec(src, segs[0].fix)}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+        {segs.map((sg, i) => <Btn key={i} size="sm" onClick={() => setEditing(e => ({ ...e, packSize: sg.fix }))}>{sg.fix}</Btn>)}
+      </div>
+    </div>
+  );
+}
+// 「🚚 下单(采购单用)」:供货商胶囊(第一个 = 找它下单,其余选上的带「设为主」)、失效 id 胶囊、下单时的叫法、只能整箱订、起订量。
+// 起订量永远存包数(spec R35 / plan 决定 2b):勾了整箱订时按箱显示和录入(录 n 箱存 n × 一箱几包),切换勾选不改存的数。存的整理在 smOrderFieldsForSave
+function ShopMatOrderFields({ editing, setEditing, suppliers, lang, inputStyle }) {
+  const pt = _supTxt(lang);
+  const [moDraft, setMoDraft] = useState(null);   // 按箱录入时的草稿(敲「1.」不被吃掉),离开输入框清掉
+  const sups = (suppliers || []).filter(s => s && typeof s === "object");
+  const sids = Array.isArray(editing.supplierIds) ? editing.supplierIds : [];
+  const alive = (id) => sups.some(s => s.id === id);
+  const bad = sids.filter((id, i) => !alive(id) && sids.indexOf(id) === i);
+  const idsOf = (e) => Array.isArray(e.supplierIds) ? e.supplierIds : [];
+  const toggle = (id) => setEditing(e => ({ ...e, supplierIds: idsOf(e).includes(id) ? idsOf(e).filter(x => x !== id) : [...idsOf(e), id] }));
+  const setMain = (id) => setEditing(e => ({ ...e, supplierIds: [id, ...idsOf(e).filter(x => x !== id)] }));
+  const dropId = (id) => setEditing(e => ({ ...e, supplierIds: idsOf(e).filter(x => x !== id) }));
+  const cp = casePackOf(editing);
+  const caseOn = editing.orderUnit === "case" && cp > 0;
+  const moRaw = editing.minOrder === undefined || editing.minOrder === null ? "" : String(editing.minOrder);
+  const moShown = moDraft !== null ? moDraft : (moRaw.trim() === "" ? "" : (caseOn ? String(Math.ceil(minOrderOf(editing) / cp)) : moRaw));
+  const editMin = (e) => {
+    const v = e.target.value;
+    if (!caseOn) { setEditing(x => ({ ...x, minOrder: v })); return; }
+    setMoDraft(v);
+    const n = parseFloat(v);
+    setEditing(x => ({ ...x, minOrder: v.trim() === "" ? "" : (isFinite(n) ? String(Math.round(n * cp * 1000) / 1000) : v) }));
+  };
+  const setCase = (on) => { setMoDraft(null); setEditing(x => { const y = { ...x }; if (on) y.orderUnit = "case"; else delete y.orderUnit; return y; }); };
+  const lab = { fontSize: 12, color: T.textSecondary, marginBottom: 4 };
+  // 第一个(找它下单)实心;选上但不是第一个的描边朱色字(以前是浅灰底白字,看不清);没选的灰
+  const pill = (on, primary) => ({ display: "inline-flex", alignItems: "center", flexWrap: "wrap", maxWidth: "100%", borderRadius: T.radiusPill, border: `0.5px solid ${on ? T.accent : T.border}`,
+    background: primary ? T.accent : "transparent", overflow: "hidden" });
+  const pillBtn = (on, primary) => ({ padding: "5px 10px", fontSize: 11, fontWeight: 500, background: "transparent", color: primary ? "#fff" : (on ? T.accent : T.textSecondary),
+    border: "none", cursor: "pointer", fontFamily: T.fontSans, textAlign: "left", overflowWrap: "anywhere" });
+  return (
+    <div data-pur="sm-order" style={{ border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "12px 14px", display: "grid", gap: 12 }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, color: T.textPrimary }}>{pt.smOrderTitle}</div>
+      <div>
+        <div style={lab}>{pt.smSupLabel}</div>
+        {sups.length === 0 && bad.length === 0 ? (
+          <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic", padding: "4px 0" }}>{pt.smNoSup}</div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {sups.map(sup => {
+              const on = sids.includes(sup.id), primary = on && sids.find(alive) === sup.id;   // 第一个还存在的 = 找它下单(同 smOrderCfg 的 supId)
+              return (
+                <span key={String(sup.id)} data-pur-sup={String(sup.id)} style={pill(on, primary)}>
+                  <button type="button" className="k-tap" aria-pressed={on} onClick={() => toggle(sup.id)} style={pillBtn(on, primary)}>{primary && "🚚 "}{sup.name}</button>
+                  {on && !primary && <button type="button" className="k-tap" onClick={() => setMain(sup.id)} style={{ ...pillBtn(on, false), borderLeft: `0.5px solid ${T.accent}` }}>· {pt.smSetMain}</button>}
+                </span>
+              );
+            })}
+            {bad.map(id => (
+              <button key={"bad:" + String(id)} type="button" className="k-tap" data-pur-bad={String(id)} aria-label={pt.smDeadSupAria} onClick={() => dropId(id)}
+                style={{ padding: "5px 10px", fontSize: 11, fontWeight: 500, background: T.warningBg, color: T.warning, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusPill, cursor: "pointer", fontFamily: T.fontSans }}>
+                {pt.smDeadSup} ✕
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <label style={{ display: "block" }}>
+        <div style={lab}>{pt.smOrderName}</div>
+        <input value={editing.orderName === undefined || editing.orderName === null ? "" : String(editing.orderName)} onChange={e => { const v = e.target.value; setEditing(x => ({ ...x, orderName: v })); }}
+          placeholder={pt.smOrderNameHolder} style={inputStyle} />
+      </label>
+      <div>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: cp > 0 ? T.textPrimary : T.textTertiary, cursor: cp > 0 ? "pointer" : "not-allowed" }}>
+          <input type="checkbox" checked={caseOn} disabled={cp === 0} onChange={e => setCase(e.target.checked)} />
+          {pt.smCaseOnly(cp)}
+        </label>
+        {cp === 0 && <WhyNote>{pt.smCaseNeedPack}</WhyNote>}
+      </div>
+      <label style={{ display: "block" }}>
+        <div style={lab}>{pt.smMinOrder}</div>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="text" inputMode="numeric" value={moShown} onChange={editMin} onBlur={() => setMoDraft(null)} placeholder="1" style={{ ...inputStyle, width: 90 }} />
+          <span style={{ fontSize: 12, color: T.textSecondary }}>{caseOn ? pt.smUnitCase : pt.smUnitPack}</span>
+          <span style={{ fontSize: 11, color: T.textTertiary }}>{pt.smMinHint}</span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
 // 第 6 批第 0 步:多可选 props openTarget / onOpened / returnLabel / onReturn(PA 接:从采购页跳进来编辑某一条、返回键写「← 回采购单」)
+// PA:openTarget = { id }(打开那一条)/ { newMaterialId }(这个材料还不是本店原料 → 新建;已经是 → 打开那一条);打开以后调 onOpened(App 清掉 openTarget)。
+// 这样打开的编辑页,保存 / 取消 / 删除以后调 onReturn(回采购单),返回键写 returnLabel;在列表里自己点开的不回
 function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands, suppliers = [], recipes = [], components = [], creations = [], lang, showToast, confirmDialog,
   openTarget, onOpened, returnLabel, onReturn }) {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState(null);
   const [picker, setPicker] = useState(false);
   const [editing, setEditing] = useState(null); // { id, materialId, pricePerG, packSize?, casePack?, note?, _new? }
+  const [fromTarget, setFromTarget] = useState(false);   // 第 6 批 PA:这个编辑页是 openTarget 打开的(关掉时回采购单)
+  useEffect(() => {
+    if (!openTarget || typeof openTarget !== "object") return;
+    let opened = null;
+    if (openTarget.id !== undefined && openTarget.id !== null && openTarget.id !== "") {
+      const sm = shopMaterials.find(x => x && x.id === openTarget.id);
+      if (sm) opened = { ...sm };
+    } else if (openTarget.newMaterialId) {
+      const have = shopMaterials.find(x => x && x.materialId === openTarget.newMaterialId);
+      const mat = materials.find(m => m && m.id === openTarget.newMaterialId);
+      if (have) opened = { ...have };
+      else if (mat) opened = newShopMatDraft(mat);
+    }
+    if (opened) { setPicker(false); setEditing(opened); setFromTarget(true); }
+    if (onOpened) onOpened();
+  }, [openTarget]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // 关掉编辑页(保存 / 取消):openTarget 打开的,回采购单。别的路径关掉的(删除)只清标记、留在本店原料页
+  const closeEditor = () => {
+    setEditing(null);
+    if (fromTarget) { setFromTarget(false); if (onReturn) onReturn(); }
+  };
+  useEffect(() => { if (!editing && fromTarget) setFromTarget(false); }, [editing]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const linkedIds = new Set(shopMaterials.map(sm => sm.materialId));
   const availableMaterials = materials.filter(m => !linkedIds.has(m.id));
@@ -24028,9 +24160,10 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
     return true;
   });
 
-  const handleAddFromPicker = (mat) => {
+  // 新建一条的草稿(从百科选 / 采购页「加进本店原料」共用)
+  function newShopMatDraft(mat) {
     const refPrice = (mat.priceRange && mat.priceRange.mid) || mat.pricePerG || "";
-    setEditing({
+    return {
       id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
       materialId: mat.id,
       pricePerG: refPrice,
@@ -24040,7 +24173,10 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       note: "",
       supplierIds: [],
       _new: true,
-    });
+    };
+  }
+  const handleAddFromPicker = (mat) => {
+    setEditing(newShopMatDraft(mat));
     setPicker(false);
   };
 
@@ -24051,20 +24187,25 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       return;
     }
     const now = new Date().toISOString();
-    const clean = { ...editing, updatedAt: now };   // 修改时间给合并导入用(mergeByNewer)
+    // 第 6 批 PA:下单设置三格(叫法 / 整箱 / 起订量)整理一下(空了删键;没有这些键 → 原样,打开不改就保存和以前一样)
+    const clean = { ...smOrderFieldsForSave({ ...editing, updatedAt: now }) };   // 修改时间给合并导入用(mergeByNewer)
     delete clean._new;
     setShopMaterials(prev => {
       const idx = prev.findIndex(x => x.id === clean.id);
       // 第 4 批 B4-3:和存盘的那一条比(不是打开编辑页时的副本),价变了才记;新建的记一条「加入本店原料」
       const old = idx >= 0 ? prev[idx] : null;
-      const ph = withPriceHistory(old, clean, "shop", old ? "shop" : "add", now);
-      const out = { ...clean };
+      // 第 6 批 PA(spec R35):「下单设置」这一组和存盘那一条比变了才写 orderAt(updatedAt 照旧写,她在改整条);
+      // 新建的:挂了供货商或填了任何一个下单设置才写
+      const orderChanged = old ? smOrderGroupChanged(old, clean, suppliers)
+        : ((Array.isArray(clean.supplierIds) && clean.supplierIds.length > 0) || ["orderName", "orderUnit", "minOrder"].some(k => Object.prototype.hasOwnProperty.call(clean, k)));
+      const out = orderChanged ? { ...clean, orderAt: now } : { ...clean };
+      const ph = withPriceHistory(old, out, "shop", old ? "shop" : "add", now);
       if (ph === undefined) delete out.priceHistory; else out.priceHistory = ph;
       if (idx >= 0) { const next = [...prev]; next[idx] = out; return next; }
       return [...prev, out];
     });
     showToast(lang === "zh" ? "✓ 已保存" : "✓ 保存しました");
-    setEditing(null);
+    closeEditor();
   };
 
   // 2026-09-29 体检第 2 批:以前只问「删除这条本店原料吗?」,不说哪些配方的成本会从本店进价退回百科参考价(可能是日元折算)
@@ -24108,12 +24249,15 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
     const refPrice = (mat && mat.priceRange && mat.priceRange.mid) || (mat && mat.pricePerG);
     const inputStyle = { width: "100%", padding: "8px 10px", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary };
     // 2026-09-29 体检第 2 批 2b:「← 返回」「取消」有没保存的改动先问一句(以前直接关,填好的价当场丢)
-    const leaveEditing = () => confirmLeaveEditor(confirmDialog, lang, () => setEditing(null));
+    const leaveEditing = () => confirmLeaveEditor(confirmDialog, lang, closeEditor);
+    const smPt = _supTxt(lang);
 
     return (
       <DirtyGuardScope key={editing.id} watch={editing}>
         <div style={{ marginBottom: 16 }}>
-          <Btn onClick={leaveEditing}>← {lang === "zh" ? "返回" : "戻る"}</Btn>
+          {fromTarget && onReturn
+            ? <Btn onClick={leaveEditing}>{returnLabel || smPt.smReturnBtn}</Btn>
+            : <Btn onClick={leaveEditing}>← {lang === "zh" ? "返回" : "戻る"}</Btn>}
         </div>
         <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 20, border: `0.5px solid ${T.border}` }}>
           <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4, fontFamily: T.fontSerif, color: T.textPrimary }}>
@@ -24140,40 +24284,13 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
               {/* 第 4 批 B4-3:存盘那一条的价格记录(不是正在改的草稿) */}
               {!editing._new && <PriceHistoryList obj={shopMaterials.find(x => x.id === editing.id)} kind="shop" lang={lang} title={lang === "zh" ? "🏷️ 本店价" : "🏷️ 仕入価"} />}
             </div>
-            {/* v13: 供货商多选。第一个是主供货商(采购清单归属) */}
-            {suppliers.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{lang === "zh" ? "供货商 (可多选,第一个=主供货商)" : "仕入先 (複数選択可,先頭=主)"}</div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {suppliers.map(sup => {
-                    const sids = editing.supplierIds || [];
-                    const idx = sids.indexOf(sup.id);
-                    const active = idx >= 0;
-                    const isPrimary = idx === 0;
-                    return (
-                      <button key={sup.id} type="button" onClick={() => {
-                        setEditing(e => {
-                          const cur = e.supplierIds || [];
-                          const has = cur.indexOf(sup.id);
-                          return { ...e, supplierIds: has >= 0 ? cur.filter(x => x !== sup.id) : [...cur, sup.id] };
-                        });
-                      }} style={{ padding: "5px 10px", fontSize: 11, fontWeight: 500, background: isPrimary ? T.accent : (active ? T.accentSoft : "transparent"), color: active ? "#fff" : T.textSecondary, border: `0.5px solid ${active ? T.accent : T.border}`, borderRadius: T.radiusPill, cursor: "pointer" }}>
-                        {isPrimary && "🚚 "}{sup.name}
-                      </button>
-                    );
-                  })}
-                </div>
-                {(editing.supplierIds || []).length > 1 && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 5 }}>{lang === "zh" ? "· 第一个是采购清单归属;再点可取消" : "· 先頭が採購所属"}</div>}
-              </div>
-            )}
-            {suppliers.length === 0 && (
-              <div style={{ fontSize: 11, color: T.textTertiary, fontStyle: "italic", padding: "4px 0" }}>
-                {lang === "zh" ? "还没有供货商。去「🚚供货商」tab 新建后,这里可以关联" : "仕入先未登録"}
-              </div>
-            )}
+            {/* 第 6 批 PA:规格写了几种 → 点你实际买的那一种(本店价不动) */}
+            <ShopMatMultiSpec editing={editing} setEditing={setEditing} mat={mat} lang={lang} />
+            {/* v13 供货商多选 → 第 6 批 PA「🚚 下单(采购单用)」:第一个 = 找它下单;叫法 / 只能整箱订 / 起订量(采购单用) */}
+            <ShopMatOrderFields editing={editing} setEditing={setEditing} suppliers={suppliers} lang={lang} inputStyle={inputStyle} />
             <label style={{ display: "block" }}>
               <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 4 }}>{lang === "zh" ? "备注" : "メモ"}</div>
-              <input value={editing.note || ""} onChange={e => setEditing({ ...editing, note: e.target.value })} placeholder={lang === "zh" ? "起订量 / 其他" : "最小ロット 等"} style={inputStyle} />
+              <input value={editing.note || ""} onChange={e => setEditing({ ...editing, note: e.target.value })} placeholder={smPt.smNoteHolder} style={inputStyle} />
             </label>
           </div>
 
@@ -24952,7 +25069,85 @@ function ProductEditForm({ product, prefill, recipes, creations, components = []
 const DAY_LABELS_ZH = ["日", "一", "二", "三", "四", "五", "六"];
 const DAY_LABELS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 
-function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterials, materials, brands, lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget }) {
+// ── 第 6 批 PA:供货商的「下单」三格(提前几天 / 截单时间 / 起送金额)在编辑页、详情页、列表上的样子(design_purchase §1.4)。
+// 读一律走 supOrderCfg(读不出 = 没写),送货日 / 下单日只走 supDeliverySlots(spec_purchase_order R16 / R18);存由 supplierFieldsForSave 整理。
+const _supTxt = (lang) => PURCHASE_TXT[lang === "ja" ? "ja" : "zh"];
+const _supHmNow = (d) => String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+const _supMoney = (n) => "¥" + (Math.round(n * 100) / 100).toLocaleString("en-US");   // 起送金额永远是人民币(minOrderCNY)
+// 一趟的说法:「今天 16:00 前下单 → 10/9(周五)送到」/「10/11(周日)16:00 前下单 → 10/12(周一)送到」(spec R20 的写法)
+const supSlotText = (slot, today, lang) => {
+  const pt = _supTxt(lang), L = lang === "ja" ? "ja" : "zh";
+  const order = slot.orderBy === today ? pt.supSlotToday(slot.cutoff) : pt.supSlotOn(mdw(slot.orderBy, L), slot.cutoff);
+  return `${order} → ${pt.supSlotArrive(mdw(slot.delivery, L))}`;
+};
+// 列表行尾「· 提前 1 天 · 16:00 截单」(有才加;没写 = "")
+const supListTail = (sup, lang) => {
+  const pt = _supTxt(lang), c = supOrderCfg(sup);
+  return (c.leadDays !== null ? ` · ${pt.supListLead(c.leadDays)}` : "") + (c.cutoff ? ` · ${pt.supListCutoff(c.cutoff)}` : "");
+};
+// 编辑页「⏰ 下单」卡:三格原样记进表单(字符串),保存时 supplierFieldsForSave 整理(空 / 读不出删键)
+function SupplierOrderFields({ form, setForm, lang, inputStyle }) {
+  const pt = _supTxt(lang);
+  const val = (k) => (form[k] === undefined || form[k] === null) ? "" : String(form[k]);
+  const set = (k) => (e) => { const v = e.target.value; setForm(f => ({ ...f, [k]: v })); };
+  const row = { display: "grid", gridTemplateColumns: "minmax(88px, max-content) minmax(0, 1fr)", gap: "4px 12px", alignItems: "center" };
+  const lab = { fontSize: 12, color: T.textSecondary };
+  const hint = { gridColumn: "2", fontSize: 11, color: T.textTertiary, lineHeight: 1.5, overflowWrap: "anywhere", minWidth: 0 };
+  const unit = { fontSize: 12, color: T.textSecondary };
+  return (
+    <div data-pur="sup-order" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12 }}>{pt.supOrderTitle}</div>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={row}>
+          <span style={lab}>{pt.supLeadLabel}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <input data-pur-f="leadDays" type="text" inputMode="numeric" value={val("leadDays")} onChange={set("leadDays")} placeholder="1" aria-label={pt.supLeadLabel} style={{ ...inputStyle, width: 72 }} />
+            <span style={unit}>{pt.supLeadUnit}</span>
+          </span>
+          <span style={hint}>{pt.supLeadHint}</span>
+        </div>
+        <div style={row}>
+          <span style={lab}>{pt.supCutoffLabel}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+            <input data-pur-f="cutoff" type="time" value={val("cutoff")} onChange={set("cutoff")} aria-label={pt.supCutoffLabel} style={{ ...inputStyle, width: 120 }} />
+            {val("cutoff") !== "" && <Btn size="sm" onClick={() => setForm(f => ({ ...f, cutoff: "" }))}>{pt.supCutoffClear}</Btn>}
+          </span>
+          <span style={hint}>{pt.supCutoffHint}</span>
+        </div>
+        <div style={row}>
+          <span style={lab}>{pt.supMinLabel}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <span style={unit}>¥</span>
+            <input data-pur-f="minOrderCNY" type="text" inputMode="decimal" value={val("minOrderCNY")} onChange={set("minOrderCNY")} placeholder="500" aria-label={pt.supMinLabel} style={{ ...inputStyle, width: 100 }} />
+          </span>
+          <span style={hint}>{pt.supMinHint}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+// 详情页:三格的设置一行 +「下次:… · 再下次:…」(没写送货日 → 不出;没写提前几天 → 只写下次送货日)
+function SupplierNextSlots({ sup, lang, today, nowHm }) {
+  const pt = _supTxt(lang), c = supOrderCfg(sup);
+  const cfg = [c.leadDays !== null ? pt.supCfgLead(c.leadDays) : "", c.cutoff ? pt.supCfgCutoff(c.cutoff) : "", c.minOrderCNY > 0 ? pt.supCfgMin(_supMoney(c.minOrderCNY)) : ""].filter(Boolean);
+  let next = null;
+  if (c.dows.length) {
+    const ok = supDeliverySlots(sup, today, nowHm).filter(s => s.orderable);
+    if (!ok.length) next = pt.supNoSlot;
+    else if (c.leadDays === null) next = pt.supNoLead(mdw(ok[0].delivery, lang === "ja" ? "ja" : "zh"));
+    else next = pt.supNextLabel + supSlotText(ok[0], today, lang) + (ok[1] ? ` · ${pt.supAgainLabel}${supSlotText(ok[1], today, lang)}` : "");
+  }
+  if (!cfg.length && !next) return null;
+  return (
+    <div data-pur="sup-next" style={{ marginTop: 12, padding: "10px 12px", background: T.bgMuted, borderRadius: T.radiusSm, fontSize: 12, lineHeight: 1.7, color: T.textSecondary, overflowWrap: "anywhere" }}>
+      {cfg.length > 0 && <div data-pur="sup-cfg">⏰ {cfg.join(" · ")}</div>}
+      {next && <div data-pur="sup-slots" style={{ color: T.textPrimary }}>🚚 {next}</div>}
+    </div>
+  );
+}
+
+function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterials, materials, brands, lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget,
+  returnLabel, onReturn }) {   // 第 6 批 PA:从采购页「去新建供货商」跳过来的(App 传 onReturn):取消直接回去,保存后提示条带「回采购单」
   const mLabel = (m) => m ? (lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh)) : "";
   const dayLabels = lang === "zh" ? DAY_LABELS_ZH : DAY_LABELS_JA;
 
@@ -24960,12 +25155,14 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
     return <SupplierEditForm
       supplier={editTarget._new ? null : editTarget}
       lang={lang}
+      backLabel={onReturn ? (returnLabel || _supTxt(lang).supReturnBtn) : null}
       onSave={(s) => {
         setSuppliers(prev => {
           const found = prev.find(x => x.id === s.id);
           return found ? prev.map(x => x.id === s.id ? s : x) : [...prev, s];
         });
-        showToast(lang === "zh" ? "✓ 供货商已保存" : "✓ 仕入先保存");
+        if (onReturn) showToast(_supTxt(lang).supSaved, { undo: onReturn, actionLabel: _supTxt(lang).supBackTo });
+        else showToast(lang === "zh" ? "✓ 供货商已保存" : "✓ 仕入先保存");
         setViewId(s.id);
         setEditTarget(null);
       }}
@@ -24991,6 +25188,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
         // [B4 修复] 有 id 跳详情,无 id 回列表
         if (editTarget && editTarget.id) setViewId(editTarget.id);
         setEditTarget(null);
+        if (onReturn) onReturn();   // 第 6 批 PA:从采购页来的,取消就回采购单
       })}
     />;
   }
@@ -25016,7 +25214,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
               <div style={{ fontSize: 10, color: T.textTertiary, textTransform: "uppercase" }}>{lang === "zh" ? "送货日(每周)" : "配送曜日"}</div>
               <div style={{ fontFamily: T.fontSerif, fontSize: 15, color: T.textPrimary, marginTop: 4 }}>
                 {(s.deliveryDaysOfWeek || []).length === 0 ? <span style={{ color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "未设" : "未設定"}</span> :
-                  (s.deliveryDaysOfWeek || []).sort().map(d => dayLabels[d]).join(" · ")}
+                  [...(s.deliveryDaysOfWeek || [])].sort().map(d => dayLabels[d]).join(" · ")}
               </div>
             </div>
             <div style={{ background: T.bgMuted, padding: "10px 12px", borderRadius: T.radiusSm }}>
@@ -25024,6 +25222,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
               <div style={{ fontFamily: T.fontSerif, fontSize: 18, fontWeight: 500, color: T.accent, marginTop: 4 }}>{linkedSMs.length}</div>
             </div>
           </div>
+          <SupplierNextSlots sup={s} lang={lang} today={localDateStr()} nowHm={_supHmNow(new Date())} />
           {(s.closureWindows || []).length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 6 }}>{lang === "zh" ? "闭店 / 休业窗口" : "休業期間"}</div>
@@ -25076,7 +25275,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
         <div style={{ display: "grid", gap: 8 }}>
           {suppliers.map(s => {
             const linkedCount = shopMaterials.filter(sm => Array.isArray(sm.supplierIds) && sm.supplierIds.includes(s.id)).length;
-            const days = (s.deliveryDaysOfWeek || []).sort().map(d => dayLabels[d]).join(" · ");
+            const days = [...(s.deliveryDaysOfWeek || [])].sort().map(d => dayLabels[d]).join(" · ");   // 第 6 批 PA:先拷贝再排(以前原地排 state 里的数组)
             return (
               <div key={s.id} onClick={() => setViewId(s.id)} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${T.accent}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -25085,6 +25284,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
                     {days || (lang === "zh" ? "未设送货日" : "曜日未設定")}
                     {(s.closureWindows || []).length > 0 && ` · ${s.closureWindows.length} ${lang === "zh" ? "个闭店窗口" : "休業期間"}`}
                     {linkedCount > 0 && ` · ${linkedCount} ${lang === "zh" ? "种原料" : "件"}`}
+                    {supListTail(s, lang) || null}
                   </div>
                 </div>
               </div>
@@ -25096,7 +25296,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
   );
 }
 
-function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
+function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack, backLabel = null }) {   // backLabel(第 6 批 PA):从采购页来的,右上「取消」写「← 回采购单」
   const empty = { name: "", deliveryDaysOfWeek: [], closureWindows: [], note: "" };
   const [form, setForm] = useState(supplier ? { ...empty, ...supplier } : empty);
   const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页 / 取消时先问一句
@@ -25119,13 +25319,15 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
       setTimeout(() => setErrorMsg(""), 3000);
       return;
     }
-    onSave({
+    // 第 6 批 PA:提前几天 / 截单时间 / 起送金额三格走 supplierFieldsForSave(空 / 读不出删键;老数据没有这三个键 → 原样,打开不改就保存和以前一样)
+    onSave(supplierFieldsForSave({
       ...form,
       id: supplier ? supplier.id : ("sup_" + Date.now() + Math.random().toString(36).slice(2, 6)),
       closureWindows: (form.closureWindows || []).filter(w => w.start && w.end),
       updatedAt: new Date().toISOString(),
-    });
+    }));
   };
+  const pt = PURCHASE_TXT[lang === "ja" ? "ja" : "zh"];
 
   return (
     <div {...dirtyBind}>
@@ -25133,7 +25335,7 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
         <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>{lang === "zh" ? (supplier ? "编辑供货商" : "新建供货商") : (supplier ? "仕入先編集" : "新規仕入先")}</div>
         <div style={{ display: "flex", gap: 8 }}>
           {supplier && <Btn variant="danger" size="sm" onClick={onDelete}>{lang === "zh" ? "删除" : "削除"}</Btn>}
-          <Btn onClick={onBack}>{lang === "zh" ? "取消" : "キャンセル"}</Btn>
+          <Btn onClick={onBack}>{backLabel || (lang === "zh" ? "取消" : "キャンセル")}</Btn>
         </div>
       </div>
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
@@ -25153,6 +25355,7 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
           })}
         </div>
       </div>
+      <SupplierOrderFields form={form} setForm={setForm} lang={lang} inputStyle={inputStyle} />
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15 }}>🏖 {lang === "zh" ? "闭店 / 休业窗口" : "休業期間"}</div>
@@ -25178,7 +25381,7 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <label style={{ display: "block" }}>
           <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "备注" : "メモ"}</div>
-          <input value={form.note || ""} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={lang === "zh" ? "联系人 / 电话 / 起订量 / 其他" : "担当者 等"} style={inputStyle} />
+          <input value={form.note || ""} onChange={e => setForm({ ...form, note: e.target.value })} placeholder={pt.supNoteHolder} style={inputStyle} />
         </label>
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
@@ -25198,8 +25401,58 @@ function SupplierEditForm({ supplier, lang, onSave, onDelete, onBack }) {
 // 其余空壳,返回值写在每一行旁边(「没写的一律返回什么都没有」)。段里不许有 React / setState;localStorage 只在 purchaseStateLoad / purchaseStateSave 里碰。
 // 之后:SM_ORDER_GROUP / supplierFieldsForSave / smOrderFieldsForSave / smOrderGroupChanged / smWithSupplier / smReattachSupplier / stripSupplierRefs /
 // normSupName / mergeSupplierList / remapShopSupplierIds / mergeShopEntry 归 PA,其余 PB
+// PA(第 6 批第 1 段)把上面 PA 那几个写成定稿(§D);另外 PA 的页面要用、规格已经定死的几个 PB 小件也先照规格原文写成真的:
+// packSpecSegments(R2)、casePackOf / minOrderOf(R4)、supOrderCfg / supDeliverySlots / supNextSlot(R16 / R18 / R19)、isYmd / md / mdw(2.6)。
+// PB 合并时这几处会撞行,以规格为准取一份即可(两份都对过 purchase oracle)
 const PURCHASE_STATE_KEY = "korora_purchase_v1";
 const PURCHASE_TXT = { zh: {}, ja: {} };   // PA / PB 往这里加字
+// PA:供货商编辑 / 详情 / 列表、本店原料编辑页「🚚 下单」块的字。键一律以 sup / sm 开头(PB 别用这两个前缀,同名会悄悄互相盖掉)
+Object.assign(PURCHASE_TXT.zh, {
+  supOrderTitle: "⏰ 下单", supLeadLabel: "提前几天下单", supLeadUnit: "天", supLeadHint: "下单那天到送到那天隔几天;当天下单当天送填 0",
+  supCutoffLabel: "截单时间", supCutoffHint: "那天几点前要下单;不填 = 当天都行", supCutoffClear: "清除",
+  supMinLabel: "起送金额", supMinHint: "不到这个数不送或要加运费;不填 = 没有",
+  supNoteHolder: "联系人 / 电话 / 微信 / 其他",
+  supNextLabel: "下次:", supAgainLabel: "再下次:",
+  supSlotToday: (t) => t ? `今天 ${t} 前下单` : "今天下单",
+  supSlotOn: (d, t) => t ? `${d}${t} 前下单` : `${d}前下单`,
+  supSlotArrive: (d) => `${d}送到`,
+  supNoLead: (d) => `下次送货 ${d} · 没写提前几天下单,采购页只能写下次送货日`,
+  supNoSlot: "4 周内没有能送的日子(看看送货日和闭店)",
+  supCfgLead: (n) => `提前 ${n} 天下单`, supCfgCutoff: (t) => `${t} 截单`, supCfgMin: (m) => `起送 ${m}`,
+  supListLead: (n) => `提前 ${n} 天`, supListCutoff: (t) => `${t} 截单`,
+  supSaved: "✓ 供货商已保存", supBackTo: "回采购单", supReturnBtn: "← 回采购单",
+  smMultiSpec: (ps, first) => `⚠ 规格写了几种(${ps}):袋价和采购单都按第一种「${first}」算。点你实际买的那一种:`,
+  smOrderTitle: "🚚 下单(采购单用)", smSupLabel: "供货商(可多选;第一个 = 找它下单)", smSetMain: "设为主",
+  smDeadSup: "⚠ 原来的供货商已删除", smDeadSupAria: "去掉这个已经删掉的供货商",
+  smNoSup: "还没有供货商。去「🚚供货商」tab 新建后,这里可以关联",
+  smOrderName: "下单时的叫法 / 货号(对方的品名,可空)", smOrderNameHolder: "例:圭那亚 70% 3kg / V5012",
+  smCaseOnly: (n) => n > 0 ? `只能整箱订(一箱 ${n} 包)` : "只能整箱订", smCaseNeedPack: "先在上面填「一箱(包)」",
+  smMinOrder: "起订量", smUnitPack: "包", smUnitCase: "箱", smMinHint: "不填 = 1",
+  smNoteHolder: "其他", smReturnBtn: "← 回采购单",
+});
+Object.assign(PURCHASE_TXT.ja, {
+  supOrderTitle: "⏰ 発注", supLeadLabel: "何日前に発注", supLeadUnit: "日", supLeadHint: "発注日から納品日まで。当日納品は 0",
+  supCutoffLabel: "締め切り時刻", supCutoffHint: "空欄 = 当日中", supCutoffClear: "クリア",
+  supMinLabel: "最低発注額", supMinHint: "未満は配送不可・送料あり。空欄 = なし",
+  supNoteHolder: "担当者 / 電話 / WeChat / その他",
+  supNextLabel: "次回:", supAgainLabel: "その次:",
+  supSlotToday: (t) => t ? `本日 ${t} までに発注` : "本日発注",
+  supSlotOn: (d, t) => t ? `${d}${t} までに発注` : `${d}までに発注`,
+  supSlotArrive: (d) => `${d}着`,
+  supNoLead: (d) => `次回配送 ${d} · 発注リードタイム未設定(仕入れリストは次回配送日だけ表示)`,
+  supNoSlot: "4 週間以内に配送日がありません(曜日と休業日を確認)",
+  supCfgLead: (n) => `${n} 日前に発注`, supCfgCutoff: (t) => `${t} 締め切り`, supCfgMin: (m) => `最低発注 ${m}`,
+  supListLead: (n) => `${n} 日前発注`, supListCutoff: (t) => `${t} 締め切り`,
+  supSaved: "✓ 仕入先保存", supBackTo: "仕入れへ", supReturnBtn: "← 仕入れへ",
+  smMultiSpec: (ps, first) => `⚠ 規格が複数あります(${ps})。パック価格と仕入れリストは最初の「${first}」で計算しています。実際に買う規格を選んでください`,
+  smOrderTitle: "🚚 発注(仕入れリスト用)", smSupLabel: "仕入先(複数可・先頭 = 発注先)", smSetMain: "メインにする",
+  smDeadSup: "⚠ 削除済みの仕入先", smDeadSupAria: "削除済みの仕入先を外す",
+  smNoSup: "仕入先未登録",
+  smOrderName: "発注時の呼び名・品番(任意)", smOrderNameHolder: "例:グアナラ 70% 3kg / V5012",
+  smCaseOnly: (n) => n > 0 ? `ケース単位のみ(1 ケース ${n} パック)` : "ケース単位のみ", smCaseNeedPack: "先に上の「1ケース(パック)」を入力してください",
+  smMinOrder: "最小発注数", smUnitPack: "パック", smUnitCase: "ケース", smMinHint: "空欄 = 1",
+  smNoteHolder: "その他", smReturnBtn: "← 仕入れへ",
+});
 // 本店原料「下单设置」一组(自带 orderAt);SM_ORDER_KEYS 只给 smOrderGroupChanged 判断变没变,合并只用 SM_ORDER_GROUP(时间戳在组里)
 const SM_ORDER_KEYS = ["supplierIds", "orderName", "orderUnit", "minOrder"];
 const SM_ORDER_GROUP = [...SM_ORDER_KEYS, "orderAt"];
@@ -25226,12 +25479,28 @@ const supNextDelivery = (sup, fromDateStr) => {
   return null;
 };
 // ── §A 下单数量和钱
-const packSpecSegments = (ps) => [];                                 // 空壳:R2
-// 保留第 5 批的字符串调用口径；第 6 批按本店原料对象返回下单规格详情。
+// R2(PA 先写成真的:本店原料编辑页的多规格提示要用;PB 合并时以规格为准,两份应逐字等价)
+const packSpecSegments = (ps) => {
+  const s = String(ps == null ? "" : ps).trim().replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
+  const parts = s.split(/[\/、，,]/).map(x => x.trim()).filter(Boolean);
+  const RE = /^\s*(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|g|克|l|ℓ|升)?/i;
+  const out = [];
+  parts.forEach((p, i) => {
+    const m = p.match(RE);
+    if (!m) return;                                                     // 不以数字开头的段不算(「冷凍」「约 1kg」)
+    if (m[2]) { out.push({ text: p, fix: p, grams: parsePackSizeToGrams(p), unit: m[2] }); return; }
+    const rest = p.slice(m[0].length).trim();
+    if (rest && /^[個个本枚缶号號粒片袋箱入]/.test(rest)) { out.push({ text: p, fix: p, grams: 0, unit: "" }); return; }   // 计件段
+    for (const q of parts.slice(i + 1)) { const mm = q.match(RE); if (mm && mm[2]) { const fix = m[1] + mm[2]; out.push({ text: p, fix, grams: parsePackSizeToGrams(fix), unit: mm[2] }); return; } }
+    out.push({ text: p, fix: p, grams: parsePackSizeToGrams(p), unit: "" });   // 哪儿都没写单位:按 g
+  });
+  return out;
+};
 const packGramsOf = (sm, mat) => typeof sm === "string" ? legacyPackGramsOf(sm, mat) : ({ g: 0, src: "", text: "", segs: [], liquid: false });   // 空壳:R3
 const specLabel = (pk) => "";                                        // 空壳:R3
-const casePackOf = (sm) => 0;                                        // 空壳:R4
-const minOrderOf = (sm) => 1;                                        // 空壳:R4
+// R4 的两个小工具(PA 先写成真的:smOrderGroupChanged 和本店原料编辑页「只能整箱订 / 起订量」要用)
+const casePackOf = (sm) => { const n = parseFloat(sm && sm.casePack); return isFinite(n) && n >= 1 && Number.isInteger(n) ? n : 0; };   // 只看本店原料自己的
+const minOrderOf = (sm) => { const n = parseFloat(sm && sm.minOrder); return isFinite(n) && n > 1 ? Math.ceil(n - 1e-9) : 1; };       // 永远是包数
 // 空壳:R4 —— supId = 今天的分组 id(sm.supplierIds[0] 真值就是它,否则 "")
 const smOrderCfg = (sm, suppliers) => ({ supId: (sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0]) ? sm.supplierIds[0] : "", badSupIds: [], orderName: "", orderUnit: "pack", minOrder: 1, casePack: 0 });
 const haveInfo = (e, packG, needG, days, S, today) => ({ haveG: 0, stale: null, elapsed: 0 });   // 空壳:R5
@@ -25277,9 +25546,43 @@ const purchaseOrderGroups = (r1, r2, c) => {
 };
 const purchaseOrderText = (group, opts) => "";                       // 空壳:R15
 // ── §B 送货和截单
-const supOrderCfg = (sup) => ({ leadDays: null, cutoff: "", minOrderCNY: 0, dows: [], closures: [] });   // 空壳:R16
-const supDeliverySlots = (sup, today, nowHm, horizon = 28) => [];   // 空壳:R18
-const supNextSlot = (sup, today, nowHm) => null;                     // 空壳:R19
+// R16 / R18 / R19(PA 先写成真的:供货商详情「下次 / 再下次」和列表行尾要用;PB 合并时以规格为准,两份应逐字等价)
+const _paHmRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+const supOrderCfg = (sup) => {
+  const v = sup && sup.leadDays;
+  const n = typeof v === "number" ? v : (typeof v === "string" && /^\s*\d+\s*$/.test(v) ? parseInt(v, 10) : NaN);
+  const leadDays = Number.isInteger(n) && n >= 0 ? n : null;                       // 1.5 / -1 / "2天" / 没写 → null
+  const c = typeof (sup && sup.cutoff) === "string" ? sup.cutoff.trim() : "";
+  const cutoff = _paHmRe.test(c) ? c : "";                                          // "24:00" / "9:00" / "16:00:00" → ""
+  const mo = parseFloat(sup && sup.minOrderCNY);
+  const minOrderCNY = isFinite(mo) && mo > 0 ? mo : 0;                             // 永远是人民币
+  const dows = Array.isArray(sup && sup.deliveryDaysOfWeek)
+    ? [...new Set(sup.deliveryDaysOfWeek.map(Number).filter(x => Number.isInteger(x) && x >= 0 && x <= 6))] : [];
+  const closures = Array.isArray(sup && sup.closureWindows)
+    ? sup.closureWindows.filter(w => w && typeof w === "object" && w.start && w.end) : [];
+  return { leadDays, cutoff, minOrderCNY, dows, closures };
+};
+const _paWd = (d) => { const [y, m, x] = String(d).split("-"); return new Date(+y, +m - 1, +x).getDay(); };   // 星期(0 = 周日)
+const supDeliverySlots = (sup, today, nowHm, horizon = 28) => {
+  const c = supOrderCfg(sup);
+  if (!isYmd(today) || !c.dows.length) return [];
+  const closed = (ymd) => c.closures.some(w => ymd >= w.start && ymd <= w.end);
+  const now = _paHmRe.test(nowHm) ? nowHm : "00:00";
+  const L = c.leadDays, span = horizon + (L === null ? 0 : L);
+  const out = [];
+  for (let i = 0; i < span; i++) {
+    const d = plusDaysStr(today, i);
+    if (!c.dows.includes(_paWd(d)) || closed(d)) continue;                        // 送货日 = 每周几、不在闭店里
+    if (L === null) { out.push({ delivery: d, orderBy: null, cutoff: c.cutoff, orderable: true, isToday: false }); continue; }
+    let o = plusDaysStr(d, -L), k = 0;                                              // 下单日 = 送货日往前数 L 个自然日
+    while (closed(o) && k < 366) { o = plusDaysStr(o, -1); k++; }                   // 落在闭店里:再往前挪到闭店前一天
+    if (closed(o)) { out.push({ delivery: d, orderBy: null, cutoff: c.cutoff, orderable: false, isToday: false }); continue; }
+    const orderable = o > today || (o === today && (c.cutoff === "" || now < c.cutoff));   // 早于今天 / 今天过了截单 → 赶不上
+    out.push({ delivery: d, orderBy: o, cutoff: c.cutoff, orderable, isToday: o === today });
+  }
+  return out;
+};
+const supNextSlot = (sup, today, nowHm) => supDeliverySlots(sup, today, nowHm).find(s => s.orderable) || null;
 const orderKey = (supId, delivery) => "";                            // 空壳:R21
 const markOrdered = (supId, delivery, nowIso, E) => ({});            // 空壳:R21(补丁)
 const orderedActive = (state, supId, today) => null;                 // 空壳:R21
@@ -25298,52 +25601,128 @@ const planWindowOf = (state, today) => ({ S: today, E: today, days: 1, endBefore
 // ── §D 供货商合并和 orderAt
 // R30:认同一家供货商只有这一个口径(合并导入、回收站、预览分组都用它);空串 = 没名字、不参与按名字认
 const normSupName = (s) => String(s === undefined || s === null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
-// 空壳:R31 —— 今天的 pickNew(按 id / 中文名 / 日文名去重):add = 追加的(补 id),keptLocal = 判重跳过的(报告的 skipped 照旧对它们推);idMap 空
-const mergeSupplierList = (local, file, genId) => {
-  const add = [], keptLocal = [];
+// R31(PA):按 id、再按名字(normSupName,第一家)认同一家;同一家时修改时间新的一边整条为准(id 留本机的),两边都没写 / 本机不比文件旧 → 留本机;
+// 改名会和另一家撞名时名字留本机的。list = 本机(一个都不丢,原位更新)+ 新加的;idMap = 文件 id → 结果里的 id(本店原料那一步换 id 用)
+const mergeSupplierList = (local, file, genId, tr = null) => {
   const gen = typeof genId === "function" ? genId : () => _mergeGenId("sup_");
-  (file || []).forEach(inc => {
-    if (!inc || typeof inc !== "object") return;
-    const dup = (local || []).find(x => x && _mergeSameName(x, inc)) || add.find(x => _mergeSameName(x, inc));
-    if (dup) { keptLocal.push(inc); return; }
-    add.push({ ...inc, id: inc.id || gen() });
+  const list = (local || []).slice();                  // 本机的一个都不丢
+  const localLen = list.length;
+  const add = [], idMap = {}, keptLocal = [], updatedIds = new Set(); let nameMatched = 0;
+  const localIds = new Set(list.filter(Boolean).map(x => x.id));
+  const t = (o) => Date.parse((o && o.updatedAt) || "") || 0;
+  (file || []).forEach((f, fi) => {
+    if (!f || typeof f !== "object") { if (tr) tr.invalid++; return; }
+    const hasId = f.id !== undefined && f.id !== null && f.id !== "";
+    const nn = normSupName(f.name);
+    let i = hasId ? list.findIndex(x => x && x.id === f.id) : -1;              // ① 先按 id
+    let byName = false;
+    if (i < 0 && nn) { i = list.findIndex(x => x && normSupName(x.name) === nn); byName = i >= 0; }   // ② 再按名字(第一家)
+    if (i < 0) {                                                                // 新的一家
+      const y = { ...f, id: hasId ? f.id : gen() };
+      list.push(y); add.push(y);
+      if (tr) tr.units.push({ i: fi, item: y, dups: [], ri: list.length - 1 });
+      if (hasId) idMap[f.id] = y.id;
+      return;
+    }
+    const m = list[i];
+    if (tr) {
+      if (i < localLen) { if (!tr.match.has(i)) tr.match.set(i, { i: fi, x1: f }); else tr.dupInFile++; }
+      else { tr.dupInFile++; const u = tr.units.find(u => u.ri === i); if (u) u.dups.push(fi); }
+    }
+    if (byName) nameMatched++;
+    if (hasId) idMap[f.id] = m.id;
+    if (t(f) > t(m)) {                                                          // 文件更新:整条换成文件的,id 留本机的
+      let y = { ...f, id: m.id };
+      if (normSupName(y.name) !== normSupName(m.name) && list.some((x, j) => j !== i && x && normSupName(x.name) === normSupName(y.name) && normSupName(y.name) !== ""))
+        y = { ...y, name: m.name };                                             // 改名会和另一家撞名:名字留本机的
+      list[i] = y;
+      if (tr && i >= localLen) { const u = tr.units.find(u => u.ri === i); if (u) u.item = y; }
+      const ai = add.indexOf(m); if (ai >= 0) add[ai] = y;                      // 文件里自己重复的,换掉刚加的那条
+      if (localIds.has(m.id)) updatedIds.add(m.id);
+    } else keptLocal.push(f);                                                    // 两边都没写时间 / 本机不比文件旧:留本机
   });
-  return { list: [...(local || []), ...add], add, idMap: {}, added: add.length, updated: 0, keptLocal, nameMatched: 0 };
+  return { list, add, idMap, added: add.length, updated: updatedIds.size, keptLocal, nameMatched };
 };
-const remapShopSupplierIds = (sm, idMap) => sm;                      // 空壳:R32(原样返回)
-// 空壳:R34 —— 今天合并导入那一行(价格组跟 updatedAt、价格历史并集、补 supplierIds);PA 加 remap 和 orderAt 那一组
+// R32(PA):文件里本店原料挂的供货商 id 换成本机那家的,换完去重;没变 → 原对象(不写 orderAt / updatedAt)
+const remapShopSupplierIds = (sm, idMap) => {
+  if (!sm || !Array.isArray(sm.supplierIds)) return sm;
+  const map = idMap || {};
+  const out = [];
+  sm.supplierIds.forEach(id => { const y = Object.prototype.hasOwnProperty.call(map, id) ? map[id] : id; if (!out.includes(y)) out.push(y); });
+  const same = out.length === sm.supplierIds.length && out.every((x, i) => x === sm.supplierIds[i]);
+  return same ? sm : { ...sm, supplierIds: out };
+};
+// R34(PA):已有的本店原料 —— 价格组跟 updatedAt、价格历史并集(今天的写法),「下单设置」一组(SM_ORDER_GROUP,orderAt 在组里)按 orderAt 整组取新
 const mergeShopEntry = (loc, inc, idMap, nowIso) => {
-  const merged = withMergedPriceHistory(loc, inc, mergeByNewer(loc, inc, ["pricePerG", "currency"]), "shop", nowIso);
-  return { ...merged, supplierIds: Array.isArray(merged.supplierIds) ? merged.supplierIds : [] };
+  const f = remapShopSupplierIds(inc, idMap);
+  const m1 = mergeByNewer(loc, f, ["pricePerG", "currency"]);
+  const m2 = withMergedPriceHistory(loc, f, m1, "shop", nowIso);
+  const m3 = pickGroupByStamp(m2, loc, f, SM_ORDER_GROUP, "orderAt");
+  return { ...m3, supplierIds: Array.isArray(m3.supplierIds) ? m3.supplierIds : [] };
 };
-const supplierFieldsForSave = (o) => o;                              // 空壳:R35(原样返回)
-const smOrderFieldsForSave = (o) => o;                               // 空壳:R35(原样返回)
-const smOrderGroupChanged = (prev, next, suppliers) => false;        // 空壳:R35
-const smWithSupplier = (sm, supId, nowIso) => sm;                    // 空壳:R36(原样返回)
-// R37 第 0 步版(今天删供货商的写法):supplierIds 里有这个 id 的本店原料去掉它、写 updatedAt;返回 { list, touched }(都没改 → 原数组)。
-// PA 改成写 orderAt、不写 updatedAt;R 线删供货商只调它
+// R35(PA):编辑页保存时整理新键(只动出现的键;没有这些键 → 同一个对象,打开不改就保存逐字节一样)
+const supplierFieldsForSave = (o) => {
+  const K = ["leadDays", "cutoff", "minOrderCNY"], has = (k) => Object.prototype.hasOwnProperty.call(o, k);
+  if (!o || typeof o !== "object" || !K.some(has)) return o;
+  const x = { ...o };
+  if (has("leadDays")) { const s = String(x.leadDays ?? "").trim(), n = s === "" ? NaN : Number(s); if (Number.isInteger(n) && n >= 0 && n <= 365) x.leadDays = n; else delete x.leadDays; }
+  if (has("cutoff")) { const s = String(x.cutoff ?? "").trim(); if (_paHmRe.test(s)) x.cutoff = s; else delete x.cutoff; }
+  if (has("minOrderCNY")) { const n = parseFloat(x.minOrderCNY); if (isFinite(n) && n > 0) x.minOrderCNY = Math.round(n * 100) / 100; else delete x.minOrderCNY; }
+  return x;
+};
+const smOrderFieldsForSave = (o) => {
+  const K = ["orderName", "orderUnit", "minOrder"], has = (k) => Object.prototype.hasOwnProperty.call(o, k);
+  if (!o || typeof o !== "object" || !K.some(has)) return o;
+  const x = { ...o };
+  if (has("orderName")) { const s = typeof x.orderName === "string" ? x.orderName.trim() : ""; if (s) x.orderName = s; else delete x.orderName; }
+  if (has("orderUnit") && x.orderUnit !== "case") delete x.orderUnit;
+  if (has("minOrder")) { const n = parseFloat(x.minOrder); const v = isFinite(n) ? Math.ceil(n - 1e-9) : NaN; if (v >= 2) x.minOrder = v; else delete x.minOrder; }
+  return x;
+};
+// 「下单设置」这一组变没变(编辑页决定写不写 orderAt):supplierIds 先去掉失效 id 再比
+const smOrderGroupChanged = (prev, next, suppliers) => {
+  const alive = (id) => (suppliers || []).some(s => s && s.id === id);
+  const nz = (o) => JSON.stringify([
+    (Array.isArray(o && o.supplierIds) ? o.supplierIds : []).filter(alive),
+    _normTxt(o && o.orderName), o && o.orderUnit === "case" ? "case" : "", minOrderOf(o)]);
+  return nz(prev) !== nz(next);
+};
+// R36(PA):采购页「归到」—— 放到第一个(已在里面就挪到第一个,失效 id 留着),只写 orderAt、不写 updatedAt;已经是第一个 → 原对象
+const smWithSupplier = (sm, supId, nowIso) => {
+  const ids = Array.isArray(sm.supplierIds) ? sm.supplierIds : [];
+  const next = [supId, ...ids.filter(x => x !== supId)];
+  if (next.length === ids.length && next.every((x, i) => x === ids[i])) return sm;
+  return { ...sm, supplierIds: next, orderAt: nowIso };
+};
+// R37(PA 版):删供货商时从本店原料里剥掉这个 id,只写 orderAt、不写 updatedAt;返回 { list, touched }(都没改 → 原数组;不是对象的元素原样留着)。
+// R 线删供货商只调它;旧版 app 删供货商写的是 updatedAt(CLAUDE.md:供货商和下单设置在一台设备上改)
 const stripSupplierRefs = (list, supId, nowIso) => {
   const arr = Array.isArray(list) ? list : [];
   const touched = [];
   const out = arr.map(sm => {
     if (sm && typeof sm === "object" && Array.isArray(sm.supplierIds) && sm.supplierIds.includes(supId)) {
       touched.push(sm.id);
-      return { ...sm, supplierIds: sm.supplierIds.filter(x => x !== supId), updatedAt: nowIso };
+      return { ...sm, supplierIds: sm.supplierIds.filter(x => x !== supId), orderAt: nowIso };
     }
     return sm;
   });
   return { list: touched.length ? out : arr, touched };
 };
-// R37 第 0 步空壳:把供货商 id 挂回本店原料(加在最后,别的键不动);已经有了 → 原对象。PA 另写 orderAt;回收站还原 / 删供货商的撤销只走它
+// R37(PA 版):把供货商 id 挂回本店原料(加在最后),写 orderAt、不写 updatedAt;已经有了 → 原对象。回收站还原 / 删供货商的撤销只走它
 const smReattachSupplier = (sm, sid, nowIso) => (Array.isArray(sm.supplierIds) && sm.supplierIds.includes(sid)) ? sm
-  : { ...sm, supplierIds: [...(Array.isArray(sm.supplierIds) ? sm.supplierIds : []), sid] };
+  : { ...sm, supplierIds: [...(Array.isArray(sm.supplierIds) ? sm.supplierIds : []), sid], orderAt: nowIso };
 // ── §F 撤销
 const undoSheetImport = (state, undo) => ({ next: state, did: 0 });  // 空壳:R39
 const undoAssign = (list, pairs) => ({ list, did: 0 });              // 空壳:R40
 // ── 小工具(名字以规格 1.1 为准;空壳)
-const isYmd = (s) => false;
-const md = (d) => "";
-const mdw = (d, lang) => "";
+// 2.6 的三个(PA 先写成真的:supDeliverySlots 和供货商详情要用;PB 合并时以规格为准)
+const isYmd = (s) => {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-");
+  return localDateStr(new Date(+y, +m - 1, +d)) === s;   // 排除 2026-02-30
+};
+const md = (d) => { const p = String(d).split("-"); return `${+p[1]}/${+p[2]}`; };   // 不补零:2026-10-09 → 10/9
+const mdw = (d, lang) => md(d) + "(" + (lang === "ja" ? ["日", "月", "火", "水", "木", "金", "土"] : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"])[_paWd(d)] + ")";
 const money = (v, approx) => "";
 const qtyText = (g, liquid) => "";
 const matName = (mat, mid, lang) => "";
