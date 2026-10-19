@@ -26970,126 +26970,529 @@ const supNextDelivery = (sup, fromDateStr) => {
   }
   return null;
 };
-// ── §A 下单数量和钱
-// R2(PA 先写成真的:本店原料编辑页的多规格提示要用;PB 合并时以规格为准,两份应逐字等价)
+// ── §A 下单数量和钱(PB 写成真的,逐条照 spec_purchase_order.md §A;改这里先跑 purchase_oracle_fuzz)
+// R2 规格拆段:多规格提示和「点你实际买的那一种」用。fix = 没写单位的段借后面第一个写了单位的段的单位(「1/10/25KG」点「10」写进去的是「10KG」)
+const _PUR_SPEC_RE = /^\s*(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|g|克|l|ℓ|升)?/i;
+const _PUR_LIQ_RE = /^(?:ml|毫升|l|ℓ|升)$/i;
 const packSpecSegments = (ps) => {
   const s = String(ps == null ? "" : ps).trim().replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
   const parts = s.split(/[\/、，,]/).map(x => x.trim()).filter(Boolean);
-  const RE = /^\s*(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|g|克|l|ℓ|升)?/i;
   const out = [];
   parts.forEach((p, i) => {
-    const m = p.match(RE);
+    const m = p.match(_PUR_SPEC_RE);
     if (!m) return;                                                     // 不以数字开头的段不算(「冷凍」「约 1kg」)
     if (m[2]) { out.push({ text: p, fix: p, grams: parsePackSizeToGrams(p), unit: m[2] }); return; }
     const rest = p.slice(m[0].length).trim();
     if (rest && /^[個个本枚缶号號粒片袋箱入]/.test(rest)) { out.push({ text: p, fix: p, grams: 0, unit: "" }); return; }   // 计件段
-    for (const q of parts.slice(i + 1)) { const mm = q.match(RE); if (mm && mm[2]) { const fix = m[1] + mm[2]; out.push({ text: p, fix, grams: parsePackSizeToGrams(fix), unit: mm[2] }); return; } }
+    for (const q of parts.slice(i + 1)) { const mm = q.match(_PUR_SPEC_RE); if (mm && mm[2]) { const fix = m[1] + mm[2]; out.push({ text: p, fix, grams: parsePackSizeToGrams(fix), unit: mm[2] }); return; } }
     out.push({ text: p, fix: p, grams: parsePackSizeToGrams(p), unit: "" });   // 哪儿都没写单位:按 g
   });
   return out;
 };
-const packGramsOf = (sm, mat) => typeof sm === "string" ? legacyPackGramsOf(sm, mat) : ({ g: 0, src: "", text: "", segs: [], liquid: false });   // 空壳:R3
-const specLabel = (pk) => "";                                        // 空壳:R3
-// R4 的两个小工具(PA 先写成真的:smOrderGroupChanged 和本店原料编辑页「只能整箱订 / 起订量」要用)
-const casePackOf = (sm) => { const n = parseFloat(sm && sm.casePack); return isFinite(n) && n >= 1 && Number.isInteger(n) ? n : 0; };   // 只看本店原料自己的
-const minOrderOf = (sm) => { const n = parseFloat(sm && sm.minOrder); return isFinite(n) && n > 1 ? Math.ceil(n - 1e-9) : 1; };       // 永远是包数
-// 空壳:R4 —— supId = 今天的分组 id(sm.supplierIds[0] 真值就是它,否则 "")
-const smOrderCfg = (sm, suppliers) => ({ supId: (sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0]) ? sm.supplierIds[0] : "", badSupIds: [], orderName: "", orderUnit: "pack", minOrder: 1, casePack: 0 });
-const haveInfo = (e, packG, needG, days, S, today) => ({ haveG: 0, stale: null, elapsed: 0 });   // 空壳:R5
-// 空壳:R6 —— 今天页面的算法(一包几克按本店原料 / 材料的规格读;包数 = ceil(要用 ÷ 一包);要付 = 本店价折人民币 × 要用),其余字段给缺省值
+// R3 一包几克:本店原料的规格 → 材料百科的规格 → 计件规格 × 材料每个几克(第 5 批 S1 的 parsePackCount / gramsPerPiece / pieceUnit);都没有 = 0
+const packGramsOf = (sm, mat) => {
+  if (typeof sm === "string") return legacyPackGramsOf(sm, mat);   // 第 5 批字符串接口继续可用
+  let g;
+  if (sm && (g = parsePackSizeToGrams(sm.packSize)) > 0) { const text = String(sm.packSize).trim(); const segs = packSpecSegments(text);
+    return { g, src: "shop", text, segs, liquid: _PUR_LIQ_RE.test(segs[0].unit) }; }
+  if (mat && (g = parsePackSizeToGrams(mat.packSize)) > 0) { const text = String(mat.packSize).trim(); const segs = packSpecSegments(text);
+    return { g, src: "mat", text, segs, liquid: _PUR_LIQ_RE.test(segs[0].unit) }; }
+  const gpp = _gramsNum(mat && mat.gramsPerPiece);
+  for (const ps of [sm && sm.packSize, mat && mat.packSize]) {
+    if (!ps) continue;
+    const c = parsePackCount(ps);
+    if (c && isFinite(gpp) && gpp > 0 && _normCountUnit(mat.pieceUnit) !== "" && _normCountUnit(mat.pieceUnit) === _normCountUnit(c.unit))
+      return { g: c.n * gpp, src: "piece", text: String(ps).trim(), segs: [], liquid: false };
+  }
+  const text = String((sm && sm.packSize) || (mat && mat.packSize) || "").trim();
+  return { g: 0, src: "", text, segs: packSpecSegments(text), liquid: false };
+};
+// R3 规格显示:纯数字按克补单位(1000 以上写成 kg);多规格写第一种;计件照原文
+const specLabel = (pk) => {
+  if (!pk) return "";
+  if (pk.src === "shop" || pk.src === "mat") {
+    const t = String(pk.text).replace(/(\d),(\d{3})(?!\d)/g, "$1$2");
+    if (/^\d+(?:\.\d+)?$/.test(t)) return pk.g >= 1000 ? fmtQty(pk.g / 1000) + " kg" : fmtQty(pk.g) + " g";
+    return pk.segs.length >= 2 ? pk.segs[0].fix : pk.text;
+  }
+  if (pk.src === "piece") return pk.text;
+  return "";
+};
+// R4 一箱几包(只看本店原料自己的正整数)/ 起订量(永远是包数,没有 = 1)
+const casePackOf = (sm) => { const n = parseFloat(sm && sm.casePack); return isFinite(n) && n >= 1 && Number.isInteger(n) ? n : 0; };
+const minOrderOf = (sm) => { const n = parseFloat(sm && sm.minOrder); return isFinite(n) && n > 1 ? Math.ceil(n - 1e-9) : 1; };
+// R4 本店原料的下单设置:supId = supplierIds 里第一个还存在的供货商("" = 还没归到);勾了整箱、却没填一箱几包 → 按包
+const smOrderCfg = (sm, suppliers) => {
+  const ids = Array.isArray(sm && sm.supplierIds) ? sm.supplierIds : [];
+  const alive = (id) => (suppliers || []).some(s => s && s.id === id);
+  const supId = ids.find(alive);
+  const casePack = casePackOf(sm);
+  return {
+    supId: supId === undefined ? "" : supId,
+    badSupIds: ids.filter((id, i) => !alive(id) && ids.indexOf(id) === i),
+    orderName: _normTxt(sm && sm.orderName),
+    orderUnit: sm && sm.orderUnit === "case" && casePack > 0 ? "case" : "pack",
+    minOrder: minOrderOf(sm),
+    casePack,
+  };
+};
+// R5「手上还有」:先判规格改过(当时一包几克 pg ≠ 现在)、再判超过 7 天;然后估掉填的那天到开始日之间用掉的
+const haveInfo = (e, packG, needG, days, S, today) => {
+  if (!e) return { haveG: 0, stale: null, elapsed: 0 };
+  if (e.u === "pack" && (!(packG > 0) || !(e.pg > 0) || _r3(e.pg) !== _r3(packG))) return { haveG: 0, stale: "spec", elapsed: 0 };
+  if (_daysBetween(e.at, today) > 7) return { haveG: 0, stale: "old", elapsed: 0 };
+  const base = e.u === "pack" ? e.n * e.pg : e.n;
+  const elapsed = Math.max(0, _daysBetween(e.at, S));
+  const haveG = Math.max(0, _r3(base - (needG / days) * elapsed));
+  return { haveG, stale: null, elapsed };
+};
+// R5 写 onHand 的规矩(给页面):填的那一刻读得出一包几克 → 按包记(连同 pg);读不出 → 按克记;读不出数 / 负数 → 删掉这一条
+const purOnHandPatch = (mid, raw, pk, today) => {
+  const n = parseFloat(raw);
+  if (!isFinite(n) || n < 0) return { onHand: { [mid]: null } };
+  return { onHand: { [mid]: pk && pk.g > 0 ? { n, u: "pack", at: today, pg: pk.g } : { n, u: "g", at: today } } };
+};
+// R6 一行下单单子。顺序固定:包 → 起订包数 → 箱。要付 = 整包克数 × 本店价(折人民币);用掉 = 第二次计算的克数 × getMaterialEffectivePrice(配方成本同一口径)
 const orderLineOf = (I) => {
-  const { mid, mat, sm, needG = 0, usedG = 0, srcs = [], unconv = [] } = I || {};
-  const g = sm && sm.packSize ? parsePackSizeToGrams(sm.packSize) : ((mat && mat.packSize) ? parsePackSizeToGrams(mat.packSize) : 0);
-  const L = { mid, mat, sm: sm || null, needG, usedG, srcs, unconv, pk: { g, src: "", text: "", segs: [], liquid: false }, packG: g, liquid: false,
-    haveG: 0, stale: null, elapsed: 0, restG: needG, status: sm ? (g > 0 ? "buy" : "noPack") : "noShop", packs0: 0, packs: 0, cases: null,
-    minApplied: false, buyG: 0, payCNY: null, approx: false, noPrice: false, leftG: 0, lastsWeeks: null, usedCNY: 0, usedApprox: false, usedNoPrice: true, incomplete: false };
-  if (g > 0) L.packs = Math.ceil(needG / g);
-  const p = sm ? toCNY(sm.pricePerG, curOf(sm)) : 0;
-  if (p > 0) { L.payCNY = p * needG; L.approx = curOf(sm) === "JPY"; }
+  const { mid, mat, sm, needG, unconv, usedG, srcs, onHand, today, S, days, suppliers } = I;
+  const pk = packGramsOf(sm || null, mat);
+  // 接续第 5 批 recheck-md-1：按件包装数件数；配方克数/成本不变，手上包数与下单缺口统一用材料每件克重。
+  const cnt = pk.src === "piece" ? parsePackCount(pk.text) : null;
+  const uq = cnt && I.unitNeeds && I.unitNeeds[_normCountUnit(cnt.unit)];
+  const gpp = _gramsNum(mat && mat.gramsPerPiece);
+  const orderNeedG = uq && gpp > 0 ? _r3(Math.max(0, needG - uq.g + uq.q * gpp)) : needG;
+  const L = { mid, mat, sm: sm || null, needG, usedG, srcs, unconv, pk, packG: pk.g, liquid: pk.liquid,
+    haveG: 0, stale: null, elapsed: 0, restG: needG, status: "", packs0: 0, packs: 0, cases: null,
+    minApplied: false, buyG: 0, payCNY: null, approx: false, noPrice: false, leftG: 0, lastsWeeks: null };
+  if (cnt && Math.abs(orderNeedG - needG) > 1e-9) L.pieceOrder = { qty: orderNeedG / gpp, unit: cnt.unit, grams: orderNeedG };
+  if (!sm) L.status = "noShop";                                        // 没有本店原料:不看手上的、不算包数、不算钱
+  else {
+    const h = haveInfo(onHand, pk.g, orderNeedG, days, S, today);
+    L.haveG = h.haveG; L.stale = h.stale; L.elapsed = h.elapsed;
+    L.restG = _r3(orderNeedG - h.haveG);
+    if (needG <= 0) L.status = unconv.length ? "pieceOnly" : "enough";
+    else if (L.restG <= 0) L.status = "enough";                       // 手上够,这次不买(起订量也不凑)
+    else if (!(pk.g > 0)) L.status = "noPack";                        // 规格读不出
+    else L.status = "buy";
+  }
+  if (L.status === "buy") {
+    const cfg = smOrderCfg(sm, suppliers);
+    L.packs0 = Math.max(1, Math.ceil((uq && gpp > 0 ? Number((L.restG / pk.g).toPrecision(12)) : _r3(L.restG / pk.g)) - 1e-9));     // ① 按包向上取整(容差)
+    const p1 = Math.max(L.packs0, cfg.minOrder);                        // ② 不够起订包数凑到起订包数
+    L.minApplied = p1 > L.packs0;
+    if (cfg.orderUnit === "case") { L.cases = Math.ceil(p1 / cfg.casePack); L.packs = L.cases * cfg.casePack; }   // ③ 只能整箱订:按箱向上取整
+    else L.packs = p1;
+    L.buyG = L.packs * pk.g;
+    const p = toCNY(sm.pricePerG, curOf(sm));
+    if (p > 0) { L.payCNY = L.buyG * p; L.approx = curOf(sm) === "JPY"; } else L.noPrice = true;
+    L.leftG = Math.max(0, _r3(L.buyG + L.haveG - orderNeedG));
+    L.lastsWeeks = Math.floor(_r3(L.leftG / (orderNeedG / days * 7)));      // 多出来的大约够几周(向下取整)
+  }
+  const eff = getMaterialEffectivePrice(mat);
+  L.usedCNY = usedG * eff;
+  L.usedApprox = eff > 0 && getMaterialRawPrice(mat).currency === "JPY";
+  L.usedNoPrice = !(eff > 0);
+  L.incomplete = L.status === "noShop" || L.status === "noPack" || L.status === "pieceOnly" || L.noPrice || unconv.length > 0;
   return L;
 };
-// 空壳:R8 —— 只有商品那一段(和今天的 pLines 一样;没手改过的用建议数 = 过去 30 天日均 × 天数 × 1.2)
-const purchasePlanLines = (products, state, c) => (products || []).filter(Boolean).map(p => {
-  const q = state && state.qty && Object.prototype.hasOwnProperty.call(state.qty, p.id) ? state.qty[p.id]
-    : Math.ceil(avgDailySales(c && c.salesLog, p.id, c && c.today) * ((c && c.days) || 1) * 1.2);
-  return { kind: "product", id: p.id, qty: q, obj: p };
-});
-const sheetToPlan = (sheetLines, ctx, k) => ({ setQty: [], adds: [], notBrought: 0, ignored: 0 });   // 空壳:R9
-const applySheetImport = (state, imp, win, genUid) => ({ next: state, undo: null, a: 0, b: 0, n: 0 });   // 空壳:R10
-// 空壳:R13 —— 今天页面的分组(sm.supplierIds[0];「还没归到供货商」排最后,其余按第一次出现),每组 payCNY = 今天的 groupTotal,其余缺省
-const purchaseOrderGroups = (r1, r2, c) => {
-  const by = new Map();
-  Object.entries((r1 && r1.grams) || {}).forEach(([mid, grams]) => {
-    const sm = ((c && c.shopMaterials) || []).find(x => x && x.materialId === mid);
-    const mat = ((c && c.materials) || []).find(x => x && x.id === mid);
-    const supId = sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0] ? sm.supplierIds[0] : "";
-    if (!by.has(supId)) by.set(supId, []);
-    by.get(supId).push(orderLineOf({ mid, mat, sm, needG: grams }));
+// R8 计划拼成 computeMaterialNeeds 的 lines:商品(手改过的用手改的数,没改过 = 建议数)→ 计划行;「取出烤」的配方行包成单项商品(走备货第一遍)
+const purchasePlanLines = (products, state, c) => {
+  const lines = [];
+  (products || []).forEach(p => {
+    if (!p) return;
+    const own = Object.prototype.hasOwnProperty.call(state.qty, p.id);
+    const q = own ? state.qty[p.id] : Math.ceil(avgDailySales(c.salesLog, p.id, c.today) * c.days * 1.2);
+    lines.push({ kind: "product", id: p.id, qty: q, obj: p });
   });
-  const ids = [...by.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : 0));
-  const groups = ids.map(supId => {
-    const lines = by.get(supId).sort((a, b) => b.needG - a.needG);
-    const payCNY = lines.reduce((s, L) => s + (L.payCNY || 0), 0);
-    return { supId, sup: supId !== "" ? ((c && c.suppliers) || []).find(s => s && s.id === supId) || null : null, slot: null, ordered: null, lines,
-      itemsN: lines.length, payCNY, approx: lines.some(L => L.approx), incompleteN: 0, minOrderCNY: 0, minGapCNY: 0, minState: "none" };
+  state.extra.forEach(x => {
+    const list = x.kind === "creation" ? c.creations : x.kind === "component" ? c.components : c.recipes;
+    const t = (list || []).find(o => o && String(o.id) === String(x.id));
+    const names = { ...(x.nameZh ? { nameZh: x.nameZh } : {}), ...(x.nameJa ? { nameJa: x.nameJa } : {}) };
+    if (x.asItem && x.kind === "recipe") {
+      const nz = (t && t.nameZh) || x.nameZh || "", nj = (t && t.nameJa) || x.nameJa || "";
+      lines.push({ kind: "product", id: "plan:" + x.uid, qty: x.qty,
+        obj: { id: "plan:" + x.uid, nameZh: nz, nameJa: nj, items: [{ linkedType: "recipe", linkedId: x.id, qty: 1 }] } });
+    } else lines.push({ kind: x.kind, id: x.id, qty: x.qty, ...names, ...(t ? { obj: t } : {}) });   // 东西删了:不给 obj,进「这些没算进来」
   });
-  return { groups, totals: { payCNY: groups.reduce((s, g) => s + g.payCNY, 0), payApprox: groups.some(g => g.approx), incompleteN: 0,
-    itemsN: groups.reduce((s, g) => s + g.itemsN, 0), usedCNY: 0, usedApprox: false, usedMissingN: 0, orderedSupN: 0 } };
+  return lines;
 };
-const purchaseOrderText = (group, opts) => "";                       // 空壳:R15
-// ── §B 送货和截单
-// R16 / R18 / R19(PA 先写成真的:供货商详情「下次 / 再下次」和列表行尾要用;PB 合并时以规格为准,两份应逐字等价)
-const _paHmRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+// R9「照今天的生产单」只带独立的需求:① 商品改数;② 没标备货的配方 / 组合产品 / 组件、③ 标了备货的配方「取出烤」→ 先扣掉同一张单子上装烤好的个数;
+// ④ 做一批(标了备货的组件、stage: "make" 的备货配方)不带。同一样几行合成一条(数量相加再 × k)
+const sheetToPlan = (sheetLines, ctx, k) => {
+  const S = (v) => String(v);
+  const find = (list, id) => (list || []).find(x => x && S(x.id) === S(id));
+  const qOf = (l) => { const n = parseFloat(l.qty); return isFinite(n) && n > 0 ? n : 0; };
+  const packed = new Map();   // "种类:id" → 装烤好的个数
+  sheetLines.forEach(l => {
+    if (!l || l.kind !== "product" || !qOf(l)) return;
+    const p = find(ctx.products, l.id);
+    if (!p || !productPrepSkips(p)) return;
+    (p.items || []).forEach(it => {
+      if (!it) return;
+      const t = it.linkedType === "creation" || it.linkedType === "component" ? it.linkedType : "recipe";
+      const key = t + ":" + S(it.linkedId);
+      packed.set(key, (packed.get(key) || 0) + qOf(l) * (parseFloat(it.qty) || 1));
+    });
+  });
+  const setQty = new Map();
+  const adds = [], addSum = new Map(); let notBrought = 0, ignored = 0;
+  sheetLines.forEach(l => {
+    if (!l) return;
+    const q = qOf(l);
+    if (!q) { ignored++; return; }
+    if (l.kind === "product") {
+      const p = find(ctx.products, l.id);
+      if (!p) { ignored++; return; }
+      setQty.set(p.id, (setQty.get(p.id) || 0) + q);
+      return;
+    }
+    const list = l.kind === "creation" ? ctx.creations : l.kind === "component" ? ctx.components : ctx.recipes;
+    const t = find(list, l.id);
+    if (!t) { ignored++; return; }
+    const marked = isPrepMarked(t);
+    if ((l.kind === "component" && marked) || (l.kind === "recipe" && marked && l.stage === "make")) { notBrought++; return; }
+    const asItem = l.kind === "recipe" && marked;
+    const key = l.kind + ":" + S(t.id);
+    const rem = packed.get(key) || 0, use = Math.min(rem, q);
+    packed.set(key, rem - use);
+    const d = _r3(q - use);
+    if (d <= 0) { notBrought++; return; }
+    if (addSum.has(key)) { addSum.set(key, addSum.get(key) + d); return; }
+    addSum.set(key, d);
+    adds.push({ kind: l.kind, id: t.id, qty: 0,
+      ...(_normTxt(t.nameZh) ? { nameZh: _normTxt(t.nameZh) } : {}), ...(_normTxt(t.nameJa) ? { nameJa: _normTxt(t.nameJa) } : {}),
+      ...(asItem ? { asItem: true } : {}) });
+  });
+  adds.forEach(a => { a.qty = _r3(addSum.get(a.kind + ":" + S(a.id)) * k); });
+  return { setQty: [...setQty].map(([id, n]) => [id, _r3(n * k)]), adds, notBrought, ignored };
+};
+// R10 把带进来的写进计划(同一样已在计划里:换数量;超过 30 行一行都不写);undo 给 R39
+const applySheetImport = (state, imp, win, genUid) => {
+  const qty = { ...state.qty };
+  const und = { winAdded: !state.win, qty: [], added: [], replaced: [] };
+  imp.setQty.forEach(([id, v]) => {
+    const k = String(id), had = Object.prototype.hasOwnProperty.call(qty, k);
+    und.qty.push({ k, had, old: had ? qty[k] : undefined, v });
+    qty[k] = v;
+  });
+  const extra = state.extra.slice();
+  imp.adds.forEach(a => {
+    const i = extra.findIndex(x => x.kind === a.kind && String(x.id) === String(a.id) && !!x.asItem === !!a.asItem);
+    if (i >= 0) { und.replaced.push({ uid: extra[i].uid, old: extra[i].qty, v: a.qty }); extra[i] = { ...extra[i], qty: a.qty }; }
+    else { const uid = genUid(); und.added.push({ uid, v: a.qty }); extra.push({ uid, ...a }); }
+  });
+  if (extra.length > 30) return { error: "full" };
+  const next = { ...state, win: state.win || win, qty, extra };
+  return { next, undo: { ...und, win: next.win }, a: imp.adds.length, b: imp.setQty.length, n: imp.notBrought };
+};
+// R10「＋ 加配方 / 组件 / 组合产品」手动加的一行:不带 asItem,默认一批(配方 / 组件 = 产出量,组合产品 = 制作个数,没填 = 1)。
+// 存成数(产出量是 "25" 这种字符串时读出 25):R24 只认 qty 是数的计划行,存成字符串下次打开这一行就没了
+const purManualAddQty = (kind, o) => { const n = parseFloat(kind === "creation" ? (o && o.serves) : (o && o.yield)); return n > 0 ? n : 1; };
+// R14 按个写的那几段:按 _normCountUnit 分组(先出现的先写,显示第一次出现的原文单位),「{数} {单位}」用「、」连
+const purUnconvParts = (unconv) => {
+  const order = [], m = new Map();
+  (unconv || []).forEach(x => {
+    const k = _normCountUnit(x.unit);
+    if (!m.has(k)) { m.set(k, { unit: x.unit, sum: 0 }); order.push(k); }
+    m.get(k).sum += x.qty;
+  });
+  return order.map(k => `${fmtQty(m.get(k).sum)} ${m.get(k).unit}`).join("、");
+};
+// R13 按供货商分组:组内按要用从多到少;组的先后 = 今天 / 最近要截单的 → 没写提前天数的(按供货商的先后)→「还没归到供货商」;合计先加后取整
+const purchaseOrderGroups = (r1, r2, c) => {
+  const materials = c.materials || [], shopMaterials = c.shopMaterials || [], suppliers = c.suppliers || [];
+  const matOf = (mid) => materials.find(x => x && x.id === mid);
+  const smOf = (mid) => shopMaterials.find(s => s && s.materialId === mid);
+  const mids = Object.keys(r1.grams);
+  const unc = (r1.detail && r1.detail.unconv) || {}, srcs = (r1.detail && r1.detail.srcs) || {};
+  const rows = mids.map((mid, i) => {
+    const mat = matOf(mid), sm = smOf(mid);
+    const unconv = unc[mid] || [];
+    const needG = _r3(r1.grams[mid] - unconv.reduce((s, x) => s + x.qty, 0));
+    const L = orderLineOf({ mid, mat, sm, needG, unconv, unitNeeds: r1.unitNeeds && r1.unitNeeds[mid], usedG: r2.grams[mid] || 0, srcs: srcs[mid] || [],
+      onHand: c.state.onHand[mid], today: c.today, S: c.S, days: c.days, suppliers: c.suppliers });
+    return { L, i, supId: sm ? smOrderCfg(sm, c.suppliers).supId : "" };
+  });
+  const bySup = new Map();
+  rows.forEach(r => { if (!bySup.has(r.supId)) bySup.set(r.supId, []); bySup.get(r.supId).push(r); });
+  const groups = [...bySup].map(([supId, rs]) => {
+    const lines = rs.slice().sort((a, b) => (a.L.needG > b.L.needG ? -1 : a.L.needG < b.L.needG ? 1 : a.i - b.i)).map(r => r.L);
+    const sup = supId !== "" ? suppliers.find(s => s && s.id === supId) : null;   // 「有没有供货商」一律按 supId !== "" 判(0 / null 也是 id)
+    const slot = sup ? supNextSlot(sup, c.today, c.nowHm) : null;
+    const ordered = supId !== "" ? orderedActive(c.state, supId, c.today) : null;
+    let payCNY = 0;
+    lines.forEach(L => { if (L.payCNY !== null) payCNY += L.payCNY; });
+    const approx = lines.some(L => L.payCNY !== null && L.approx);
+    const itemsN = lines.filter(L => L.status !== "enough").length;
+    const incompleteN = lines.filter(L => L.incomplete).length;
+    const minOrderCNY = sup ? supOrderCfg(sup).minOrderCNY : 0;
+    let minGapCNY = 0, minState = "none";
+    if (minOrderCNY > 0) {
+      minGapCNY = Math.max(0, minOrderCNY - payCNY);
+      const reach = Math.round(payCNY * 100) >= Math.round(minOrderCNY * 100);
+      minState = incompleteN === 0 ? (reach ? "ok" : "short") : (reach ? "unknownOk" : "unknownShort");   // 算不全永远不打 ✓
+    }
+    return { supId, sup, slot, ordered, lines, itemsN, payCNY, approx, incompleteN, minOrderCNY, minGapCNY, minState };
+  });
+  const idxOf = (g) => suppliers.findIndex(s => s && s.id === g.supId);
+  const rank = (g) => g.supId === "" ? 3 : (g.slot && g.slot.orderBy) ? 1 : 2;
+  const scmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  groups.sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra === 1) { const x = scmp(a.slot.orderBy, b.slot.orderBy) || scmp(a.slot.cutoff || "24:00", b.slot.cutoff || "24:00"); if (x) return x; }
+    if (ra === 3) return 0;
+    return idxOf(a) - idxOf(b);
+  });
+  let payCNY = 0;
+  groups.forEach(g => { payCNY += g.payCNY; });
+  let usedCNY = 0, usedApprox = false, usedMissingN = 0;
+  Object.keys(r2.grams).forEach(mid => {
+    const mat = matOf(mid);
+    const eff = getMaterialEffectivePrice(mat);
+    usedCNY += r2.grams[mid] * eff;
+    if (eff > 0 && getMaterialRawPrice(mat).currency === "JPY") usedApprox = true;
+    if (!(eff > 0)) usedMissingN++;
+  });
+  const totals = {
+    payCNY, payApprox: groups.some(g => g.approx),
+    incompleteN: groups.reduce((s, g) => s + g.incompleteN, 0), itemsN: groups.reduce((s, g) => s + g.itemsN, 0),
+    usedCNY, usedApprox, usedMissingN, orderedSupN: groups.filter(g => g.ordered != null).length,   // 已标下单的组照样算进合计(规格 Q12)
+  };
+  return { groups, totals };
+};
+// R15 复制给供货商的下单文字(逐字节;半角标点照原样;不带价时没有一个钱字)
+const purchaseOrderText = (group, opts) => {
+  const { lang, withPrice, S, E, brandName } = opts || {};
+  const ja = lang === "ja";
+  const brand = _normTxt(brandName) || "kororā";
+  const rows = group.lines.filter(L => L.status !== "enough").map((L, k) => {
+    const i = k + 1;
+    const nm = _normTxt(L.sm && L.sm.orderName) || matName(L.mat, L.mid, lang);
+    if (L.status === "buy") {
+      const spec = specLabel(L.pk);
+      let s = L.cases !== null
+        ? (ja ? `${i}. ${nm} ${spec} × ${L.cases} ケース(${L.packs} パック)` : `${i}. ${nm} ${spec} × ${L.cases} 箱(${L.packs} 包)`)
+        : (ja ? `${i}. ${nm} ${spec} × ${L.packs} パック` : `${i}. ${nm} ${spec} × ${L.packs} 包`);
+      if (withPrice && !L.noPrice) {
+        const v = L.pk.g * parseFloat(L.sm.pricePerG);
+        const pp = curOf(L.sm) === "CNY" ? "¥" + fmtQty(v) : fmtQty(v) + "円";
+        s += ja ? `(${pp}/パック)` : `(${pp}/包)`;
+      }
+      return s;
+    }
+    if (L.status === "noPack") return ja ? `${i}. ${nm} 約 ${qtyText(L.restG, L.liquid)}(規格未入力)` : `${i}. ${nm} 约 ${qtyText(L.restG, L.liquid)}(规格没填)`;
+    if (L.status === "noShop") return ja ? `${i}. ${nm} 約 ${qtyText(L.needG, L.liquid)}(仕入れ原料未登録)` : `${i}. ${nm} 约 ${qtyText(L.needG, L.liquid)}(没有本店原料)`;
+    if (L.status === "pieceOnly") { const parts = purUnconvParts(L.unconv); return ja ? `${i}. ${nm}(個数指定 ${parts}、g 換算なし)` : `${i}. ${nm}(按个写的 ${parts},没换成克)`; }
+    return `${i}. ${nm}`;
+  });
+  const N = rows.length;
+  if (group.supId !== "") {
+    const out = [ja ? `お世話になっております。${brand} です。` : `您好,${brand} 下单:`];
+    if (group.slot) out.push(ja ? `${mdw(group.slot.delivery, "ja")}着でお願いいたします。` : `送货日:${mdw(group.slot.delivery, "zh")}`);
+    out.push(...rows);
+    out.push(ja ? `以上 ${N} 点、よろしくお願いいたします。` : `共 ${N} 样,麻烦确认,谢谢!`);
+    return out.join("\n");
+  }
+  return [ja ? `${brand} 仕入れリスト(${md(S)}〜${md(E)})` : `${brand} 采购清单(${md(S)} 到 ${md(E)})`, ...rows, ja ? `計 ${N} 点` : `共 ${N} 样`].join("\n");
+};
+// ── §B 送货和截单(PB 写成真的,照 §B;新代码一律走 supDeliverySlots,不调上面两个老函数)
+const _PUR_HM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const _PUR_WD_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const _PUR_WD_JA = ["日", "月", "火", "水", "木", "金", "土"];
+const _purWd = (d) => { const [y, m, x] = String(d).split("-"); return new Date(+y, +m - 1, +x).getDay(); };
+// 本地时刻「HH:MM」(两位补零);给 App / 采购页算「过没过截单」
+const purHmOf = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+// R16 供货商的下单设置(读不出 = 没写;minOrderCNY 永远是人民币,别让任何币种检查碰它)
 const supOrderCfg = (sup) => {
   const v = sup && sup.leadDays;
   const n = typeof v === "number" ? v : (typeof v === "string" && /^\s*\d+\s*$/.test(v) ? parseInt(v, 10) : NaN);
-  const leadDays = Number.isInteger(n) && n >= 0 ? n : null;                       // 1.5 / -1 / "2天" / 没写 → null
+  const leadDays = Number.isInteger(n) && n >= 0 ? n : null;
   const c = typeof (sup && sup.cutoff) === "string" ? sup.cutoff.trim() : "";
-  const cutoff = _paHmRe.test(c) ? c : "";                                          // "24:00" / "9:00" / "16:00:00" → ""
+  const cutoff = _PUR_HM_RE.test(c) ? c : "";
   const mo = parseFloat(sup && sup.minOrderCNY);
-  const minOrderCNY = isFinite(mo) && mo > 0 ? mo : 0;                             // 永远是人民币
+  const minOrderCNY = isFinite(mo) && mo > 0 ? mo : 0;
   const dows = Array.isArray(sup && sup.deliveryDaysOfWeek)
     ? [...new Set(sup.deliveryDaysOfWeek.map(Number).filter(x => Number.isInteger(x) && x >= 0 && x <= 6))] : [];
   const closures = Array.isArray(sup && sup.closureWindows)
     ? sup.closureWindows.filter(w => w && typeof w === "object" && w.start && w.end) : [];
   return { leadDays, cutoff, minOrderCNY, dows, closures };
 };
-const _paWd = (d) => { const [y, m, x] = String(d).split("-"); return new Date(+y, +m - 1, +x).getDay(); };   // 星期(0 = 周日)
+// R18 送货日 / 下单日:送货日 = 每周几且不在闭店里;下单日 = 送货日往前数 leadDays 个自然日,落在闭店里再往前挪;
+// 下单日早于今天、或者是今天且过了截单时刻(16:00 整就算过)→ 这一趟赶不上。按下单日往后找 horizon 天
 const supDeliverySlots = (sup, today, nowHm, horizon = 28) => {
   const c = supOrderCfg(sup);
   if (!isYmd(today) || !c.dows.length) return [];
+  const now = _PUR_HM_RE.test(nowHm) ? nowHm : "00:00";
   const closed = (ymd) => c.closures.some(w => ymd >= w.start && ymd <= w.end);
-  const now = _paHmRe.test(nowHm) ? nowHm : "00:00";
   const L = c.leadDays, span = horizon + (L === null ? 0 : L);
   const out = [];
   for (let i = 0; i < span; i++) {
     const d = plusDaysStr(today, i);
-    if (!c.dows.includes(_paWd(d)) || closed(d)) continue;                        // 送货日 = 每周几、不在闭店里
+    if (!c.dows.includes(_purWd(d)) || closed(d)) continue;
     if (L === null) { out.push({ delivery: d, orderBy: null, cutoff: c.cutoff, orderable: true, isToday: false }); continue; }
-    let o = plusDaysStr(d, -L), k = 0;                                              // 下单日 = 送货日往前数 L 个自然日
-    while (closed(o) && k < 366) { o = plusDaysStr(o, -1); k++; }                   // 落在闭店里:再往前挪到闭店前一天
+    let o = plusDaysStr(d, -L), k = 0;
+    while (closed(o) && k < 366) { o = plusDaysStr(o, -1); k++; }
     if (closed(o)) { out.push({ delivery: d, orderBy: null, cutoff: c.cutoff, orderable: false, isToday: false }); continue; }
-    const orderable = o > today || (o === today && (c.cutoff === "" || now < c.cutoff));   // 早于今天 / 今天过了截单 → 赶不上
+    const orderable = o > today || (o === today && (c.cutoff === "" || now < c.cutoff));
     out.push({ delivery: d, orderBy: o, cutoff: c.cutoff, orderable, isToday: o === today });
   }
   return out;
 };
+// R19 下一趟能订上的
 const supNextSlot = (sup, today, nowHm) => supDeliverySlots(sup, today, nowHm).find(s => s.orderable) || null;
-const orderKey = (supId, delivery) => "";                            // 空壳:R21
-const markOrdered = (supId, delivery, nowIso, E) => ({});            // 空壳:R21(补丁)
-const orderedActive = (state, supId, today) => null;                 // 空壳:R21
-const purchaseReminders = (suppliers, state, today, nowHm) => [];    // 空壳:R22
-const orderToastOf = (rows, state, today, lang) => null;             // 空壳:R23
+// R21「已下单」只记在这台设备:键 = 供货商 id | 送货日;until = 点的那一刻的计划结束日(这段计划里都算下过单)
+const orderKey = (supId, delivery) => String(supId) + "|" + (delivery || "");
+const markOrdered = (supId, delivery, nowIso, E) => ({ ordered: { [orderKey(supId, delivery)]: { at: nowIso, until: E } } });
+const orderedActive = (state, supId, today) => {
+  const ord = (state && state.ordered) || {};
+  let best = null, bestT = -Infinity;
+  Object.keys(ord).forEach(k => {
+    const j = k.lastIndexOf("|");
+    if (j < 0) return;
+    const r = ord[k];
+    if (!r) return;
+    const sid = k.slice(0, j), dl = k.slice(j + 1);
+    if (sid !== String(supId) || !(r.until >= today)) return;
+    const t = Date.parse(r.at);
+    if (best === null || t > bestT || (t === bestT && k > best.key)) { best = { key: k, delivery: dl, at: r.at, until: r.until }; bestT = t; }
+  });
+  return best;
+};
+// R21「取消已下单」= 这家所有 until ≥ 今天的键置 null(补丁)
+const purCancelOrderedPatch = (state, supId, today) => {
+  const p = {};
+  Object.keys((state && state.ordered) || {}).forEach(k => {
+    const j = k.lastIndexOf("|");
+    if (j >= 0 && k.slice(0, j) === String(supId) && state.ordered[k] && state.ordered[k].until >= today) p[k] = null;
+  });
+  return { ordered: p };
+};
+// R22「今日」页的截单提醒:今天要截单、还没过截单时刻、这台设备上这段计划没标已下单;只看时间表,不看单子里有没有东西
+const purchaseReminders = (suppliers, state, today, nowHm) => {
+  const rows = [];
+  (suppliers || []).forEach((sup, idx) => {
+    if (!sup || sup.id === undefined || sup.id === "") return;
+    const slot = supNextSlot(sup, today, nowHm);
+    if (!slot || slot.orderBy !== today) return;
+    if (orderedActive(state, sup.id, today)) return;
+    rows.push({ supId: sup.id, name: _normTxt(sup.name), delivery: slot.delivery, cutoff: slot.cutoff, idx });
+  });
+  rows.sort((a, b) => ((a.cutoff || "24:00") < (b.cutoff || "24:00") ? -1 : (a.cutoff || "24:00") > (b.cutoff || "24:00") ? 1 : a.idx - b.idx));
+  return rows.map(({ idx, ...r }) => r);
+};
+// R23 截单那天打开 App 的提示条(每台设备每天最多一条,几家合成一条,按最早的截单时刻写);返回值只有 { msg, actionLabel }
+const orderToastOf = (rows, state, today, lang) => {
+  if (!rows || rows.length === 0 || (state && state.remindDay === today)) return null;
+  const r = rows[0], N = rows.length;
+  if (lang === "ja") {
+    const more = N >= 2 ? `ほか ${N - 1} 社` : "";
+    return { msg: r.cutoff ? `本日 ${r.cutoff} までに「${r.name}」${more}へ発注` : `本日「${r.name}」${more}へ発注`, actionLabel: "仕入れへ" };
+  }
+  const more = N >= 2 ? `等 ${N} 家` : "";
+  return { msg: r.cutoff ? `今天 ${r.cutoff} 前要给「${r.name}」${more}下单` : `今天要给「${r.name}」${more}下单`, actionLabel: "去采购单" };
+};
 // ── §C 本机采购状态 korora_purchase_v1(只属于这台设备;封顶 1 万字,从不删 extra)
-const purchaseStateRead = (raw, today) => ({ v: 1, qty: {}, extra: [], onHand: {}, ordered: {}, textLang: {} });   // 空壳:R24 的空状态
-const purchaseStatePatch = (state, patch, nowIso) => state;          // 空壳:R25
-const purchaseStateCap = (state, today) => state;                    // 空壳:R26
-// R27 的读法(读出来过 purchaseStateRead,第 0 步是空状态);App 的 purchaseState 用它做初值(只读)
+const _PUR_KNOWN = ["v", "win", "qty", "extra", "onHand", "ordered", "textLang", "remindDay", "at"];
+// R24 读的时候整理:日子过完(win.end 早于今天)清计划;手上的数照留(用的时候按 7 天 / 规格灰掉);已下单 30 天删;不认识的键原样留着
+const purchaseStateRead = (raw, today) => {
+  let o = raw;
+  if (typeof raw === "string") { try { o = JSON.parse(raw); } catch (e) { o = null; } }
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { v: 1, qty: {}, extra: [], onHand: {}, ordered: {}, textLang: {} };
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+  const num0 = (x) => typeof x === "number" && isFinite(x) && x >= 0;
+  const out = { v: typeof o.v === "number" && o.v > 1 ? o.v : 1 };
+  const w = o.win;
+  if (isObj(w) && isYmd(w.start) && isYmd(w.end) && w.end >= today) {
+    out.win = { start: w.start, end: w.end };
+    out.qty = {}; if (isObj(o.qty)) Object.keys(o.qty).forEach(k => { if (k !== "" && num0(o.qty[k])) out.qty[k] = o.qty[k]; });
+    out.extra = []; const seen = new Set();
+    (Array.isArray(o.extra) ? o.extra : []).forEach(x => {
+      if (!isObj(x) || typeof x.uid !== "string" || !x.uid || seen.has(x.uid)) return;
+      if (!["recipe", "component", "creation"].includes(x.kind)) return;
+      if (x.id === undefined || x.id === null || x.id === "" || !num0(x.qty)) return;
+      seen.add(x.uid);
+      const y = { uid: x.uid, kind: x.kind, id: x.id, qty: x.qty };
+      if (typeof x.nameZh === "string") y.nameZh = x.nameZh;
+      if (typeof x.nameJa === "string") y.nameJa = x.nameJa;
+      if (x.asItem === true) y.asItem = true;
+      out.extra.push(y);
+    });
+  } else { out.qty = {}; out.extra = []; }
+  out.onHand = {};
+  if (isObj(o.onHand)) Object.keys(o.onHand).forEach(k => {
+    const e = o.onHand[k];
+    if (!k || !isObj(e) || !num0(e.n) || (e.u !== "pack" && e.u !== "g") || !isYmd(e.at)) return;
+    const y = { n: e.n, u: e.u, at: e.at };
+    if (typeof e.pg === "number" && isFinite(e.pg) && e.pg > 0) y.pg = e.pg;
+    out.onHand[k] = y;
+  });
+  out.ordered = {};
+  const cut = plusDaysStr(today, -30);
+  if (isObj(o.ordered)) Object.keys(o.ordered).forEach(k => {
+    const r = o.ordered[k], j = k.lastIndexOf("|");
+    if (j <= 0 || !isObj(r) || typeof r.at !== "string" || !isFinite(Date.parse(r.at)) || !isYmd(r.until)) return;
+    const dl = k.slice(j + 1);
+    if (dl !== "" && !isYmd(dl)) return;
+    const keep = dl > r.until ? dl : r.until;
+    if (keep < cut) return;
+    out.ordered[k] = { at: r.at, until: r.until };
+  });
+  out.textLang = {};
+  if (isObj(o.textLang)) Object.keys(o.textLang).forEach(k => { if (k && o.textLang[k] === "ja") out.textLang[k] = "ja"; });
+  if (isYmd(o.remindDay)) out.remindDay = o.remindDay;
+  if (typeof o.at === "string") out.at = o.at;
+  Object.keys(o).forEach(k => { if (!_PUR_KNOWN.includes(k)) out[k] = o[k]; });
+  return out;
+};
+// R25 局部改:win / qty / extra / remindDay 整块换(null = 删);onHand / ordered / textLang 按条改。写 qty / extra 的补丁必须同时带 win
+const purchaseStatePatch = (state, patch, nowIso) => {
+  const next = { ...state };
+  ["win", "qty", "extra", "remindDay"].forEach(k => {
+    if (!Object.prototype.hasOwnProperty.call(patch, k)) return;
+    if (patch[k] === null || patch[k] === undefined) delete next[k]; else next[k] = patch[k];
+  });
+  ["onHand", "ordered", "textLang"].forEach(k => {
+    if (!patch[k]) return;
+    const m = { ...(state[k] || {}) };
+    Object.keys(patch[k]).forEach(kk => { const v = patch[k][kk]; if (v === null || v === undefined) delete m[kk]; else m[kk] = v; });
+    next[k] = m;
+  });
+  next.at = nowIso;
+  return next;
+};
+// R26 封顶 1 万字:从不删 extra;先删送货日和 until 都过了的已下单(最旧的先删),再删最旧的手上的数
+const purchaseStateCap = (state, today) => {
+  const LIMIT = 10000;
+  const s = { ...state, ordered: { ...state.ordered }, onHand: { ...state.onHand } };
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const dlOf = (k) => k.slice(k.lastIndexOf("|") + 1);
+  const removable = () => Object.keys(s.ordered).filter(k => s.ordered[k].until < today && (dlOf(k) || s.ordered[k].until) < today)
+    .sort((a, b) => cmp(dlOf(a) || s.ordered[a].until, dlOf(b) || s.ordered[b].until) || cmp(s.ordered[a].at, s.ordered[b].at) || cmp(a, b));
+  const oldestOnHand = () => Object.keys(s.onHand).sort((a, b) => cmp(s.onHand[a].at, s.onHand[b].at) || cmp(a, b))[0];
+  while (Object.keys(s.ordered).length > 60) { const k = removable()[0]; if (!k) break; delete s.ordered[k]; }
+  while (Object.keys(s.onHand).length > 100) { delete s.onHand[oldestOnHand()]; }
+  const len = () => JSON.stringify(s).length;
+  while (len() > LIMIT) { const k = removable()[0]; if (!k) break; delete s.ordered[k]; }
+  while (len() > LIMIT) { const k = oldestOnHand(); if (!k) break; delete s.onHand[k]; }
+  return s;
+};
+// R27 唯一两处碰本机存储的(读写都包 try/catch;写之前重读、只改自己那块,两个窗口各改各的块不互相盖)
 const purchaseStateLoad = (today) => {
   try { return purchaseStateRead(localStorage.getItem(PURCHASE_STATE_KEY), today); } catch (e) { return purchaseStateRead(null, today); }
 };
-const purchaseStateSave = (patch, today, nowIso) => ({ state: purchaseStateLoad(today), ok: false });   // 空壳:R27(第 0 步什么都不写)
-const planWindowOf = (state, today) => ({ S: today, E: today, days: 1, endBeforeStart: false, startPastDays: 0 });   // 空壳:R29
+const purchaseStateSave = (patch, today, nowIso) => {
+  const cur = purchaseStateLoad(today);
+  const next = purchaseStateCap(purchaseStatePatch(cur, patch, nowIso), today);
+  try { localStorage.setItem(PURCHASE_STATE_KEY, JSON.stringify(next)); return { state: next, ok: true }; } catch (e) { return { state: next, ok: false }; }
+};
+// R29 计划窗口:没写 = 今天到 7 天后;结束日早于开始日按开始日算(红字);开始日早于今天给「从今天算」
+const planWindowOf = (state, today) => {
+  const S = state.win ? state.win.start : today;
+  const E0 = state.win ? state.win.end : plusDaysStr(today, 7);
+  const E = E0 < S ? S : E0;
+  return { S, E, days: _daysBetween(S, E) + 1, endBeforeStart: E0 < S, startPastDays: S < today ? _daysBetween(S, today) : 0 };
+};
 // ── §D 供货商合并和 orderAt
 // R30:认同一家供货商只有这一个口径(合并导入、回收站、预览分组都用它);空串 = 没名字、不参与按名字认
 const normSupName = (s) => String(s === undefined || s === null ? "" : s).normalize("NFKC").toLowerCase().replace(/\s+/g, "");
@@ -27158,7 +27561,7 @@ const supplierFieldsForSave = (o) => {
   if (!o || typeof o !== "object" || !K.some(has)) return o;
   const x = { ...o };
   if (has("leadDays")) { const s = String(x.leadDays ?? "").trim(), n = s === "" ? NaN : Number(s); if (Number.isInteger(n) && n >= 0 && n <= 365) x.leadDays = n; else delete x.leadDays; }
-  if (has("cutoff")) { const s = String(x.cutoff ?? "").trim(); if (_paHmRe.test(s)) x.cutoff = s; else delete x.cutoff; }
+  if (has("cutoff")) { const s = String(x.cutoff ?? "").trim(); if (_PUR_HM_RE.test(s)) x.cutoff = s; else delete x.cutoff; }
   if (has("minOrderCNY")) { const n = parseFloat(x.minOrderCNY); if (isFinite(n) && n > 0) x.minOrderCNY = Math.round(n * 100) / 100; else delete x.minOrderCNY; }
   return x;
 };
@@ -27203,317 +27606,881 @@ const stripSupplierRefs = (list, supId, nowIso) => {
 // R37(PA 版):把供货商 id 挂回本店原料(加在最后),写 orderAt、不写 updatedAt;已经有了 → 原对象。回收站还原 / 删供货商的撤销只走它
 const smReattachSupplier = (sm, sid, nowIso) => (Array.isArray(sm.supplierIds) && sm.supplierIds.includes(sid)) ? sm
   : { ...sm, supplierIds: [...(Array.isArray(sm.supplierIds) ? sm.supplierIds : []), sid], orderAt: nowIso };
-// ── §F 撤销
-const undoSheetImport = (state, undo) => ({ next: state, did: 0 });  // 空壳:R39
-const undoAssign = (list, pairs) => ({ list, did: 0 });              // 空壳:R40
-// ── 小工具(名字以规格 1.1 为准;空壳)
-// 2.6 的三个(PA 先写成真的:supDeliverySlots 和供货商详情要用;PB 合并时以规格为准)
+// ── §F 撤销(PB)
+// R39「照今天的生产单」的撤销:逐项,之后又改过的那一项不撤;导入时顺手写的窗口,窗口没变就一起去掉
+const undoSheetImport = (state, undo) => {
+  const qty = { ...state.qty }; let did = 0;
+  undo.qty.forEach(u => {
+    if (!Object.prototype.hasOwnProperty.call(qty, u.k) || qty[u.k] !== u.v) return;   // 之后改过了:不撤
+    if (u.had) qty[u.k] = u.old; else delete qty[u.k];
+    did++;
+  });
+  const extra = state.extra.slice();
+  undo.added.forEach(a => { const i = extra.findIndex(x => x.uid === a.uid); if (i >= 0 && extra[i].qty === a.v) { extra.splice(i, 1); did++; } });
+  undo.replaced.forEach(r => { const i = extra.findIndex(x => x.uid === r.uid); if (i >= 0 && extra[i].qty === r.v) { extra[i] = { ...extra[i], qty: r.old }; did++; } });
+  const next = { ...state, qty, extra };
+  if (undo.winAdded && state.win && state.win.start === undo.win.start && state.win.end === undo.win.end) delete next.win;
+  return { next, did };
+};
+// R40「归到」/「全部归到」的撤销:列表里同 id 的第一条还等于归到之后的那个样子才整条换回(之后改过的不动)
+const undoAssign = (list, pairs) => {
+  const out = (list || []).slice(); let did = 0;
+  (pairs || []).forEach(p => { const i = out.findIndex(x => x && x.id === p.id); if (i >= 0 && stableEq(out[i], p.after)) { out[i] = p.before; did++; } });
+  return { list: out, did };
+};
+// ── 小工具(名字以规格 1.1 / 2.6 为准)
 const isYmd = (s) => {
   if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split("-");
-  return localDateStr(new Date(+y, +m - 1, +d)) === s;   // 排除 2026-02-30
+  return localDateStr(new Date(+y, +m - 1, +d)) === s;
 };
-const md = (d) => { const p = String(d).split("-"); return `${+p[1]}/${+p[2]}`; };   // 不补零:2026-10-09 → 10/9
-const mdw = (d, lang) => md(d) + "(" + (lang === "ja" ? ["日", "月", "火", "水", "木", "金", "土"] : ["周日", "周一", "周二", "周三", "周四", "周五", "周六"])[_paWd(d)] + ")";
-const money = (v, approx) => "";
-const qtyText = (g, liquid) => "";
-const matName = (mat, mid, lang) => "";
-const stableEq = (a, b) => false;
+const md = (d) => { const [, M, D] = String(d).split("-"); return `${+M}/${+D}`; };
+const mdw = (d, lang) => md(d) + "(" + (lang === "ja" ? _PUR_WD_JA : _PUR_WD_ZH)[_purWd(d)] + ")";
+const money = (v, approx) => (approx ? "≈" : "") + (v > 0 ? fmtCost(v) : "¥0");
+const qtyText = (g, liquid) => fmtQty(g) + " " + (liquid ? "ml" : "g");
+const matName = (mat, mid, lang) => {
+  const n = mat ? (lang === "ja" ? (mat.nameJa || mat.nameZh) : (mat.nameZh || mat.nameJa)) : "";
+  return n || String(mid);
+};
+// 稳定相等:对象的键排序后再比(递归;数组保持先后;值是 undefined / 函数的键当不存在)
+const _purStableStr = (v) => {
+  if (v === undefined || typeof v === "function" || typeof v === "symbol") return undefined;
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (typeof v.toJSON === "function") return _purStableStr(v.toJSON());
+  if (Array.isArray(v)) return "[" + v.map(x => { const s = _purStableStr(x); return s === undefined ? "null" : s; }).join(",") + "]";
+  const parts = [];
+  Object.keys(v).sort().forEach(k => { const s = _purStableStr(v[k]); if (s !== undefined) parts.push(JSON.stringify(k) + ":" + s); });
+  return "{" + parts.join(",") + "}";
+};
+const stableEq = (a, b) => _purStableStr(a) === _purStableStr(b);
+// ── PB 的字(采购页 / 「今日」页截单提醒 / 采购单打印):放在 PURCHASE_TXT 的 pb 一块里,不和 PA 的键混(同名键会悄悄互相盖掉)。
+// 页面上的格式照 spec_purchase_order R14 / R20 / R21 / R22 / R29 / R10;复制给供货商的文字不在这里(R15 写死在 purchaseOrderText)
+PURCHASE_TXT.zh.pb = {
+  title: "📦 采购", sub: "先定这几天要做多少 → 每家供货商一张下单单子",
+  schedTitle: "🚚 送货和截单", noSup: "还没有供货商", newSup: "去新建供货商",
+  noDows: "没写送货日",
+  orderToday: (cut, dl) => cut ? `今天 ${cut} 前下单 → ${dl}送到` : `今天下单 → ${dl}送到`,
+  orderOn: (ob, cut, dl) => cut ? `${ob}${cut} 前下单 → ${dl}送到` : `${ob}前下单 → ${dl}送到`,
+  noLead: (dl) => `没写提前几天下单 · 下次送货 ${dl}`, noLeadPre: "没写提前几天下单 · ",
+  noSlot: "4 周内没有能送的日子(看看送货日和闭店)",
+  late: (s, n) => `比开始日 ${s} 晚 ${n} 天:头几天要用手上的`,
+  schedOrdered: (dl) => dl ? `✓ 这台设备上已标下单 · ${dl}送到` : "✓ 这台设备上已标下单",
+  dateTitle: "📅 算哪几天的用量", to: "到", days: (n) => `共 ${n} 天`, endBefore: "结束日早于开始日",
+  startPast: (s, n) => `开始日 ${s} 已经过了 ${n} 天:那几天的用量也算在里面`, fromToday: "从今天算",
+  saveFail: "这台设备空间不够,计划没记住",
+  planTitle: "🍰 这几天要做多少", planHint: "建议数 = 最近 30 天平均每天卖的 × 天数 × 1.2,可以改",
+  noSales: "还没有销售记录,建议数都是 0:照今天的生产单填,或者一行行填",
+  noProducts: "还没有商品", suggest: (n) => `建议 ${n}`, spanNote: (n) => `(按最近 ${n} 天)`, stock: (n) => `现有 ${n}`, piece: "件",
+  kind: { recipe: "配方", component: "组件", creation: "组合产品" }, take: "取出烤", gone: "(已经删掉了)", batch: "批",
+  removeLine: "删掉这一行", removed: (n) => `计划里删掉了「${n}」`,
+  add: "＋ 加配方 / 组件 / 组合产品", sheet1: "照今天的生产单(1 天)", sheetN: (n) => `照今天的生产单 × ${n} 天`,
+  sheetEmpty: "今天的生产单还是空的", full: "计划最多 30 行,先删几行",
+  sheetToast: (a, b, n) => `照今天的生产单加了 ${a} 行、改了 ${b} 个商品的数` + (n > 0 ? ` · 另有 ${n} 行没带(做一批 / 给礼盒烤的):原料已经按商品的数算了` : ""),
+  sheetsTitle: "下单单子", unassigned: (n) => `⚠ 还没归到供货商(${n} 样)`,
+  need: (q) => `要用 ${q}`, have: "手上还有", packU: "包", gU: "g",
+  buyPack: (p, spec, m) => `买 ${p} 包 × ${spec}` + (m ? `(起订 ${m} 包)` : ""),
+  buyCase: (c, p, spec) => `买 ${c} 箱(${p} 包)× ${spec}`,
+  noPrice: "没有进货价", enough: "手上够,这次不买", noPack: "规格没填,算不出几包",
+  noShop: "没有本店原料(不知道规格和进货价)", addShop: "加进本店原料", fill: "去填", fix: "去改",
+  unconv: (parts) => `另有 ${parts} 是按个写的、没填每个几克,没算进几包`,
+  multi: (list, first) => `规格写了几种(${list}),按第一种 ${first} 算的`,
+  haveFilled: (d) => `(${d} 填的)`,
+  haveEst: (d, n, u, s, q) => `${d} 填的 ${n} ${u === "pack" ? "包" : "g"},估到 ${s} 还剩约 ${q}`,
+  staleSpec: "规格改过了,再数一下", staleOld: (d) => `${d} 填的,过了 7 天不算了,数一下再填`,
+  usedIn: (names, n) => `用在:${names}` + (n > 3 ? ` 等 ${n} 处` : ""), lasts: (n) => `多出来的大约够 ${n} 周`, usedMoney: (m) => `这段时间用掉 ${m}`,
+  cardHead: (n, m) => `${n} 样 · 要付 ${m}`, cardHeadInc: (n, m, k) => `${n} 样 · 至少 ${m} · 另有 ${k} 样没算钱`,
+  minOk: (m) => `起送 ¥${m} ✓`, minShort: (m, d) => `起送 ¥${m},还差 ${d}`,
+  minUnkShort: (m, d) => `起送 ¥${m},最多还差 ${d} · 算不全`, minUnkOk: (m) => `起送 ¥${m} · 算不全`,
+  copyBtn: "📋 复制下单文字", copyList: "📋 复制清单", printOne: "🖨 打印这家", printList: "🖨 打印", markBtn: "✓ 已下单",
+  orderedLine: (at, dl) => `✓ 这台设备上已标下单(${at})· ` + (dl ? `${dl} 送到 · ` : "") + "这段日子已经下过单",
+  expand: "展开", collapse: "收起", again: "还要再下一单", cancelOrdered: "取消已下单",
+  againHead: "上一单的东西没扣,先填『手上还有』",
+  assignTo: "归到", assignAll: "这张卡里的全部归到", pickSup: "选供货商 ▾", needSup: "先建一家供货商", goNew: "去新建",
+  assigned: (m, s) => `「${m}」归到「${s}」了`, assignedAll: (n, s) => `${n} 样归到「${s}」了`,
+  totPay: (m) => `这次一共要付 ${m}(按整包算;日元进价折成人民币的标 ≈)`,
+  totPayInc: (m, n) => `这次一共要付 至少 ${m} · 另有 ${n} 样没算钱(按整包算;日元进价折成人民币的标 ≈)`,
+  totOrdered: (n) => `(含这台设备上已标下单的 ${n} 家)`,
+  totUsed: (inc, m) => `这几天用掉的原料 ${inc ? "至少 " : ""}${m}`,
+  totUsedFoot: "这几天做的东西按配方折算用掉的原料(含从备货里取的;算成本用的数)",
+  printMoney: "打印时印价格(自己对账用)", printAll: "🖨 打印全部",
+  emptyTitle: "这几天的计划都是 0", emptyHint: "先在上面填要做多少,或者照今天的生产单带进来", noNeed: "按当前计划无原料需求",
+  textTitle: "下单文字(可以改,只改这一次)", withPrice: "带上我记的单价(核对报价用)", copy: "📋 复制",
+  copied: (s) => `已复制「${s}」的下单文字,去微信粘贴`, copiedList: "已复制采购清单", markLabel: "标成已下单",
+  copyFail: "这台设备不让直接复制:长按上面的文字 → 全选 → 拷贝",
+  remind: (cut, name, dl) => (cut ? `🚚 今天 ${cut} 前要给「${name}」下单` : `🚚 今天要给「${name}」下单`) + `(${dl} 送到)· 这台设备上还没标已下单 · `,
+  remindGo: "去采购单 →", backToPur: "← 回采购单",
+  pTitle: (b) => `${b} 采购单`, pPrinted: (d) => `${d} 打印`, pRange: (s, e) => `算的是 ${s} 到 ${e}`,
+  pDeliver: (dl) => `${dl}送到`, pOrderBy: (d, cut) => cut ? `${d} ${cut} 前下单` : `${d} 前下单`, pUnassigned: "还没归到供货商",
+  pCols: ["#", "品名(下单叫法)", "规格", "订", "到货", "实收"], pMoneyCols: ["单价", "要付"],
+  pPack: (n) => `${n} 包`, pCase: (c, n) => `${c} 箱(${n} 包)`, pAbout: (q) => `约 ${q}`, pEnough: "手上够", pTotal: "合计",
+  pSign: "签收人 ________   日期 ________", pSkipped: (n) => `没算进来的 ${n} 项:`, pPerPack: "/包",
+};
+PURCHASE_TXT.ja.pb = {
+  title: "📦 仕入れ", sub: "期間の製造数を決める → 仕入先ごとの発注書",
+  schedTitle: "🚚 配送と締め切り", noSup: "仕入先が未登録です", newSup: "仕入先を作成",
+  noDows: "配送曜日未設定",
+  orderToday: (cut, dl) => cut ? `本日 ${cut} までに発注 → ${dl}着` : `本日発注 → ${dl}着`,
+  orderOn: (ob, cut, dl) => cut ? `${ob}${cut} までに発注 → ${dl}着` : `${ob}までに発注 → ${dl}着`,
+  noLead: (dl) => `発注リードタイム未設定 · 次回配送 ${dl}`, noLeadPre: "発注リードタイム未設定 · ",
+  noSlot: "4 週間以内に配送日がありません(曜日と休業日を確認)",
+  late: (s, n) => `開始日 ${s} より ${n} 日遅れ:最初の数日は手持ちで`,
+  schedOrdered: (dl) => dl ? `✓ この端末で発注済み · ${dl}着` : "✓ この端末で発注済み",
+  dateTitle: "📅 計算する期間", to: "〜", days: (n) => `${n} 日間`, endBefore: "終了日が開始日より前です",
+  startPast: (s, n) => `開始日 ${s} から ${n} 日過ぎています:その分の使用量も含まれます`, fromToday: "今日から計算",
+  saveFail: "この端末の容量が足りず、計画を保存できません",
+  planTitle: "🍰 この期間の製造数", planHint: "推奨 = 直近 30 日の 1 日平均販売数 × 日数 × 1.2(変更可)",
+  noSales: "販売記録がないため推奨は 0 です。今日の製造リストから入れるか、直接入力してください",
+  noProducts: "商品未登録", suggest: (n) => `推奨 ${n}`, spanNote: (n) => `(直近 ${n} 日)`, stock: (n) => `在庫 ${n}`, piece: "件",
+  kind: { recipe: "レシピ", component: "パーツ", creation: "組み合わせ" }, take: "取り出して焼く", gone: "(削除済み)", batch: "バッチ",
+  removeLine: "この行を削除", removed: (n) => `計画から「${n}」を削除しました`,
+  add: "＋ レシピ・パーツ・組み合わせを追加", sheet1: "今日の製造リストから(1 日分)", sheetN: (n) => `今日の製造リスト × ${n} 日`,
+  sheetEmpty: "今日の製造リストは空です", full: "計画は最大 30 行です。先に何行か削除してください",
+  sheetToast: (a, b, n) => `今日の製造リストから ${a} 行追加・${b} 商品の数を変更` + (n > 0 ? ` · ほかに ${n} 行は入れていません(作り置き / 箱詰め用):原料は商品の数で計算済みです` : ""),
+  sheetsTitle: "発注書", unassigned: (n) => `⚠ 仕入先未設定(${n} 件)`,
+  need: (q) => `必要量 ${q}`, have: "手持ち", packU: "パック", gU: "g",
+  buyPack: (p, spec, m) => `発注 ${p} パック × ${spec}` + (m ? `(最小 ${m} パック)` : ""),
+  buyCase: (c, p, spec) => `発注 ${c} ケース(${p} パック)× ${spec}`,
+  noPrice: "仕入価格なし", enough: "手持ちで足ります", noPack: "規格未入力のためパック数不明",
+  noShop: "仕入れ原料が未登録(規格・仕入価格なし)", addShop: "追加する", fill: "入力する", fix: "修正する",
+  unconv: (parts) => `ほかに ${parts} は個数指定で g 換算なし(パック数に未反映)`,
+  multi: (list, first) => `規格が複数(${list})、最初の ${first} で計算`,
+  haveFilled: (d) => `(${d} 入力)`,
+  haveEst: (d, n, u, s, q) => `${d} 入力の ${n} ${u === "pack" ? "パック" : "g"}、${s} 時点で残り約 ${q} と推定`,
+  staleSpec: "規格が変わりました。もう一度数えてください", staleOld: (d) => `${d} 入力分は 7 日以上前なので使いません。数え直してください`,
+  usedIn: (names, n) => `使用:${names}` + (n > 3 ? ` ほか計 ${n} 件` : ""), lasts: (n) => `余りで約 ${n} 週分`, usedMoney: (m) => `この期間の使用分 ${m}`,
+  cardHead: (n, m) => `${n} 件 · 支払い ${m}`, cardHeadInc: (n, m, k) => `${n} 件 · 少なくとも ${m} · ほかに ${k} 件は未計算`,
+  minOk: (m) => `最低発注 ¥${m} ✓`, minShort: (m, d) => `最低発注 ¥${m}、あと ${d}`,
+  minUnkShort: (m, d) => `最低発注 ¥${m}、最大あと ${d} · 計算できない品目あり`, minUnkOk: (m) => `最低発注 ¥${m} · 計算できない品目あり`,
+  copyBtn: "📋 発注文をコピー", copyList: "📋 リストをコピー", printOne: "🖨 この仕入先を印刷", printList: "🖨 印刷", markBtn: "✓ 発注済み",
+  orderedLine: (at, dl) => `✓ この端末で発注済み(${at})· ` + (dl ? `${dl} 着 · ` : "") + "この期間は発注済み",
+  expand: "開く", collapse: "閉じる", again: "もう一度発注する", cancelOrdered: "発注済みを取消",
+  againHead: "前回の発注分は差し引いていません。先に『手持ち』を入力してください",
+  assignTo: "仕入先", assignAll: "このカードの全件を", pickSup: "仕入先を選択 ▾", needSup: "仕入先が未登録です", goNew: "仕入先を作成",
+  assigned: (m, s) => `「${m}」を「${s}」に設定しました`, assignedAll: (n, s) => `${n} 件を「${s}」に設定しました`,
+  totPay: (m) => `今回の支払い合計 ${m}(パック単位。円の仕入価格は人民元換算で ≈ 表示)`,
+  totPayInc: (m, n) => `今回の支払い合計 少なくとも ${m} · ほかに ${n} 件は未計算(パック単位。円の仕入価格は人民元換算で ≈ 表示)`,
+  totOrdered: (n) => `(この端末で発注済みの ${n} 社を含む)`,
+  totUsed: (inc, m) => `この期間の使用原料 ${inc ? "少なくとも " : ""}${m}`,
+  totUsedFoot: "この期間に作る分を配合から換算した使用原料(作り置きから使う分を含む。原価計算用)",
+  printMoney: "印刷時に価格も印刷(照合用)", printAll: "🖨 すべて印刷",
+  emptyTitle: "この期間の計画がすべて 0 です", emptyHint: "上で製造数を入力するか、今日の製造リストから入れてください", noNeed: "計画内の仕入不要",
+  textTitle: "発注文(編集可・今回のみ)", withPrice: "記録している単価も入れる(見積もり照合用)", copy: "📋 コピー",
+  copied: (s) => `「${s}」の発注文をコピーしました。WeChat に貼り付けてください`, copiedList: "仕入れリストをコピーしました", markLabel: "発注済みにする",
+  copyFail: "コピーできませんでした:上の文字を長押し → すべて選択 → コピー",
+  remind: (cut, name, dl) => (cut ? `🚚 本日 ${cut} までに「${name}」へ発注` : `🚚 本日「${name}」へ発注`) + `(${dl} 着)· この端末では未発注 · `,
+  remindGo: "仕入れへ →", backToPur: "← 発注書へ戻る",
+  pTitle: (b) => `${b} 発注書`, pPrinted: (d) => `${d} 印刷`, pRange: (s, e) => `計算期間 ${s}〜${e}`,
+  pDeliver: (dl) => `${dl}着`, pOrderBy: (d, cut) => cut ? `${d} ${cut} までに発注` : `${d} までに発注`, pUnassigned: "仕入先未設定",
+  pCols: ["#", "品名(発注名)", "規格", "発注", "着荷", "実数"], pMoneyCols: ["単価", "支払い"],
+  pPack: (n) => `${n} パック`, pCase: (c, n) => `${c} ケース(${n} パック)`, pAbout: (q) => `約 ${q}`, pEnough: "手持ちで足ります", pTotal: "合計",
+  pSign: "受領者 ________   日付 ________", pSkipped: (n) => `計算に含まれていないもの ${n} 件:`, pPerPack: "/パック",
+};
+const purTx = (lang) => PURCHASE_TXT[lang === "ja" ? "ja" : "zh"].pb;
 // ─── END purchase order helpers ───
-// 第 6 批第 0 步:采购单打印模板(PB;PrintView 的 purchase 支)。空壳
-function PurchaseOrderTemplate({ data, lang }) { return null; }
+// 第 6 批 PB:采购单打印模板(PrintView 的 purchase 支;design_purchase §1.2)。A4,一家一节(打印全部时每家另起一页);
+// 默认没有价格列(这张纸收货时在员工手里),data.withMoney 才多「单价 / 要付」两列和合计;「没算进来的」只在打印全部的最后一节。
+// data = purchasePrintData(…) 的结果:{ lang, brandName, today, S, E, withMoney, all, sections: [{ supId, name, slot, lines, payCNY, approx, incompleteN }], skipped }
+const purPrintRowOf = (L, lang) => {
+  const X = purTx(lang);
+  const nm = _normTxt(L.sm && L.sm.orderName) || matName(L.mat, L.mid, lang);
+  const sub = _normTxt(L.sm && L.sm.orderName) ? matName(L.mat, L.mid, lang) : "";
+  const cp = L.sm ? casePackOf(L.sm) : 0;
+  const spec = L.status === "buy" ? (L.cases !== null && cp > 0 ? `${specLabel(L.pk)} × ${cp}` : specLabel(L.pk)) : (L.pk ? specLabel(L.pk) : "");
+  const qty = L.status === "buy" ? (L.cases !== null ? X.pCase(L.cases, L.packs) : X.pPack(L.packs))
+    : L.status === "noPack" ? X.pAbout(qtyText(L.restG, L.liquid)) : L.status === "noShop" ? X.pAbout(qtyText(L.needG, L.liquid))
+    : L.status === "pieceOnly" ? purUnconvParts(L.unconv) : X.pEnough;
+  let unit = "";
+  if (L.status === "buy" && !L.noPrice) { const v = L.pk.g * parseFloat(L.sm.pricePerG); unit = (curOf(L.sm) === "CNY" ? "¥" + fmtQty(v) : fmtQty(v) + "円") + X.pPerPack; }
+  const pay = L.status === "buy" && L.payCNY !== null ? money(L.payCNY, L.approx) : "";
+  return { nm, sub, spec, qty, unit, pay };
+};
+function PurchaseOrderTemplate({ data, lang }) {
+  if (!data || !Array.isArray(data.sections)) return null;
+  const L = (data.lang || lang) === "ja" ? "ja" : "zh";
+  const X = purTx(L);
+  const brand = _normTxt(data.brandName) || "kororā";
+  const wm = !!data.withMoney;
+  const cols = wm ? [...X.pCols.slice(0, 4), ...X.pMoneyCols, ...X.pCols.slice(4)] : X.pCols;
+  const th = { textAlign: "left", fontSize: "10pt", fontWeight: 400, padding: "6px 4px", borderBottom: "1.5px solid #000", whiteSpace: "nowrap" };
+  const td = { padding: "8px 4px", borderBottom: "1px solid #BBB", fontSize: "11pt", verticalAlign: "top" };
+  const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+  return (
+    <div data-pur-print="1">
+      {data.sections.map((s, si) => {
+        const rows = (s.lines || []).filter(x => x.status !== "enough");
+        const head = [s.supId === "" ? X.pUnassigned : s.name];
+        if (s.slot) { head.push(X.pDeliver(mdw(s.slot.delivery, L))); if (s.slot.orderBy) head.push(X.pOrderBy(md(s.slot.orderBy), s.slot.cutoff)); }
+        head.push(X.pRange(md(data.S), md(data.E)));
+        const last = si === data.sections.length - 1;
+        return (
+          <section key={si} data-pur-print-sec={String(s.supId)} style={si > 0 ? { breakBefore: "page", pageBreakBefore: "always" } : undefined}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: "2px solid #000", paddingBottom: "6px", gap: "12px" }}>
+              <div style={{ fontSize: "16pt", fontWeight: 700 }}>{X.pTitle(brand)}</div>
+              <div style={{ fontSize: "10pt", ...T.num }}>{X.pPrinted(data.today)}</div>
+            </div>
+            <div style={{ fontSize: "12pt", fontWeight: 700, margin: "10px 0 8px", lineHeight: 1.5 }}>{head.join(" · ")}</div>
+            <table>
+              <thead><tr>{cols.map((c, i) => <th key={i} style={{ ...th, ...(c === "#" ? { width: "24px" } : {}) }}>{c}</th>)}</tr></thead>
+              <tbody>
+                {rows.map((x, i) => {
+                  const r = purPrintRowOf(x, L);
+                  return (
+                    <tr key={i} className="p-row">
+                      <td style={{ ...td, ...T.num }}>{i + 1}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{r.nm}{r.sub && <div style={{ fontSize: "9pt", fontWeight: 400 }}>{r.sub}</div>}</td>
+                      <td style={{ ...td, whiteSpace: "nowrap" }}>{r.spec}</td>
+                      <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap", ...T.num }}>{r.qty}</td>
+                      {wm && <td style={{ ...td, whiteSpace: "nowrap", ...T.num }}>{r.unit}</td>}
+                      {wm && <td style={{ ...td, whiteSpace: "nowrap", ...T.num }}>{r.pay}</td>}
+                      <td style={td}><span className="p-check" style={{ width: "16px", height: "16px" }} /></td>
+                      <td style={{ ...td, width: "64px" }}>____</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {wm && <div className="p-row" style={{ marginTop: "8px", fontSize: "11pt", fontWeight: 700, textAlign: "right", ...T.num }}>{X.pTotal} {s.incompleteN > 0 ? (L === "ja" ? "少なくとも " : "至少 ") : ""}{money(s.payCNY, s.approx)}</div>}
+            <div className="p-row" style={{ marginTop: "22px", fontSize: "11pt" }}>{X.pSign}</div>
+            {data.all && last && skipped.length > 0 && (
+              <div className="p-row" data-pur-print-skipped="1" style={{ marginTop: "18px", fontSize: "10pt", lineHeight: 1.6 }}>
+                {X.pSkipped(skipped.reduce((a, x) => a + Math.max(1, (x.names || []).length), 0))}
+                {skipped.map(x => `「${x.src}」${(x.names || []).length ? " " + x.names.join("、") : ""}`).join(L === "ja" ? "、" : ";")}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════
-// 📦 采购清单 View (v13)
-// 给定窗口 → 按计划产量展开 ingredient 消耗 → 按 supplier 分组
+// 📦 采购页 (v13 → 第 6 批 PB 整页重排,design_purchase §1.1 / plan「每个页面怎么变」§1)
+// 从上到下:🚚 送货和截单 → 📅 算哪几天 → 🍰 这几天要做多少 → 下单单子(每家一张)+ 底部两笔钱。
+// 算数只走 purchase order helpers 段(spec_purchase_order;R11 的调用顺序原样照写),这里只管显示和写本机状态 korora_purchase_v1。
+// 子组件全部在模块顶层(别在渲染函数里定义组件);新节点带 data-pur* 钩子。员工外壳里没有这一页。
 // ═══════════════════════════════════════════════════════════════
+// 本地时刻「已下单」那一行用:{md(本地日期)} {HH:MM}(R21)
+const purAtText = (iso) => { const d = new Date(iso); return isFinite(d.getTime()) ? `${md(localDateStr(d))} ${purHmOf(d)}` : ""; };
+// R20 送货和截单一行的字(卡片头下面那一行也用它);ordered = orderedActive 的结果
+const purSchedInfo = (sup, today, nowHm, S, lang, ordered) => {
+  const X = purTx(lang);
+  if (ordered) return { text: X.schedOrdered(ordered.delivery ? mdw(ordered.delivery, lang) : ""), isToday: false, late: "", ordered: true };
+  const c = supOrderCfg(sup);
+  if (!c.dows.length) return { text: X.noDows, isToday: false, late: "", missing: true };
+  const slot = supNextSlot(sup, today, nowHm);
+  if (!slot) return { text: (c.leadDays === null ? X.noLeadPre : "") + X.noSlot, isToday: false, late: "", missing: true };
+  const text = slot.orderBy
+    ? (slot.orderBy === today ? X.orderToday(slot.cutoff, mdw(slot.delivery, lang)) : X.orderOn(mdw(slot.orderBy, lang), slot.cutoff, mdw(slot.delivery, lang)))
+    : X.noLead(mdw(slot.delivery, lang));
+  const late = slot.delivery > S ? X.late(md(S), _daysBetween(S, slot.delivery)) : "";
+  return { text, isToday: slot.orderBy === today, late, slot };
+};
+// 起送那一格(R14)
+const purMinText = (g, lang) => {
+  const X = purTx(lang), m = fmtQty(g.minOrderCNY);
+  return g.minState === "ok" ? X.minOk(m) : g.minState === "short" ? X.minShort(m, money(g.minGapCNY, g.approx))
+    : g.minState === "unknownShort" ? X.minUnkShort(m, money(g.minGapCNY, g.approx)) : g.minState === "unknownOk" ? X.minUnkOk(m) : "";
+};
+const _purLink = { background: "none", border: "none", padding: "2px 0", color: T.info, cursor: "pointer", fontFamily: T.fontSans, textDecoration: "underline", textUnderlineOffset: 2 };
+const _purInput = { padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary };
+const _purStep = { width: 28, height: 28, borderRadius: T.radiusSm, border: `0.5px solid ${T.border}`, background: T.bgCard, fontSize: 16, lineHeight: 1, cursor: "pointer", color: T.textSecondary, flexShrink: 0 };
+const _purCard = { background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem", minWidth: 0 };
+// 日期框:可以被清空,清空期间计算用上一个有效日期,离开输入框时填回去(R29;存进状态的永远是两个合法日期)
+function PurDateField({ value, min, onCommit, label, hook }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return <input type="date" data-pur-date={hook} aria-label={label} value={draft} min={min}
+    onChange={e => { const v = e.target.value; setDraft(v); if (isYmd(v) && v !== value) onCommit(v); }}
+    onBlur={() => setDraft(value)} style={_purInput} />;
+}
+// 计划里一个数(商品 / 计划行):− [数] +;空 = 0
+function PurQtyStepper({ value, onChange, hook }) {
+  const cur = parseFloat(value) > 0 ? parseFloat(value) : 0;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <button type="button" className="k-tap" aria-label="−" data-pur-step="minus" onClick={() => onChange(Math.max(0, _r3(cur - 1)))} style={_purStep}>−</button>
+      <input type="number" data-pur-qty={hook} value={cur === 0 ? "" : cur} min="0" placeholder="0"
+        onChange={e => { const n = parseFloat(e.target.value); onChange(isFinite(n) && n > 0 ? n : 0); }} style={{ ..._purInput, width: 64, textAlign: "center" }} />
+      <button type="button" className="k-tap" aria-label="+" data-pur-step="plus" onClick={() => onChange(_r3(cur + 1))} style={_purStep}>+</button>
+    </span>
+  );
+}
+// 「手上还有」:按包或按克(填的那一刻读得出一包几克 = 包);清空 = 删掉这一条
+function PurOnHandInput({ entry, pk, onCommit, lang, mid }) {
+  const X = purTx(lang);
+  const shown = entry ? String(entry.n) : "";
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => { setDraft(shown); }, [shown]);
+  const unit = entry ? (entry.u === "pack" ? X.packU : X.gU) : (pk && pk.g > 0 ? X.packU : X.gU);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <span>{X.have}</span>
+      <input type="number" min="0" inputMode="decimal" data-pur-onhand={mid} aria-label={X.have} value={draft}
+        onChange={e => { const v = e.target.value; setDraft(v); const n = parseFloat(v); if (v === "" || (isFinite(n) && n >= 0)) onCommit(v); }}
+        onBlur={() => setDraft(shown)} style={{ ..._purInput, width: 64, textAlign: "center", fontSize: 16 }} />
+      <span>{unit}</span>
+    </span>
+  );
+}
+// 🚚 送货和截单(R20):每家一行,先后同下单单子;没有供货商时换成一句 + 去新建
+function PurchaseSchedule({ suppliers, today, nowHm, S, state, lang, onNewSupplier }) {
+  const X = purTx(lang);
+  const list = (suppliers || []).map((sup, idx) => ({ sup, idx })).filter(x => x.sup && typeof x.sup === "object");
+  const rows = list.map(({ sup, idx }) => {
+    const ordered = sup.id !== undefined && sup.id !== "" ? orderedActive(state, sup.id, today) : null;
+    const slot = supNextSlot(sup, today, nowHm);
+    return { sup, idx, slot, info: purSchedInfo(sup, today, nowHm, S, lang, ordered) };
+  });
+  const rank = (r) => (r.slot && r.slot.orderBy) ? 1 : 2;
+  const scmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  rows.sort((a, b) => (rank(a) - rank(b)) || (rank(a) === 1 ? (scmp(a.slot.orderBy, b.slot.orderBy) || scmp(a.slot.cutoff || "24:00", b.slot.cutoff || "24:00")) : 0) || (a.idx - b.idx));
+  return (
+    <div data-pur-sched="1" style={_purCard}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, marginBottom: 8 }}>{X.schedTitle}</div>
+      {rows.length === 0 ? (
+        <div style={{ ...T.fs.small, color: T.secondary, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span>{X.noSup}</span><span>·</span>
+          {onNewSupplier && <button type="button" className="k-tap" data-pur-newsup="sched" onClick={onNewSupplier} style={{ ..._purLink, ...T.fs.small }}>{X.newSup}</button>}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 6 }}>
+          {rows.map(r => (
+            <div key={String(r.sup.id) + "_" + r.idx} data-pur-sched-row={String(r.sup.id)}
+              style={{ ...T.fs.caption, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline", minWidth: 0, overflowWrap: "anywhere",
+                paddingLeft: r.info.isToday ? 8 : 0, borderLeft: r.info.isToday ? `3px solid ${T.ink}` : "none", fontWeight: r.info.isToday ? 700 : 400, color: T.ink }}>
+              <span style={{ minWidth: 0 }}>{_normTxt(r.sup.name)}</span>
+              <span style={{ color: r.info.missing ? T.secondary : T.ink, minWidth: 0 }}>{r.info.text}</span>
+              {r.info.late && <span style={{ color: T.warning, minWidth: 0 }}>⚠ {r.info.late}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+// 下单文字面板(就地展开,不是弹窗;R15 的文字,可以改、只改这一次)。语言按供货商记在本机(textLang),两个勾都不记
+function OrderTextPanel({ group, lang, textLang, onTextLang, S, E, brandName, beginOwnerOp, onCopied, onClose }) {
+  const X = purTx(lang);
+  const [withPrice, setWithPrice] = useState(false);
+  const [draft, setDraft] = useState(null);       // null = 跟着单子;她改过以后留着她改的
+  const [failed, setFailed] = useState(false);
+  const taRef = useRef(null);
+  const text = purchaseOrderText(group, { lang: textLang, withPrice, S, E, brandName });
+  const value = draft === null ? text : draft;
+  const setLang = (l) => { setDraft(null); onTextLang(l); };
+  const doCopy = () => {
+    const canContinue = typeof beginOwnerOp === "function" ? beginOwnerOp() : () => true;
+    if (!canContinue()) return;
+    const ta = taRef.current;
+    const legacy = () => { if (!canContinue()) return false; try { if (ta) { ta.focus(); ta.select(); } return !!(typeof document !== "undefined" && document.execCommand && document.execCommand("copy")); } catch (e) { return false; } };
+    const done = () => { if (!canContinue()) return; setFailed(false); onCopied(canContinue); };
+    const fail = () => { if (!canContinue()) return; setFailed(true); try { if (ta) { ta.focus(); ta.select(); } } catch (e) { /* 选不中就算了 */ } };
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(value).then(done, () => { if (legacy()) done(); else fail(); });
+        return;
+      }
+    } catch (e) { /* 走老办法 */ }
+    if (legacy()) done(); else fail();
+  };
+  const pill = (on) => ({ ...T.fs.caption, padding: "4px 10px", border: `1px solid ${T.ink}`, background: on ? T.ink : T.paper, color: on ? T.paper : T.ink, cursor: "pointer", fontFamily: T.fontSans });
+  return (
+    <div data-pur-text={String(group.supId)} style={{ marginTop: 10, borderTop: `0.5px dashed ${T.border}`, paddingTop: 10, display: "grid", gap: 8, minWidth: 0 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ ...T.fs.caption, color: T.secondary }}>{X.textTitle}</span>
+        <span style={{ display: "inline-flex" }}>
+          <button type="button" className="k-tap" data-pur-textlang="zh" aria-pressed={textLang !== "ja"} onClick={() => setLang("zh")} style={pill(textLang !== "ja")}>中文</button>
+          <button type="button" className="k-tap" data-pur-textlang="ja" aria-pressed={textLang === "ja"} onClick={() => setLang("ja")} style={{ ...pill(textLang === "ja"), borderLeft: "none" }}>日本語</button>
+        </span>
+      </div>
+      <label style={{ ...T.fs.caption, display: "flex", gap: 6, alignItems: "flex-start", cursor: "pointer", minWidth: 0 }}>
+        <input type="checkbox" data-pur-withprice="1" checked={withPrice} onChange={e => { setWithPrice(e.target.checked); setDraft(null); }} style={{ marginTop: 3, flexShrink: 0 }} />
+        <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{X.withPrice}</span>
+      </label>
+      <textarea ref={taRef} data-pur-textarea="1" value={value} onChange={e => setDraft(e.target.value)} rows={Math.min(14, Math.max(4, value.split("\n").length + 1))}
+        style={{ ..._purInput, width: "100%", boxSizing: "border-box", fontSize: 16, lineHeight: 1.5, fontFamily: T.fontSans, resize: "vertical" }} />
+      {failed && <InlineError title={X.copyFail} />}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <Btn onClick={onClose}>{X.collapse}</Btn>
+        <Btn variant="primary" onClick={doCopy}>{X.copy}</Btn>
+      </div>
+    </div>
+  );
+}
+// 下单单子的一行(R14):名字 + 要用;手上还有 → 买 … + 要付;黄字(每种最多一行,点了去改);灰字(用在 / 够几周 / 用掉)
+function PurchaseOrderRow({ L, lang, S, onHandEntry, act, assign }) {
+  const X = purTx(lang);
+  const nm = _normTxt(L.sm && L.sm.orderName) || matName(L.mat, L.mid, lang);
+  const orig = _normTxt(L.sm && L.sm.orderName) ? matName(L.mat, L.mid, lang) : "";
+  const dim = L.status === "enough";
+  let buyText = "", payText = "";
+  if (L.status === "buy") {
+    const cfg = smOrderCfg(L.sm, act.suppliers);
+    buyText = L.cases !== null ? X.buyCase(L.cases, L.packs, specLabel(L.pk)) : X.buyPack(L.packs, specLabel(L.pk), L.minApplied ? cfg.minOrder : 0);
+    payText = L.noPrice ? X.noPrice : money(L.payCNY, L.approx);
+  }
+  const e = onHandEntry;
+  let haveNote = "";
+  if (e) {
+    if (L.stale === "spec") haveNote = X.staleSpec;
+    else if (L.stale === "old") haveNote = X.staleOld(md(e.at));
+    else if (L.elapsed > 0) haveNote = X.haveEst(md(e.at), fmtQty(e.n), e.u, md(S), qtyText(L.haveG, L.liquid));
+    else haveNote = X.haveFilled(md(e.at));
+  }
+  const gray = [];
+  if (L.pieceOrder) gray.push(lang === "ja" ? fmtQty(L.pieceOrder.qty) + " " + L.pieceOrder.unit + " でパック数を計算" : "按 " + fmtQty(L.pieceOrder.qty) + " " + (L.pieceOrder.unit === "個" ? "个" : L.pieceOrder.unit) + " 计算包装");
+  if (L.srcs && L.srcs.length) gray.push(X.usedIn(L.srcs.slice(0, 3).join("、"), L.srcs.length));
+  if (L.status === "buy" && L.lastsWeeks >= 1) gray.push(X.lasts(L.lastsWeeks));
+  if (L.usedCNY > 0) gray.push(X.usedMoney(money(L.usedCNY, L.usedApprox)));
+  const yellow = { ...T.fs.caption, color: T.warning, overflowWrap: "anywhere", minWidth: 0 };
+  return (
+    <div data-pur-line={L.mid} data-pur-status={L.status} style={{ padding: "8px 0", borderBottom: `0.5px dashed ${T.borderSoft}`, display: "grid", gap: 4, minWidth: 0, opacity: dim ? 0.6 : 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "baseline", minWidth: 0 }}>
+        <div style={{ ...T.fs.small, color: T.ink, minWidth: 0, overflowWrap: "anywhere", flex: "1 1 180px" }}>
+          {nm}{orig && <span style={{ ...T.fs.caption, color: T.secondary, marginLeft: 6 }}>{orig}</span>}
+        </div>
+        <div style={{ ...T.fs.caption, color: T.body, ...T.num, whiteSpace: "nowrap" }}>{X.need(qtyText(L.needG, L.liquid))}</div>
+        {assign}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0, ...T.fs.caption, color: T.ink }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0, flex: "1 1 220px" }}>
+          {L.sm && L.needG > 0 && <PurOnHandInput entry={e} pk={L.pk} lang={lang} mid={L.mid} onCommit={(raw) => act.onHand(L.mid, raw, L.pk)} />}
+          {L.status === "buy" && <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{L.sm && L.needG > 0 ? "→ " : ""}{buyText}</span>}
+          {L.status === "enough" && <span>{X.enough}</span>}
+          {L.status === "noPack" && <span style={{ minWidth: 0 }}>{X.noPack}{act.onJump && <> · <button type="button" className="k-tap" data-pur-go="noPack" onClick={() => act.onJump({ kind: "shopMaterial", id: L.sm.id })} style={{ ..._purLink, ...T.fs.caption }}>{X.fill}</button></>}</span>}
+          {L.status === "noShop" && <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{X.noShop}{act.onJump && <> · <button type="button" className="k-tap" data-pur-go="noShop" onClick={() => act.onJump({ kind: "shopMaterialNew", id: L.mid })} style={{ ..._purLink, ...T.fs.caption }}>{X.addShop}</button></>}</span>}
+        </div>
+        {payText && <div style={{ ...T.fs.small, fontFamily: T.fontSerif, ...T.num, color: L.noPrice ? T.secondary : T.ink, whiteSpace: "nowrap" }}>{payText}</div>}
+      </div>
+      {haveNote && <div data-pur-have-note={L.stale || (L.elapsed > 0 ? "est" : "filled")} style={{ ...T.fs.caption, color: L.stale ? T.secondary : T.body, overflowWrap: "anywhere" }}>{haveNote}</div>}
+      {L.unconv && L.unconv.length > 0 && (
+        <div data-pur-warn="unconv" style={yellow}>{X.unconv(purUnconvParts(L.unconv))}{act.onJump && L.mat && <> · <button type="button" className="k-tap" onClick={() => act.onJump({ kind: "material", id: L.mid })} style={{ ..._purLink, ...T.fs.caption }}>{X.fill}</button></>}</div>
+      )}
+      {L.sm && L.pk.segs.length >= 2 && (
+        <div data-pur-warn="multi" style={yellow}>{X.multi(L.pk.segs.map(s => s.text).join(" / "), L.pk.segs[0].fix)}{act.onJump && <> · <button type="button" className="k-tap" onClick={() => act.onJump({ kind: "shopMaterial", id: L.sm.id })} style={{ ..._purLink, ...T.fs.caption }}>{X.fix}</button></>}</div>
+      )}
+      {gray.length > 0 && <div style={{ ...T.fs.caption, color: T.secondary, overflowWrap: "anywhere" }}>{gray.join(" · ")}</div>}
+    </div>
+  );
+}
+// 归到 ▾(列出全部供货商;选了立刻生效 + 撤销)
+function PurSupSelect({ suppliers, lang, label, onPick, hook }) {
+  const X = purTx(lang);
+  return (
+    <label style={{ ...T.fs.caption, display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", minWidth: 0 }}>
+      <span>{label}</span>
+      <select data-pur-assign={hook} value="" onChange={e => { const i = parseInt(e.target.value, 10); if (i >= 0 && suppliers[i]) onPick(suppliers[i]); }}
+        style={{ ..._purInput, fontSize: 13, maxWidth: "100%" }}>
+        <option value="">{X.pickSup}</option>
+        {suppliers.map((s, i) => s ? <option key={i} value={String(i)}>{_normTxt(s.name)}</option> : null)}
+      </select>
+    </label>
+  );
+}
+// 一家供货商一张卡(「还没归到供货商」也是这张卡,supId === "")
+function PurchaseOrderCard({ group, lang, today, nowHm, S, E, state, act, view }) {
+  const X = purTx(lang);
+  const g = group;
+  const hasSup = g.supId !== "";
+  const head = g.incompleteN === 0 ? X.cardHead(g.itemsN, money(g.payCNY, g.approx)) : X.cardHeadInc(g.itemsN, money(g.payCNY, g.approx), g.incompleteN);
+  const key = String(g.supId);
+  const collapsed = hasSup && g.ordered && !view.expanded.has(key) && !view.again.has(key);
+  const card = { ..._purCard, border: `0.5px solid ${hasSup ? T.border : T.warning}`, borderLeft: `3px solid ${hasSup ? T.accent : T.warning}`, marginBottom: "0.75rem" };
+  const orderedRow = hasSup && g.ordered ? (
+    <div data-pur-ordered={key} style={{ ...T.fs.small, color: T.success, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0, overflowWrap: "anywhere" }}>
+      <span style={{ minWidth: 0 }}>{X.orderedLine(purAtText(g.ordered.at), g.ordered.delivery ? md(g.ordered.delivery) : "")}</span>
+      {collapsed
+        ? <button type="button" className="k-tap" data-pur-act="expand" onClick={() => act.setView("expanded", key, true)} style={{ ..._purLink, ...T.fs.caption }}>{X.expand}</button>
+        : view.expanded.has(key) && <button type="button" className="k-tap" data-pur-act="collapse" onClick={() => act.setView("expanded", key, false)} style={{ ..._purLink, ...T.fs.caption }}>{X.collapse}</button>}
+      {!view.again.has(key) && <button type="button" className="k-tap" data-pur-act="again" onClick={() => act.setView("again", key, true)} style={{ ..._purLink, ...T.fs.caption }}>{X.again}</button>}
+      <button type="button" className="k-tap" data-pur-act="cancelOrdered" onClick={() => act.cancelOrdered(g)} style={{ ..._purLink, ...T.fs.caption }}>{X.cancelOrdered}</button>
+    </div>
+  ) : null;
+  if (collapsed) return <div data-pur-card={key} data-pur-collapsed="1" style={card}><div style={{ ...T.fs.small, fontWeight: 500, marginBottom: 4 }}>🚚 {_normTxt(g.sup && g.sup.name)}</div>{orderedRow}</div>;
+  const sched = hasSup ? purSchedInfo(g.sup, today, nowHm, S, lang, null) : null;
+  const minText = hasSup ? purMinText(g, lang) : "";
+  const sups = (act.suppliers || []).filter(Boolean);
+  const canAssign = !hasSup && act.canAssign && sups.length > 0;
+  const assignable = g.lines.filter(L => L.sm);
+  return (
+    <div data-pur-card={key} style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, minWidth: 0, overflowWrap: "anywhere" }}>{hasSup ? `🚚 ${_normTxt(g.sup.name)}` : X.unassigned(g.lines.length)}</div>
+        <div data-pur-cardhead={key} style={{ ...T.fs.small, fontFamily: T.fontSerif, color: g.incompleteN > 0 ? T.warning : T.accent, ...T.num }}>{head}</div>
+      </div>
+      {hasSup && (
+        <div style={{ ...T.fs.caption, color: T.body, display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6, minWidth: 0, overflowWrap: "anywhere" }}>
+          <span style={{ fontWeight: sched.isToday ? 700 : 400 }}>{sched.text}</span>
+          {minText && <span data-pur-min={g.minState} style={{ color: g.minState === "ok" ? T.success : T.warning }}>· {minText}</span>}
+          {sched.late && <span style={{ color: T.warning }}>⚠ {sched.late}</span>}
+        </div>
+      )}
+      {orderedRow}
+      {hasSup && view.again.has(key) && <div data-pur-again={key} style={{ ...T.fs.caption, color: T.warning, marginBottom: 4 }}>{X.againHead}</div>}
+      {!hasSup && act.canAssign && (sups.length === 0 ? (
+        <div style={{ ...T.fs.caption, color: T.secondary, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 4 }}>
+          <span>{X.needSup}</span><span>·</span>
+          {act.onNewSupplier && <button type="button" className="k-tap" data-pur-newsup="card" onClick={act.onNewSupplier} style={{ ..._purLink, ...T.fs.caption }}>{X.goNew}</button>}
+        </div>
+      ) : assignable.length > 0 && (
+        <div style={{ marginBottom: 4 }}><PurSupSelect suppliers={sups} lang={lang} label={X.assignAll} hook="all" onPick={(s) => act.assign(assignable.map(L => L.sm), s, assignable.map(L => L))} /></div>
+      ))}
+      <div>
+        {g.lines.map(L => (
+          <PurchaseOrderRow key={L.mid} L={L} lang={lang} S={S} onHandEntry={state.onHand[L.mid]} act={act}
+            assign={canAssign && L.sm ? <PurSupSelect suppliers={sups} lang={lang} label={X.assignTo} hook={L.mid} onPick={(s) => act.assign([L.sm], s, [L])} /> : null} />
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, justifyContent: "flex-end" }}>
+        <Btn size="sm" onClick={() => act.toggleText(key)}>{hasSup ? X.copyBtn : X.copyList}</Btn>
+        {act.canPrint && <Btn size="sm" onClick={() => act.printGroups([g], false)}>{hasSup ? X.printOne : X.printList}</Btn>}
+        {hasSup && (!g.ordered || view.again.has(key)) && <Btn size="sm" variant="success" onClick={() => act.mark(g, g.slot)}>{X.markBtn}</Btn>}
+      </div>
+      {view.text === key && (
+        <OrderTextPanel group={g} lang={lang} textLang={hasSup ? (state.textLang[key] === "ja" ? "ja" : "zh") : (view.listLang || "zh")}
+          onTextLang={(l) => act.setTextLang(g, l)} S={S} E={E} brandName={act.brandName}
+          beginOwnerOp={act.beginOwnerOp} onCopied={(canContinue) => act.copied(g, g.slot, canContinue)} onClose={() => act.toggleText(null)} />
+      )}
+    </div>
+  );
+}
+// 底部两笔钱(R14 底部):要付 = 整包 × 本店价;用掉 = 第二次计算的克数 × 成本链的价
+function PurchaseTotals({ totals, lang, printMoney, setPrintMoney, onPrintAll }) {
+  const X = purTx(lang);
+  const t = totals;
+  const pay = (t.incompleteN === 0 ? X.totPay(money(t.payCNY, t.payApprox)) : X.totPayInc(money(t.payCNY, t.payApprox), t.incompleteN)) + (t.orderedSupN > 0 ? X.totOrdered(t.orderedSupN) : "");
+  return (
+    <div data-pur-totals="1" style={{ ..._purCard, display: "grid", gap: 6 }}>
+      <div data-pur-total="pay" style={{ ...T.fs.small, color: T.ink, overflowWrap: "anywhere", ...T.num }}>{pay}</div>
+      <div data-pur-total="used" style={{ ...T.fs.small, color: T.ink, overflowWrap: "anywhere", ...T.num }}>{X.totUsed(t.usedMissingN > 0, money(t.usedCNY, t.usedApprox))}</div>
+      <div style={{ ...T.fs.caption, color: T.secondary, overflowWrap: "anywhere" }}>{X.totUsedFoot}</div>
+      {onPrintAll && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+          <label style={{ ...T.fs.caption, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input type="checkbox" data-pur-printmoney="1" checked={printMoney} onChange={e => setPrintMoney(e.target.checked)} />
+            <span>{X.printMoney}</span>
+          </label>
+          <Btn size="sm" onClick={onPrintAll}>{X.printAll}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+// 「这些没算进来」(原样;按钮去掉了,说明里的「再点一次计算」改成「单子会跟着变」)
+function PurchaseSkippedCard({ skipped, lang }) {
+  const zh = lang === "zh";
+  const reasonText = {
+    noItems: zh ? "商品没挂任何配方 / 组合产品 / 组件" : "レシピ未関連の商品",
+    missing: zh ? "商品挂的配方 / 组合产品 / 组件已删除" : "関連先が削除済み",
+    noUsed: zh ? "这几个部分没填「用量」,整部分没算" : "使用量未入力のパーツ",
+    unlinked: zh ? "没关联材料百科" : "百科未関連",
+    badQty: zh ? "用量没填或不是数字" : "分量が数字でない",
+    // 第 4 批 B4-6:配料行「来自组件」展不开成原料的
+    ...PURCHASE_COMP_SKIP[zh ? "zh" : "ja"],
+  };
+  const total = skipped.reduce((a, x) => a + Math.max(1, x.names.length), 0);
+  return (
+    <div style={{ background: T.bgCard, border: `0.5px solid ${T.warning}`, borderLeft: `3px solid ${T.warning}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
+      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.warning }}>⚠️ {zh ? `这些没算进来(${total} 项)` : `計算に含まれていないもの(${total} 件)`}</div>
+      <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3, marginBottom: 8 }}>{zh ? "照上面的单子下单会少买这些。补好关联 / 用量后,单子会跟着变。" : "上のリストには含まれていません。"}</div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {skipped.map((x, i) => (
+          <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: T.textSecondary, overflowWrap: "anywhere" }}>
+            <span style={{ color: T.textPrimary, fontWeight: 500 }}>「{x.src}」</span>
+            <span style={{ color: T.warning, margin: "0 6px" }}>{reasonText[x.reason] || x.reason}</span>
+            {x.names.length > 0 && <span>{x.names.join(zh ? "、" : "、")}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 // [B6 修复] 加 components,采购计算支持组件
 function PurchaseView({ products, salesLog, recipes, creations, components = [], materials, brands, shopMaterials, suppliers, lang,
   prepOnHand = null, prepOnHandAt = null,
-  // 第 6 批第 0 步:PB 要的可选 props,先接上不用(today / now 在函数里另有同名的 const,这里换个名字收)
-  setShopMaterials, purchaseState, setPurchaseState, rawPlan, printSettings, onPrint, onJump, onGoTab, showToast, today: _todayProp, now: _nowProp }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 调用和 DOM 和以前一样;够得着时出「按手上的备货算」
+  // 第 6 批第 0 步接上的 props(today / now 在函数里另有同名的 const,这里换个名字收)。没传 purchaseState(单独渲染)时用自己读的本机状态
+  setShopMaterials, purchaseState, setPurchaseState, purchaseLiveRef, beginOwnerOp, rawPlan, printSettings, onPrint, onJump, onGoTab, showToast, today: _todayProp, now: _nowProp }) {   // 备货 F 线:prepOnHand(prepOnHandMap 的结果)空 / 没传 = 不出「按手上的备货算」
   // 终审 r1:prepOnHandAt(day) = 按那一天算的 prepOnHandMap;算的时候按结束日取(这段时间里会过期的批不算能用),没传照旧用 prepOnHand(今天的)
-  // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前默认开始日差一天;plus 按本地日历加减天数
-  const today = localDateStr();
-  const plus = plusDaysStr;
-  const [startDate, setStartDate] = useState(today);
-  const [endDate, setEndDate] = useState(plus(today, 7));
-  const days = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
+  // 2026-09-29 体检第 2 批:「今天」按本地日历(以前 UTC,北京早上 8 点前默认开始日差一天)
+  const today = isYmd(_todayProp) ? _todayProp : localDateStr();
+  const nowHm = _PUR_HM_RE.test(_nowProp || "") ? _nowProp : purHmOf(new Date());
+  const X = purTx(lang);
+  const sups = suppliers || [];
+  const [ownState, setOwnState] = useState(() => (purchaseState ? null : purchaseStateLoad(today)));
+  const st = purchaseState || ownState || purchaseStateRead(null, today);
+  const setSt = typeof setPurchaseState === "function" && purchaseState ? setPurchaseState : setOwnState;
+  const stRef = useRef(st); stRef.current = st;
+  const liveState = () => purchaseLiveRef ? purchaseLiveRef.current.state : stRef.current;
+  const liveToday = () => purchaseLiveRef ? purchaseLiveRef.current.today : today;
+  const [ownSaveFail, setSaveFail] = useState(false);
+  const saveFail = purchaseLiveRef ? !!purchaseLiveRef.current.saveFail : ownSaveFail;
+  const savePur = (patch) => { const day = liveToday(), r = purchaseStateSave(patch, day, new Date().toISOString()); stRef.current = r.state; if (purchaseLiveRef) purchaseLiveRef.current = { ...purchaseLiveRef.current, state: r.state, today: day, saveFail: !r.ok }; setSt(r.state); setSaveFail(!r.ok); return r; };
+  const toast = (msg, opts) => { if (typeof showToast === "function") showToast(msg, opts); };
+  const genUid = () => "px_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-  // 历史均值: 过去 30 天日均(2026-09-29 第 3 批:算法原样搬到模块顶层 salesSpanOf / avgDailySales,今日生产单共用)
+  // 📅 计划窗口(R29)
+  const W = planWindowOf(st, today);
+  const { S, E, days } = W;
+  const rawS = st.win ? st.win.start : today, rawE = st.win ? st.win.end : plusDaysStr(today, 7);
+  const winNow = () => (liveState().win || { start: liveToday(), end: plusDaysStr(liveToday(), 7) });
+
+  // 🍰 计划(R8):商品没手改过 = 建议数;计划行按 extra
   const salesSpan = (productId) => salesSpanOf(salesLog, productId, today);
-  const avgPerDay = (productId) => avgDailySales(salesLog, productId, today);
-  const suggestQty = (productId) => Math.ceil(avgPerDay(productId) * days * 1.2);
-
-  // 每个 product 计划数量(可改)
-  const [plan, setPlan] = useState(() => {
-    const init = {};
-    (products || []).forEach(p => { init[p.id] = suggestQty(p.id); });
-    return init;
-  });
-  // 日期变化时重算默认推荐(只对没被用户手动改过的)
-  const [dirtyPlanIds, setDirtyPlanIds] = useState(new Set());
-  useEffect(() => {
-    setPlan(prev => {
-      const next = { ...prev };
-      (products || []).forEach(p => {
-        if (!dirtyPlanIds.has(p.id)) next[p.id] = suggestQty(p.id);
-      });
-      return next;
-    });
-  // eslint-disable-next-line
-  }, [startDate, endDate]);
-
-  const [computed, setComputed] = useState(null); // { grams: {materialId: g}, bySupplier: {supplierId: [{matId, grams}]} }
-  const mLabel = (o) => o ? (lang === "zh" ? (o.nameZh || o.nameJa) : (o.nameJa || o.nameZh)) : "";
-  const inputStyle = { padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary };
-
-  // 备货 F 线「按手上的备货算」:只在这次计划里数量 > 0 的商品真用得到已开始记的备货时出勾选(prepReachable)。
-  // 默认勾上;她关掉时本机 localStorage 记 "0"(读写都 try/catch,读不到按默认)。prepOnHand 空 = 不算、不出勾选,调用和 DOM 和以前一样
-  const prepCtx = { products, recipes, creations, components, materials, brands, lang };
-  const prepReach = useMemo(() => !!(prepOnHand && prepOnHand.size > 0) && prepReachable(products, plan, prepCtx, prepOnHand),
+  const suggestQty = (productId) => Math.ceil(avgDailySales(salesLog, productId, today) * days * 1.2);
+  const lines = useMemo(() => purchasePlanLines(products, st, { recipes, components, creations, salesLog, today, days }),
     // eslint-disable-next-line
-    [prepOnHand, plan, products, recipes, creations, components, materials, brands]);
-  const [usePrepStock, setUsePrepStock] = useState(() => { try { return localStorage.getItem("korora_purchase_prep_v1") !== "0"; } catch (e) { return true; } });
-  const compute = (prepFlag) => {
-    // 2026-09-29 第 3 批:汇总原料的算法原样搬到模块顶层 computeMaterialNeeds(今日生产单用它的生产模式);
-    // 这里是采购模式:没关联百科的配料照旧跳过、列进「这些没算进来」
-    // 备货 F 线:勾着「按手上的备货算」且够得着时传 { onHand }(结果多 prepPlan);否则第三个参数照旧不传。prepFlag = 勾选刚变、state 还没到这一帧时的新值
-    const withPrep = prepReach && (typeof prepFlag === "boolean" ? prepFlag : usePrepStock);
-    // 终审 r1 / r2:手上能用的 = 开始日还没过期的批里,这段时间用得上的部分 —— 开始前就过期的不算;这段时间里才过期的,
-    // 只算过期之前按这段时间平均每天的用量(先进先出)用得掉的(prepWindowUsable)。r1 按结束日算,会把用得完的批整批扔掉、多买原料
-    const pLines = (products || []).map(p => ({ kind: "product", id: p.id, qty: plan[p.id], obj: p }));
-    const pCtx = { products, recipes, creations, components, materials, brands, lang };
-    let ohWin = prepOnHand;
-    if (withPrep && typeof prepOnHandAt === "function") {
-      const d0 = startDate && startDate > today ? startDate : today, d1 = endDate && endDate > d0 ? endDate : d0;
-      const oh0 = prepOnHandAt(d0);
-      const pre = oh0.size ? computeMaterialNeeds(pLines, pCtx, { onHand: oh0 }).prepPlan || [] : [];
-      ohWin = prepWindowUsable(oh0, pre, d0, d1, prepOnHandAt);
-    }
-    const need = computeMaterialNeeds(pLines, pCtx, ...(withPrep ? [{ onHand: ohWin }] : []));
-    const { grams, skipped, prepPlan } = need;
-    // 按 supplier 分组
-    const bySupplier = {}; // supplierId or '' -> [{materialId, grams, sm, units}](units:按单位分的数量,「几包」数个数用,recheck-md-1)
-    Object.entries(grams).forEach(([materialId, g]) => {
-      const sm = (shopMaterials || []).find(x => x.materialId === materialId);
-      const supId = sm && Array.isArray(sm.supplierIds) && sm.supplierIds[0] ? sm.supplierIds[0] : "";
-      if (!bySupplier[supId]) bySupplier[supId] = [];
-      bySupplier[supId].push({ materialId, grams: g, sm, units: (need.unitNeeds && need.unitNeeds[materialId]) || null });
-    });
-    // 每组排序: 按克数降序
-    Object.values(bySupplier).forEach(arr => arr.sort((a, b) => b.grams - a.grams));
-    setComputed({ grams, bySupplier, skipped, computedAt: new Date().toISOString(), ...(prepPlan ? { prepPlan } : {}) });
+    [products, st.qty, st.extra, recipes, components, creations, salesLog, today, days]);
+  const allZero = lines.every(l => !(parseFloat(l.qty) > 0));
+  const noSales = !(salesLog || []).some(r => r && parseFloat(r.soldQty) > 0);
+  const setProdQty = (pid, v) => savePur({ win: winNow(), qty: { ...stRef.current.qty, [pid]: v } });
+  const setExtraQty = (uid, v) => savePur({ win: winNow(), extra: stRef.current.extra.map(x => x.uid === uid ? { ...x, qty: v } : x) });
+  const [planErr, setPlanErr] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const removeExtra = (row) => {
+    const idx = stRef.current.extra.findIndex(x => x.uid === row.uid);
+    savePur({ win: winNow(), extra: stRef.current.extra.filter(x => x.uid !== row.uid) });
+    setPlanErr(null);
+    toast(X.removed(extraName(row)), { undo: () => {
+      const cur = liveState();
+      if (cur.extra.some(x => x.uid === row.uid) || cur.extra.length >= 30) return;
+      const ex = cur.extra.slice(); ex.splice(Math.min(Math.max(0, idx), ex.length), 0, row);
+      savePur({ win: cur.win || winNow(), extra: ex });
+    } });
   };
-  // 勾 / 不勾:记本机;已经算过就立刻按新的勾选重算(结果区和说明不会和勾选对不上)
+  const onPick = (id, type) => {
+    setAdding(false);
+    if (stRef.current.extra.length >= 30) { setPlanErr("full"); return; }
+    const list = type === "creation" ? creations : type === "component" ? components : recipes;
+    const o = (list || []).find(x => x && x.id === id);
+    const nz = _normTxt(o && o.nameZh), nj = _normTxt(o && o.nameJa);
+    const row = { uid: genUid(), kind: type, id, qty: purManualAddQty(type, o), ...(nz ? { nameZh: nz } : {}), ...(nj ? { nameJa: nj } : {}) };
+    setPlanErr(null);
+    savePur({ win: winNow(), extra: [...stRef.current.extra, row] });
+  };
+  // 「照今天的生产单」(R9 / R10):只带独立的需求;满 30 行一行都不写;撤销逐项(R39)
+  const sheetLines = prodPlanForToday(rawPlan, today).lines;
+  const doSheet = (k) => {
+    const imp = sheetToPlan(sheetLines, { products, recipes, creations, components }, k);
+    const res = applySheetImport(stRef.current, imp, { start: S, end: E }, genUid);
+    if (res.error === "full") { setPlanErr("full"); return; }
+    setPlanErr(null);
+    savePur({ win: res.next.win, qty: res.next.qty, extra: res.next.extra });
+    toast(X.sheetToast(res.a, res.b, res.n), { undo: () => {
+      const u = undoSheetImport(liveState(), res.undo);
+      savePur({ win: u.next.win || null, qty: u.next.qty, extra: u.next.extra });
+    } });
+  };
+  const extraObj = (x) => { const list = x.kind === "creation" ? creations : x.kind === "component" ? components : recipes; return (list || []).find(o => o && String(o.id) === String(x.id)) || null; };
+  const extraName = (x) => { const o = extraObj(x); return (o && prodName(o, lang)) || (lang === "ja" ? x.nameJa : x.nameZh) || x.nameZh || x.nameJa || String(x.id); };
+  const extraUnit = (x, o) => {
+    if (!o) return "";
+    if (x.asItem && x.kind === "recipe") { const cfg = prepCfgOf("recipe", o); if (cfg) return cfg.unit; }   // 后来取消了备货标记:按普通配方写
+    if (x.kind === "creation") return creationWords(o.structure, lang === "ja" ? "ja" : "zh").unit;
+    return parseFloat(o.yield) > 0 ? (o.unit || "g") : X.batch;
+  };
+
+  // 备货 F 线「按手上的备货算」:默认勾上;她关掉时本机 localStorage 记 "0"(读写都 try/catch,读不到按默认)
+  const [usePrepStock, setUsePrepStock] = useState(() => { try { return localStorage.getItem("korora_purchase_prep_v1") !== "0"; } catch (e) { return true; } });
   const togglePrepStock = (v) => {
     setUsePrepStock(v);
     try { if (v) localStorage.removeItem("korora_purchase_prep_v1"); else localStorage.setItem("korora_purchase_prep_v1", "0"); } catch (e) { /* 存不了就只在这一页有效 */ }
-    if (computed) compute(v);
   };
 
-  // 闭店窗口判定 / 下次送货日:第 6 批第 0 步原样搬到模块顶层 supIsClosed / supNextDelivery(purchase order helpers 段)
+  // 算单子(R11 原样):要付那次带备货 + detail;用掉那次不带备货、不带 detail。结果跟着计划 / 日期 / 勾选 / 手上的数实时变,没有「计算」按钮
+  const calc = useMemo(() => {
+    const ctx = { products, recipes, creations, components, materials, brands, lang };
+    const reach = !!(prepOnHand && prepOnHand.size > 0) && prepReachable(products, lines, ctx, prepOnHand);
+    const withPrep = reach && usePrepStock;
+    let ohWin = prepOnHand;
+    if (withPrep && typeof prepOnHandAt === "function") {
+      const d0 = S > today ? S : today, d1 = E > d0 ? E : d0;
+      const oh0 = prepOnHandAt(d0);
+      const pre = oh0.size ? (computeMaterialNeeds(lines, ctx, { onHand: oh0 }).prepPlan || []) : [];
+      ohWin = prepWindowUsable(oh0, pre, d0, d1, prepOnHandAt);
+    }
+    const r1 = computeMaterialNeeds(lines, ctx, withPrep ? { onHand: ohWin, detail: true } : { detail: true });
+    const r2 = computeMaterialNeeds(lines, ctx);
+    const og = purchaseOrderGroups(r1, r2, { materials, shopMaterials, suppliers: sups, state: st, today, nowHm, S, E, days, lang });
+    return { reach, r1, og };
+    // eslint-disable-next-line
+  }, [lines, products, recipes, creations, components, materials, brands, lang, prepOnHand, prepOnHandAt, usePrepStock, shopMaterials, sups, st, today, nowHm, S, E, days]);
+  const { reach: prepReach, r1, og } = calc;
 
+  // 下单单子的本页状态:展开 / 还要再下一单(只在这次打开页面里)、哪张卡的文字面板开着、打印印不印价
+  const [view, setView] = useState({ expanded: new Set(), again: new Set(), text: null, listLang: "zh" });
+  const [printMoney, setPrintMoney] = useState(false);
+  const setViewSet = (which, key, on) => setView(v => { const s = new Set(v[which]); if (on) s.add(key); else s.delete(key); return { ...v, [which]: s }; });
+  const finishOrdered = (key) => setView(v => { const expanded = new Set(v.expanded), again = new Set(v.again); expanded.delete(key); again.delete(key); return { ...v, expanded, again, text: v.text === key ? null : v.text }; });
+  useEffect(() => {
+    if (!purchaseLiveRef) return;
+    purchaseLiveRef.current.finishOrdered = finishOrdered;
+    return () => { if (purchaseLiveRef.current.finishOrdered === finishOrdered) delete purchaseLiveRef.current.finishOrdered; };
+  }, [purchaseLiveRef]);   // 跨页后停住的复制动作只收当前挂载页的目标卡;卸载后不调用旧页 setter
+  const markOrderedNow = (g, slot, canContinue) => {
+    if ((typeof canContinue === "function" && !canContinue()) || g.supId === "") return;
+    savePur(markOrdered(g.supId, slot ? slot.delivery : "", new Date().toISOString(), planWindowOf(liveState(), liveToday()).E));
+    if (purchaseLiveRef) { const finish = purchaseLiveRef.current.finishOrdered; if (typeof finish === "function") finish(String(g.supId)); }
+    else finishOrdered(String(g.supId));
+  };
+  const printData = (groups, all) => ({ lang, brandName: (printSettings && printSettings.brandName) || "", today, S, E, withMoney: printMoney, all,
+    sections: groups.map(g => ({ supId: g.supId, name: g.sup ? _normTxt(g.sup.name) : "", slot: g.slot, lines: g.lines, payCNY: g.payCNY, approx: g.approx, incompleteN: g.incompleteN })),
+    skipped: all ? (r1.skipped || []) : [] });
+  const act = {
+    suppliers: sups, brandName: (printSettings && printSettings.brandName) || "",
+    canAssign: typeof setShopMaterials === "function", canPrint: typeof onPrint === "function",
+    beginOwnerOp,
+    onJump: typeof onJump === "function" ? onJump : null,
+    onNewSupplier: typeof onJump === "function" ? () => onJump({ kind: "supplierNew" }) : null,
+    onHand: (mid, raw, pk) => savePur(purOnHandPatch(mid, raw, pk, today)),
+    setView: setViewSet,
+    toggleText: (key) => setView(v => ({ ...v, text: key === null || v.text === key ? null : key })),
+    setTextLang: (g, l) => { if (g.supId === "") setView(v => ({ ...v, listLang: l })); else savePur({ textLang: { [String(g.supId)]: l === "ja" ? "ja" : null } }); },
+    mark: (g, slot) => markOrderedNow(g, slot),
+    cancelOrdered: (g) => { savePur(purCancelOrderedPatch(stRef.current, g.supId, today)); setViewSet("again", String(g.supId), false); },
+    copied: (g, slot, canContinue) => {
+      if (typeof canContinue === "function" && !canContinue()) return;
+      if (g.supId === "") { toast(X.copiedList); return; }
+      toast(X.copied(_normTxt(g.sup && g.sup.name)), { undo: () => markOrderedNow(g, slot, canContinue), actionLabel: X.markLabel });
+    },
+    printGroups: (groups, all) => { if (typeof onPrint === "function") onPrint(printData(groups, all)); },
+    // 「归到」/「全部归到」(R36 / R40):只调 smWithSupplier(写 orderAt、不写 updatedAt),立刻生效 + 撤销;之后改过的不撤
+    assign: (sms, sup, Ls) => {
+      if (typeof setShopMaterials !== "function" || !sms.length) return;
+      const nowIso = new Date().toISOString();
+      // 只数真变了的(smWithSupplier 对已经挂在第一个的原样返回;例题 E45:3 条里 1 条本来就是,toast 写 2 样)
+      const pairs = sms.map((sm, i) => ({ id: sm.id, before: sm, after: smWithSupplier(sm, sup.id, nowIso), L: Ls[i] })).filter(p => p.after !== p.before);
+      if (!pairs.length) return;
+      setShopMaterials(prev => prev.map(x => { if (!x) return x; const p = pairs.find(q => q.id === x.id); return p ? (p.before === x ? p.after : smWithSupplier(x, sup.id, nowIso)) : x; }));
+      const sn = _normTxt(sup.name);
+      const msg = pairs.length === 1 ? X.assigned(_normTxt(pairs[0].before.orderName) || matName(pairs[0].L && pairs[0].L.mat, pairs[0].L ? pairs[0].L.mid : pairs[0].before.materialId, lang), sn) : X.assignedAll(pairs.length, sn);
+      const und = pairs.map(({ id, before, after }) => ({ id, before, after }));
+      toast(msg, { undo: () => setShopMaterials(prev => undoAssign(prev, und).list) });
+    },
+  };
+
+  if (adding) {
+    return <ProductItemPicker recipes={recipes || []} components={components || []} creations={creations || []} mLabel={(o) => prodName(o, lang)} lang={lang}
+      onPick={onPick} onCancel={() => setAdding(false)} />;
+  }
+  const groups = og.groups;
+  const skipped = r1.skipped || [];
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 8 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>{lang === "zh" ? "📦 采购清单" : "📦 仕入リスト"}</div>
-          <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{lang === "zh" ? "窗口内要做多少 → 按供货商分组算采购量" : "期間の計画 → 仕入先別仕入量"}</div>
-        </div>
+    <div data-pur-page="1">
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>{X.title}</div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{X.sub}</div>
       </div>
 
-      {/* 日期窗口 */}
-      <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
+      <PurchaseSchedule suppliers={sups} today={today} nowHm={nowHm} S={S} state={st} lang={lang} onNewSupplier={act.onNewSupplier} />
+
+      {/* 📅 算哪几天 */}
+      <div data-pur-win="1" style={_purCard}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14 }}>📅 {lang === "zh" ? "窗口" : "期間"}</div>
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={inputStyle} />
-          <span style={{ color: T.textTertiary }}>~</span>
-          <input type="date" value={endDate} min={startDate} onChange={e => setEndDate(e.target.value)} style={inputStyle} />
-          <span style={{ fontSize: 12, color: T.textSecondary }}>{lang === "zh" ? `共 ${days} 天` : `${days} 日間`}</span>
+          <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14 }}>{X.dateTitle}</div>
+          <PurDateField value={rawS} hook="start" label={X.dateTitle} onCommit={(v) => savePur({ win: { start: v, end: rawE } })} />
+          <span style={{ color: T.textTertiary }}>{X.to}</span>
+          <PurDateField value={rawE} min={rawS} hook="end" label={X.dateTitle} onCommit={(v) => savePur({ win: { start: rawS, end: v } })} />
+          <span style={{ fontSize: 12, color: T.textSecondary }}>{X.days(days)}</span>
         </div>
-        {/* supplier 送货日/闭店预览 */}
-        {suppliers.length > 0 && (
-          <div style={{ marginTop: 10, display: "grid", gap: 5 }}>
-            {suppliers.map(sup => {
-              const nextD = supNextDelivery(sup, startDate);
-              const isInWindowClosure = (sup.closureWindows || []).some(w => {
-                if (!w.start || !w.end) return false;
-                // 窗口 [startDate, endDate] 与闭店窗口 [w.start, w.end] 有重叠
-                return startDate <= w.end && w.start <= endDate;
-              });
-              return (
-                <div key={sup.id} style={{ fontSize: 11, color: T.textSecondary, display: "flex", gap: 10, alignItems: "center" }}>
-                  <span>🚚 {sup.name}</span>
-                  <span style={{ color: T.textTertiary }}>
-                    {lang === "zh" ? "下次送货" : "次回"}: <b>{nextD || "—"}</b>
-                  </span>
-                  {isInWindowClosure && <span style={{ color: T.warning }}>⚠️ {lang === "zh" ? "窗口内有闭店" : "休業あり"}</span>}
-                </div>
-              );
-            })}
+        {W.endBeforeStart && <div data-pur-winerr="endBefore" style={{ ...T.fs.caption, color: T.danger, marginTop: 6 }}>{X.endBefore}</div>}
+        {W.startPastDays > 0 && (
+          <div data-pur-winerr="startPast" style={{ ...T.fs.caption, color: T.danger, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{X.startPast(md(S), W.startPastDays)}</span>
+            <Btn size="sm" onClick={() => savePur({ win: { start: today, end: rawE } })}>{X.fromToday}</Btn>
           </div>
         )}
+        {saveFail && <div data-pur-savefail="1" style={{ ...T.fs.caption, color: T.secondary, marginTop: 6 }}>{X.saveFail}</div>}
       </div>
 
-      {/* 计划制作 */}
-      <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
-        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, marginBottom: 8 }}>🍰 {lang === "zh" ? "计划制作(默认按过去 30 天 × 1.2 buffer,可改)" : "計画量(過去30日 × 1.2)"}</div>
-        {products.length === 0 ? (
-          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{lang === "zh" ? "还没有商品" : "商品未登録"}</div>
+      {/* 🍰 这几天要做多少 */}
+      <div data-pur-plan="1" style={_purCard}>
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14 }}>{X.planTitle}</div>
+        <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 2, marginBottom: 8 }}>{X.planHint}</div>
+        {noSales && (products || []).length > 0 && <div data-pur-nosales="1" style={{ ...T.fs.caption, color: T.secondary, marginBottom: 8 }}>{X.noSales}</div>}
+        {(products || []).length === 0 && st.extra.length === 0 ? (
+          <div style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>{X.noProducts}</div>
         ) : (
           <div style={{ display: "grid", gap: 6 }}>
-            {products.map(p => {
+            {(products || []).filter(Boolean).map(p => {
               const recommend = suggestQty(p.id);
-              const cur = plan[p.id] == null ? recommend : plan[p.id];
+              const own = Object.prototype.hasOwnProperty.call(st.qty, p.id);
+              const cur = own ? st.qty[p.id] : recommend;
               const sp = salesSpan(p.id);
-              const spanNote = sp.list.length > 0 && sp.span < 30 ? (lang === "zh" ? `(按最近 ${sp.span} 天)` : `(直近 ${sp.span} 日)`) : "";
+              const spanNote = sp.list.length > 0 && sp.span < 30 ? X.spanNote(sp.span) : "";
+              const stock = parseFloat(p.currentStock);
               return (
-                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bgMuted, borderRadius: T.radiusSm }}>
-                  <div style={{ flex: 1, fontSize: 13 }}>{mLabel(p)}</div>
-                  <div style={{ fontSize: 10, color: T.textTertiary, minWidth: 80 }}>{lang === "zh" ? `建议 ${recommend}` : `推奨 ${recommend}`}{spanNote}</div>
-                  {/* [B2 修复] 手机端没原生 +/- 箭头 → 加自定义按钮; value 处理前置 0 */}
-                  <button onClick={() => {
-                    const next = Math.max(0, cur - 1);
-                    setPlan(prev => ({ ...prev, [p.id]: next }));
-                    setDirtyPlanIds(s => new Set([...s, p.id]));
-                  }} style={{ width: 28, height: 28, borderRadius: T.radiusSm, border: `0.5px solid ${T.border}`, background: T.bgCard, fontSize: 16, lineHeight: 1, cursor: "pointer", color: T.textSecondary, flexShrink: 0 }}>−</button>
-                  <input type="number" value={cur === 0 ? "" : cur} min="0" placeholder="0" onChange={e => {
-                    const v = e.target.value;
-                    setPlan(prev => ({ ...prev, [p.id]: v === "" ? 0 : parseFloat(v) }));
-                    setDirtyPlanIds(s => new Set([...s, p.id]));
-                  }} style={{ ...inputStyle, width: 50, textAlign: "center" }} />
-                  <button onClick={() => {
-                    const next = cur + 1;
-                    setPlan(prev => ({ ...prev, [p.id]: next }));
-                    setDirtyPlanIds(s => new Set([...s, p.id]));
-                  }} style={{ width: 28, height: 28, borderRadius: T.radiusSm, border: `0.5px solid ${T.border}`, background: T.bgCard, fontSize: 16, lineHeight: 1, cursor: "pointer", color: T.textSecondary, flexShrink: 0 }}>+</button>
-                  <span style={{ fontSize: 11, color: T.textTertiary }}>{p.unit || (lang === "zh" ? "件" : "件")}</span>
+                <div key={p.id} data-pur-prod={String(p.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bgMuted, borderRadius: T.radiusSm, flexWrap: "wrap", minWidth: 0 }}>
+                  <div style={{ flex: "1 1 140px", fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>{prodName(p, lang)}</div>
+                  <div style={{ fontSize: 10, color: T.textTertiary, minWidth: 80 }}>{X.suggest(recommend)}{spanNote}{stock > 0 ? ` · ${X.stock(fmtQty(stock))}` : ""}</div>
+                  <PurQtyStepper value={cur} hook={String(p.id)} onChange={(v) => setProdQty(p.id, v)} />
+                  <span style={{ fontSize: 11, color: T.textTertiary }}>{p.unit || X.piece}</span>
+                </div>
+              );
+            })}
+            {st.extra.length > 0 && (products || []).length > 0 && <div style={{ borderTop: `0.5px solid ${T.border}`, margin: "4px 0" }} />}
+            {st.extra.map(x => {
+              const o = extraObj(x);
+              return (
+                <div key={x.uid} data-pur-extra={x.uid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: T.bgMuted, borderRadius: T.radiusSm, flexWrap: "wrap", minWidth: 0 }}>
+                  <div style={{ flex: "1 1 140px", fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>
+                    {extraName(x)}
+                    <span style={{ ...T.fs.caption, color: T.secondary, marginLeft: 6 }}>({X.kind[x.kind] || x.kind}{x.asItem ? " · " + X.take : ""})</span>
+                    {!o && <span style={{ ...T.fs.caption, color: T.warning, marginLeft: 6 }}>{X.gone}</span>}
+                  </div>
+                  <PurQtyStepper value={x.qty} hook={x.uid} onChange={(v) => setExtraQty(x.uid, v)} />
+                  <span style={{ fontSize: 11, color: T.textTertiary }}>{extraUnit(x, o)}</span>
+                  <button type="button" className="k-tap" data-pur-remove={x.uid} aria-label={X.removeLine} onClick={() => removeExtra(x)} style={{ ..._purStep, color: T.danger }}>✕</button>
                 </div>
               );
             })}
           </div>
         )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <Btn size="sm" onClick={() => { if (st.extra.length >= 30) setPlanErr("full"); else { setPlanErr(null); setAdding(true); } }}>{X.add}</Btn>
+          <Btn size="sm" disabled={sheetLines.length === 0} onClick={() => doSheet(1)}>{X.sheet1}</Btn>
+          <Btn size="sm" disabled={sheetLines.length === 0} onClick={() => doSheet(days)}>{X.sheetN(days)}</Btn>
+        </div>
+        {sheetLines.length === 0 && <WhyNote>{X.sheetEmpty}</WhyNote>}
+        {planErr === "full" && <div data-pur-full="1" style={{ marginTop: 8 }}><InlineError title={X.full} /></div>}
         {prepReach && (
           <label data-prep-buy="1" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, cursor: "pointer", minWidth: 0 }}>
             <input type="checkbox" checked={usePrepStock} onChange={e => togglePrepStock(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
             <span style={{ ...T.fs.small, color: T.ink, fontFamily: T.fontSans, minWidth: 0, overflowWrap: "anywhere" }}>{prepTxt(lang).fBuyToggle}</span>
           </label>
         )}
-        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
-          <Btn variant="primary" onClick={compute}>{lang === "zh" ? "📦 计算采购清单" : "📦 仕入計算"}</Btn>
-        </div>
       </div>
 
-      {/* 备货 F 线:按手上的备货算了的,每样一行说明(只在算的时候传了 onHand 才有) */}
-      {computed && Array.isArray(computed.prepPlan) && computed.prepPlan.length > 0 && (() => {
-        const X = prepTxt(lang);
+      {/* 备货 F 线:按手上的备货算了的,每样一行说明(只在算的时候传了 onHand 才有;原样) */}
+      {Array.isArray(r1.prepPlan) && r1.prepPlan.length > 0 && (() => {
+        const PX = prepTxt(lang);
         const nameOf = (r) => { const o = (r.kind === "component" ? components : recipes).find(x => x && String(x.id) === String(r.id)); return String((o && (pickLang(o, "name", lang) || o.nameZh || o.nameJa)) || r.name || "").trim(); };
         return (
           <div data-prep-plan="1" style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderLeft: `3px solid ${T.accent}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
             <div style={{ display: "grid", gap: 6 }}>
-              {computed.prepPlan.map(r => (
+              {r1.prepPlan.map(r => (
                 <div key={r.key} data-prep-plan-row={r.key} style={{ ...T.fs.small, color: T.ink, lineHeight: 1.6, overflowWrap: "anywhere", fontFamily: T.fontSans, ...T.num }}>
-                  {X.fBuyLine(nameOf(r), r.need, r.unit, r.usable, r.min, r.batches, r.qty)}
+                  {PX.fBuyLine(nameOf(r), r.need, r.unit, r.usable, r.min, r.batches, r.qty)}
                 </div>
               ))}
             </div>
-            <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, fontFamily: T.fontSans }}>{X.fBuyFoot}</div>
+            <div style={{ ...T.fs.caption, color: T.secondary, marginTop: 8, fontFamily: T.fontSans }}>{PX.fBuyFoot}</div>
           </div>
         );
       })()}
 
-      {/* 采购结果 */}
-      {computed && (() => {
-        const entries = Object.entries(computed.bySupplier).sort(([a], [b]) => {
-          if (!a) return 1;
-          if (!b) return -1;
-          return 0;
-        });
-        return (
-          <div>
-            {entries.length === 0 && <div style={{ background: T.bgSoft, padding: 40, textAlign: "center", borderRadius: T.radius, color: T.textSecondary }}>{lang === "zh" ? "按当前计划无原料需求" : "計画内の仕入不要"}</div>}
-            {entries.map(([supId, items]) => {
-              const sup = suppliers.find(s => s.id === supId);
-              const nextD = sup ? supNextDelivery(sup, startDate) : null;
-              // 本店价按各自币种折成人民币再相加(没写币种 = 日元,见 curOf);日元折算的标 ≈
-              const groupTotal = items.reduce((acc, it) => {
-                const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
-                return acc + (pricePerG > 0 ? pricePerG * it.grams : 0);
-              }, 0);
-              const groupApprox = items.some(it => it.sm && curOf(it.sm) === "JPY" && parseFloat(it.sm.pricePerG) > 0);
-              return (
-                <div key={supId || "unassigned"} style={{ background: T.bgCard, border: `0.5px solid ${sup ? T.border : T.warning}`, borderLeft: `3px solid ${sup ? T.accent : T.warning}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
-                    <div>
-                      <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15 }}>
-                        {sup ? `🚚 ${sup.name}` : (lang === "zh" ? "⚠️ 未分配供货商" : "⚠️ 仕入先未設定")}
-                      </div>
-                      {sup && nextD && <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{lang === "zh" ? `下次送货 ${nextD}` : `次回配送 ${nextD}`}</div>}
-                      {!sup && <div style={{ fontSize: 11, color: T.warning, marginTop: 3 }}>{lang === "zh" ? "去本店原料编辑里关联供货商" : "仕入先を関連付けてください"}</div>}
-                    </div>
-                    <div style={{ fontSize: 13, fontFamily: T.fontSerif, fontWeight: 500, color: T.accent }}>
-                      {items.length} {lang === "zh" ? "种" : "件"}
-                      {groupTotal > 0 && <span style={{ marginLeft: 8, color: T.success }}>{groupApprox ? "≈" : ""}¥{groupTotal.toFixed(0)}</span>}
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gap: 4 }}>
-                    {items.map(it => {
-                      const mat = materials.find(m => m.id === it.materialId);
-                      // 复查修 r3-money-4:按件的规格 × 每个克数;recheck-md-1:按件的规格数个数(行上克重和材料的不一样时不拿克数除)
-                      const packs = it.sm && it.sm.packSize ? packsNeededOf(it.sm.packSize, mat, it.grams, it.units) : ((mat && mat.packSize) ? packsNeededOf(mat.packSize, mat, it.grams, it.units) : null);
-                      const pricePerG = it.sm ? toCNY(it.sm.pricePerG, curOf(it.sm)) : 0;
-                      const subtotal = pricePerG > 0 ? pricePerG * it.grams : 0;
-                      const approx = !!(it.sm && curOf(it.sm) === "JPY");
-                      return (
-                        <div key={it.materialId} style={{ display: "grid", gridTemplateColumns: "2.5fr 1fr 1fr 1fr", gap: 8, padding: "6px 10px", borderBottom: `0.5px dashed ${T.borderSoft}`, fontSize: 12, alignItems: "center" }}>
-                          <div>{mat ? mLabel(mat) : <span style={{ color: T.danger }}>{it.materialId}</span>}</div>
-                          <div style={{ textAlign: "right", color: T.textSecondary }}>{it.grams.toFixed(0)}g</div>
-                          <div style={{ textAlign: "right", fontSize: 11, color: T.textTertiary }}>
-                            {packs != null ? `${packs} ${lang === "zh" ? "包" : "パック"}` : (lang === "zh" ? "规格未知" : "規格?")}
-                          </div>
-                          <div style={{ textAlign: "right", fontFamily: T.fontSerif, color: subtotal > 0 ? T.textPrimary : T.textTertiary }}>
-                            {subtotal > 0 ? `${approx ? "≈" : ""}¥${subtotal.toFixed(0)}` : "—"}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-            {/* 2026-09-29 体检第 2 批:以前跳过的东西不提示,现在末尾列「这些没算进来」 */}
-            {(computed.skipped || []).length > 0 && (() => {
-              const zh = lang === "zh";
-              const reasonText = {
-                noItems: zh ? "商品没挂任何配方 / 组合产品 / 组件" : "レシピ未関連の商品",
-                missing: zh ? "商品挂的配方 / 组合产品 / 组件已删除" : "関連先が削除済み",
-                noUsed: zh ? "这几个部分没填「用量」,整部分没算" : "使用量未入力のパーツ",
-                unlinked: zh ? "没关联材料百科" : "百科未関連",
-                badQty: zh ? "用量没填或不是数字" : "分量が数字でない",
-                // 第 4 批 B4-6:配料行「来自组件」展不开成原料的
-                ...PURCHASE_COMP_SKIP[zh ? "zh" : "ja"],
-              };
-              const total = computed.skipped.reduce((a, x) => a + Math.max(1, x.names.length), 0);
-              return (
-                <div style={{ background: T.bgCard, border: `0.5px solid ${T.warning}`, borderLeft: `3px solid ${T.warning}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "0.75rem" }}>
-                  <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, color: T.warning }}>⚠️ {zh ? `这些没算进来(${total} 项)` : `計算に含まれていないもの(${total} 件)`}</div>
-                  <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3, marginBottom: 8 }}>{zh ? "照上面的单子下单会少买这些。补好关联 / 用量后再点一次「计算采购清单」。" : "上のリストには含まれていません。"}</div>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {computed.skipped.map((x, i) => (
-                      <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: T.textSecondary }}>
-                        <span style={{ color: T.textPrimary, fontWeight: 500 }}>「{x.src}」</span>
-                        <span style={{ color: T.warning, margin: "0 6px" }}>{reasonText[x.reason] || x.reason}</span>
-                        {x.names.length > 0 && <span>{x.names.join(zh ? "、" : "、")}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        );
-      })()}
+      {/* 下单单子 */}
+      <div data-pur-sheets="1">
+        <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, margin: "4px 0 8px" }}>{X.sheetsTitle}</div>
+        {groups.length === 0 && skipped.length === 0 && (allZero
+          ? <div style={{ background: T.bgSoft, borderRadius: T.radius, marginBottom: "0.75rem" }}><EmptyState variant="first" title={X.emptyTitle} hint={X.emptyHint} lang={lang} /></div>
+          : <div style={{ background: T.bgSoft, padding: 40, textAlign: "center", borderRadius: T.radius, color: T.textSecondary, marginBottom: "0.75rem" }}>{X.noNeed}</div>)}
+        {groups.map(g => (
+          <PurchaseOrderCard key={String(g.supId) + "|" + (g.sup ? sups.indexOf(g.sup) : -1)} group={g} lang={lang} today={today} nowHm={nowHm} S={S} E={E} state={st} act={act} view={view} />
+        ))}
+        {groups.length > 0 && <PurchaseTotals totals={og.totals} lang={lang} printMoney={printMoney} setPrintMoney={setPrintMoney} onPrintAll={act.canPrint ? () => act.printGroups(groups, true) : null} />}
+        {skipped.length > 0 && <PurchaseSkippedCard skipped={skipped} lang={lang} />}
+      </div>
     </div>
   );
 }
@@ -33148,12 +34115,23 @@ function TodayView(props) {
   const subs = (props.prepOn || sub === "prep") ? TODAY_SUBS_PREP : TODAY_SUBS;
   // 日结 / 备货页有没保存的格子时,切子页先问一句(子页一换,那一页就卸载了)
   const goSub = (id) => { if (id === sub) return; confirmLeaveEditor(confirmDialog, lang, () => setSub(id)); };
+  // 第 6 批 PB:截单提醒(spec R22;日期下面、子页签上面,每家一行最多 3 行)。没有提醒时一个节点都不多(左边那个 div 也不加样式)
+  const rem = Array.isArray(props.orderReminders) ? props.orderReminders.slice(0, 3) : [];
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingBottom: T.sp.l, borderBottom: `1px solid ${T.ink}`, flexWrap: "wrap", gap: T.sp.m, marginBottom: T.sp.l }}>
-        <div>
+        <div style={rem.length ? { flex: "1 1 260px", minWidth: 0 } : undefined}>
           <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "ja" ? "本日" : "今日"}</div>
           <div style={{ ...T.fs.title, fontFamily: T.fontSerif, ...T.num, color: T.ink, marginTop: T.sp.xs }}>{today}</div>
+          {rem.map(r => (
+            <div key={String(r.supId)} data-pur-remind={String(r.supId)} style={{ ...T.fs.small, color: T.ink, marginTop: T.sp.s, overflowWrap: "anywhere", minWidth: 0 }}>
+              {purTx(lang).remind(r.cutoff, r.name, md(r.delivery))}
+              <button type="button" className="k-tap" onClick={() => props.onGoTab && props.onGoTab("purchase")}
+                style={{ ...T.fs.small, background: "none", border: "none", padding: 0, color: T.info, cursor: "pointer", fontFamily: T.fontSans, textDecoration: "underline", textUnderlineOffset: 2 }}>
+                {purTx(lang).remindGo}
+              </button>
+            </div>
+          ))}
         </div>
         <div role="tablist" style={{ display: "flex", border: `1px solid ${T.ink}` }}>
           {subs.map((t, i) => (
@@ -34417,6 +35395,18 @@ function App() {
   // 第 3 批 F4:员工模式(每台设备各自的开关,存 localStorage korora_staff_mode_v1)、进入 / 退出对话框、老板界面的厨房视图
   const [staffMode, setStaffMode] = useState(readStaffMode);
   const exportStaffEpochRef = useRef(0);
+  const purchaseOwnerLiveRef = useRef(true), purchaseOwnerStaffRef = useRef(staffMode); purchaseOwnerStaffRef.current = staffMode;
+  useEffect(() => { purchaseOwnerLiveRef.current = true; return () => { purchaseOwnerLiveRef.current = false; }; }, []);
+  const beginPurchaseOwnerOp = () => {
+    const staffEpoch = exportStaffEpochRef.current;
+    let stopped = false;
+    return () => {
+      if (stopped) return false;
+      try { if (!purchaseOwnerLiveRef.current || purchaseOwnerStaffRef.current || staffEpoch !== exportStaffEpochRef.current || localStorage.getItem(STAFF_MODE_KEY) === "1") stopped = true; }
+      catch (e) { stopped = true; }
+      return !stopped;
+    };
+  };   // 复制开始时的老板操作:观察到员工模式后永久作废,普通页签切换仍有效
   const [staffDialog, setStaffDialog] = useState(null);     // null | "setup" | "enter" | "exit"
   const [staffPending, setStaffPending] = useState(null);   // 审查 r2:别的窗口切了员工模式、这一页有没保存的改动,先问:null | "enter" | "exit"
   const [kitchenTarget, setKitchenTarget] = useState(null); // 老板界面:{ kind, id, qty, stage?, uid?, fromLine? }
@@ -35069,8 +36059,58 @@ function App() {
     } catch (e) { return ""; }
   };
   // ─── 第 6 批第 0 步:App 里的空壳状态(plan 裁决 16)。各线新加的监听各写在自己的 effect 里,不改已有的 flush / 多窗口监听 ───
-  const [purchaseState, setPurchaseState] = useState(() => purchaseStateLoad(today));   // PB:本机采购状态 korora_purchase_v1(第 0 步只读、读出来是空状态)
-  const orderReminders = [];                                                           // PB:「今日」页截单提醒(purchaseReminders 的结果)
+  const [purchaseState, setPurchaseState] = useState(() => purchaseStateLoad(today));   // PB:本机采购状态 korora_purchase_v1(采购页写穿 purchaseStateSave,写完换成返回的 state)
+  const purchaseLiveRef = useRef(null); purchaseLiveRef.current = { ...purchaseLiveRef.current, state: purchaseState, today, saveFail: !!(purchaseLiveRef.current && purchaseLiveRef.current.saveFail) };   // 停住的采购动作跨页后仍读当前内存
+  // PB:「现在」的本地时刻 HH:MM(截单判定用)。不每分钟轮询:挂一个定时器到今天最近的截单时刻;切回前台 / 窗口拿到焦点 / 换日子时重算(spec R22)
+  const [purNow, setPurNow] = useState(() => purHmOf(new Date()));
+  const orderReminders = useMemo(() => purchaseReminders(suppliers, purchaseState, today, purNow), [suppliers, purchaseState, today, purNow]);   // PB:「今日」页截单提醒
+  const purTodayRef = useRef(today);
+  useEffect(() => {
+    const tick = () => setPurNow(p => { const n = purHmOf(new Date()); return p === n ? p : n; });
+    const onVis = () => { if (document.visibilityState !== "hidden") tick(); };
+    // 别的窗口写了本机采购状态:只重读(不写、不碰「别的窗口改过」那条红条)
+    const onSt = (e) => { if (e && e.key === PURCHASE_STATE_KEY) setPurchaseState(purchaseStateLoad(localDateStr())); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", tick);
+    window.addEventListener("storage", onSt);
+    return () => { document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", tick); window.removeEventListener("storage", onSt); };
+  }, []);
+  useEffect(() => {
+    if (purTodayRef.current === today) return;
+    purTodayRef.current = today;   // 换日子:按新的今天重读(日子过完的计划清掉,R28)、重算「现在」
+    setPurchaseState(purchaseStateLoad(today)); setPurNow(purHmOf(new Date()));
+  }, [today]);
+  useEffect(() => {
+    const cuts = (suppliers || []).map(s => (s && typeof s === "object") ? supNextSlot(s, today, purNow) : null)
+      .filter(sl => sl && sl.orderBy === today && sl.cutoff && sl.cutoff > purNow).map(sl => sl.cutoff).sort();
+    if (!cuts.length) return;
+    const [hh, mm] = cuts[0].split(":"); const at = new Date(); at.setHours(+hh, +mm, 0, 50);
+    const id = setTimeout(() => setPurNow(purHmOf(new Date())), Math.max(1000, at.getTime() - Date.now()));
+    return () => clearTimeout(id);
+  }, [suppliers, today, purNow]);
+  // PB:从采购页跳去本店原料 / 供货商编辑页,保存或取消后回采购单(离开那个 tab 就作废,同 creationReturnTo)
+  const [purchaseReturn, setPurchaseReturn] = useState(null);   // null | "shopMaterials" | "suppliers"
+  const [smOpenTarget, setSmOpenTarget] = useState(null);       // 给本店原料页:{ id } 打开那一条 / { newMaterialId } 新建那一条(PA 接)
+  useEffect(() => { if (purchaseReturn && tab !== purchaseReturn) { setPurchaseReturn(null); setSmOpenTarget(null); } }, [tab]);
+  const purSupEditRef = useRef(false);
+  useEffect(() => {   // 供货商:从采购页点「去新建」打开的编辑页关掉(保存 / 返回)了 → 回采购单
+    if (purchaseReturn !== "suppliers" || tab !== "suppliers") { purSupEditRef.current = false; return; }
+    if (supplierEditTarget !== null) { purSupEditRef.current = true; return; }
+    if (purSupEditRef.current) { purSupEditRef.current = false; setPurchaseReturn(null); setSupplierViewId(null); setTab("purchase"); }
+  }, [supplierEditTarget, purchaseReturn, tab]);
+  const purBackToSheet = () => { setPurchaseReturn(null); setSmOpenTarget(null); setTab("purchase"); };
+  // PB:截单那天打开 App 的提示条(spec R23):每台设备每天最多一条(记 remindDay);只在老板界面(员工模式里不推、也不记,退出后再判一次);停止保存的窗口不推
+  const purGoTabRef = useRef(null); purGoTabRef.current = goTab;   // 提示条 8 秒后才点,用那一刻的 goTab(有没保存的改动先问)
+  useEffect(() => {
+    if (staffMode || staleRef.current) return;
+    const st0 = purchaseStateLoad(today);
+    const t = orderToastOf(purchaseReminders(suppliers, st0, today, purHmOf(new Date())), st0, today, lang);
+    if (!t) return;
+    const r = purchaseStateSave({ remindDay: today }, today, new Date().toISOString());
+    setPurchaseState(r.state);
+    showToast(t.msg, { undo: () => { if (purGoTabRef.current) purGoTabRef.current("purchase"); }, actionLabel: t.actionLabel, ms: 8000 });
+    // eslint-disable-next-line
+  }, [staffMode, today]);
   // ─── 第 6 批 D 线(spec_reminder.md):设备 key、导出提醒、横幅、员工那一行、持久存储。全部只写设备 key(korora_device_v1),不碰主存档 ───
   const [deviceInfo, setDeviceInfo] = useState(() => initDeviceInfo(today));           // D:设备 key 的内存副本(R9:第一次渲染的惰性初值里记 first,不放 effect)
   const [devNav] = useState(() => { const raw = deviceNavRaw(); return { raw, env: deviceEnvOf(raw) }; });   // 2.2:设备环境每次挂载算一次
@@ -35170,8 +36210,12 @@ function App() {
   const jumpToItem = ({ kind, id } = {}) => {
     // 备货(prepstock E 线):id = 账本 key("recipe:…" / "component:…")→ 今日 → 备货,展开那一张(东西删了也能看账上那一样)
     if (kind === "prep") { openPrep(id); return; }
-    // 第 6 批第 0 步:采购页要的三种(本店原料编辑页 / 新建本店原料 / 新建供货商;保存或取消后回采购单),PB 填;第 0 步先不跳
-    if (kind === "shopMaterial" || kind === "shopMaterialNew" || kind === "supplierNew") return;
+    // 第 6 批 PB:采购页要的三种 —— 本店原料编辑页(id = 本店原料 id)/ 新建本店原料(id = 材料 id)/ 新建供货商;记下 purchaseReturn,
+    // 那一页保存或取消后回采购单(本店原料页由 openTarget / returnLabel / onReturn 接,PA;供货商页看编辑对象关掉,下面的 effect)
+    if (kind === "shopMaterial" || kind === "shopMaterialNew") {
+      setShowDataHealth(false); setSmOpenTarget(kind === "shopMaterial" ? { id } : { newMaterialId: id }); setPurchaseReturn("shopMaterials"); setTab("shopMaterials"); return;
+    }
+    if (kind === "supplierNew") { setShowDataHealth(false); setSupplierViewId(null); setSupplierEditTarget({ _new: true }); setPurchaseReturn("suppliers"); setTab("suppliers"); return; }
     const byId = (arr) => (arr || []).find(x => x && x.id === id);
     // 第 4 批第 0 步:加了四种「打开查看页」(recipeView / componentView / creationView / productView),给毛利一览 / 材料使用情况 / 待换国产看板用
     const target = (kind === "recipe" || kind === "recipeView") ? byId(recipes) : (kind === "component" || kind === "componentView") ? byId(components)
@@ -37833,6 +38877,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setShopMaterials={setShopMaterials}
           purchaseState={purchaseState}
           setPurchaseState={setPurchaseState}
+          purchaseLiveRef={purchaseLiveRef}
+          beginOwnerOp={beginPurchaseOwnerOp}
           rawPlan={appSettings.prodPlan}
           printSettings={printSettings}
           onPrint={(data) => setPrintTarget({ type: "purchase", stage: "preview", data, lang: data && data.lang })}
@@ -37840,6 +38886,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onGoTab={goTab}
           showToast={showToast}
           today={today}
+          now={purNow}
         />
       )}
 
@@ -37876,6 +38923,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           lang={lang}
           showToast={showToast}
           confirmDialog={confirmDialog}
+          openTarget={smOpenTarget}
+          onOpened={() => setSmOpenTarget(null)}
+          returnLabel={purchaseReturn === "shopMaterials" ? purTx(lang).backToPur : null}
+          onReturn={purchaseReturn === "shopMaterials" ? purBackToSheet : undefined}
         />
       )}
 
@@ -38248,6 +39299,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
                 // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
                 setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
+                try { localStorage.removeItem(PURCHASE_STATE_KEY); } catch (e) { /* 删不掉就算了 */ } setPurchaseState(purchaseStateRead(null, today));   // 第 6 批 PB:本机采购状态(计划 / 手上还有 / 已下单)一起删(spec R27)
                 showToast(uiTxt(lang).cleared); };
               const pb = await pinBackupNow("clear");
               if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
