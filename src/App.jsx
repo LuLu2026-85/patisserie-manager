@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment, cloneElement, isValidElement } from "react";
 import { createPortal } from "react-dom";   // 第 6 批第 0 步:TapTip 的气泡挂到 body(react-dom 是已有依赖)
 import { SEED_RECIPES, SEED_COMPONENTS, SEED_CREATIONS, SEED_KNOWLEDGE, SEED_FAMILIES } from "./seedData.js";
 
@@ -744,7 +744,7 @@ const fmtOther = (v, currency) => {
 
 // 售价旁边的币种切换,一个字宽
 const priceCurBtn = (obj, onToggle, lang, price = null) => (
-  <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation();
+  <button className="k-tap" aria-label={lang === "zh" ? "售价的币种,点一下切换" : "販売価の通貨を切替"} type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation();
     const from = priceCurOf(obj), to = from === "CNY" ? "JPY" : "CNY";
     onToggle(to, convCur(price, from, to, 2)); }}
     title={lang === "zh" ? "售价的币种,点一下切换" : "販売価の通貨を切替"}
@@ -762,7 +762,7 @@ const priceCurBtn = (obj, onToggle, lang, price = null) => (
 const ingCurBtn = (ing, onToggle, lang) => {
   const cur = curOf(ing), to = cur === "CNY" ? "JPY" : "CNY";
   return (
-    <button type="button" onClick={() => onToggle({ currency: to, unitPrice: convCur(ing.unitPrice, cur, to), cost: convCur(ing.cost, cur, to, 2),
+    <button className="k-tap" aria-label={lang === "zh" ? "这条单价的币种,点一下切换(人民币 / 日元),已填的价一起换算" : "この単価の通貨を切替(入力済みの価格も換算)"} type="button" onClick={() => onToggle({ currency: to, unitPrice: convCur(ing.unitPrice, cur, to), cost: convCur(ing.cost, cur, to, 2),
       ...(ing._originalPrice !== undefined ? { _originalPrice: convCur(ing._originalPrice, cur, to) } : {}) })}
       title={lang === "zh" ? "这条单价的币种,点一下切换(人民币 / 日元),已填的价一起换算" : "この単価の通貨を切替(入力済みの価格も換算)"}
       style={{ padding: "2px 4px", fontSize: 11, lineHeight: 1.2, cursor: "pointer", borderRadius: 3,
@@ -1086,6 +1086,7 @@ function PriceTrendChip({ obj, kind, lang }) {
   return (
     <div title={title} style={{ fontSize: 10, color: up ? T.danger : T.success, marginTop: 2, whiteSpace: "nowrap", ...T.num }}>
       {zh ? "较上次" : "前回比"} {t.approx ? "≈" : ""}{up ? "↑" : "↓"}{phPct(t.pct)}
+      <TapTip tipId="price-history" text={title} lang={lang} />
     </div>
   );
 }
@@ -7129,11 +7130,15 @@ const packsNeededOf = (ps, m, grams, units) => {
 // L1(8.4)加的:固定中文 toast 跟语言(design_touch-lang §4.3 L1 表;删除类归 R,导出 / 导入 / 供货商和本店原料保存 / 采购页 / 知识标记归各自的线)
 const UI_TXT = {
   zh: { ok: "确定", cancel: "取消", undo: "撤销", close: "关闭", tipLabel: "说明", add: "＋ 添加", delRow: "删掉这一行", moveUp: "上移", moveDown: "下移",
+    deleteBackup: "删除这份备份", deleteImage: "删除这张图片", removeTag: "移除标签", removeRelated: "移除关联",
+    undoPrice: "撤销改价", applyTablePrice: "使用价格表的单价", deleteSalesLog: "删除这条销售记录", deleteProductionLog: "删除这条生产记录", stockMinus: "库存减少 1", stockPlus: "库存增加 1", rating: (n) => `评分 ${n} 星`,
     savedRecipe: "✓ 配方已保存", savedComponent: "✓ 组件已保存", savedCreation: "✓ 组合产品已保存", savedKnowledge: "✓ 知识点已保存",
     savedFamily: "✓ 家族已保存", savedBrand: "✓ 厂家已保存", savedMaterial: "✓ 材料已保存",
     knowledgeAdded: "✓ 知识点已添加并关联", compCatAdded: "✓ 新分类已添加", cleared: "已清除",
     layerNowLocal: (nm) => `「${nm}」改成了本产品专用，不再跟组件库。想让组件库也改，编辑这一部分时点「↻ 同步回组件库」。` },
   ja: { ok: "確定", cancel: "キャンセル", undo: "元に戻す", close: "閉じる", tipLabel: "説明", add: "＋ 追加", delRow: "この行を削除", moveUp: "上へ", moveDown: "下へ",
+    deleteBackup: "このバックアップを削除", deleteImage: "この画像を削除", removeTag: "タグを外す", removeRelated: "関連を外す",
+    undoPrice: "単価の変更を元に戻す", applyTablePrice: "価格表の単価を使う", deleteSalesLog: "この販売記録を削除", deleteProductionLog: "この製造記録を削除", stockMinus: "在庫を 1 減らす", stockPlus: "在庫を 1 増やす", rating: (n) => `${n} つ星の評価`,
     savedRecipe: "✓ レシピを保存しました", savedComponent: "✓ パーツを保存しました", savedCreation: "✓ 組み合わせを保存しました", savedKnowledge: "✓ ナレッジを保存しました",
     savedFamily: "✓ ファミリーを保存しました", savedBrand: "✓ ブランドを保存しました", savedMaterial: "✓ 材料を保存しました",
     knowledgeAdded: "✓ ナレッジを追加して関連付けました", compCatAdded: "✓ 新しい分類を追加しました", cleared: "クリアしました",
@@ -7380,19 +7385,26 @@ input, textarea, select, button { font-family: inherit; }
    别的线的新界面直接挂这些 class,不另写 :hover、不改这里(plan 裁决 1);以后改这里要同时更新判官 probe_b6_regress_diff 的说明 */
 @media (pointer: coarse) {
   .k-btn { min-height: 40px; }
-  .k-tab { min-height: 44px; }
+  .k-tab { min-width: 40px; min-height: 44px; }
   .k-tap { min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
   .k-tap-l { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   /* 在售 / 在用圆点:看起来大小不变,只把点的范围放到 40 × 40(负边距压回原来的占位,行排版不动) */
-  .k-dot { width: 40px !important; height: 40px !important; margin: -11px !important; }
-  /* 「ⓘ」18 px,点的范围靠 ::after 往外扩 11 px = 40 × 40(TapTip 都是单独出现,不会盖住别的按钮) */
+  .k-dot { width: 40px !important; height: 40px !important; margin: -11px !important; position: relative; }
+  /* 默认「ⓘ」外框 18 px 含两侧 1 px 边框,内部 16 px;::after 向外扩 12 px,实际点击区为 40 × 40 */
   .k-tip { position: relative; }
-  .k-tip::after { content: ""; position: absolute; inset: -11px; }
-  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
+  .k-tip::after { content: ""; position: absolute; inset: -12px; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; flex-shrink: 0; }
+  .k-ing-price-head { padding-top: 12px !important; padding-bottom: 12px !important; }
   input:not([type=checkbox]):not([type=radio]):not([type=range]), select { min-height: 36px; }
   .k-staffbar .k-btn, .k-staffmain .k-btn, [data-owner-kitchen] .k-btn { min-height: 44px; }
   /* 名字联想 / 厂家选择器的每一项 */
   .k-opt { min-height: 44px; }
+  .k-tap-l[data-tl-close] > .k-btn { min-width: 44px; min-height: 44px; }
+  .k-tap-rating { min-width: 0; }
+  .k-tap-rating > div { flex-wrap: wrap; }
+  /* T2实测补缺：只作用于逐站标记的触控控件，覆盖其原inline min-height；不改输入框、打印或全体按钮。 */
+  [data-tl-min="40"] { min-width: 40px !important; min-height: 40px !important; box-sizing: border-box; }
+  [data-tl-min="44"], [data-tl-child-min="44"] > .k-btn { min-width: 44px !important; min-height: 44px !important; box-sizing: border-box; }
 }
 /* 手机(375 宽)上 3 / 4 / 5 列的编辑页表单变两列(fgClass(cols) 生成 k-fg k-fg-N);iPad 和电脑不变 */
 @media (max-width: 599px) {
@@ -7414,6 +7426,9 @@ body:has(.k-savebar) .k-toasts { bottom: 84px !important; }
 @media (hover: hover) { .k-tip:hover { color: ${T.ink} !important; border-color: ${T.ink} !important; } }
 /* 配料表删除列固定在表格最右边(所有宽度):中间几列横划时删除「×」一直看得见;阴影 = T.ink 加透明度(同 T.sh) */
 .k-ing-del { position: sticky; right: 0; background: ${T.bgCard}; box-shadow: -6px 0 6px -6px rgba(22,22,15,0.18); }
+/* Creation原输入为12px normal/8×12 border-box，高35；仅本调用恢复。coarse原input36/button40规则仍生效。 */
+.k-creation-tag-input [data-tl-tagadd] > input { font-size: 12px !important; line-height: normal !important; padding: 8px 12px !important; box-sizing: border-box; }
+
 `;
 
 // 按钮四型三态。hover / focus-visible / disabled 由全局 <style> 里的 .k-btn 规则接管
@@ -7608,7 +7623,8 @@ const _backupTimeText = (iso) => {
     return `${d.getFullYear()}-${m(d.getMonth()+1)}-${m(d.getDate())} ${m(d.getHours())}:${m(d.getMinutes())}:${m(d.getSeconds())}`;
   } catch { return iso || ""; }
 };
-function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = {}) {
+function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note, ownerAllowed = () => true } = {}) {
+  if (!ownerAllowed()) return;
   const movedAwayToast = () => showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再恢复" : "このウィンドウは古いバージョンです。再読み込みしてから復元してください");
   if (_movedAway) { movedAwayToast(); return; }
   confirmDialog(
@@ -7616,8 +7632,10 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = 
       ? `恢复到 ${_backupTimeText(snap.savedAt)} 的备份吗？\n\n当前数据会被这个版本覆盖（恢复前会自动把当前状态存一份「固定」备份，不会被轮换掉，所以可以反悔）。\n\n刷新页面后生效。`
       : `${_backupTimeText(snap.savedAt)} のバックアップに戻しますか?\n現在の状態は自動で固定バックアップとして保存されます。`) + (note ? "\n\n" + note : ""),
     async () => {
+      if (!ownerAllowed()) return;
       // 2026-09-29 体检第 2 批:整份数据点「恢复」才读;恢复前的当前状态存成固定备份,并且等它存完再刷新
       let payload = await getBackupPayload(snap);
+      if (!ownerAllowed()) return;
       // 第 −1 步复查(R115):确认框开着的时候数据被搬走了 —— 在存「恢复备份之前」之前就停,不然会把搬家标记(157 字、条数全 0)存成一份固定备份
       if (_movedAway) { movedAwayToast(); return; }
       if (lsHasMovedTo(payload)) {   // 第 −1 步(R115):写回前去掉 movedTo
@@ -7627,6 +7645,7 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = 
       }
       if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
       const doRestore = () => {
+        if (!ownerAllowed()) return;
         if (_movedAway) { movedAwayToast(); return; }
         try {
           _suspendSaves = true;   // 刷新前别再写:离开页面时的立即保存会把刚恢复的备份盖回去
@@ -7645,6 +7664,7 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note } = 
         if (lsHasMovedTo(current)) { movedAwayToast(); return; }
         if (current && current !== payload) pinned = await addBackupSnapshot(current, null, { pinned: true, reason: "restore" });
       } catch (e) { pinned = false; }
+      if (!ownerAllowed()) return;
       // 审查发现:以前固定备份没存上也照样覆盖,对话框却说「会先存一份」。和覆盖导入 / 清除全部一样,存不上先问
       if (!pinned) {
         confirmDialog(
@@ -7809,7 +7829,7 @@ function MergePreviewBody({ rows, lang, onToggleSkipDeleted }) {
 // 顶栏「💾」:≥ 768 px 写 wide、600 到 767 px 写 short、< 600 px 不画(手机走「更多」抽屉那一行)。宽度看 window.innerWidth(GLOBAL_CSS 没有 768 这一档,只有 T1 能改它)
 function ExportChip({ view, level, lang, onExport }) {
   if (!view || !view.show) return null;
-  return <ExportChipBody view={view} level={level} onExport={onExport} />;
+  return <ExportChipBody view={view} level={level} lang={lang} onExport={onExport} />;
 }
 // 窗口宽度(只给 D 线的两个浮层用:「💾」三种写法、「怎么装」手机上换底部面板);读不到当 1280
 function useDevWinWidth() {
@@ -7821,15 +7841,18 @@ function useDevWinWidth() {
   }, []);
   return w;
 }
-function ExportChipBody({ view, level, onExport }) {
+function ExportChipBody({ view, level, lang, onExport }) {
   const w = useDevWinWidth();
   if (w < 600) return null;
   const color = view.tone === "warning" ? T.warning : T.danger;
   return (
+    <span data-tl-export="" style={{ display: "inline-flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
     <button type="button" className="k-tap" data-b6="export-chip" data-b6-level={level} title={view.title} onClick={onExport}
       style={{ background: "transparent", border: `1px solid ${color}`, color, borderRadius: T.radius, padding: "3px 10px", cursor: "pointer", fontSize: 12, fontFamily: T.fontSans, whiteSpace: "nowrap", lineHeight: 1.5 }}>
       {w >= 768 ? view.wide : view.short}
     </button>
+      <TapTip tipId="export-reminder" text={view.title} lang={lang} />
+    </span>
   );
 }
 // 横幅(R36 到 R38):和「别的窗口改过」「新版本」两条老横幅同一个位置(sticky、data-app-banner,数据体检面板靠它定位),同一时间只出一条。
@@ -7926,7 +7949,7 @@ function DeviceExportStatus({ lang, deviceInfo, env, changed, today, onRename, u
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ overflowWrap: "anywhere" }}>{devLine}</span>
         {editing === null && (
-          <button type="button" onClick={() => setEditing(_devNameOk(deviceInfo) ? deviceInfo.name : "")}
+          <button data-tl-min="44" type="button" onClick={() => setEditing(_devNameOk(deviceInfo) ? deviceInfo.name : "")}
             style={{ background: "transparent", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "2px 10px", cursor: "pointer", fontSize: 12, color: T.textPrimary, fontFamily: T.fontSans }}>{X.rename}</button>
         )}
       </div>
@@ -8113,7 +8136,7 @@ function RecycleBinDialog({ open, lang, onClose, onRestore, showToast, confirmDi
   );
 }
 
-function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highlightSavedAt }) {
+function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highlightSavedAt, beginOwnerOp }) {
   const [snapshots, setSnapshots] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -8162,7 +8185,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
   }[r] || "");
 
   // 第 6 批第 0 步:恢复的整段挪到模块顶层 restoreBackupSnapshot(行为不变),I 线的「回到导入之前」也走它
-  const handleRestore = (snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog });
+  const handleRestore = (snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, ownerAllowed: beginOwnerOp?.() });
 
   const handleDelete = (snap) => {
     confirmDialog(
@@ -8190,7 +8213,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
                 : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_HOURS} 時間は1時間1件 + ${BACKUP_DAYS} 日間は1日1件;上書き・全削除・復元の前は固定保存(最大 ${BACKUP_PINNED_MAX} 件) · 現在 ${snapshots.length} 件`}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
+          <button className="k-tap-l" aria-label={uiTxt(lang).close} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
         {loading ? (
           <div style={{ padding: "3rem", textAlign: "center", color: T.textTertiary, fontSize: 12 }}>{lang === "zh" ? "读取中..." : "読込中..."}</div>
@@ -8220,7 +8243,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
                   <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 2 }}>{summarizeSnap(s)}</div>
                 </div>
                 <Btn size="sm" onClick={() => handleRestore(s)}>{lang === "zh" ? "恢复" : "復元"}</Btn>
-                <button onClick={() => handleDelete(s)} style={{ background: "none", border: "none", cursor: "pointer", color: T.danger, fontSize: 16, padding: "4px 8px" }} title={lang === "zh" ? "删除" : "削除"}>🗑</button>
+                <button className="k-tap" aria-label={uiTxt(lang).deleteBackup} onClick={() => handleDelete(s)} style={{ background: "none", border: "none", cursor: "pointer", color: T.danger, fontSize: 16, padding: "4px 8px" }} title={lang === "zh" ? "删除" : "削除"}>🗑</button>
               </div>
             ))}
           </div>
@@ -8265,7 +8288,7 @@ function ContentQualityScanDialog({ onClose, materials, brands, lang, onJumpMate
                 : `${materials.length} 件材料 + ${brands.length} 件メーカー`}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
+          <button className="k-tap-l" aria-label={uiTxt(lang).close} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
 
         <div style={{ display: "flex", gap: 6 }}>
@@ -9716,7 +9739,7 @@ function SaveStatus({ state, lang, onRetry }) {
 // fixed 放在里面会跑偏),**只在开着时才渲染 portal**(服务端渲染永远走不到)。再点 / 在外面按下 / Esc / 滚动或改尺寸收起;同一时间只开一个。
 // 点按钮 stopPropagation(放在可点的卡片 / 行里不会进详情)。触屏放大点的范围靠 GLOBAL_CSS 的 .k-tip::after(T1 加)
 let _tipCloseCurrent = null;
-function TapTip({ text, lang, label, children }) {
+function TapTip({ text, lang, label, children, trigger, tipId }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
   const btnRef = useRef(null);
@@ -9750,14 +9773,22 @@ function TapTip({ text, lang, label, children }) {
     };
   }, [open]);
   const t = uiTxt(lang);
+  const custom = isValidElement(trigger);
+  const toggle = (e) => { e.stopPropagation(); if (custom && trigger.props.onClick) trigger.props.onClick(e); setOpen(v => !v); };
   return (
     <>
-      <button ref={btnRef} type="button" className="k-tip" data-tl-tip="" aria-label={label || t.tipLabel} aria-expanded={open ? "true" : "false"} title={text}
-        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+      {custom ? cloneElement(trigger, {
+        ref: btnRef, "data-tl-tip": tipId || "", "aria-label": label || t.tipLabel, "aria-expanded": open ? "true" : "false",
+        title: trigger.props.title === undefined ? text : trigger.props.title,
+        role: trigger.type === "button" ? trigger.props.role : "button", tabIndex: trigger.props.tabIndex === undefined ? 0 : trigger.props.tabIndex,
+        onClick: toggle,
+        onKeyDown: (e) => { if (trigger.props.onKeyDown) trigger.props.onKeyDown(e); if (!e.defaultPrevented && trigger.type !== "button" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(e); } },
+      }) : <button ref={btnRef} type="button" className="k-tip" data-tl-tip={tipId || ""} aria-label={label || t.tipLabel} aria-expanded={open ? "true" : "false"} title={text}
+        onClick={toggle}
         style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, padding: 0, margin: "0 0 0 4px", border: `1px solid ${T.subtle}`,
-          borderRadius: "50%", background: "transparent", color: T.subtle, fontFamily: T.fontSerif, fontSize: 11, fontStyle: "italic", lineHeight: 1, cursor: "pointer", verticalAlign: "middle", flexShrink: 0 }}>i</button>
+          borderRadius: "50%", background: "transparent", color: T.subtle, fontFamily: T.fontSerif, fontSize: 11, fontStyle: "italic", lineHeight: 1, cursor: "pointer", verticalAlign: "middle", flexShrink: 0 }}>i</button>}
       {open && typeof document !== "undefined" && document.body && createPortal(
-        <div ref={popRef} className="k-tip-pop" role="tooltip" onPointerDown={(e) => e.stopPropagation()}
+        <div ref={popRef} className="k-tip-pop" role="tooltip" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
           style={{ position: "fixed", left: pos ? pos.left : 12, top: pos ? pos.top : 12, zIndex: T.z.popover, maxWidth: "min(320px, calc(100vw - 24px))", boxSizing: "border-box",
             whiteSpace: "pre-line", overflowWrap: "anywhere", background: T.surface, border: `1px solid ${T.border}`, boxShadow: T.sh.popover, padding: "8px 12px",
             ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
@@ -9773,6 +9804,7 @@ function WhyNote({ children }) {
 // TagAddInput:输入框 +「＋ 添加」按钮;回车也能加,但输入法选字时(isComposing / keyCode 229)不加;空串 / 只有空格不加。
 // 各调用处原来的去重 / trim 规则原样当 onAdd 传进来(不在这里改);list 给 datalist 的 id
 function TagAddInput({ value, onChange, onAdd, placeholder, lang, list }) {
+  const composition = useRef({ active: false });
   const v = value === undefined || value === null ? "" : String(value);
   const blank = v.trim() === "";
   const add = () => { if (!blank && typeof onAdd === "function") onAdd(v); };
@@ -9780,7 +9812,8 @@ function TagAddInput({ value, onChange, onAdd, placeholder, lang, list }) {
     <span data-tl-tagadd="" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", minWidth: 0, maxWidth: "100%" }}>
       <input className="k-input" value={v} list={list} placeholder={placeholder}
         onChange={(e) => { if (typeof onChange === "function") onChange(e.target.value); }}
-        onKeyDown={(e) => { if (e.key !== "Enter") return; if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return; e.preventDefault(); add(); }}
+        onCompositionStart={() => { composition.current = { active: true }; }} onCompositionEnd={() => { const cycle = composition.current; setTimeout(() => { if (composition.current === cycle) cycle.active = false; }, 0); }}
+        onKeyDown={(e) => { if (e.key !== "Enter") return; if (composition.current.active || (e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return; e.preventDefault(); add(); }}
         style={{ ...T.fs.caption, padding: "5px 8px", border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, minWidth: 0, flex: "1 1 120px" }} />
       <button type="button" className="k-btn k-tap" onClick={add} disabled={blank}
         style={{ ...T.fs.caption, padding: "5px 10px", border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, cursor: blank ? "default" : "pointer", fontFamily: T.fontSans, whiteSpace: "nowrap" }}>
@@ -10262,7 +10295,7 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 12, color: T.textSecondary }}>{lang === "zh" ? "目标" : "目標"}：</span>
-              <input
+              <input inputMode="decimal"
                 type="number"
                 value={targetYield}
                 onChange={e => setTargetYield(e.target.value)}
@@ -10299,7 +10332,7 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
           <span>{lang === "zh" ? "原" : "原"} {originalYield}{unit}</span>
           <span style={{ color: T.disabled }}>→</span>
           <div style={{ display: "flex", alignItems: "center", border: `1px solid ${T.border}`, background: T.surface, borderRadius: T.radius }}>
-            <input
+            <input inputMode="decimal"
               type="number" className="k-input"
               value={targetYield}
               onChange={e => setTargetYield(e.target.value)}
@@ -10323,7 +10356,7 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
   // ── 按模具 / 按某样原料 / 按总重 ──
   const inline = [];   // 和下拉同一行(手机上自动折行)
   const notes = [];    // 下面的灰字 / 提示,一行一条
-  const note = (key, text, color) => notes.push(<div key={key} data-scale-note={key} style={{ color: color || (isComp ? T.textTertiary : T.subtle), overflowWrap: "anywhere" }}>{text}</div>);
+  const note = (key, text, color) => notes.push(<div data-tl-cap="scale-note" key={key} data-scale-note={key} style={{ color: color || (isComp ? T.textTertiary : T.subtle), overflowWrap: "anywhere" }}>{text}</div>);
   const labelLine = () => { if (info && info.label) { const L = info.label[lang === "ja" ? "ja" : "zh"]; if (L) note("label", `${L.main} ${L.sub}`, isComp ? T.textSecondary : T.body); } };
   if (mode === "mold") {
     inline.push(<ScaleMoldInput key="from" which="from" label={X.moldFrom} value={sc.moldFrom} onChange={v => set({ moldFrom: v })} X={X} inStyle={inStyle} labStyle={labStyle} />);
@@ -10332,7 +10365,7 @@ function ScaleBar({ variant = "recipe", lang, originalYield, unit, targetYield, 
     const txt = _normTxt(obj && obj.mold);
     if (txt) note("moldHint", parseMoldSize(txt) ? X.moldFilled(txt) : X.moldUnread(txt));
     notes.push(
-      <div key="common" data-scale-note="common" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <div data-tl-cap="scale-note" key="common" data-scale-note="common" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <span style={labStyle}>{X.common}</span>
         {SCALE_MOLD_COMMON.map(d => (
           <button key={d} data-scale-chip={d} onClick={() => set({ moldTo: { ...(sc.moldTo || {}), shape: "round", d: String(d) } })}
@@ -10496,6 +10529,8 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
             });
             if (uniqueMissing.length === 0) return null;
             return (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <WhyNote>{lang === "zh" ? "以参考价加入，之后可修改" : "参考価格で追加し、あとで変更できます"}</WhyNote>
               <Btn size="sm" variant="success" onClick={() => {
                 const now = new Date().toISOString();   // 第 4 批:修改时间和价格记录同一个时间,在 updater 外面定好
                 setShopMaterials(prev => {
@@ -10533,6 +10568,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               }} title={lang === "zh" ? `把本配方 ${uniqueMissing.length} 条未添加的原料一键加入本店原料(以参考价,可后续修改)` : `${uniqueMissing.length} 件を仕入れ原料に一括追加`}>
                 {lang === "zh" ? `+ 本店原料 (${uniqueMissing.length})` : `+ 仕入 (${uniqueMissing.length})`}
               </Btn>
+              </span>
             );
           })()}
           {/* 第 3 批 F4:厨房视图(大字、打勾、常亮;不显示钱)。缩放过就带着缩放后的个数 */}
@@ -10728,7 +10764,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                         <span style={{ fontSize: 16, fontWeight: 500, letterSpacing: "0.01em", color: T.ink }}>{n}</span>
                         {sub && sub !== n && <span style={{ ...T.fs.caption, color: T.subtle }}>{sub}</span>}
                         {shown.map((b, bi) => (
-                          <span key={bi} title={b.tip} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}</span>
+                          <span key={bi} title={b.tip} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}{(b.c === T.warning || b.t === (lang === "zh" ? "组件" : "パーツ")) && <TapTip tipId="ingredient-badge" text={b.tip} lang={lang} />}</span>
                         ))}
                         {rest.length > 0 && (
                           <span className="k-more" style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${T.border}`, color: T.secondary, cursor: "default" }} tabIndex={0}>
@@ -10750,13 +10786,15 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
                       <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
                     </div>
                     <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
-                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{fmtCost(scaledCost)}</div>
+                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{fmtCost(scaledCost)}{canJump && <span data-tl-cap="encyclopedia-link" aria-hidden="true" style={{ marginLeft: 6 }}>›</span>}</div>
                   </div>
                 );
               })}
             </div>
           );
         })}
+
+        <div data-tl-legend="ingredient-badges" style={{ ...T.fs.caption, color: T.subtle, marginTop: 10 }}>{lang === "zh" ? "本店 = 本店采购价 · 参考 = 百科参考价 · 手写 = 手写单价 · 组件 = 来自组件 · 百科 = 已关联材料百科" : "仕入 = 仕入れ価 · 参考 = 事典参考価 · 手入 = 手入力 · パーツ = パーツから · 事典 = 事典連動"}</div>
 
         {/* 汇总条：顶部 1px ink，微标签 + 大数字 */}
         {liveTotalCost > 0 && (
@@ -10871,7 +10909,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
               return (
                 <button
                   key={k.id}
-                  className="k-btn"
+                  className="k-btn k-tap"
                   onClick={() => onNavigateToKnowledge && onNavigateToKnowledge(k.id)}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.surface, color: T.info, padding: "4px 10px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${T.info}`, cursor: "pointer", fontFamily: T.fontSans }}
                 >
@@ -11564,7 +11602,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         onMouseLeave={hoverOnly((e) => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.borderLeftColor = cat.color; e.currentTarget.style.transform = "translateY(0)"; })}
       >
         {/* 在用圆点(和配方「在售中」同款);点它不进详情 */}
-        <button
+        <button className="k-dot"
           type="button"
           onClick={(e) => { e.stopPropagation(); toggleInUse(c.id); }}
           title={c.inUse
@@ -11572,9 +11610,9 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             : (lang === "zh" ? "点一下标为在用(会排到最前面)" : "タップで使用中に")}
           aria-label={c.inUse ? (lang === "zh" ? "取消在用" : "使用中を解除") : (lang === "zh" ? "标为在用" : "使用中にする")}
           style={{
-            width: 18, height: 18, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
+            width: 32, height: 32, margin: -7, flex: "0 0 auto", padding: 0, border: "none", background: "transparent",
             cursor: "pointer", lineHeight: 1, fontSize: 13,
-            color: c.inUse ? T.success : T.line,
+            color: c.inUse ? T.success : T.muted,
           }}
         >{c.inUse ? "●" : "○"}</button>
 
@@ -11631,7 +11669,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
                 {i < arr.length - 1 && <span style={{ color: T.textMuted }}>·</span>}
               </span>
             ))}
-          </div>
+          {(uses.length > 1 || ingUses.length > 0) && <TapTip tipId="component-uses" text={ingUses.length ? [uses.length > 1 ? uses.join(" / ") : "", ingUses.map(u => (pickLang(u.obj, "name", lang) || u.obj.nameFr || "") + (u.layer ? ` · ${u.layer.customName || pickLang(u.layer, "name", lang) || ""}` : "")).join(" / ")].filter(Boolean).join("\n") : (uses.length > 1 ? uses.join(" / ") : undefined)} lang={lang} />}</div>
         </div>
       </div>
     );
@@ -11654,7 +11692,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
         <div style={{ fontSize: 11, color: T.textTertiary, marginLeft: 8, marginRight: 4, letterSpacing: "0.5px" }}>
           {lang === "zh" ? "视图" : "表示"}
         </div>
-        <button
+        <button data-tl-min="40"
           onClick={() => setCompViewMode("list")}
           style={{
             padding: "6px 14px", fontSize: 12,
@@ -11668,7 +11706,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             transition: "all 0.15s",
           }}
         >{lang === "zh" ? "📋 列表" : "📋 リスト"}</button>
-        <button
+        <button data-tl-min="40"
           onClick={() => setCompViewMode("matrix")}
           style={{
             padding: "6px 14px", fontSize: 12,
@@ -11869,7 +11907,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
 
       {/* 分类筛选 */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "1rem" }}>
-        <button
+        <button data-tl-min="40"
           onClick={() => setFilterCat("all")}
           style={{
             padding: "5px 14px", fontSize: 12,
@@ -11883,7 +11921,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
             transition: "all 0.15s",
           }}
         >{lang === "zh" ? "全部" : "すべて"}</button>
-        <button
+        <button data-tl-min="40"
           onClick={() => setFilterCat("inuse")}
           style={{
             padding: "5px 14px", fontSize: 12,
@@ -11904,7 +11942,7 @@ function ComponentsView({ components, setComponents, cats, onUpdateCats, brands 
           const count = components.filter(c => c.componentCategory === cat.id).length;
           const active = filterCat === cat.id;
           return (
-            <button
+            <button data-tl-min="40"
               key={cat.id}
               onClick={() => setFilterCat(cat.id)}
               style={{
@@ -12083,10 +12121,10 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
             })()}
             {/* v17.8: 备货 = 整批做好存着,组合产品的整体配方里只写「从库存取多少」 */}
             {c.prepMode === "stock" && (
-              <span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
+              <><span title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}
                 style={{ background: "#FFFFFF", color: T.warning, border: `0.5px solid ${T.warning}`, padding: "3px 12px", borderRadius: T.radiusPill, fontSize: 11, fontWeight: 500 }}>
                 {lang === "zh" ? "备货" : "作り置き"}{_prepItem && _prepCfg && !_prepOh.unitMismatch ? ` · ${prepTxt(lang).tagHave(prepTxt(lang).storeName(_prepCfg.store), fmtQty(_prepOh.usable) || "0", _prepItem.unit || _prepCfg.unit)}` : ""}
-              </span>
+              </span><div data-tl-cap="component-stock"><WhyNote>{lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管"}</WhyNote></div></>
             )}
           </div>
 
@@ -12226,7 +12264,7 @@ function ComponentDetail({ component: c, lang, setLang, onEdit, onBack, knowledg
             {relatedKnowledge.map(k => {
               const kTitle = pickLang(k, "title", lang);
               return (
-                <button
+                <button className="k-tap"
                   key={k.id}
                   onClick={() => onNavigateToKnowledge && onNavigateToKnowledge(k.id)}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#EDE9FE", color: "#5B21B6", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", fontFamily: "system-ui, sans-serif" }}
@@ -12351,7 +12389,7 @@ function IngPriceInput({ ing, placeholder, style, onChangeStored }) {
   // 审查第 6 轮:base = 开始敲之前存的原值。敲回一开始显示的那个数就原样还回去(清空照旧存 "",老数据存数字 0 的不还成 0)—— 存的 0.12727999999999998 显示成 12.728,
   // 敲 1 再删掉以前会存成 0.12728,离开时白问「还没保存」
   return (
-    <input type="number" placeholder={placeholder} value={shown}
+    <input inputMode="decimal" type="number" placeholder={placeholder} value={shown}
       onChange={e => { const text = e.target.value; const base = live ? draft.base : cur; const stored = (text !== "" && text === ingPriceShown(base, per100)) ? base : ingPriceStored(text, per100); setDraft({ text, stored, per100, base }); onChangeStored(stored); }}
       onBlur={() => setDraft(null)}
       onWheel={blurOnWheel}
@@ -12553,7 +12591,7 @@ function IngNameInput({ value, placeholder, title, style, materials, brands, lan
           const price = pp > 0 ? fmtUnitPrice(pp, "CNY") : "";
           const sub = [bName, price].filter(Boolean).join(" · ");
           return (
-            <div key={m.id} role="option" aria-selected={i === hi}
+            <div className="k-opt" key={m.id} role="option" aria-selected={i === hi}
               onMouseDown={(e) => { e.preventDefault(); choose(m); }}
               onMouseEnter={() => setHi(i)}
               style={{ padding: "6px 10px", cursor: "pointer", background: i === hi ? T.bgMuted : "transparent", borderBottom: `0.5px solid ${T.borderSoft}` }}>
@@ -12697,7 +12735,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
           <thead>
             <tr style={{ background: "#F5F5F5" }}>
               {tx.headers.map((h, i) => (
-                <th key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }} title={i === 7 ? tx.priceTh : undefined}>{h}</th>
+                <th className={i === tx.headers.length - 1 ? "k-ing-del" : i === 7 ? "k-ing-price-head" : undefined} key={i} style={{ fontSize: 11, color: "#666666", fontWeight: 400, padding: "6px 6px 8px", textAlign: "left", borderBottom: "0.5px solid #E5E5E5", whiteSpace: "nowrap" }} title={i === 7 ? tx.priceTh : undefined}>{h}{i === 7 && <TapTip tipId="price-heading" text={tx.priceTh} lang={lang} />}</th>
               ))}
             </tr>
           </thead>
@@ -12782,7 +12820,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px" }}>
                     {/* 第 4 批 B4-6:来自组件 = 蓝底 🧩;组件已删 = 黄底(按快照价算);不计价 = 灰底。老行颜色不变 */}
                     {(() => { const lc = linkedMat ? "#059669" : liveComp ? T.info : compGone ? "#F59E0B" : null; return (
-                    <button
+                    <button className="k-tap" aria-label={tx.pick}
                       onClick={() => onPickMaterial(ing._id)}
                       title={linkedMat ? tx.linked(pickLang(linkedMat, "name", lang))
                         : liveComp ? (lang === "zh" ? `🧩 来自组件:${pickLang(liveComp, "name", lang)}\n点击换一个或取消` : `🧩 パーツ:${pickLang(liveComp, "name", lang)}\nクリックで変更・解除`)
@@ -12806,15 +12844,15 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   </td>
                   <td style={{ padding: "3px 4px" }}><IngNameInput placeholder={tx.nameJa} value={ing.nameJa||""} onChangeText={val=>onNameChange("nameJa", val)} materials={materials} brands={brands} lang={lang} onPickMaterial={onSuggestPick("nameJa")} style={{ ...ist, width: 110, borderColor: linkedMat ? "#059669" : (linked ? "#0F6E56" : "#CCCCCC") }} /></td>
                   <td style={{ padding: "3px 4px" }}><input placeholder={tx.fr} value={ing.nameFr||""} onChange={e=>updateIng(ing._id,"nameFr",e.target.value)} style={{ ...ist, width: 70 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : unitConverted ? tx.unitConverted(String(ing.unit).trim(), String(gf)) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input inputMode="decimal" type="number" placeholder="量" value={ing.qty||""} onChange={e=>updateQtyOrPrice(ing._id,"qty",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 52 }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input placeholder="g" value={ing.unit||""} onFocus={()=>{ if (unitResume.current === ing._id) unitResume.current = null; else unitAtFocus.current[ing._id] = ing.unit || ""; }} onBlur={e=>commitUnit(ing._id, e)} onChange={e=>updateIng(ing._id,"unit",e.target.value)} title={unitMismatch ? tx.unitMismatch(String(ing.unit).trim()) : unitConverted ? tx.unitConverted(String(ing.unit).trim(), String(gf)) : undefined} style={{ ...ist, width: 36, borderColor: unitMismatch ? "#F59E0B" : "#CCCCCC", background: unitMismatch ? "#FFFBEB" : "#FFFFFF" }} />{unitMismatch && <TapTip tipId="unit-mismatch" text={tx.unitMismatch(String(ing.unit).trim())} lang={lang} trigger={<button type="button" className="k-tip" style={{ border: "none", background: "transparent", color: T.warning, cursor: "pointer", padding: 0, marginLeft: 4 }}>⚠</button>} />}</td>
                   <td style={{ padding: "3px 4px" }}>
                     {linkedMat ? (
                       // v11: 百科关联优先,品牌只读显示 linkedMatBrand(改品牌需解除关联重新选)。
                       // 2026-09-29 第 2 批 2b C3:以前只有配方页锁,组件 / 部分编辑页关联了百科还能手改品牌,改了也不起作用
-                      <div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <><div title={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: "#059669", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         🔗 {linkedMatBrand ? (lang === "zh" ? (linkedMatBrand.nameZh || linkedMatBrand.nameJa) : (linkedMatBrand.nameJa || linkedMatBrand.nameZh)) : (ing.brand || "—")}
-                      </div>
+                      </div><TapTip tipId="brand-lock" text={lang === "zh" ? "已从材料百科关联,品牌随百科条目锁定" : "材料事典連動中"} lang={lang} /></>
                     ) : liveComp ? (
                       // 第 4 批 B4-6:来自组件 —— 品牌格只读写组件名
                       <div title={lang === "zh" ? `来自组件:${pickLang(liveComp, "name", lang)}` : `パーツ:${pickLang(liveComp, "name", lang)}`} style={{ width: 78, padding: "4px 3px", fontSize: 11, color: T.info, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -12832,12 +12870,12 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   <td style={{ padding: "3px 4px", position: "relative" }}>
                     {/* 第 4 批 B4-6:不计价 / 来自组件的行单价只读(不计价点标签 = 打开 🔗 弹窗改回;来自组件的价跟组件走) */}
                     {ing.noCost ? (
-                      <button type="button" onClick={() => onPickMaterial(ing._id)} title={lang === "zh" ? "这一行不计价:成本按 0 算,不算「没价」。点这里(或行首 🔗)改回" : "原価に入れない行。クリックで変更"}
+                      <><button className="k-tap" aria-label={tx.pick} type="button" onClick={() => onPickMaterial(ing._id)} title={lang === "zh" ? "这一行不计价:成本按 0 算,不算「没价」。点这里(或行首 🔗)改回" : "原価に入れない行。クリックで変更"}
                         style={{ padding: "2px 8px", fontSize: 11, cursor: "pointer", borderRadius: 3, background: T.bgMuted, border: `0.5px solid ${T.border}`, color: T.textSecondary, whiteSpace: "nowrap" }}>
                         {lang === "zh" ? "不计价" : "原価外"}
-                      </button>
+                      </button><TapTip tipId="no-cost" text={lang === "zh" ? "这一行不计价:成本按 0 算,不算「没价」。点这里(或行首 🔗)改回" : "原価に入れない行。クリックで変更"} lang={lang} /></>
                     ) : liveComp ? (
-                      <div title={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "パーツ原価 ÷ 出来高(自動)"}
+                      <><div title={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "パーツ原価 ÷ 出来高(自動)"}
                         style={{ fontSize: 11, color: compPrice && compPrice.perUnit > 0 ? T.info : "#92400E", whiteSpace: "nowrap", padding: "4px 2px" }}>
                         {compPrice && compPrice.perUnit > 0
                           ? (ingWeightFactor(ing.unit) > 0 ? fmtUnitPrice(compPrice.perUnit / ingWeightFactor(ing.unit), "CNY") : `${fmtCost(compPrice.perUnit)}/${_normTxt(ing.unit)}`)
@@ -12846,7 +12884,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                             : compPrice && compPrice.reason === "cycle" ? (lang === "zh" ? "循环引用,算不出" : "循環参照")
                             : (lang === "zh" ? "组件没价" : "価格なし"))}
                         {compPrice && compPrice.perUnit > 0 && compPrice.incomplete && <span style={{ color: "#92400E" }}>{lang === "zh" ? " · 不全" : " · 一部なし"}</span>}
-                      </div>
+                      </div><TapTip tipId="component-price" text={lang === "zh" ? "单价 = 组件现在的成本 ÷ 产出量,跟着组件走,这里不能改" : "パーツ原価 ÷ 出来高(自動)"} lang={lang} /></>
                     ) : (
                     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                       {/* C5:g / ml / 空 的行按每 100g 填(存的仍是每克价),其他单位按每单位填 */}
@@ -12859,7 +12897,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                       {/* 口径小字:填好数以后占位符看不见了,这里一直写着按什么填 */}
                       <span style={{ fontSize: 10, color: T.textTertiary, whiteSpace: "nowrap" }}>{curBtnShown ? "" : (curOf(ing) === "CNY" ? "¥" : "円")}/{basis.label}</span>
                       {ing._priceModified && (
-                        <button onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + (
+                        <button className="k-tap" aria-label={uiTxt(lang).undoPrice} onClick={() => revertPrice(ing._id)} title={(lang === "zh" ? "撤销改价 (原 " : "改価取消 (元 ") + (
                           // 第 5 批复查修(r3-money-3):原价和输入框同一个口径 —— S1 起 kg / L 行、填了克重的计件行存的是「每这一行单位」的价,不能按每克 ×100 写成 /100g
                           // recheck-ui-print-1:每单位的原价照 fmtUnitPrice 的写法 —— 人民币「¥800/kg」、日元「800円/kg」(円 在数字后),显示口径人民币时日元折算标 ≈;没有原价不写数
                           (basis.per100 || basis.label === "g") ? fmtUnitPrice(ing._originalPrice, curOf(ing))
@@ -12870,20 +12908,23 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                     </div>
                     )}
                     {priceDrift !== null && (
-                      <button onClick={() => {
+                      <span style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 2 }}>
+                      <button className="k-tap" aria-label={uiTxt(lang).applyTablePrice} onClick={() => {
                         setIngs(prev => prev.map(i => {
                           if (i._id !== ing._id) return i;
                           const q = parseFloat(i.qty) || 0;
                           return { ...i, unitPrice: String(priceDrift), cost: q > 0 ? (q * priceDrift).toFixed(1) : i.cost };
                         }));
                       }} style={{ display: "block", width: "100%", marginTop: 2, fontSize: 10, padding: "1px 3px", background: "#FEF3C7", border: "0.5px solid #F59E0B", borderRadius: 3, cursor: "pointer", color: "#92400E" }} title={tx.drift}>→ {fmtUnitPrice(priceDrift, "JPY")}</button>
+                      <TapTip tipId="apply-table-price" text={tx.drift} lang={lang} />
+                      </span>
                     )}
                   </td>
                   {/* 第 4 批 B4-6:不计价写「—」;来自组件只读(用量 × 组件单价,快照随用量 / 单位更新) */}
                   {ing.noCost || liveComp ? (
                     <td style={{ padding: "3px 4px" }}><div style={{ width: 56, padding: "4px 3px", fontSize: 12, textAlign: "right", color: ing.noCost ? T.textTertiary : T.info }}>{ing.noCost ? "—" : (fmtCost(ing.cost) || "—")}</div></td>
                   ) : (
-                  <td style={{ padding: "3px 4px" }}><input type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
+                  <td style={{ padding: "3px 4px" }}><input inputMode="decimal" type="number" placeholder={tx.cost} value={ing.cost||""} onChange={e=>updateIng(ing._id,"cost",e.target.value)} onWheel={blurOnWheel} style={{ ...ist, width: 56, textAlign: "right" }} /></td>
                   )}
                   <td style={{ padding: "3px 4px" }}>
                     {/* 认不出的分组值下拉显示「未分组」;不去动它,她选了别的才改 */}
@@ -12893,7 +12934,7 @@ function IngredientTable({ variant, ings, setIngs, nextIdRef, cats, materials, b
                   </td>
                   {/* 备注:三页都有(2026-09-29 第 2 批 2b C1,以前组件 / 部分编辑页看不见,组件 106 行、部分 61 行备注改不了) */}
                   <td style={{ padding: "3px 4px" }}><input placeholder={tx.note} value={ing.note||""} onChange={e=>updateIng(ing._id,"note",e.target.value)} style={{ ...ist, width: 120, fontSize: 11 }} /></td>
-                  <td style={{ padding: "3px 4px" }}><button onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "2px 4px" }}>×</button></td>
+                  <td className="k-ing-del" style={{ padding: "3px 4px" }}><button className="k-tap" aria-label={uiTxt(lang).delRow} onClick={() => setIngs(prev=>prev.filter(i=>i._id !== ing._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "2px 4px" }}>×</button></td>
                 </tr>
               );
             })}
@@ -13659,7 +13700,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
             <input value={form.nameJa} onChange={f("nameJa")} placeholder={lang === "zh" ? "ムース ショコラブランキャラメル" : "ムース ショコラブランキャラメル"} style={inpStyle} />
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>法文名</label>
             <input value={form.nameFr} onChange={f("nameFr")} placeholder="Mousse chocolat blanc" style={inpStyle} />
@@ -13706,7 +13747,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产出量" : "出来高"}</label>
-            <input type="number" value={form.yield} onChange={f("yield")} placeholder="500" style={inpStyle} />
+            <input inputMode="decimal" type="number" value={form.yield} onChange={f("yield")} placeholder="500" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "单位" : "単位"}</label>
@@ -13715,11 +13756,11 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
           {/* v17.8: 备货 = 整批做好存着(千层面团、泡芙壳这类),组合产品的整体配方里只写「从库存取多少」 */}
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "备货" : "作り置き"}</label>
-            <label title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組み合わせのレシピでは「ストックから何 g」だけ表示"}
+            <><label title={lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組み合わせのレシピでは「ストックから何 g」だけ表示"}
               style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "8px 0", cursor: "pointer", color: T.textSecondary }}>
               <input type="checkbox" checked={form.prepMode === "stock"} onChange={e => setForm(prev => ({ ...prev, prepMode: e.target.checked ? "stock" : undefined }))} />
               {lang === "zh" ? "整批做好存着" : "まとめて仕込み"}
-            </label>
+            </label><div data-tl-cap="component-stock"><WhyNote>{lang === "zh" ? "整批做好存着，组合产品的整体配方里只写「从库存取多少」" : "まとめて仕込んで保管。組み合わせのレシピでは「ストックから何 g」だけ表示"}</WhyNote></div></>
           </div>
         </div>
         {/* 备货(prepstock E 线):勾上以后展开存在哪 / 能放多久 / 低于多少提醒 / 取出后说明;没勾时 DOM 和以前一样 */}
@@ -13792,20 +13833,20 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
               <input value={s.textJa || ""} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, textJa: e.target.value } : st))} placeholder="日本語ステップ…" style={inpStyle} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveUp}
                 onClick={() => setSteps(prev => { if (i === 0) return prev; const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; })}
                 disabled={i === 0}
                 style={{ background: i === 0 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === 0 ? "not-allowed" : "pointer", color: i === 0 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="上移"
               >↑</button>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveDown}
                 onClick={() => setSteps(prev => { if (i === prev.length - 1) return prev; const n = [...prev]; [n[i], n[i + 1]] = [n[i + 1], n[i]]; return n; })}
                 disabled={i === steps.length - 1}
                 style={{ background: i === steps.length - 1 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === steps.length - 1 ? "not-allowed" : "pointer", color: i === steps.length - 1 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="下移"
               >↓</button>
             </div>
-            <button onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
+            <button className="k-tap" aria-label={uiTxt(lang).delRow} onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
           </div>
         ))}
       </div>
@@ -13826,7 +13867,7 @@ function ComponentEditForm({ component, cats, brands = [], materials = [], onSav
       </div>
 
       {/* 🖼️ 图片链接 */}
-      <ImageUrlsEditor
+      <ImageUrlsEditor lang={lang}
         urls={form.imageUrls || []}
         onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))}
       />
@@ -13966,7 +14007,7 @@ async function compressImage(file) {
 }
 
 // ─── 图片URL编辑器 ─────────────────────────────────────────────
-function ImageUrlsEditor({ urls, onChange }) {
+function ImageUrlsEditor({ urls, onChange, lang = "zh" }) {
   const [newUrl, setNewUrl] = useState("");
   const [newCaption, setNewCaption] = useState("");
   const [error, setError] = useState("");
@@ -14093,7 +14134,7 @@ function ImageUrlsEditor({ urls, onChange }) {
                     style={{ ...inputStyle, width: "100%", fontSize: 12 }}
                   />
                 </div>
-                <button onClick={() => removeImage(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999", fontSize: 18, flexShrink: 0 }}>×</button>
+                <button className="k-tap" aria-label={uiTxt(lang).deleteImage} onClick={() => removeImage(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999", fontSize: 18, flexShrink: 0 }}>×</button>
               </div>
             );
           })}
@@ -14113,7 +14154,7 @@ function ImageUrlsEditor({ urls, onChange }) {
         }}
       />
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-        <button
+        <button className="k-tap"
           onClick={() => { if (!uploading && fileInputRef.current) fileInputRef.current.click(); }}
           disabled={uploading}
           style={{
@@ -14340,7 +14381,7 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
       {/* 通用制作参数 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>⚙ 家族通用参数（所有变体共用，仅作显示参考）</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+        <div className={fgClass("1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "模具" : "型"}</label>
             <input value={form.commonMold || ""} onChange={f("commonMold")} placeholder="例：15cm 慕斯圈" style={inpStyle} />
@@ -14363,25 +14404,13 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
           {(form.tags || []).map((tag, i) => (
             <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: selectedColor.bg, color: selectedColor.color, padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 500 }}>
               {tag}
-              <button onClick={() => setForm(prev => ({ ...prev, tags: prev.tags.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", color: selectedColor.color, fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
+              <button className="k-tap" aria-label={uiTxt(lang).removeTag} onClick={() => setForm(prev => ({ ...prev, tags: prev.tags.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", color: selectedColor.color, fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
             </span>
           ))}
         </div>
-        <input
-          value={newTag}
-          onChange={e => setNewTag(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === "Enter" && newTag.trim()) {
-              e.preventDefault();
-              if (!(form.tags || []).includes(newTag.trim())) {
-                setForm(prev => ({ ...prev, tags: [...(prev.tags || []), newTag.trim()] }));
-              }
-              setNewTag("");
-            }
-          }}
-          placeholder="回车添加标签：例 招牌、冷藏甜品、礼盒..."
-          style={{ ...inpStyle, fontSize: 12 }}
-        />
+        <TagAddInput value={newTag} onChange={setNewTag} lang={lang}
+          onAdd={raw => { const tag = raw.trim(); if (!(form.tags || []).includes(tag)) setForm(prev => ({ ...prev, tags: [...(prev.tags || []), tag] })); setNewTag(""); }}
+          placeholder="回车添加标签：例 招牌、冷藏甜品、礼盒..." />
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -15441,7 +15470,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
   );
   const hint = (txt, color, attr, extra) => <div data-p5-hint={attr} style={{ fontSize: 12, color, lineHeight: 1.6, marginTop: 6, overflowWrap: "anywhere" }}>{txt}{extra}</div>;
   const linkBtn = (label, onClick, attr) => (
-    <button type="button" data-p5-btn={attr} onClick={onClick} style={{ background: "none", border: "none", padding: 0, marginLeft: 6, cursor: "pointer", fontSize: 12, color: T.info, textDecoration: "underline", fontFamily: T.fontSans }}>{label}</button>
+    <button data-tl-min="40" type="button" data-p5-btn={attr} onClick={onClick} style={{ background: "none", border: "none", padding: 0, marginLeft: 6, cursor: "pointer", fontSize: 12, color: T.info, textDecoration: "underline", fontFamily: T.fontSans }}>{label}</button>
   );
   const inp16 = { padding: "6px 8px", fontSize: 16, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSans, boxSizing: "border-box", minWidth: 0 };
 
@@ -15452,7 +15481,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
         style={{ background: T.paper, border: `1px solid ${T.ink}`, borderRadius: T.radius, maxWidth: 600, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: T.sh.overlay, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "16px 20px 8px", flexShrink: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 500, color: T.ink }}>{X.title}</div>
-          <button type="button" aria-label={X.cancel} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, lineHeight: 1 }}>×</button>
+          <button className="k-tap-l" type="button" aria-label={X.cancel} onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: T.textTertiary, lineHeight: 1 }}>×</button>
         </div>
         <div style={{ overflowY: "auto", padding: "4px 20px 12px", flex: "1 1 auto", minHeight: 0 }}>
           {isCreation && <div style={{ fontSize: 12, color: T.textSecondary, marginBottom: 14, lineHeight: 1.6 }}>{X.creationIntro}</div>}
@@ -15517,7 +15546,7 @@ function PrintModal({ onClose, onConfirm, itemType, src, scale0, n0, appLang, ct
             <div style={sectionHead}>{X.langTitle}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {PRINT_LANGS.map(v => (
-                <button type="button" key={v} data-p5-lang={v} aria-pressed={lang === v} onClick={() => setLang(v)}
+                <button data-tl-min="40" type="button" key={v} data-p5-lang={v} aria-pressed={lang === v} onClick={() => setLang(v)}
                   style={{ flex: "1 1 90px", padding: "8px 10px", fontSize: 12, border: `1.5px solid ${lang === v ? T.ink : T.border}`, background: lang === v ? T.ink : T.paper, color: lang === v ? T.paper : T.ink, borderRadius: T.radius, cursor: "pointer", fontWeight: lang === v ? 500 : 400, fontFamily: T.fontSans }}>{X.langs[v]}</button>
               ))}
             </div>
@@ -16574,7 +16603,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
         style={{ display: "inline-block", padding: "2px 8px", marginRight: 6, marginBottom: 4, fontSize: 12, borderRadius: T.radius,
           border: `1px solid ${tone === "warn" ? T.warning : T.ink}`, color: tone === "warn" ? T.warning : T.ink, fontWeight: 500 }}>
         {allergenShort(code, lang)}
-      </span>
+      {src.length > 0 && <TapTip tipId="allergen-sources" text={src.length ? (zh ? "来自:" : "由来:") + src.join(sep) : ""} lang={lang} />}</span>
     );
   };
   const box = flat
@@ -16613,7 +16642,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
             </div>
             <div style={{ color: T.body }}>{unknownShown.map(u => _allergenUnknownText(u, zh)).join(sep)}</div>
             {summary.unknown.length > 6 && (
-              <button type="button" onClick={() => setShowAllUnknown(v => !v)} style={{ background: "none", border: "none", padding: 0, marginTop: 2, color: T.info, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans }}>
+              <button className="k-tap" type="button" onClick={() => setShowAllUnknown(v => !v)} style={{ background: "none", border: "none", padding: 0, marginTop: 2, color: T.info, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans }}>
                 {showAllUnknown ? (zh ? "收起" : "閉じる") : (zh ? `展开全部 ${summary.unknown.length} 条` : `全 ${summary.unknown.length} 件を表示`)}
               </button>
             )}
@@ -16647,7 +16676,7 @@ function AllergenSummaryCard({ kind, entity, lang, materials = [], brands = [], 
           </div>
         )}
         <div style={{ marginTop: 6 }}>
-          <button type="button" onClick={() => setShowDraft(v => !v)} aria-expanded={showDraft}
+          <button className="k-tap" type="button" onClick={() => setShowDraft(v => !v)} aria-expanded={showDraft}
             style={{ background: "none", border: "none", padding: 0, color: T.info, cursor: "pointer", fontSize: 12, fontFamily: T.fontSans }}>
             {showDraft ? "▾ " : "▸ "}{zh ? "配料表草稿(按投料重量排)" : "原材料表示の下書き(配合量順)"}
           </button>
@@ -16728,7 +16757,7 @@ function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], comp
       <div role="dialog" aria-modal="true" style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.25rem 1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div style={{ fontSize: 16, fontWeight: 500 }}>🏷 {zh ? "打印标签(草稿)" : "ラベル印刷(下書き)"}</div>
-          <button type="button" onClick={onClose} aria-label={zh ? "关闭" : "閉じる"} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+          <button className="k-tap-l" type="button" onClick={onClose} aria-label={zh ? "关闭" : "閉じる"} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
         </div>
         <div style={{ fontSize: 11, color: T.textTertiary, lineHeight: 1.6, marginBottom: 12 }}>{zh ? LABEL_DRAFT_NOTE : LABEL_DRAFT_NOTE_JA}</div>
         {!summary.complete && (
@@ -16929,7 +16958,7 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
       <div style={{ background: "#FFFFFF", borderRadius: 16, padding: "1.5rem", maxWidth: 600, width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
           <div style={{ fontSize: 16, fontWeight: 500 }}>📚 快速新建知识点</div>
-          <button onClick={requestClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+          <button className="k-tap-l" aria-label={uiTxt(lang).close} onClick={requestClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
         </div>
 
         {relatedName && (
@@ -16953,7 +16982,7 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
             {KNOWLEDGE_TAGS.map(tag => {
               const active = selectedTags.includes(tag.id);
               return (
-                <button key={tag.id} onClick={() => toggleTag(tag.id)} style={{ padding: "4px 10px", fontSize: 11, border: `1.5px solid ${active ? tag.color : "#CCCCCC"}`, borderRadius: 20, background: active ? tag.bg : "#FFFFFF", color: active ? tag.color : "#111111", cursor: "pointer" }}>
+                <button data-tl-min="40" key={tag.id} onClick={() => toggleTag(tag.id)} style={{ padding: "4px 10px", fontSize: 11, border: `1.5px solid ${active ? tag.color : "#CCCCCC"}`, borderRadius: 20, background: active ? tag.bg : "#FFFFFF", color: active ? tag.color : "#111111", cursor: "pointer" }}>
                   {active ? "✓ " : ""}{tag.zh}
                 </button>
               );
@@ -16963,12 +16992,9 @@ function QuickKnowledgeModal({ relatedName, onClose, onSave, lang = "zh" }) {
             ))}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <input value={customTag} onChange={e => setCustomTag(e.target.value)} onKeyDown={e => {
-              if (e.key === "Enter" && customTag.trim()) {
-                setSelectedTags(prev => prev.includes(customTag.trim()) ? prev : [...prev, customTag.trim()]);
-                setCustomTag("");
-              }
-            }} placeholder="或输入自定义标签，回车添加" style={{ ...inpStyle, fontSize: 12 }} />
+            <TagAddInput value={customTag} onChange={setCustomTag} lang={lang}
+              onAdd={raw => { const tag = raw.trim(); setSelectedTags(prev => prev.includes(tag) ? prev : [...prev, tag]); setCustomTag(""); }}
+              placeholder="或输入自定义标签，回车添加" />
           </div>
         </div>
 
@@ -17388,15 +17414,15 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
                   {/* 2026-09-29 体检第 2 批:用量没填 / 读不准的提醒;没有成本时也要出,所以不放在成本那个 span 里 */}
                   {usedWarnCount > 0 && (
                     <span style={{ marginLeft: "auto", fontSize: 11, color: T.warning }}
-                      title={lang === "zh" ? "这几个部分的用量没填、读不出数字，或写法有歧义（只按开头的数字算），成本和毛利不准。去「编辑」改成这一批一共多少克的纯数字。" : "使用量が未入力・読めない・曖昧な部分があります"}>
+                      title={lang === "zh" ? "这几个部分的用量没填、读不出数字，或写法有歧义（只按开头的数字算），成本和毛利不准。去「编辑」改成这一批一共多少克的纯数字。" : "使用量が未入力・読めない・曖昧な部分があり、原価と粗利率が正確ではありません。『編集』で、この仕込み全体に使うグラム数を数字だけで入力してください。"}>
                       ⚠ {lang === "zh" ? `${usedWarnCount} 个${creationWords(creationStructureOf(c), lang).isStack ? "层" : "部分"}用量没填或读不准` : `使用量要確認 ${usedWarnCount}`}
-                    </span>
+                    <TapTip tipId="creation-usage" text={lang === "zh" ? "这几个部分的用量没填、读不出数字，或写法有歧义（只按开头的数字算），成本和毛利不准。去「编辑」改成这一批一共多少克的纯数字。" : "使用量が未入力・読めない・曖昧な部分があり、原価と粗利率が正確ではありません。『編集』で、この仕込み全体に使うグラム数を数字だけで入力してください。"} lang={lang} /></span>
                   )}
                   {totalCost > 0 && (
                     <span style={{ marginLeft: usedWarnCount > 0 ? 8 : "auto", fontSize: 11, color: T.textTertiary }}>
                       {lang === "zh" ? "原料" : "原価"} ¥{totalCost.toFixed(0)}
                       {/* 2026-09-29 体检第 2 批:以前 marginPct > 0 才显示,亏本(负毛利)的反而整栏空着;负数走红色 */}
-                      {cardMargin && <span data-cardmargin="1" title={cardMargin.note || undefined} style={{ marginLeft: 8, color: cardMargin.color }}>· {marginPct.toFixed(0)}%{cardMargin.badge ? ` · ${cardMargin.badge}` : ""}</span>}
+                      {cardMargin && <span data-cardmargin="1" title={cardMargin.note || undefined} style={{ marginLeft: 8, color: cardMargin.color }}>· {marginPct.toFixed(0)}%{cardMargin.badge ? ` · ${cardMargin.badge}` : ""}{cardMargin.note && <TapTip tipId="creation-margin" text={cardMargin.note} lang={lang} />}</span>}
                     </span>
                   )}
                 </div>
@@ -17661,6 +17687,7 @@ function CreationRecipeSheet({ c, lang, components = [], materials = [], brands 
           <span style={{ fontSize: 11, color: T.warning, border: `0.5px solid ${T.warning}`, borderRadius: T.radiusPill, padding: "1px 8px" }}
             title={incText.title}>
             {incText.parts}
+            <TapTip tipId="creation-sheet-incomplete" text={incText.title} lang={lang} />
           </span>
         )}
       </div>
@@ -17844,7 +17871,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           {/* 第 5 批 E1:锁定 / 解锁(先做 + 撤销) */}
           {onUpdateCreation && (
             <span data-lock-btn="1" style={{ display: "inline-flex" }}>
-              <Btn size="sm" onClick={toggleLock} title={locked ? undefined : LT.btnLockTitle}>{locked ? LT.btnUnlock : LT.btnLock}</Btn>
+              <Btn size="sm" onClick={toggleLock} title={locked ? undefined : LT.btnLockTitle}>{locked ? LT.btnUnlock : LT.btnLock}</Btn>{!locked && <TapTip tipId="creation-lock" text={LT.btnLockTitle} lang={lang} />}
             </span>
           )}
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
@@ -17862,7 +17889,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           { id: "recipe", label: lang === "zh" ? "📘 配方" : "📘 レシピ",  desc: lang === "zh" ? "制作用" : "制作用" },
           { id: "menu",   label: lang === "zh" ? "📗 菜单" : "📗 メニュー", desc: lang === "zh" ? "对外展示" : "展示用" },
         ].map(m => (
-          <button
+          <button data-tl-min="40"
             key={m.id}
             onClick={() => { setViewMode(m.id); setExpandedLayer(null); }}
             title={m.desc}
@@ -17878,6 +17905,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
           >{m.label}</button>
         ))}
       </div>
+      <div data-tl-cap="creation-view" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{lang === "zh" ? (viewMode === "recipe" ? "制作用：只看做法和用量" : viewMode === "menu" ? "对外展示：给客人看的说明" : "全部信息：配方、成本、备注都在") : (viewMode === "recipe" ? "製造用：作り方と分量を表示" : viewMode === "menu" ? "お客様向けの説明を表示" : "すべて表示：レシピ・原価・メモ")}</div>
 
       {/* 🎂 封面卡片 - RURU 风格 */}
       <div style={{
@@ -18085,14 +18113,14 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                 const heightPct = usedAmount > 0 ? Math.min(60, Math.max(20, usedAmount / 30)) : 28;
                 const isHovered = expandedLayer === i;
                 return (
-                  <div
-                    key={i}
+                  <TapTip key={i} tipId="layer-block" text={l.customName || pickLang(l, "name", lang)} label={l.customName || pickLang(l, "name", lang)} lang={lang} trigger={<div data-tl-min="40"
+                    className="k-tap"
                     onClick={() => setExpandedLayer(expandedLayer === i ? null : i)}
                     title={l.customName || l.nameZh || l.nameJa}
                     style={{ background: cat.color, height: heightPct, display: "flex", alignItems: "center", justifyContent: "center", color: "#FFFFFF", fontSize: 11, fontWeight: 500, cursor: "pointer", opacity: isHovered ? 1 : 0.85, transition: "opacity 0.15s" }}
                   >
                     {i + 1}
-                  </div>
+                  </div>} />
                 );
               })}
             </div>}
@@ -18137,9 +18165,9 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
                             <span>💰 {W.costLabel} <strong>{fmtCost(actualCost)}</strong></span>
                             <span>🧪 {lang === "zh" ? `${(l.ingredients || []).length}种原料` : `材料 ${(l.ingredients || []).length} 種`}</span>
                             {LAYER_LINK_TAGS[tagKeys[i]] && tagKeys[i] !== "differs" && (
-                              <span title={LAYER_LINK_TAGS[tagKeys[i]].hint} style={{ color: LAYER_LINK_TAGS[tagKeys[i]].color }}>
+                              <span title={lang === "zh" ? LAYER_LINK_TAGS[tagKeys[i]].hint : LAYER_LINK_TAGS[tagKeys[i]].hintJa} style={{ color: LAYER_LINK_TAGS[tagKeys[i]].color }}>
                                 {lang === "zh" ? LAYER_LINK_TAGS[tagKeys[i]].zh : LAYER_LINK_TAGS[tagKeys[i]].ja}
-                              </span>
+                              <TapTip tipId="layer-link" text={lang === "zh" ? LAYER_LINK_TAGS[tagKeys[i]].hint : LAYER_LINK_TAGS[tagKeys[i]].hintJa} lang={lang} /></span>
                             )}
                           </>
                         )}
@@ -18333,7 +18361,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
             {relatedKnowledge.map(k => {
               const kTitle = pickLang(k, "title", lang);
               return (
-                <button
+                <button className="k-tap"
                   key={k.id}
                   onClick={() => onNavigateToKnowledge && onNavigateToKnowledge(k.id)}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#EDE9FE", color: "#5B21B6", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 500, border: "none", cursor: "pointer", fontFamily: "system-ui, sans-serif" }}
@@ -18435,12 +18463,12 @@ function LayerUsedField({ layer, W, cost, onField, serves, lang, idx, onLayer })
   const inp = { padding: "5px 8px", ...T.fs.label, letterSpacing: 0, border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, minWidth: 0 };
   const warnBox = (color) => ({ ...T.fs.label, letterSpacing: 0, color, marginTop: 4, overflowWrap: "anywhere" });
   const capBtn = (p, label) => (
-    <button key={p} type="button" aria-pressed={per === p} onClick={() => { if (p !== per) put({ ...cur, per: p }); }}
+    <button data-tl-min="44" key={p} type="button" aria-pressed={per === p} onClick={() => { if (p !== per) put({ ...cur, per: p }); }}
       style={{ ...T.fs.label, letterSpacing: 0, padding: "4px 8px", border: 0, cursor: "pointer", fontFamily: T.fontSans,
         background: per === p ? T.ink : T.surface, color: per === p ? T.paper : T.body }}>{label}</button>
   );
   return (
-    <div data-used-field={idx === undefined ? "" : idx}>
+    <div data-tl-cap="used-amount" data-used-field={idx === undefined ? "" : idx}>
                     {/* 部分名 */}
                     <input
                       value={layer.customName || ""}
@@ -18783,28 +18811,28 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       {/* 📦 规格与商品化 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与售卖</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>尺寸/模具</label>
             <input value={form.size || form.mold || ""} onChange={f("size")} placeholder="例：15cm 慕斯圈" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{W.servesLabel}</label>
-            <input type="number" value={form.serves || ""} onChange={e => setServes(e.target.value)} placeholder="4" style={inpStyle} />
+            <input inputMode="numeric" type="number" value={form.serves || ""} onChange={e => setServes(e.target.value)} placeholder="4" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{W.portionsLabel}</label>
-            <input type="number" value={form.portions || ""} onChange={f("portions")} placeholder="8" style={inpStyle} />
+            <input inputMode="numeric" type="number" value={form.portions || ""} onChange={f("portions")} placeholder="8" style={inpStyle} />
           </div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>售价（每份 ¥）</label>
             <div style={{ display: "flex", alignItems: "center" }}>
-              <input type="number" value={form.price || ""} onChange={f("price")} placeholder="780" style={inpStyle} />
+              <input inputMode="decimal" type="number" value={form.price || ""} onChange={f("price")} placeholder="780" style={inpStyle} />
               {priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, price: p })), lang, form.price)}
             </div>
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>制作时间</label>
             <input value={form.prepTime || ""} onChange={f("prepTime")} placeholder="例：3 天（冷冻 + 组装）" style={inpStyle} />
@@ -18829,26 +18857,14 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             {(form.flavorTags || []).map((tag, i) => (
               <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#FCE7F3", color: "#BE185D", padding: "3px 10px", borderRadius: 20, fontSize: 11 }}>
                 {tag}
-                <button onClick={() => setForm(prev => ({ ...prev, flavorTags: prev.flavorTags.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", color: "#BE185D", fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
+                <button className="k-tap" aria-label={uiTxt(lang).removeTag} onClick={() => setForm(prev => ({ ...prev, flavorTags: prev.flavorTags.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", color: "#BE185D", fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
               </span>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              value={newFlavorTag}
-              onChange={e => setNewFlavorTag(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter" && newFlavorTag.trim()) {
-                  e.preventDefault();
-                  if (!(form.flavorTags || []).includes(newFlavorTag.trim())) {
-                    setForm(prev => ({ ...prev, flavorTags: [...(prev.flavorTags || []), newFlavorTag.trim()] }));
-                  }
-                  setNewFlavorTag("");
-                }
-              }}
-              placeholder="输入标签回车添加，例：热带水果、百香果、焦糖、清爽..."
-              style={{ ...inpStyle, fontSize: 12 }}
-            />
+          <div className="k-creation-tag-input" style={{ display: "flex", gap: 6 }}>
+            <TagAddInput value={newFlavorTag} onChange={setNewFlavorTag} lang={lang}
+              onAdd={raw => { const tag = raw.trim(); if (!(form.flavorTags || []).includes(tag)) setForm(prev => ({ ...prev, flavorTags: [...(prev.flavorTags || []), tag] })); setNewFlavorTag(""); }}
+              placeholder="输入标签回车添加，例：热带水果、百香果、焦糖、清爽..." />
           </div>
         </div>
       </div>
@@ -18918,7 +18934,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           {CREATION_STRUCTURES.map(s => {
             const active = structure === s.id;
             return (
-              <button
+              <button data-tl-min="40"
                 key={s.id}
                 type="button"
                 onClick={() => setForm(prev => ({ ...prev, structure: s.id }))}
@@ -18932,7 +18948,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
               >{lang === "zh" ? s.zh : s.ja}</button>
             );
           })}
-          <span style={{ fontSize: 11, color: T.textTertiary }}>
+          <span data-tl-cap="creation-structure" style={{ fontSize: 11, color: T.textTertiary }}>
             {(CREATION_STRUCTURES.find(s => s.id === structure) || CREATION_STRUCTURES[0])[lang === "zh" ? "hintZh" : "hintJa"]}
           </span>
         </div>
@@ -18973,13 +18989,13 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1, minWidth: 0 }}>
                         <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {lang === "zh" ? cat.zh : (cat.ja || cat.zh)}</span>
                         <span style={{ fontSize: 13, color: cat.color }}>{name}</span>
-                        {linkTag && <span title={linkTag.hint} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{linkTag.zh}</span>}
+                        {linkTag && <span title={lang === "zh" ? linkTag.hint : linkTag.hintJa} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{lang === "zh" ? linkTag.zh : linkTag.ja}<TapTip tipId="edit-layer-link" text={lang === "zh" ? linkTag.hint : linkTag.hintJa} lang={lang} /></span>}
                       </div>
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                        <button onClick={() => moveLayer(idx, -1)} disabled={idx === 0} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: 12 }}>↑</button>
-                        <button onClick={() => moveLayer(idx, 1)} disabled={idx === form.layers.length - 1} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === form.layers.length - 1 ? "default" : "pointer", opacity: idx === form.layers.length - 1 ? 0.3 : 1, fontSize: 12 }}>↓</button>
-                        <button onClick={() => setEditingLayerIdx(idx)} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 12 }}>{lang === "zh" ? "编辑" : "編集"}</button>
-                        <button onClick={() => deleteLayer(idx)} style={{ background: "#FFFFFF", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 4, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}>×</button>
+                        <button className="k-tap" aria-label={uiTxt(lang).moveUp} onClick={() => moveLayer(idx, -1)} disabled={idx === 0} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: 12 }}>↑</button>
+                        <button className="k-tap" aria-label={uiTxt(lang).moveDown} onClick={() => moveLayer(idx, 1)} disabled={idx === form.layers.length - 1} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === form.layers.length - 1 ? "default" : "pointer", opacity: idx === form.layers.length - 1 ? 0.3 : 1, fontSize: 12 }}>↓</button>
+                        <button className="k-tap" onClick={() => setEditingLayerIdx(idx)} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 12 }}>{lang === "zh" ? "编辑" : "編集"}</button>
+                        <button className="k-tap" aria-label={uiTxt(lang).delRow} onClick={() => deleteLayer(idx)} style={{ background: "#FFFFFF", border: "1px solid #F7C1C1", color: "#A32D2D", borderRadius: 4, padding: "4px 8px", cursor: "pointer", fontSize: 12 }}>×</button>
                       </div>
                     </div>
 
@@ -19002,11 +19018,11 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>日期</label>
             <input type="date" value={form.tasting?.date || ""} onChange={fTasting("date")} style={inpStyle} />
           </div>
-          <div>
+          <div className="k-tap-rating">
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>评分</label>
             <div style={{ display: "flex", gap: 4, padding: "7px 10px" }}>
               {[1,2,3,4,5].map(n => (
-                <button key={n} onClick={() => setForm(prev => ({ ...prev, rating: prev.rating === n ? 0 : n }))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: (form.rating || 0) >= n ? "#F59E0B" : "#CCCCCC", padding: 0 }}>★</button>
+                <button className="k-tap" aria-label={uiTxt(lang).rating(n)} key={n} onClick={() => setForm(prev => ({ ...prev, rating: prev.rating === n ? 0 : n }))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: (form.rating || 0) >= n ? "#F59E0B" : "#CCCCCC", padding: 0 }}>★</button>
               ))}
             </div>
           </div>
@@ -19026,7 +19042,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       </div>
 
       {/* 🖼️ 图片链接 */}
-      <ImageUrlsEditor
+      <ImageUrlsEditor lang={lang}
         urls={form.imageUrls || []}
         onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))}
       />
@@ -19144,7 +19160,7 @@ function ComponentPicker({ components = [], materials = [], brands = [], lang = 
         <div style={{ padding: "1rem 1.25rem 0.5rem", flexShrink: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{X.title}</div>
-            <Btn size="sm" onClick={() => onClose && onClose()}>{X.close}</Btn>
+            <span className="k-tap-l" data-tl-close=""><Btn size="sm" onClick={() => onClose && onClose()}>{X.close}</Btn></span>
           </div>
           <div style={{ fontSize: 12, color: T.textTertiary, marginTop: 4, lineHeight: 1.6 }}>{X.desc}</div>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder={X.search} className="k-input"
@@ -19152,7 +19168,7 @@ function ComponentPicker({ components = [], materials = [], brands = [], lang = 
           {/* 「全部 N」永远在;「● 在用」和各分类只在有的时候出 */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
             {chips.map(ch => (
-              <button key={ch.id} type="button" onClick={() => setChip(ch.id)} style={pillStyle(chip === ch.id, ch.cat && ch.cat.color)}>{ch.label}</button>
+              <button data-tl-min="40" key={ch.id} type="button" onClick={() => setChip(ch.id)} style={pillStyle(chip === ch.id, ch.cat && ch.cat.color)}>{ch.label}</button>
             ))}
           </div>
         </div>
@@ -19369,13 +19385,13 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>名（中文）</label><input value={form.nameZh || ""} onChange={f("nameZh")} style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>名（日文）</label><input value={form.nameJa || ""} onChange={f("nameJa")} style={inpStyle} /></div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "分类" : "カテゴリー"}</label>
             <select value={form.componentCategory} onChange={f("componentCategory")} style={inpStyle}>
               {getAllCompCats().map(c => <option key={c.id} value={c.id}>{lang === "zh" ? c.zh : (c.ja || c.zh)}</option>)}
             </select>
           </div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产出量" : "出来高"}</label><input type="number" value={form.yield || ""} onChange={f("yield")} style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产出量" : "出来高"}</label><input inputMode="decimal" type="number" value={form.yield || ""} onChange={f("yield")} style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "单位" : "単位"}</label><input value={form.unit || "g"} onChange={f("unit")} style={inpStyle} /></div>
         </div>
       </div>
@@ -19425,20 +19441,20 @@ function LayerEditForm({ layer, structure = "stack", cats = [], brands = [], mat
               <input value={s.textJa || ""} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, textJa: e.target.value } : st))} placeholder="日本語ステップ…" style={inpStyle} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveUp}
                 onClick={() => setSteps(prev => { if (i === 0) return prev; const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; })}
                 disabled={i === 0}
                 style={{ background: i === 0 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === 0 ? "not-allowed" : "pointer", color: i === 0 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="上移"
               >↑</button>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveDown}
                 onClick={() => setSteps(prev => { if (i === prev.length - 1) return prev; const n = [...prev]; [n[i], n[i + 1]] = [n[i + 1], n[i]]; return n; })}
                 disabled={i === steps.length - 1}
                 style={{ background: i === steps.length - 1 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === steps.length - 1 ? "not-allowed" : "pointer", color: i === steps.length - 1 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="下移"
               >↓</button>
             </div>
-            <button onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
+            <button className="k-tap" aria-label={uiTxt(lang).delRow} onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
           </div>
         ))}
       </div>
@@ -19728,7 +19744,7 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span>{KT.linkBar(linkNone, linkAmb)}</span>
-                <button onClick={() => setLinkOpen(o => !o)} className="k-btn"
+                <button data-tl-min="40" onClick={() => setLinkOpen(o => !o)} className="k-btn"
                   style={{ ...T.fs.caption, color: T.info, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: T.fontSans, textDecoration: "underline", textUnderlineOffset: 3 }}>
                   {linkOpen ? KT.hide : KT.view}
                 </button>
@@ -19760,6 +19776,7 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
                       </div>
                     </div>
                   ))}
+                  {g.items.some(p => p.status === "ambiguous" && p.cands.some(c => !uniqueLinkNameFor(c.type, c.item, linkResolver))) && <WhyNote>{KT.sameNames}</WhyNote>}
                 </div>
               ))}
             </>
@@ -19782,7 +19799,7 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
           if (count === 0) return null;
           const active = filterTag === tag.id;
           return (
-            <button key={tag.id} onClick={() => setFilterTag(tag.id)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? tag.color : "#CCCCCC"}`, borderRadius: 20, background: active ? tag.bg : "#FFFFFF", color: active ? tag.color : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
+            <button data-tl-min="40" key={tag.id} onClick={() => setFilterTag(tag.id)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? tag.color : "#CCCCCC"}`, borderRadius: 20, background: active ? tag.bg : "#FFFFFF", color: active ? tag.color : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
               {lang === "zh" ? tag.zh : tag.ja} <span style={{ color: "#999999", marginLeft: 2 }}>({count})</span>
             </button>
           );
@@ -19799,13 +19816,13 @@ function KnowledgeView({ knowledge, setKnowledge, lang, setLang, viewId, setView
               const count = counts.get(tag);
               const active = filterTag === tag;
               return (
-                <button key={tag} onClick={() => setFilterTag(tag)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? "#8B5CF6" : "#CCCCCC"}`, borderRadius: 20, background: active ? "#F3E8FF" : "#FFFFFF", color: active ? "#6D28D9" : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
+                <button data-tl-min="40" key={tag} onClick={() => setFilterTag(tag)} style={{ padding: "4px 12px", fontSize: 12, border: `1.5px solid ${active ? "#8B5CF6" : "#CCCCCC"}`, borderRadius: 20, background: active ? "#F3E8FF" : "#FFFFFF", color: active ? "#6D28D9" : "#111111", cursor: "pointer", fontWeight: active ? 500 : 400 }}>
                   {tag} <span style={{ color: "#999999", marginLeft: 2 }}>({count})</span>
                 </button>
               );
             }),
             (hiddenN > 0 || tagMore) && customTags.some(t => counts.get(t) < 2) ? (
-              <button key="__k_tagmore" data-k-tagmore={tagMore ? "open" : String(hiddenN)} onClick={() => setTagMore(v => !v)}
+              <button data-tl-min="40" key="__k_tagmore" data-k-tagmore={tagMore ? "open" : String(hiddenN)} onClick={() => setTagMore(v => !v)}
                 style={{ padding: "4px 12px", fontSize: 12, border: `1px dashed ${T.border}`, borderRadius: 20, background: "#FFFFFF", color: T.textSecondary, cursor: "pointer" }}>
                 {tagMore ? KT.less : KT.more(hiddenN)}
               </button>
@@ -21261,6 +21278,12 @@ function KnowledgePrintModal({ src, knowledge, lang, staff, onClose, onConfirm, 
 // 中文 / 双语时根元素中文字体在前(.print-area 的 CSS 不改),双语时日文那几段单独用日文字体
 const KPRINT_ZH_FONT = '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Zen Kaku Gothic New", sans-serif';
 const KPRINT_JA_FONT = '"Zen Kaku Gothic New", "Noto Sans JP", "Hiragino Sans", "PingFang SC", "Microsoft YaHei", sans-serif';
+// 知识打印的临时品牌文字：跟本次保留价格开关走，不写回打印设置。
+const knowledgePrintBrandSettings = (settings = {}, keepMoney = false) => keepMoney === true ? settings : ({
+  ...settings,
+  brandName: stripMoneyClauses(settings.brandName).text,
+  brandSubtitle: stripMoneyClauses(settings.brandSubtitle).text,
+});
 function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle }) {
   if (!data || typeof data !== "object" || !Array.isArray(data.items)) return null;
   const L = data.lang === "ja" || data.lang === "zh" || data.lang === "both" ? data.lang : (lang === "ja" ? "ja" : lang === "both" ? "both" : "zh");
@@ -21273,7 +21296,9 @@ function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle 
     return `${z} · ${j}`;
   };
   const jaFont = both ? { fontFamily: KPRINT_JA_FONT } : {};
-  const brand = brandName || "kororā";
+  const printBrand = knowledgePrintBrandSettings({ brandName, brandSubtitle }, data.keepMoney);
+  const brand = printBrand.brandName || "kororā";
+  const subtitle = printBrand.brandSubtitle;
   const mainTitle = (it) => (L === "ja" ? it.title.ja : (it.title.zh || it.title.ja)) || "—";
   const subTitle = (it) => (both && it.title.zh && it.title.ja ? it.title.ja : "");
   const parts = (o) => (L === "ja" ? [["ja", o.ja]] : L === "zh" ? [["zh", o.zh]] : [["zh", o.zh], ["ja", o.ja]]).filter(([, t]) => typeof t === "string" && t.trim() !== "");
@@ -21287,7 +21312,7 @@ function KnowledgePrintTemplate({ data, lang, logoSrc, brandName, brandSubtitle 
           <div style={{ textAlign: "center", paddingTop: "18mm", paddingBottom: "10mm", borderBottom: "1.5px solid #000" }}>
             {logoSrc && <img src={logoSrc} alt="LOGO" style={{ display: "block", width: "auto", height: "auto", maxWidth: "60mm", maxHeight: "30mm", margin: "0 auto 5mm" }} />}
             {logoSrc !== LOGO_DATA_URI && <div style={{ fontSize: "14pt", letterSpacing: "0.3em", marginBottom: "2mm" }}>{brand}</div>}
-            {brandSubtitle && <div style={{ fontSize: "9pt", letterSpacing: "0.2em" }}>— {brandSubtitle} —</div>}
+            {subtitle && <div style={{ fontSize: "9pt", letterSpacing: "0.2em" }}>— {subtitle} —</div>}
             <div style={{ fontSize: "22pt", fontWeight: 700, marginTop: "10mm" }}>{lb("tCover")}</div>
             <div style={{ fontSize: "11pt", marginTop: "3mm" }}>{lb("tCoverMeta", items.length, data.printedAt)}</div>
           </div>
@@ -21457,10 +21482,15 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
                 const match = resolveLink(r);
                 if (match && match.ambiguous) {
                   const names = match.ambiguous.map(x => x.item.nameZh || x.item.nameJa).join(" / ");
+                  const tipNames = match.ambiguous.map(x => _klDisplayName(x.item, lang)).join(" / ");
                   return (
-                    <span key={i} style={{ background: "#F5F5F5", color: "#888888", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontStyle: "italic" }} title={`${match.ambiguous.length} 个同名:${names}\n在「编辑」里写全名或从下拉里重选,就能跳`}>
+                    <span key={i} style={{ background: "#F5F5F5", color: "#888888", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontStyle: "italic" }} title={lang === "zh" ? `${match.ambiguous.length} 个同名:${names}
+在「编辑」里写全名或从下拉里重选,就能跳` : `同名が ${match.ambiguous.length} 件:${names}
+『編集』で正式名を書くか、リストから選び直すと移動できます`}>
                       {r}<span style={{ fontSize: 10, fontStyle: "normal", marginLeft: 6 }}>{lang === "zh" ? `${match.ambiguous.length} 个同名` : `同名 ${match.ambiguous.length} 件`}</span>
-                    </span>
+                    <TapTip tipId="knowledge-ambiguous" text={lang === "zh" ? `${match.ambiguous.length} 个同名:${tipNames}
+在「编辑」里写全名或从下拉里重选,就能跳` : `同名が ${match.ambiguous.length} 件:${tipNames}
+『編集』で正式名を書くか、リストから選び直すと移動できます`} lang={lang} /></span>
                   );
                 }
                 if (match && onNavigate) {
@@ -21480,7 +21510,7 @@ function KnowledgeDetail({ item: k, lang, onEdit, onBack, onNavigate, recipes, c
                   );
                 }
                 // 未找到匹配项，只显示标签
-                return <span key={i} style={{ background: "#F5F5F5", color: "#888888", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontStyle: "italic" }} title="未找到对应项">{r}</span>;
+                return <span key={i} style={{ background: "#F5F5F5", color: "#888888", padding: "4px 12px", borderRadius: 20, fontSize: 12, fontStyle: "italic" }} title={lang === "zh" ? "找不到对应的配方 / 组件 / 组合产品" : "対応する項目が見つかりません"}>{r}<TapTip tipId="knowledge-missing" text={lang === "zh" ? "找不到对应的配方 / 组件 / 组合产品" : "対応する項目が見つかりません"} lang={lang} /></span>;
               })}
             </div>
           </div>
@@ -21497,6 +21527,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
   const empty = { titleZh: "", titleJa: "", tags: [], relatedRecipes: [], contentZh: "", contentJa: "", imageUrls: [] };
   const [form, setForm] = useState(item ? { imageUrls: [], ...item, tags: item.tags || [], relatedRecipes: item.relatedRecipes || [] } : empty);
   const [relatedInput, setRelatedInput] = useState("");
+  const [customTagInput, setCustomTagInput] = useState("");
   const dirtyBind = useDirtyGuard(() => ({ form, relatedInput }));   // 没保存就切页 / 返回时先问一句(「关联配方」框里敲了还没点添加的也算)
   // 第 5 批 E3:关联胶囊后面标这个名字现在跳到哪(同知识页按钮的四档规则);「从已有项目选择」按 id 选、加能唯一命中它的名字;
   // 自定义标签输入框的候选 = 已有的自定义标签,按用的次数排(少造「sable / サブレ」这种重复)
@@ -21603,25 +21634,13 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
         </div>
         {/* 自定义标签输入 */}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="text"
-            list="k-custom-tag-options"
-            placeholder="或输入自定义标签，回车添加"
-            onKeyDown={e => {
-              if (e.key === "Enter" && e.target.value.trim()) {
-                const newTag = e.target.value.trim();
-                if (!form.tags.includes(newTag)) {
-                  setForm(prev => ({ ...prev, tags: [...prev.tags, newTag] }));
-                }
-                e.target.value = "";
-              }
-            }}
-            style={{ flex: 1, padding: "6px 10px", fontSize: 12, border: "0.5px solid #CCCCCC", borderRadius: 6, background: "#FFFFFF", color: "#111111", fontFamily: "system-ui, sans-serif" }}
-          />
+          <TagAddInput value={customTagInput} onChange={setCustomTagInput} lang={lang} list="k-custom-tag-options"
+            onAdd={raw => { const newTag = raw.trim(); if (!form.tags.includes(newTag)) setForm(prev => ({ ...prev, tags: [...prev.tags, newTag] })); setCustomTagInput(""); }}
+            placeholder="或输入自定义标签，回车添加" />
           <datalist id="k-custom-tag-options">
             {customTagOptions.filter(t => !form.tags.includes(t)).map(t => <option key={t} value={t} />)}
           </datalist>
-          <span style={{ fontSize: 11, color: "#999999" }}>回车添加</span>
+          
         </div>
       </div>
 
@@ -21645,7 +21664,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>{lang === "zh" ? "📷 参考图片" : "📷 参考画像"}</div>
         <div style={{ fontSize: 11, color: "#666", marginBottom: 10 }}>可以粘贴网上图片的链接。每张图可加说明。</div>
-        <ImageUrlsEditor
+        <ImageUrlsEditor lang={lang}
           urls={form.imageUrls || []}
           onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))}
         />
@@ -21732,7 +21751,7 @@ function KnowledgeEditForm({ item, onSave, onDelete, onBack, recipes = [], compo
                   const color = !m ? T.danger : m.ambiguous ? T.warning : T.muted;
                   return <span key={j} data-k-linkstate={!m ? "none" : m.ambiguous ? "ambiguous" : "ok"} style={{ fontSize: 10, color, marginLeft: 2 }}>{txt}</span>;
                 })}
-                <button onClick={() => removeRelated(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999999", fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
+                <button className="k-tap" aria-label={uiTxt(lang).removeRelated} onClick={() => removeRelated(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#999999", fontSize: 14, padding: 0, marginLeft: 2 }}>×</button>
               </span>
             ))}
           </div>
@@ -23107,7 +23126,7 @@ function PickerComponentList({ lang, materials, selfCompId, rowUnit, currentComp
                     {zh ? `这一行按「${_normTxt(rowUnit) || "g"}」计量,组件按「${unit}」,对不上算不出价。选了以后把这一行的单位改成和组件一样的口径` : `単位が合いません(行「${_normTxt(rowUnit) || "g"}」/ パーツ「${unit}」)`}
                   </div>
                 )}
-              </div>
+              {noYield && <div data-tl-cap="picker-no-yield"><WhyNote>{zh ? "没填产出量，不能当原料用 · 去组件编辑页填" : "出来高が未入力のため材料として使えません · パーツ編集で入力"}</WhyNote></div>}</div>
               {isCurrent && (
                 <div style={{ fontSize: 10, color: T.accent, padding: "2px 6px", background: T.bgSoft, borderRadius: 3 }}>{zh ? "当前" : "現在"}</div>
               )}
@@ -23192,14 +23211,14 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
           <div style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.brand }}>
             {tab === "comp" ? (lang === "zh" ? "🧩 这一行来自组件" : "🧩 パーツから") : (lang === "zh" ? "🔗 从材料百科选择" : "🔗 材料事典から選択")}
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
+          <button className="k-tap-l" aria-label={uiTxt(lang).close} onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
 
         {/* 第 4 批 B4-6:材料百科 | 组件 */}
         {compMode && (
           <div role="tablist" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {[["mat", lang === "zh" ? "材料百科" : "材料事典"], ["comp", lang === "zh" ? "组件(自家做的半成品)" : "パーツ(自家製)"]].map(([k, label]) => (
-              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+              <button data-tl-min="40" key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                 style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: T.radius, fontFamily: T.fontSans,
                   background: tab === k ? T.brand : T.bgCard, color: tab === k ? "#FFFFFF" : T.textSecondary,
                   border: `0.5px solid ${tab === k ? T.brand : T.border}` }}>{label}</button>
@@ -23323,7 +23342,7 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
               : (lang === "zh" ? "💡 选中后自动填入名称、品牌、单价;百科价格变动时配方成本自动更新" : "💡 選択で自動入力、百科更新時に自動連動")}
           </div>
           {compMode && typeof onToggleNoCost === "function" && (
-            <button
+            <><button data-tl-min="40"
               type="button"
               onClick={() => onToggleNoCost(!noCost)}
               title={lang === "zh" ? "水、冰、装饰用的一点点这类不花钱或不值得算的:成本按 0 算,不算「没价」。只管钱,过敏原照样要查" : "水・氷など原価に入れない行:原価 0、「価格なし」に数えない。アレルゲンは通常どおり確認"}
@@ -23334,10 +23353,10 @@ function MaterialPickerModal({ materials, brands, currentMaterialId, lang, onSel
               }}
             >
               {noCost ? (lang === "zh" ? "↺ 改回计价" : "↺ 原価に戻す") : (lang === "zh" ? "这一行不计价" : "この行は原価に入れない")}
-            </button>
+            </button><div data-tl-cap="picker-no-cost"><WhyNote>{lang === "zh" ? "水、冰、装饰用的一点点这类不花钱或不值得算的:成本按 0 算,不算「没价」。只管钱,过敏原照样要查" : "水・氷など原価に入れない行:原価 0、「価格なし」に数えない。アレルゲンは通常どおり確認"}</WhyNote></div></>
           )}
           {(currentMaterialId || (compMode && currentComponentId !== null)) && (
-            <button
+            <button data-tl-min="40"
               onClick={() => onSelect(null)}
               style={{
                 padding: "6px 12px", fontSize: 11, color: "#DC2626",
@@ -23394,7 +23413,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose, where
         background: "rgba(0,0,0,0.4)", zIndex: 1000,
         display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
       }}>
-        <div onClick={(e) => e.stopPropagation()} style={{
+        <div data-tl-child-min="44" onClick={(e) => e.stopPropagation()} style={{
           background: T.bgCard, borderRadius: T.radiusLg, padding: "1.5rem",
           width: "100%", maxWidth: 500, textAlign: "center",
         }}>
@@ -23427,7 +23446,7 @@ function BulkMatchModal({ ings, materials, brands, lang, onApply, onClose, where
           <div style={{ fontFamily: T.fontSerif, fontSize: 16, fontWeight: 500, color: T.brand }}>
             {lang === "zh" ? "🤖 智能批量关联材料百科" : "🤖 一括スマート関連"}
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
+          <button className="k-tap-l" aria-label={uiTxt(lang).close} onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: T.textTertiary, padding: "4px 8px" }}>×</button>
         </div>
         <div style={{ fontSize: 12, color: T.textSecondary, background: T.bgMuted, padding: "10px 14px", borderRadius: T.radius, lineHeight: 1.7 }}>
           {lang === "zh"
@@ -23887,7 +23906,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="例：四叶乳业" style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家名（日文）</label><input value={form.nameJa} onChange={f("nameJa")} placeholder="よつ葉乳業" style={inpStyle} /></div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "法文名" : "フランス語名"}</label><input value={form.nameFr || ""} onChange={f("nameFr")} placeholder="(可选)" style={inpStyle} /></div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>大分类</label>
@@ -23908,7 +23927,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
             )}
           </div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "产地" : "原産地"}</label><input value={form.origin || ""} onChange={f("origin")} placeholder="北海道" style={inpStyle} /></div>
-          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "创立年份" : "創立年"}</label><input type="number" value={form.foundedYear || ""} onChange={f("foundedYear")} placeholder="1967" style={inpStyle} /></div>
+          <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "创立年份" : "創立年"}</label><input inputMode="numeric" type="number" value={form.foundedYear || ""} onChange={f("foundedYear")} placeholder="1967" style={inpStyle} /></div>
         </div>
       </div>
 
@@ -23924,7 +23943,7 @@ function BrandEditForm({ brand, defaultCategory, onSave, onDelete, onBack, lang 
         </div>
       </div>
 
-      <ImageUrlsEditor urls={form.imageUrls || []} onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))} />
+      <ImageUrlsEditor lang={lang} urls={form.imageUrls || []} onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -24534,7 +24553,7 @@ function BrandPicker({ brands, value, categoryId, onChange, lang, inpStyle, inCa
             const sameCat = b.categoryId === categoryId || (inCatBrandIds && inCatBrandIds.has(b.id));
             const isAll = !b.categoryId;
             return (
-              <div key={b.id}
+              <div className="k-opt" key={b.id}
                 onMouseDown={(e) => { e.preventDefault(); pick(b); }}
                 onMouseEnter={() => setHi(i)}
                 style={{
@@ -24587,7 +24606,7 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: T.textSecondary }}>{zh ? "100 日元 =" : "100 円 ="}</span>
-        <input type="number" step="0.1" value={val}
+        <input inputMode="decimal" type="number" step="0.1" value={val}
           onChange={e => { setDraft(e.target.value); commit(e.target.value); }}
           onBlur={() => setDraft(null)} style={inp} />
         <span style={{ fontSize: 13, color: T.textSecondary }}>{zh ? "元" : "元"}</span>
@@ -24612,7 +24631,7 @@ function FxSettingCard({ appSettings, setAppSettings, lang }) {
           {[["CNY", zh ? "¥ 都折成人民币" : "¥ 人民元に統一"], ["raw", zh ? "円 各按原币种" : "円 元の通貨のまま"]].map(([v, label]) => {
             const on = (appSettings.displayCurrency || "CNY") === v;
             return (
-              <button key={v} type="button"
+              <button data-tl-min="40" key={v} type="button"
                 onClick={() => setAppSettings(prev => ({ ...prev, displayCurrency: v }))}
                 style={{ padding: "5px 12px", fontSize: 12, fontWeight: 500, cursor: "pointer", borderRadius: T.radiusPill, fontFamily: T.fontSans,
                   background: on ? T.accent : "transparent", color: on ? "#fff" : T.textSecondary,
@@ -24818,8 +24837,8 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
         )}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-        <div><label style={lab}>{zh ? "单包(g)" : "単パック(g)"}</label><input type={textSpec ? "text" : "number"} value={packSize || ""} onChange={editSpec("packSize")} placeholder={textSpec ? "450 / 1kg" : "450"} style={inpStyle} /></div>
-        <div><label style={lab}>{zh ? "一箱(包)" : "1ケース(パック)"}</label><input type={textSpec ? "text" : "number"} value={casePack || ""} onChange={editSpec("casePack")} placeholder={textSpec ? "20" : "30"} style={inpStyle} /></div>
+        <div><label style={lab}>{zh ? "单包(g)" : "単パック(g)"}</label><input inputMode={textSpec ? undefined : "decimal"} type={textSpec ? "text" : "number"} value={packSize || ""} onChange={editSpec("packSize")} placeholder={textSpec ? "450 / 1kg" : "450"} style={inpStyle} /></div>
+        <div><label style={lab}>{zh ? "一箱(包)" : "1ケース(パック)"}</label><input inputMode={textSpec ? undefined : "numeric"} type={textSpec ? "text" : "number"} value={casePack || ""} onChange={editSpec("casePack")} placeholder={textSpec ? "20" : "30"} style={inpStyle} /></div>
       </div>
       {String(packSize || "").trim() && !hasG && (
         <div style={{ fontSize: 11, color: T.warning, margin: "-6px 0 10px" }}>
@@ -24833,25 +24852,25 @@ function PackPriceFields({ packSize, casePack, pricePerG, currency, onChange, la
           {zh ? `单包 ${pieceCnt.n} ${pieceCnt.unit} ≈ ${fmtQty(g)} g` : `1 パック ${pieceCnt.n}${pieceCnt.unit} ≈ ${fmtQty(g)} g`}
         </div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: pieceMode ? "repeat(auto-fit, minmax(110px, 1fr))" : "1fr 1fr 1fr", gap: 12 }}>
+      <div className={pieceMode ? undefined : fgClass("1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: pieceMode ? "repeat(auto-fit, minmax(110px, 1fr))" : "1fr 1fr 1fr", gap: 12 }}>
         <div>
           <label style={lab}>{zh ? `袋价(${sym}/包)` : `パック価(${sym})`}</label>
-          <input type="number" step="0.01" value={show("pack", money(packPrice))} onChange={editPrice("pack", g)} onBlur={() => setDraft(null)}
+          <input inputMode="decimal" type="number" step="0.01" value={show("pack", money(packPrice))} onChange={editPrice("pack", g)} onBlur={() => setDraft(null)}
             disabled={!hasG} placeholder={hasG ? "例:2200" : (zh ? "先填单包(g)" : "先に単パック")} style={hasG ? inpStyle : lockStyle} />
         </div>
         <div>
           <label style={lab}>{zh ? `箱价(${sym}/箱)` : `箱価(${sym})`}</label>
-          <input type="number" step="0.01" value={show("case", money(casePrice))} onChange={editPrice("case", g * cp)} onBlur={() => setDraft(null)}
+          <input inputMode="decimal" type="number" step="0.01" value={show("case", money(casePrice))} onChange={editPrice("case", g * cp)} onBlur={() => setDraft(null)}
             disabled={!hasCase} placeholder={hasCase ? "例:26400" : (zh ? "先填单包 + 一箱" : "先に単パック+ケース")} style={hasCase ? inpStyle : lockStyle} />
         </div>
         <div>
           <label style={lab}>{(priceLabel || (zh ? "单价" : "単価")) + `(${sym}/100g)` + (required ? " *" : "")}</label>
-          <input type="number" step="0.01" value={show("g", p100)} onChange={editPrice("g", 100)} onBlur={() => setDraft(null)} placeholder={cur === "CNY" ? "例:13" : "例:220"} style={inpStyle} autoFocus={autoFocus} />
+          <input inputMode="decimal" type="number" step="0.01" value={show("g", p100)} onChange={editPrice("g", 100)} onBlur={() => setDraft(null)} placeholder={cur === "CNY" ? "例:13" : "例:220"} style={inpStyle} autoFocus={autoFocus} />
         </div>
         {pieceMode && (
           <div data-unit-grams="piecepay">
             <label style={lab}>{zh ? `每${pieceUnit}价(${sym}/${pieceUnit})` : `1${pieceUnit}価(${sym}/${pieceUnit})`}</label>
-            <input type="number" step="0.01" value={show("piece", ppg > 0 ? money(ppg * gpp) : "")} onChange={editPiecePrice} onBlur={() => setDraft(null)} style={inpStyle} />
+            <input inputMode="decimal" type="number" step="0.01" value={show("piece", ppg > 0 ? money(ppg * gpp) : "")} onChange={editPiecePrice} onBlur={() => setDraft(null)} style={inpStyle} />
           </div>
         )}
       </div>
@@ -25018,7 +25037,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>材料名（中文）</label><input value={form.nameZh} onChange={f("nameZh")} placeholder="例：四叶发酵黄油（无盐）" style={inpStyle} /></div>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>材料名（日文）</label><input value={form.nameJa} onChange={f("nameJa")} placeholder="北海道よつ葉 発酵ポンドバター（食塩不使用）" style={inpStyle} /></div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+        <div className={fgClass("1fr 1fr 1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
           <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "法文名" : "フランス語名"}</label><input value={form.nameFr || ""} onChange={f("nameFr")} placeholder="(可选)" style={inpStyle} /></div>
           <div>
             <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>厂家</label>
@@ -25160,7 +25179,7 @@ function MaterialEditForm({ material, brandId, brands, materials = [], defaultCa
         </div>
       </div>
 
-      <ImageUrlsEditor urls={form.imageUrls || []} onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))} />
+      <ImageUrlsEditor lang={lang} urls={form.imageUrls || []} onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))} />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {errorMsg && <span style={{ color: "#A32D2D", fontSize: 13, marginRight: 8 }}>⚠ {errorMsg}</span>}
@@ -25284,7 +25303,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }));
   const inp = (key, placeholder, type = "text", extra = {}) => (
-    <input type={type} placeholder={placeholder} value={form[key] || ""} onChange={f(key)} style={{ width: "100%", padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", fontFamily: "system-ui, sans-serif", ...extra }} />
+    <input inputMode={type === "number" ? (key === "time" ? "numeric" : "decimal") : undefined} type={type} placeholder={placeholder} value={form[key] || ""} onChange={f(key)} style={{ width: "100%", padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", fontFamily: "system-ui, sans-serif", ...extra }} />
   );
   // 第 6 批 L1:labelOf 给显示名(分类 / 难度查表);显示名和存的值一样时不写 value(DOM 和以前一样),不一样时 value = 存的值
   const sel = (key, options, labelOf) => (
@@ -25297,7 +25316,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
 
   const card = (children) => <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>{children}</div>;
   // 子元素按位置给 key(以前直接塞数组,控制台一直报「列表缺 key」)
-  const grid = (cols, children) => <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, marginBottom: 12 }}>{children.map((c, i) => <Fragment key={i}>{c}</Fragment>)}</div>;
+  const grid = (cols, children) => <div className={fgClass(cols)} style={{ display: "grid", gridTemplateColumns: cols, gap: 12, marginBottom: 12 }}>{children.map((c, i) => <Fragment key={i}>{c}</Fragment>)}</div>;
   const fld = (label, children) => <div><label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{label}</label>{children}</div>;
 
   return (
@@ -25413,20 +25432,20 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
               <input value={s.textJa || ""} onChange={e => setSteps(prev => prev.map(st => st._id === s._id ? { ...st, textJa: e.target.value } : st))} placeholder="日本語ステップ…" style={{ padding: "7px 10px", fontSize: 13, border: "0.5px solid #CCCCCC", borderRadius: "6px", background: "#FFFFFF", color: "#111111", boxSizing: "border-box", width: "100%" }} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveUp}
                 onClick={() => setSteps(prev => { if (i === 0) return prev; const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; })}
                 disabled={i === 0}
                 style={{ background: i === 0 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === 0 ? "not-allowed" : "pointer", color: i === 0 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="上移"
               >↑</button>
-              <button
+              <button className="k-tap" aria-label={uiTxt(lang).moveDown}
                 onClick={() => setSteps(prev => { if (i === prev.length - 1) return prev; const n = [...prev]; [n[i], n[i + 1]] = [n[i + 1], n[i]]; return n; })}
                 disabled={i === steps.length - 1}
                 style={{ background: i === steps.length - 1 ? "#F5F5F5" : "#FFFFFF", border: "0.5px solid #CCCCCC", cursor: i === steps.length - 1 ? "not-allowed" : "pointer", color: i === steps.length - 1 ? "#CCCCCC" : "#666666", fontSize: 11, padding: "2px 6px", borderRadius: 3 }}
                 title="下移"
               >↓</button>
             </div>
-            <button onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
+            <button className="k-tap" aria-label={uiTxt(lang).delRow} onClick={() => setSteps(prev => prev.filter(st => st._id !== s._id))} style={{ background: "none", border: "none", cursor: "pointer", color: "#666666", fontSize: 15, padding: "6px", marginTop: 4 }}>×</button>
           </div>
         ))}
       </>)}
@@ -25446,7 +25465,7 @@ function EditForm({ recipe, cats, materials = [], brands = [], setMaterials, sho
       </>)}
 
       {/* 🖼️ 图片链接 */}
-      <ImageUrlsEditor
+      <ImageUrlsEditor lang={lang}
         urls={form.imageUrls || []}
         onChange={(urls) => setForm(prev => ({ ...prev, imageUrls: urls }))}
       />
@@ -25874,7 +25893,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
               <div key={sm.id} onClick={() => setEditing({ ...sm })} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>
-                    {mat ? mLabel(mat) : <span style={{ color: T.danger }}>{lang === "zh" ? `⚠️ 关联的材料已经删掉了(编号 ${sm.materialId})` : `⚠️ 材料なし`}</span>}
+                    {mat ? mLabel(mat) : <span style={{ color: T.danger }}>{lang === "zh" ? "⚠️ 关联的材料已经删掉了" : "⚠️ 材料なし"}<TapTip tipId="deleted-material" text={lang === "zh" ? `编号 ${sm.materialId}` : `番号 ${sm.materialId}`} lang={lang} /></span>}
                   </div>
                   <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {brand && <span>{bLabel(brand)}</span>}
@@ -26128,14 +26147,14 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
               const w = wasteTotalOf(s), sq = parseFloat(s.soldQty) || 0, back = _r3(saleStockBack(s) + (parseFloat(s.wasteOut) || 0));
               const wTip = WASTE_REASONS.filter(r => wasteOf(s)[r.id] > 0).map(r => `${lang === "zh" ? r.zh : r.ja} ${wasteOf(s)[r.id]}`).join(" · ");
               return (
-              <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0", borderBottom: `0.5px dashed ${T.borderSoft}` }}>
+              <Fragment key={s.id}><div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0", borderBottom: `0.5px dashed ${T.borderSoft}` }}>
                 <span>{s.date}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {(sq > 0 || !(w > 0)) && <span style={{ color: T.danger }}>−{s.soldQty || 0}</span>}
                   {w > 0 && <span title={wTip} style={{ color: T.warning }}>{lang === "zh" ? `报损 ${w}` : `ロス ${w}`}</span>}
-                  <button onClick={() => confirmDialog(lang === "zh" ? `删除 ${s.date} 销售 ${s.soldQty || 0} 件${w > 0 ? `、报损 ${w} 件` : ""}? 库存会加回 ${back}` : `${s.date} の販売 ${s.soldQty || 0} 件${w > 0 ? `・ロス ${w} 件` : ""}を削除?`, () => deleteLog("sale", s.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  <button className="k-tap" aria-label={uiTxt(lang).deleteSalesLog} onClick={() => confirmDialog(lang === "zh" ? `删除 ${s.date} 销售 ${s.soldQty || 0} 件${w > 0 ? `、报损 ${w} 件` : ""}? 库存会加回 ${back}` : `${s.date} の販売 ${s.soldQty || 0} 件${w > 0 ? `・ロス ${w} 件` : ""}を削除?`, () => deleteLog("sale", s.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
                 </div>
-              </div>
+              </div>{w > 0 && <div data-tl-cap="waste-detail" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 6, overflowWrap: "anywhere" }}>{wTip}</div>}</Fragment>
               );
             })}
           </div>
@@ -26150,7 +26169,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                 <span>{l.date}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ color: T.success }}>+{l.batchQty || 0}</span>
-                  <button onClick={() => confirmDialog((lang === "zh" ? `删除 ${l.date} 生产 ${l.batchQty} 件? 库存会扣回 ${l.batchQty}` : `${l.date} の製造 ${l.batchQty} 件を削除?`) + prodLogPrepNote(l.id), () => deleteLog("prod", l.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
+                  <button className="k-tap" aria-label={uiTxt(lang).deleteProductionLog} onClick={() => confirmDialog((lang === "zh" ? `删除 ${l.date} 生产 ${l.batchQty} 件? 库存会扣回 ${l.batchQty}` : `${l.date} の製造 ${l.batchQty} 件を削除?`) + prodLogPrepNote(l.id), () => deleteLog("prod", l.id))} title={lang === "zh" ? "删除(库存会回滚)" : "削除"} style={{ border: "none", background: "none", color: T.textTertiary, cursor: "pointer", fontSize: 14, padding: "0 4px", lineHeight: 1 }}>×</button>
                 </div>
               </div>
             ))}
@@ -26195,7 +26214,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                     const th = p.threshold || 0;
                     const suggest = restockSuggest(p); // 推荐做: 补到 threshold+50% buffer(第 3 批搬到模块顶层,今日生产单共用)
                     return (
-                      <div key={p.id} onClick={() => setViewId(p.id)} style={{ cursor: "pointer", background: T.bgCard, padding: "8px 12px", borderRadius: T.radiusSm, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+                      <div data-tl-min="40" key={p.id} onClick={() => setViewId(p.id)} style={{ cursor: "pointer", background: T.bgCard, padding: "8px 12px", borderRadius: T.radiusSm, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
                         <span style={{ fontWeight: 500 }}>{mLabel(p)}</span>
                         <span style={{ fontSize: 12 }}>
                           <span style={{ color: T.danger }}>{lang === "zh" ? `库存 ${stock}` : `在庫 ${stock}`}</span>
@@ -26240,8 +26259,8 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
                   </div>
                   {/* v12: 快捷 -1 / +1 按钮 */}
                   <div onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <button onClick={e => { e.stopPropagation(); adjust(-1); }} disabled={stock === 0} title={lang === "zh" ? "库存 -1" : "-1"} style={{ width: 28, height: 28, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, cursor: stock === 0 ? "not-allowed" : "pointer", fontSize: 14, color: T.textSecondary, opacity: stock === 0 ? 0.4 : 1 }}>−</button>
-                    <button onClick={e => { e.stopPropagation(); adjust(1); }} title={lang === "zh" ? "库存 +1" : "+1"} style={{ width: 28, height: 28, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, cursor: "pointer", fontSize: 14, color: T.textSecondary }}>+</button>
+                    <button className="k-tap" aria-label={uiTxt(lang).stockMinus} onClick={e => { e.stopPropagation(); adjust(-1); }} disabled={stock === 0} title={lang === "zh" ? "库存 -1" : "-1"} style={{ width: 28, height: 28, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, cursor: stock === 0 ? "not-allowed" : "pointer", fontSize: 14, color: T.textSecondary, opacity: stock === 0 ? 0.4 : 1 }}>−</button>
+                    <button className="k-tap" aria-label={uiTxt(lang).stockPlus} onClick={e => { e.stopPropagation(); adjust(1); }} title={lang === "zh" ? "库存 +1" : "+1"} style={{ width: 28, height: 28, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, cursor: "pointer", fontSize: 14, color: T.textSecondary }}>+</button>
                   </div>
                   <div style={{ textAlign: "right", minWidth: 80 }}>
                     <div style={{ fontSize: 20, fontFamily: T.fontSerif, fontWeight: 500, color: low ? T.danger : T.textPrimary }}>{stock}</div>
@@ -26275,7 +26294,7 @@ function SalesInput({ kind, today, onSubmit, lang }) {
   return (
     <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
       <input type="date" value={date} max={today} onChange={e => setDate(e.target.value || today)} style={{ padding: "6px 8px", fontSize: 12, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary, fontFamily: T.fontSans, minWidth: 120 }} title={lang === "zh" ? "选日期(可补录过去日期)" : "日付選択"} />
-      <input type="number" value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submit(); }} placeholder={lang === "zh" ? (kind === "sale" ? "几件" : "几件") : (kind === "sale" ? "数" : "数")} style={{ flex: 1, minWidth: 60, padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary }} />
+      <input inputMode="numeric" type="number" value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") submit(); }} placeholder={lang === "zh" ? (kind === "sale" ? "几件" : "几件") : (kind === "sale" ? "数" : "数")} style={{ flex: 1, minWidth: 60, padding: "6px 8px", fontSize: 13, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.textPrimary }} />
       <button onClick={submit} disabled={!val || parseFloat(val) <= 0} style={{ padding: "6px 10px", fontSize: 12, background: (!val || parseFloat(val) <= 0) ? T.bgMuted : color, color: (!val || parseFloat(val) <= 0) ? T.textTertiary : "#fff", border: "none", borderRadius: T.radiusSm, cursor: (!val || parseFloat(val) <= 0) ? "not-allowed" : "pointer", fontWeight: 500 }}>{kind === "sale" ? (lang === "zh" ? "记录卖出" : "販売記録") : (lang === "zh" ? "记录生产" : "製造記録")}</button>
     </div>
   );
@@ -26483,7 +26502,7 @@ function ProductEditForm({ product, prefill, recipes, creations, components = []
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <span style={{ fontSize: 11, color: T.textTertiary }}>×</span>
                     {/* 2026-09-29 体检第 2 批:以前 value={it.qty || 1},按退格清空立刻变回 1,再输 2 成了 12;空着保存时 handleSave 兜底成 1 */}
-                    <input type="number" value={it.qty ?? 1} onChange={e => updateItem(i, "qty", e.target.value)} style={{ ...inputStyle, width: 60, padding: "4px 6px" }} />
+                    <input inputMode="decimal" type="number" value={it.qty ?? 1} onChange={e => updateItem(i, "qty", e.target.value)} style={{ ...inputStyle, width: 60, padding: "4px 6px" }} />
                   </div>
                   <button onClick={() => removeItem(i)} style={{ background: "none", border: "none", cursor: "pointer", color: T.danger, fontSize: 16 }}>×</button>
                 </div>
@@ -26508,28 +26527,28 @@ function ProductEditForm({ product, prefill, recipes, creations, components = []
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
           <label>
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "当前库存" : "現在庫"}</div>
-            <input type="number" value={form.currentStock} onChange={e => setForm({ ...form, currentStock: e.target.value })} style={inputStyle} />
+            <input inputMode="numeric" type="number" value={form.currentStock} onChange={e => setForm({ ...form, currentStock: e.target.value })} style={inputStyle} />
           </label>
           <label>
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "补货阈值" : "補充ライン"}</div>
-            <input type="number" value={form.threshold} onChange={e => setForm({ ...form, threshold: e.target.value })} style={inputStyle} />
+            <input inputMode="numeric" type="number" value={form.threshold} onChange={e => setForm({ ...form, threshold: e.target.value })} style={inputStyle} />
           </label>
           <label>
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "制作周期(天)" : "製作日数"}</div>
-            <input type="number" value={form.leadTimeDays} onChange={e => setForm({ ...form, leadTimeDays: e.target.value })} style={inputStyle} />
+            <input inputMode="numeric" type="number" value={form.leadTimeDays} onChange={e => setForm({ ...form, leadTimeDays: e.target.value })} style={inputStyle} />
           </label>
           <label>
             {/* 第 4 批:标签跟着币种按钮写 ¥ / 円(以前日元售价也写「(¥)」) */}
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "销售单价" : "販売価"}({priceCurOf(form) === "CNY" ? "¥" : "円"})</div>
             <div style={{ display: "flex", alignItems: "center" }}>
-              <input type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
+              <input inputMode="decimal" type="number" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: e.target.value })} style={inputStyle} />
               {priceCurBtn(form, (c, p) => setForm(prev => ({ ...prev, priceCurrency: c, sellPrice: p })), lang, form.sellPrice)}
             </div>
           </label>
           {/* 第 4 批 B4-2:包装费 / 件(人民币)。算「包装后毛利率」和建议售价用;日结只按卖出的件数算 */}
           <label data-packinput="1">
             <div style={{ fontSize: 11, color: T.textTertiary, marginBottom: 4 }}>{lang === "zh" ? "包装费 / 件(¥)" : "包装費 / 個(¥)"}</div>
-            <input type="number" min="0" step="0.1" value={form.packagingCost ?? ""} onChange={e => setForm({ ...form, packagingCost: e.target.value })}
+            <input inputMode="decimal" type="number" min="0" step="0.1" value={form.packagingCost ?? ""} onChange={e => setForm({ ...form, packagingCost: e.target.value })}
               onWheel={blurOnWheel} placeholder={lang === "zh" ? "没有就空着" : "なければ空欄"} style={inputStyle} />
             <div style={{ fontSize: 10, color: T.textTertiary, marginTop: 3, lineHeight: 1.5 }}>
               {lang === "zh" ? "盒子、贴纸、干燥剂、丝带,每件摊多少" : "箱・シール・乾燥剤・リボンなど 1 個あたり"}
@@ -29073,6 +29092,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   const td = (children, right = true, extra = {}) => <td style={{ ...T.fs.caption, textAlign: right ? "right" : "left", padding: "10px 8px", borderBottom: `1px solid ${T.lineFaint}`, verticalAlign: "top", ...T.num, ...extra }}>{children}</td>;
   return (
     <div data-margin-overview="1">
+      <div data-tl-legend="margin" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{lang === "zh" ? "≈ = 日元折算 · 至少 = 有原料没价，实际只会更高 · 建议价向上取整" : "≈ = 円から換算 · 以上 = 単価のない材料あり · 推奨価格は切り上げ"}</div>
       <div style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, marginBottom: T.sp.m }}>{X.hint}</div>
       <TargetCostRateInput appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
       <div style={{ display: "flex", gap: T.sp.xl, marginTop: T.sp.l, alignItems: "center", flexWrap: "wrap" }}>
@@ -31859,8 +31879,9 @@ const PROD_TXT = {
     title: "生产单", kinds: { product: "商品", recipe: "配方", creation: "组合", component: "组件" },
     addProducts: "＋ 从商品加", addPick: "＋ 配方 / 组合产品", addOnSale: "＋ 在售中", print: "🖨 打印", clearAll: "清空",
     emptyTitle: "今天的生产单还是空的", emptyHint: "从商品加(按库存和最近的销量给建议数),或者直接选配方 / 组合产品 / 在售中的。数量随时能改,改了马上存。",
-    lead: (n) => `需提前 ${n} 天`, done: "做完", logBtn: (n) => `记入生产 +${n}`, logged: (n) => `✓ 已记入 ${n}`, logMore: (n) => `再记 +${n}`,
-    logHint: "记入生产 = 商品页「记录生产」同一写法,库存照加",
+    lead: (n) => `需提前 ${n} 天`, done: "做完", removeLine: "从生产单删掉这一行", logBtn: (n) => `记入生产 +${n}`, logged: (n) => `✓ 已记入 ${n}`, logMore: (n) => `再记 +${n}`,
+    logHint: "点『记入生产』= 和商品页『记录生产』一样,库存照加",
+    logHintStaff: "点『记入生产』= 把做好的个数记进库存",
     todayLogged: (n) => `⚠ 今天已经记入生产 ${n}(商品页或删掉的行记的),再点会再加一遍`,
     removed: (n) => `已从生产单删掉「${n}」`, cleared: (n) => `生产单清空了(${n} 样)`,
     added: (a, e) => a > 0 ? `✓ 加了 ${a} 样${e > 0 ? `,${e} 样已经在单子上(数量没动)` : ""}` : `这 ${e} 样已经在单子上了(数量没动)`,
@@ -31886,8 +31907,9 @@ const PROD_TXT = {
     title: "製造リスト", kinds: { product: "商品", recipe: "レシピ", creation: "組み合わせ", component: "パーツ" },
     addProducts: "＋ 商品から", addPick: "＋ レシピ / 組み合わせ", addOnSale: "＋ 販売中", print: "🖨 印刷", clearAll: "クリア",
     emptyTitle: "本日の製造リストは空です", emptyHint: "商品(在庫と販売実績から推奨数)・レシピ / 組み合わせ・販売中から追加。数量はいつでも変更でき、すぐ保存されます。",
-    lead: (n) => `${n} 日前から仕込み`, done: "完了", logBtn: (n) => `製造記録 +${n}`, logged: (n) => `✓ 記録済み ${n}`, logMore: (n) => `追加記録 +${n}`,
+    lead: (n) => `${n} 日前から仕込み`, done: "完了", removeLine: "製造リストから外す", logBtn: (n) => `製造記録 +${n}`, logged: (n) => `✓ 記録済み ${n}`, logMore: (n) => `追加記録 +${n}`,
     logHint: "製造記録 = 商品ページの「製造記録」と同じ(在庫に加算)",
+    logHintStaff: "『製造記録』= できた数を在庫に記録",
     todayLogged: (n) => `⚠ 本日すでに製造記録 ${n}(商品ページ・削除した行の分)。押すとさらに加算`,
     removed: (n) => `「${n}」を削除しました`, cleared: (n) => `リストをクリア(${n} 件)`,
     added: (a, e) => a > 0 ? `✓ ${a} 件追加${e > 0 ? `(${e} 件は既にあり)` : ""}` : `${e} 件は既にリストにあります`,
@@ -32211,7 +32233,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
     <div data-prodline={l.uid} style={{ borderTop: `1px solid ${l.done ? T.success : T.border}`, borderRight: `1px solid ${l.done ? T.success : T.border}`, borderBottom: `1px solid ${l.done ? T.success : T.border}`, borderLeft: `3px solid ${l.done ? T.success : T.ink}`, background: T.bgCard, padding: "12px 14px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {/* 审查 r2:「✓ 做完」以前 28 px,比同一张卡上的 ± / ✕(36)还小;员工模式里它是主要操作,手湿 / 有面粉时点不准 → 员工 44(同 Btn lg)、老板 36 */}
-        <button type="button" onClick={onDone} aria-pressed={!!l.done} title={X.done}
+        <button className="k-tap" aria-label={X.done} type="button" onClick={onDone} aria-pressed={!!l.done} title={X.done}
           style={{ ...sq, width: readOnly ? 44 : 36, height: readOnly ? 44 : 36, fontSize: readOnly ? 22 : 17, color: l.done ? T.paper : T.body, background: l.done ? T.success : T.paper, border: `1px solid ${l.done ? T.success : T.border}` }}>{l.done ? "✓" : ""}</button>
         <div style={{ flex: "1 1 160px", minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
@@ -32228,12 +32250,12 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           </div>
         ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button type="button" onClick={() => onStep(-1)} style={sq} aria-label="-1">−</button>
+          <button className="k-tap" type="button" onClick={() => onStep(-1)} style={sq} aria-label="-1">−</button>
           <input type="text" inputMode="decimal" value={l.qty} onChange={e => onQty(e.target.value)}
             style={{ width: 64, height: 36, textAlign: "center", fontSize: 17, border: `1px solid ${T.ink}`, borderRadius: T.radius, background: T.paper, color: T.ink, fontFamily: T.fontSerif, ...T.num }} />
-          <button type="button" onClick={() => onStep(1)} style={sq} aria-label="+1">+</button>
+          <button className="k-tap" type="button" onClick={() => onStep(1)} style={sq} aria-label="+1">+</button>
           <span style={{ ...T.fs.caption, color: T.subtle, minWidth: 16 }}>{shownUnit}</span>
-          <button type="button" onClick={onRemove} title="✕" style={{ ...sq, border: "none", background: "transparent", color: T.subtle }}>✕</button>
+          <button className="k-tap" aria-label={X.removeLine} type="button" onClick={onRemove} title={X.removeLine} style={{ ...sq, border: "none", background: "transparent", color: T.subtle }}>✕</button>
         </div>
         )}
       </div>
@@ -32244,12 +32266,13 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
           {pending > 0 && todayLogged > logged && <span data-prod-todaylogged="1" style={{ ...T.fs.caption, color: T.warning }}>{X.todayLogged(fmtQty(todayLogged))}</span>}
           {/* 两种按钮给不同的 key:同一个 Btn 换 variant 会在重画时混用 border / borderColor(React 警告) */}
           {pending > 0 && (logged > 0
-            ? <Btn key="more" size="sm" onClick={onLog} title={willTake ? X.logHint + " · " + PX.burnt : X.logHint}>{X.logMore(fmtQty(pending))}</Btn>
-            : <Btn key="first" size="sm" variant="success" onClick={onLog} title={willTake ? X.logHint + " · " + PX.burnt : X.logHint}>{X.logBtn(fmtQty(pending))}</Btn>)}
+            ? <Btn key="more" size="sm" onClick={onLog} title={willTake ? (readOnly ? X.logHintStaff : X.logHint) + " · " + PX.burnt : (readOnly ? X.logHintStaff : X.logHint)}>{X.logMore(fmtQty(pending))}</Btn>
+            : <Btn key="first" size="sm" variant="success" onClick={onLog} title={willTake ? (readOnly ? X.logHintStaff : X.logHint) + " · " + PX.burnt : (readOnly ? X.logHintStaff : X.logHint)}>{X.logBtn(fmtQty(pending))}</Btn>)}
         </div>
       )}
       {willTake && (
         <div data-prep-willtake="1" style={{ ...T.fs.caption, color: T.subtle, marginTop: 4, ...T.num, overflowWrap: "anywhere" }}>
+          <div data-tl-cap="burnt" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 4 }}>{PX.burnt}</div>
           {willTake.map(({ st, xs }, i) => (
             <div key={i}>{PX.willTake(st, "")}{xs.map((x, j) => <span key={j} style={{ color: x.lack ? T.danger : T.subtle }}>{j ? "、" : ""}{x.txt}</span>)}</div>
           ))}
@@ -32274,7 +32297,7 @@ function ProdLineCard({ s, lang, open, onToggleOpen, onQty, onStep, onRemove, on
       {!s.missing && !s.zero && s.noItems && <div style={{ ...T.fs.caption, color: T.subtle, marginTop: 8 }}>{X.noItems}</div>}
       {s.blocks.length > 0 && (
         <div style={{ marginTop: 6 }}>
-          <button type="button" onClick={onToggleOpen}
+          <button type="button" className={readOnly ? "k-tap-l" : "k-tap"} onClick={onToggleOpen}
             style={{ background: "none", border: "none", padding: "4px 0", cursor: "pointer", ...T.fs.caption, color: T.body, fontFamily: T.fontSans }}>
             {open ? "▼ " + X.collapse : "▶ " + X.expand}
           </button>
@@ -32631,6 +32654,7 @@ function ProductionSheetView({ products = [], recipes = [], creations = [], comp
 
   return (
     <div data-prodsheet="1">
+      <div data-tl-cap="logHint" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{staff ? X.logHintStaff : X.logHint}</div>
       {staff ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, justifyContent: "flex-end" }}>
           <Btn size="sm" disabled={!plan.lines.length} onClick={() => onPrint && onPrint(printData())}>{X.print}</Btn>
@@ -33000,7 +33024,7 @@ function PrepCfgFields({ kind, form, setForm, lang, prepStock, products = [], on
         {PREP_STORES.map(s => {
           const active = store === s;
           return (
-            <button key={s} type="button" data-prep-store={s} aria-pressed={active} onClick={() => setForm(prev => ({ ...prev, prepStore: s }))}
+            <button data-tl-min="40" key={s} type="button" data-prep-store={s} aria-pressed={active} onClick={() => setForm(prev => ({ ...prev, prepStore: s }))}
               style={{ padding: "4px 12px", minHeight: 32, fontSize: 12, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
                 border: `${active ? 1 : 0.5}px solid ${active ? T.brand : T.border}`, background: active ? T.brand : T.bgCard, color: active ? T.bgApp : T.textSecondary, fontWeight: active ? 500 : 400 }}>
               {X.storeName(s)}
@@ -33374,6 +33398,7 @@ const PREP_LABEL_TXT = {
   },
 };
 const _plTxt = (lang) => PREP_LABEL_TXT[lang === "ja" ? "ja" : "zh"];
+const prepLabelSafeName = (s) => { const t = stripMoneyClauses(s).text; return t.trim() ? t : "—"; };
 const _PL_PT = 0.3528;   // 1 pt = 0.3528 mm
 // 「2026-10-06(周二)」/「2026-10-06(火)」:日期写全(冷冻 60 天会跨年),星期写「周二」不写「(二)」(审查 U12)。读不出 → ""
 const prepLabelDate = (ymd, lang) => {
@@ -33432,10 +33457,10 @@ const prepLabelRows = (args) => {
   const o = a.opts && typeof a.opts === "object" ? a.opts : {};
   const store = obj && PREP_STORES.includes(obj.prepStore) ? obj.prepStore : null;
   const X = prepTxt(lang);
-  const unit = _normTxt((item && item.unit) || (cfg && cfg.unit) || "");
+  const unit = prepLabelSafeName(_normTxt((item && item.unit) || (cfg && cfg.unit) || ""));
   const thawRaw = obj ? (lang === "ja" ? (_normTxt(obj.prepThawJa) || _normTxt(obj.prepThawZh)) : (_normTxt(obj.prepThawZh) || _normTxt(obj.prepThawJa))) : "";
   const base = {
-    name: _normTxt(o.name) || prepItemName(obj, item, lang),
+    name: prepLabelSafeName(_normTxt(o.name) || prepItemName(obj, item, lang)),
     store, storeText: store ? X.storeName(store) : PREP_STORES.map(s => X.storeName(s)).join(" · "),
     madeLabel: L.madeL(store), untilLabel: L.untilL(store), takeOut: store === "freeze",
     thaw: o.thaw && thawRaw ? stripMoneyText(thawRaw).text.replace(/\s*\n+\s*/g, " ").trim() : "",
@@ -33579,7 +33604,7 @@ function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, componen
   const chosen = printable.filter(l => Object.prototype.hasOwnProperty.call(sel, String(l.id)));
   const copiesOf = (l) => { const n = Math.floor(parseFloat(String(sel[String(l.id)]).normalize("NFKC"))); return isFinite(n) && n >= 1 ? n : 1; };
   const total = chosen.reduce((s, l) => s + copiesOf(l), 0);
-  const nameAuto = prepItemName(obj, item, labelLang);
+  const nameAuto = prepLabelSafeName(prepItemName(obj, item, labelLang));
   const nameShown = nameText === null ? nameAuto : nameText;
   const ctx = { materials, components, recipes, creations, brands };
   const buildRows = (sl) => prepLabelRows({ kind, obj, item, today: t, lang: labelLang, ctx,
@@ -33596,7 +33621,7 @@ function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, componen
   const canGo = !!item && chosen.length > 0 && !tooMany;
   const X = prepTxt(ui);
   const storeTxt = noStore ? U.storeNone : X.storeName(obj.prepStore);
-  const unit = (item && item.unit) || (cfg && cfg.unit) || "";
+  const unit = prepLabelSafeName((item && item.unit) || (cfg && cfg.unit) || "");
   const confirm = () => {
     if (!canGo) return;
     const labels = buildRows(chosen.map(l => ({ lotId: l.id, copies: copiesOf(l) })));
@@ -33635,7 +33660,7 @@ function PrepLabelModal({ printKey, lotId, lang, staff, today, recipes, componen
         </div>
         <div style={{ overflowY: "auto", padding: "4px 20px 12px", flex: "1 1 auto", minHeight: 0 }}>
           <div data-plabel-sub="1" style={{ fontSize: 13, color: T.body, marginBottom: 14, overflowWrap: "anywhere" }}>
-            {[prepItemName(obj, item, ui), storeTxt, noShelf ? U.shelfNone : U.shelf(cfg.shelfDays)].filter(Boolean).join(" · ")}
+            {[prepLabelSafeName(prepItemName(obj, item, ui)), storeTxt, noShelf ? U.shelfNone : U.shelf(cfg.shelfDays)].filter(Boolean).join(" · ")}
           </div>
           {!item ? hint(U.noItem, T.warning, "noitem") : (
             <div data-plabel-lots="1" style={{ marginBottom: 16 }}>
@@ -33960,7 +33985,7 @@ function PrepStockCard({ kind, obj, cfg, item, lang, today, products = [], onPre
                   <span style={{ ...T.fs.caption, ...T.num, color: l.status === "expired" ? T.danger : T.body, flex: "1 1 180px", minWidth: 0 }}>
                     {X.lotMade(X.md(l.madeAt))} · {q(l.left)} {unit}{l.made !== l.left ? X.lotOf(q(l.made)) : ""}{l.expiresOn ? ` · ${X.lotUntil(X.md(l.expiresOn))}` : ""}({lotStatus(l)})
                   </span>
-                  {!busy && <button type="button" className="k-btn" onClick={() => discard([l], l.status === "expired" ? "expired" : "bad")}
+                  {!busy && <button data-tl-min={staff ? "44" : "40"} type="button" className="k-btn" onClick={() => discard([l], l.status === "expired" ? "expired" : "bad")}
                     style={{ ...T.fs.caption, background: "none", border: `1px solid ${T.border}`, color: T.body, cursor: "pointer", fontFamily: T.fontSans, padding: "2px 8px", minHeight: 28 }}>{X.btnDiscard}</button>}
                 </div>
               ))}
@@ -34082,7 +34107,7 @@ function PrepStockView({ lang, today, recipes = [], components = [], products = 
         {FILTERS.map(f => {
           const on = filter === f;
           return (
-            <button key={f} type="button" data-prep-filter={f} aria-pressed={on} onClick={() => pickFilter(f)}
+            <button data-tl-min={staff ? "44" : "40"} key={f} type="button" data-prep-filter={f} aria-pressed={on} onClick={() => pickFilter(f)}
               style={{ padding: "6px 12px", minHeight: 32, ...T.fs.caption, cursor: "pointer", fontFamily: T.fontSans, borderRadius: T.radiusPill,
                 border: `1px solid ${on ? T.ink : T.border}`, background: on ? T.ink : T.surface, color: on ? T.paper : T.body }}>{X.filters[f]}</button>
           );
@@ -34460,6 +34485,7 @@ function StaffPinDialog({ mode: mode0, lang, hasPin, onEnter, onExit, onCancel, 
         <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{X.setupKicker}</div>
         <div style={{ ...T.fs.titleS, marginTop: T.sp.m, color: T.ink }}>{X.setupTitle}</div>
         <div style={{ ...T.fs.small, color: T.body, marginTop: 8, lineHeight: 1.65 }}>{X.setupHint}</div>
+        <WhyNote>{lang === "zh" ? "员工模式下看不到钱、不能改配方" : "スタッフモードでは金額は表示されず、レシピの編集はできません"}</WhyNote>
         <label style={{ display: "block", marginTop: 14 }}>
           <div style={{ ...T.fs.caption, color: T.subtle, marginBottom: 4 }}>{X.pin1}</div>
           <input type="password" inputMode="numeric" autoComplete="off" maxLength={4} data-staffpin="1" value={p1} onChange={e => { setP1(digits(e.target.value)); setErr(""); }} style={inputStyle} autoFocus />
@@ -36372,10 +36398,13 @@ function App() {
     },
     // H14:清掉旧价格表 cats。先存一份固定备份;存不上再问一次(同「清除全部」)
     clearCats: async () => {
+      const ownerAllowed = beginPurchaseOwnerOp();
+      if (!ownerAllowed()) return;
       const zh = lang === "zh";
       const orig = cats;
       if (!orig || orig.length === 0) return;
       const doClear = (pinned) => {
+        if (!ownerAllowed()) return;
         const emptied = [];
         setCats(emptied);
         showToast(zh ? `旧价格表 ${orig.length} 条已清掉${pinned ? "(清之前存了固定备份)" : ""}` : `旧価格表 ${orig.length} 件を削除しました`, { undo: () => {
@@ -36388,7 +36417,7 @@ function App() {
       dhClearCatsBusy.current = true;
       try {
         const pb = await pinBackupNow("clear-cats");
-        if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
+        if (pb === "moved" || !ownerAllowed()) return;   // 搬走或老板操作失效都不清
         if (pb) doClear(true);
         else confirmDialog(
           zh ? "清之前的固定备份没存上(浏览器的数据库用不了)。仍然清掉旧价格表吗?清掉后 5 秒内还能撤销。" : "削除前の固定バックアップを保存できませんでした。それでも削除しますか?",
@@ -37248,7 +37277,8 @@ function App() {
 
   // 第 6 批 I 线:合并导入先看预览(spec_merge_plan R24 到 R26),确认回调的先后照 R10。选文件和「改用合并导入」都走这里
   // 预览、确认以及备份等待后的写入都复查：搬走的旧窗口不能因漏到 storage 事件而继续写。
-  const importStopped = () => {
+  const importStopped = (ownerAllowed) => {
+    if (!ownerAllowed()) return true;
     try {
       if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) {
         _movedAway = true; staleRef.current = true; setStaleWindow("moved");
@@ -37259,8 +37289,8 @@ function App() {
     if (staleRef.current) { showToast(_impTxt(lang).stale); return true; }
     return false;
   };
-  const openMergePreview = (d, fileName) => {
-    if (importStopped()) return;
+  const openMergePreview = (d, fileName, ownerAllowed) => {
+    if (importStopped(ownerAllowed)) return;
     const it = _impTxt(lang);
     const cur0 = { ...(dataRef.current || {}), printSettings, appSettings };   // 预览和勾选框重算都用打开时这一份(R26)
     const prepItemsN = Object.keys(prepStock.items).length;
@@ -37278,9 +37308,9 @@ function App() {
       showToast(it.mergeFail + (err && err.message ? err.message : String(err)));
       return;
     }
-    const onToggle = (checked) => { sel.skipDeleted = !!checked; try { return rowsOf(planOf(cur0, sel.skipDeleted), sel.skipDeleted); } catch (e2) { return null; } };
+    const onToggle = (checked) => { if (importStopped(ownerAllowed)) return null; sel.skipDeleted = !!checked; try { return rowsOf(planOf(cur0, sel.skipDeleted), sel.skipDeleted); } catch (e2) { return null; } };
     confirmDialog(it.mergeMsg, () => {
-      if (importStopped()) return;   // R10 第 1 步
+      if (importStopped(ownerAllowed)) return;   // R10 第 1 步
       // 2026-09-29 体检第 2 批:先用「点确定那一刻」的数据(dataRef)算好要加的条目和计数,再 setX;结果留在数据页上。
       // 第 6 批第 0 步:计算整段抽成模块顶层的 planMergeImport(纯函数,预览和执行用同一套),写回走 applyMergePlan;
       // 打印设置 / appSettings / 备货账本样数用这个回调闭包里的值(和以前一样);别处在这之后又改过某张表时,applyMergePlan 照以前的写法兜底
@@ -37298,7 +37328,7 @@ function App() {
       const out = {};
       const idbOk = typeof indexedDB !== "undefined";
       const pinP = pinBackupNow("merge", out);
-      if (importStopped()) return;
+      if (importStopped(ownerAllowed)) return;
       applyMergePlan(plan, base, {
         cats: setCats, components: setComponents, recipes: setRecipes, creations: setCreations, knowledge: setKnowledge,
         brands: setBrands, materials: setMaterials, shopMaterials: setShopMaterials, products: setProducts,
@@ -37310,8 +37340,8 @@ function App() {
       const rep = importReportOf({ kind: "merge", fileName, at: new Date().toISOString(), lang, lines: plan.lines, skipped: plan.skipped, notes: plan.notes,
         backup: { reason: "merge", status: idbOk ? "pending" : "failed", id: null } });
       showImportReport(rep);
-      Promise.resolve(pinP).then((okp) => settleImportBackup(rep.rid, "merge", okp && okp !== "moved" ? (out.id !== undefined ? "ok" : "none") : "failed", out.id),
-        () => settleImportBackup(rep.rid, "merge", "failed", null));
+      Promise.resolve(pinP).then((okp) => { settleImportBackup(rep.rid, "merge", okp && okp !== "moved" ? (out.id !== undefined ? "ok" : "none") : "failed", out.id); },
+        () => { settleImportBackup(rep.rid, "merge", "failed", null); });
       // 第 5 批(E3,design_edit D9):合并进来的复制版会让知识按钮变同名 —— 合并成功以后也检查一次(报告行不动)
       offerKnowledgeRepairs({ recipes: base.recipes || [], components: base.components || [], creations: base.creations || [] },
         { recipes: [...(base.recipes || []), ...plan.added.recipes], components: [...(base.components || []), ...plan.added.components], creations: [...(base.creations || []), ...plan.added.creations] }, null);
@@ -37323,11 +37353,14 @@ function App() {
 
   // 覆盖导入时逐类说「现有几条 → 文件几条 / 清空」(2026-09-29 体检第 2 批):IMPORT_ENTITY_LABELS 第 6 批第 0 步挪到 import-preview 段(从 IMPORT_KINDS 派生,字不变)
   const importData = (e) => {
+    const ownerAllowed = beginPurchaseOwnerOp();
+    if (!ownerAllowed()) return;
     const f = e.target.files[0];
     e.target.value = "";   // 2026-09-29 体检第 2 批:清空选择,同一个文件第二次选也能触发(以前取消后再选没反应)
     if (!f) return;
     const reader = new FileReader();
     reader.onload = ev => {
+      if (importStopped(ownerAllowed)) return;
       try {
         const d = JSON.parse(ev.target.result);
         const err = validateImportSchema(d);
@@ -37336,7 +37369,7 @@ function App() {
           return;
         }
         // 第 6 批 I 线(spec_merge_plan R46):别的窗口改过、这个窗口已经停止保存 → 不弹框(导进来的东西刷新就没了)
-        if (importStopped()) return;
+        if (importStopped(ownerAllowed)) return;
         // 2026-09-29 体检第 2 批:以前确认框只写「导入后将覆盖当前数据」,局部包误点这里会把材料库等整块清空。
         // 现在逐类列出「现有 → 文件 / 清空」,文件里缺的类别直接建议改用合并导入;覆盖前自动存一份固定备份
         const cur = dataRef.current || {};
@@ -37368,7 +37401,7 @@ function App() {
               ? `このファイルにないデータは空になります。新規パックなら「キャンセル」してマージインポートを使ってください。\n上書き前に固定バックアップを保存します。`
               : `ファイルの内容で現在のデータを置き換えます。\n上書き前に固定バックアップを保存します。`);
         const applyOverwrite = () => {
-          if (importStopped()) return false;
+          if (importStopped(ownerAllowed)) return false;
           setRecipes(d.recipes || []);
           setCats(migrateCats(d.cats || []));
           setComponents(d.components || []);
@@ -37402,10 +37435,10 @@ function App() {
         const oplan = overwritePlan({ ...cur, printSettings, appSettings }, d, { localSavedAt, lang });
         const owRows = overwritePreviewView(oplan, info, lang, { fileName: f.name, deviceName: importDeviceName(), localSavedAt, now: Date.now() });
         confirmDialog(msg, async () => {
-          if (importStopped()) return;
+          if (importStopped(ownerAllowed)) return;
           const out = {};
           const pb = await pinBackupNow("import", out);
-          if (pb === "moved" || importStopped()) return;
+          if (pb === "moved" || importStopped(ownerAllowed)) return;
           if (pb) { if (applyOverwrite() !== false) finishOverwrite(out.id !== undefined ? "ok" : "none", out.id); }
           else confirmDialog(
             lang === "zh" ? "覆盖前的固定备份没存上(浏览器的数据库用不了)。仍然覆盖吗?建议先点「导出完整备份」存一份文件。" : "固定バックアップを保存できませんでした。それでも上書きしますか?",
@@ -37420,7 +37453,7 @@ function App() {
           wide: true,
           body: <OverwritePreviewBody rows={owRows} lang={lang} />,
           // R47:「改用合并导入」关掉这个框,拿同一个文件直接出合并预览(不重选、不重新校验);录入包 / 只有几类 / IP 包时是蓝色主按钮(待看 29)
-          extra: oplan.risky ? { label: it.toMerge, primary: ["pkg", "partial", "ip"].includes(info.kind), onClick: () => { setConfirmState(null); openMergePreview(d, f.name); } } : undefined,
+          extra: oplan.risky ? { label: it.toMerge, primary: ["pkg", "partial", "ip"].includes(info.kind), onClick: () => { if (importStopped(ownerAllowed)) return; setConfirmState(null); openMergePreview(d, f.name, ownerAllowed); } } : undefined,
         });
       } catch (err) {
         showToast((lang === "zh" ? "⚠️ 导入失败:JSON 格式错 - " : "⚠️ JSON エラー:") + (err.message || err));
@@ -37433,11 +37466,14 @@ function App() {
   // - cats: 按 nameZh/nameJa 匹配,已有则只追加新品牌,没有则新建大类
   // - components/recipes/creations/knowledge: 按名字和 id 匹配,已有跳过;brands/materials/shopMaterials: 已有的按修改时间取新的一边(mergeByNewer)
   const mergeImportData = (e) => {
+    const ownerAllowed = beginPurchaseOwnerOp();
+    if (!ownerAllowed()) return;
     const f = e.target.files[0];
     e.target.value = "";   // 2026-09-29 体检第 2 批:清空选择,同一个文件第二次选也能触发(以前取消后再选没反应)
     if (!f) return;
     const reader = new FileReader();
     reader.onload = ev => {
+      if (importStopped(ownerAllowed)) return;
       try {
         const d = JSON.parse(ev.target.result);
         const err = validateImportSchema(d);
@@ -37446,8 +37482,8 @@ function App() {
           return;
         }
         // 第 6 批 I 线(R46):停止保存的窗口不让导入
-        if (importStopped()) return;
-        openMergePreview(d, f.name);
+        if (importStopped(ownerAllowed)) return;
+        openMergePreview(d, f.name, ownerAllowed);
       } catch (err) {
         showToast((lang === "zh" ? "⚠️ 合并导入失败:" : "⚠️ マージ失敗:") + (err.message || "JSON 格式错"));
       }
@@ -37814,7 +37850,7 @@ function App() {
             template={printTarget.template}
             lang={printTarget.lang}
             sections={printTarget.sections}
-            printSettings={printSettings}
+            printSettings={printTarget.type === "knowledge" ? knowledgePrintBrandSettings(printSettings, !staffMode && printTarget.data && printTarget.data.keepMoney === true) : printSettings}
             onClose={() => setPrintTarget(null)}
             onUpdateSettings={(newSettings) => setPrintSettings(prev => ({ ...prev, ...newSettings }))}
             canEditSettings={!staffMode}
@@ -37888,6 +37924,7 @@ function App() {
       {/* 🛟 备份恢复弹窗 */}
       {showBackupDialog && (
         <BackupRestoreDialog
+          beginOwnerOp={beginPurchaseOwnerOp}
           onClose={() => { setShowBackupDialog(false); setBackupHighlightSavedAt(null); }}
           highlightSavedAt={backupHighlightSavedAt}
           lang={lang}
@@ -38378,7 +38415,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     >
                       <div className="k-fluid">
                         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                          <button
+                          <button className="k-dot" aria-label={c.onSale
+                              ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
+                              : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
                             type="button"
                             onClick={(e) => { e.stopPropagation(); toggleCreationOnSale(c.id); }}
                             title={c.onSale
@@ -38419,7 +38458,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                             {cMv.incomplete
                               ? (lang === "zh" ? <>成本不全<br />毛利率虚高</> : <>原価不完全<br />粗利率過大</>)
                               : cMv.badge}
-                          </div>
+                          {cMv.note && <TapTip tipId="creation-row-margin" text={cMv.note} lang={lang} />}</div>
                         )}
                       </div>
                       <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
@@ -38465,7 +38504,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     <div className="k-fluid">
                       {/* 标题行：法文 20px / 主名 14px 500 / 副名 12px muted，同一 baseline */}
                       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                        <button
+                        <button className="k-dot" aria-label={r.onSale
+                            ? (lang === "zh" ? "在售中 — 点一下取消" : "販売中 — タップで解除")
+                            : (lang === "zh" ? "点一下标为在售(会排到最前面)" : "タップで販売中に")}
                           type="button"
                           onClick={(e) => { e.stopPropagation(); toggleOnSale(r.id); }}
                           title={r.onSale
@@ -38510,7 +38551,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                           {unitN === 0 ? (lang === "zh" ? <>{noPriceN} 项没价<br />毛利率虚高</> : <>単価なし {noPriceN}<br />粗利率過大</>)
                             : noPriceN === unitN ? (lang === "zh" ? <>{unitN} 项单位不符<br />毛利率虚高</> : <>単位不一致 {unitN}<br />粗利率過大</>)
                             : (lang === "zh" ? <>{noPriceN} 项没价或单位不符<br />毛利率虚高</> : <>単価なし・単位不一致 {noPriceN}<br />粗利率過大</>)}
-                        </div>
+                        <TapTip tipId="recipe-margin" text={(lang === "zh" ? (unitN > 0 ? "没单价或单位不符的原料：" : "没有单价的原料：") : (unitN > 0 ? "単価なし・単位不一致の材料：" : "単価のない材料：")) + (r.ingredients || []).filter(ing => ingNoPrice(ing, materials)).map(ing => pickLang(ing, "name", lang) || ing.nameFr || "").filter(Boolean).join(lang === "zh" ? "、" : "・") + (lang === "zh" ? "。成本算少了，显示的毛利率比实际高。" : "。原価が少なく計算され、粗利率が実際より高く表示されています。")} lang={lang} /></div>
                       )}
                     </div>
                     {/* 售价 */}
@@ -38764,7 +38805,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                           placeholder={lang === "zh" ? "日文" : "日"}
                           style={{ border: "none", borderRight: `0.5px solid ${T.borderSoft}`, padding: "9px 10px", fontSize: 13, background: "transparent", color: T.textPrimary, outline: "none", fontFamily: T.fontSans }}
                         />
-                        <input
+                        <input inputMode="decimal"
                           type="number"
                           value={b.price}
                           onChange={e => setCats(prev => prev.map(x => x.id === c.id ? { ...x, brands: x.brands.map((bb, bj) => bj === bi ? { ...bb, price: e.target.value } : bb) } : x))}
@@ -39206,10 +39247,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             const backupCards = [
               { title: lang === "zh" ? "🛟 恢复备份(防丢失保险)" : "🛟 バックアップ復元", desc: lang === "zh" ? `每次保存自动写一份到浏览器内置数据库(跟主数据分开存):保留最近 ${BACKUP_RECENT} 份,再加最近 ${BACKUP_HOURS} 小时每小时一份、最近 ${BACKUP_DAYS} 天每天一份;内容没变不重复存。覆盖导入、清除全部、恢复备份之前,会另存一份「固定」备份,不会被自动挤掉。万一数据丢了或导错了,从这里挑一个版本恢复。` : `自動バックアップ:最新 ${BACKUP_RECENT} 件 + ${BACKUP_DAYS} 日間は1日1件。上書き・全削除・復元の前は固定保存。`, descNote: <span data-b6="restore-note">{devUiTxt(lang).restoreNote}</span>, action: <Btn variant="primary" onClick={() => { setBackupHighlightSavedAt(null); setShowBackupDialog(true); }}>{lang === "zh" ? "🛟 打开恢复列表" : "🛟 復元リスト"}</Btn> },
               { title: lang === "zh" ? "导出数据(完整备份)" : "データエクスポート(フル)", desc: lang === "zh" ? "⚠️ 包含本店原料采购价。用于自己跨设备迁移或灾难恢复 —— 不要把这个文件发给客户或公开分享!" : "⚠️ 仕入れ原料の価格を含む。自分のバックアップ用。顧客に渡さないこと。", action: <>{/* 第 6 批 D 线:「这台设备 [改名] / 上次在这台设备上导出」两行放在按钮上面(R25) */}<DeviceExportStatus lang={lang} deviceInfo={deviceInfo} env={devEnv} ua={devUa} changed={expChanged} today={today} onRename={renameDevice} /><Btn variant="success" onClick={exportData}>{lang === "zh" ? "↓ 导出完整备份" : "↓ フル出力"}</Btn></> },
-              { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
+              { title: lang === "zh" ? "导入数据(覆盖)" : "データインポート(上書き)", desc: lang === "zh" ? "⚠️ 将覆盖现有数据!选择之前导出的完整备份 JSON 恢复全部数据。用于跨设备迁移或灾难恢复。录入包(只含几条新配方 / 组件 / 知识)请用下面的「合并导入」,用这里会把文件里没有的数据清空。" : "⚠️ 現在のデータを上書きします。デバイス移行や復旧時に使用。", action: <label data-tl-min="40" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: T.textPrimary, fontFamily: T.fontSans }}>{lang === "zh" ? "↑ 选择 JSON 文件(覆盖)" : "↑ JSON ファイルを選択"}<input type="file" accept=".json" onChange={importData} style={{ display: "none" }} /></label> },
             ];
             const exchangeCards = [
-              { title: lang === "zh" ? "🆕 合并导入(只新增不覆盖)" : "🆕 マージインポート(追加のみ)", desc: lang === "zh" ? "✨ 推荐!只追加新内容,不覆盖现有数据。用于:从 Claude 拿到的新配方包 / 一键加入新材料和组件。已存在的项目会自动跳过。" : "✨ おすすめ!新規のみ追加、既存は上書きしない。Claude から受け取った新レシピパック等に使用。", action: <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
+              { title: lang === "zh" ? "🆕 合并导入" : "🆕 マージインポート", desc: lang === "zh" ? "✨ 推荐!先预览会新增、更新或保留的内容,确认后再合并。用于:从 Claude 拿到的新配方包 / 加入新材料和组件。文件里没有的数据会保留。" : "✨ おすすめ!追加・更新・この端末に残す内容を確認してからマージします。Claude から受け取った新レシピパックや材料・パーツの取り込みに使用。ファイルにないデータは残ります。", action: <label data-tl-min="40" style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", background: "#E1F5EE", border: `0.5px solid #0F6E56`, borderRadius: T.radiusSm, padding: "7px 14px", fontSize: 13, color: "#085041", fontFamily: T.fontSans, fontWeight: 500 }}>{lang === "zh" ? "+ 合并导入 JSON 文件" : "+ マージインポート"}<input type="file" accept=".json" onChange={mergeImportData} style={{ display: "none" }} /></label> },
               { title: lang === "zh" ? "📦 导出 IP 分发包(卖给买家用)" : "📦 IP パック出力(顧客向け)", desc: lang === "zh" ? `✨ 剥离本店原料 (${shopMaterials.length} 条) 的版本。百科/配方/组件/知识库完整保留。买家导入后看到的是百科参考价,自己录入本店价,不会看到你的采购价。` : `仕入れ原料 (${shopMaterials.length} 件) を除外。百科・レシピ等は完全保持。顧客は百科参考価のみ見え、自分の仕入れ価は別途入力。`, action: <Btn variant="primary" onClick={exportPublicIP}>{lang === "zh" ? "📦 导出 IP 分发包" : "📦 IP パック出力"}</Btn> },
             ];
             const maintainCards = [
@@ -39226,7 +39267,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 {/* 第 6 批第 0 步:结果卡抽成 ImportReportCard(DOM 一样;I 线加持久、notes、备份行、更早的几次) */}
                 <ImportReportCard report={importReport} lang={lang} onClose={closeImportReport} history={importReports}
                   onShow={(rep) => { importReportRef.current = rep; setImportReport(rep); }}
-                  onRevert={(snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note: _impTxt(lang).revertNote })} />
+                  onRevert={(snap) => restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note: _impTxt(lang).revertNote, ownerAllowed: beginPurchaseOwnerOp() })} />
                 {secTitle(lang === "zh" ? "维护工具" : "メンテナンス")}
                 {maintainCards.map(card)}
               </>
@@ -39254,7 +39295,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       <span style={{ fontSize: 11, color: T.textTertiary, marginLeft: "auto" }}>
                         {inUse > 0 ? `${inUse}${lang === "zh" ? "个组件使用中" : "個使用中"}` : (lang === "zh" ? "未使用" : "未使用")}
                       </span>
-                      <button onClick={() => {
+                      <button data-tl-min="40" onClick={() => {
                         // 第 6 批 R(spec_bin R22 / R23):照旧确认(在用时),多撤销、进回收站(还原时把没改过的组件分类换回来);提示条带名字
                         const doDelete = () => binDeleteRun(binEnv, "compCat", cc);
                         if (inUse > 0) {
@@ -39294,18 +39335,19 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div style={{ fontWeight: 500, fontSize: 13, color: T.danger, marginBottom: 6 }}>危险操作</div>
             <p style={{ fontSize: 12, color: T.body, marginBottom: 10 }}>清除所有数据，不可撤销。请先导出备份。</p>
             {/* 2026-09-29 体检第 2 批:清除前先存一份「固定」备份(不参与自动轮换),以前清完只能靠很快就被挤掉的自动备份 */}
-            <Btn variant="danger" onClick={() => confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
-              const doClear = () => { setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
+            <Btn variant="danger" onClick={() => { const ownerAllowed = beginPurchaseOwnerOp(); if (!ownerAllowed()) return; confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
+              if (!ownerAllowed()) return;
+              const doClear = () => { if (!ownerAllowed()) return; setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
                 // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
                 // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
                 setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
                 try { localStorage.removeItem(PURCHASE_STATE_KEY); } catch (e) { /* 删不掉就算了 */ } setPurchaseState(purchaseStateRead(null, today));   // 第 6 批 PB:本机采购状态(计划 / 手上还有 / 已下单)一起删(spec R27)
                 showToast(uiTxt(lang).cleared); };
               const pb = await pinBackupNow("clear");
-              if (pb === "moved") return;   // recheck-md-3:搬走了的旧窗口不清
+              if (pb === "moved" || !ownerAllowed()) return;   // 搬走或老板操作失效都不清
               if (pb) doClear();
               else confirmDialog("清除前的固定备份没存上(浏览器的数据库用不了)。仍然清除吗?建议先点上面的「导出完整备份」存一份文件。", doClear, { title: "备份没存上", confirmText: "仍然清除" });
-            })}>清除全部数据</Btn>
+            }); }}>清除全部数据</Btn>
           </div>
         </div>
       )}
