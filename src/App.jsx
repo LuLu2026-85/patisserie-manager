@@ -59,6 +59,19 @@ const T = {
   danger: "#B0442F",       // 缺货 / 删除 / 关键备注
   dangerBg: "#FFFFFF",
 
+  // 成品结构的食材色只用于剖面图，界面仍沿用中性色。
+  sectionFood: {
+    plain: { fill: "#E8E4D9", line: "#9C9788", detail: "#C0BAAA" },
+    cream: { fill: "#F2DCAD", line: "#CFB67E", detail: "#D4BE8F" },
+    sponge: { fill: "#C8A66F", line: "#A98550", detail: "#8F6D42" },
+    pastry: { fill: "#BE8443", line: "#966332", detail: "#E9BC78" },
+    chocolate: { fill: "#6A4434", line: "#4C3028", detail: "#A17C61" },
+    fruit: { fill: "#B0442F", line: "#963B2F", detail: "#EBA58C" },
+    jelly: { fill: "#BD776D", line: "#9E554E", detail: "#E4B8AC" },
+    crunch: { fill: "#C9B37F", line: "#9E8653", detail: "#8F7447" },
+  },
+  sectionLeaf: "#5D7049",
+
   // 圆角 —— 这套几乎是方的
   radius: "2px",           // 输入框 / 标签
   radiusLg: "0",           // 面 / 卡片 / 表格
@@ -6209,7 +6222,11 @@ function overwritePlan(cur, d, opts = {}) {
         if (!F) { p.lose.push(ref()); return; }
         if (importCanon(key, F) === importCanon(key, L)) { p.same++; return; }
         p.changed++;
-        const tl = _impTp(L.updatedAt), tf = _impTp(F.updatedAt);
+        const timeOf = (x) => {
+          const ts = [_impTp(x.updatedAt), ...(key === "creations" ? [_impTp(x.trialAt)] : [])].filter(t => t !== null);
+          return ts.length ? Math.max(...ts) : null;
+        };
+        const tl = timeOf(L), tf = timeOf(F);
         if (tl !== null && (tf === null || tl > tf)) p.localNewer.push(ref());
       });
     }
@@ -6627,8 +6644,12 @@ function planMergeImport(cur, d, opts = {}) {
     setUnitItems("recipes", a);
     plusW("recipes", (n) => (zh ? "+ 新配方 " : "+ レシピ ") + n);
   }
+  const cPairs = [];
+  let cMarks = null;
   if (has("creations")) {
-    const a = remap(mergeNamedPlan(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品", null, skipped, newTr("creations")));
+    const a = remap(mergeNamedPlan(cur.creations, d.creations, sameName, () => genId("creat_"), zh ? "组合产品" : "組立製品",
+      (inc, dup) => { if ((cur.creations || []).includes(dup)) cPairs.push([dup.id, inc]); }, skipped, newTr("creations")));
+    cMarks = mergeCreationTrialMarks(cur.creations, cPairs, lang);
     add.creations = a;
     setUnitItems("creations", a);
     plusW("creations", (n) => (zh ? "+ 新组合产品 " : "+ 組立製品 ") + n);
@@ -6743,7 +6764,7 @@ function planMergeImport(cur, d, opts = {}) {
   if (d.printSettings && typeof d.printSettings === "object") next.printSettings = mergePrintSettingsPlan(cur.printSettings, d.printSettings);
 
   // ── R5:W 类加进来的条目 id 本机已经有了的,今天的 appendTo 会挡掉(实际只有组件分类:它不补 id)—— 记成「文件内重复」、不查回收站
-  const wBase = (k) => (k === "knowledge" && kMarks) ? kMarks.list : cur[k];
+  const wBase = (k) => (k === "creations" && cMarks) ? cMarks.list : (k === "knowledge" && kMarks) ? kMarks.list : cur[k];
   MERGE_W_KEYS.forEach(k => {
     if (!has(k) || !TR[k]) return;
     const ids = new Set((cur[k] || []).map(x => x && x.id));
@@ -6832,7 +6853,8 @@ function planMergeImport(cur, d, opts = {}) {
       const L = cur[key][j], x1 = mm.x1, N = nOf(key, j);
       const ref = { id: L.id, name: iname(key, x1), localName: iname(key, L) };
       const tf = Date.parse((x1 && x1.updatedAt) || "") || 0, tl = Date.parse((L && L.updatedAt) || "") || 0;
-      if (importCanon(key, x1) === importCanon(key, L)) ent.same.push(ref);
+      if (key === "creations" && N !== L && importCanon(key, N) !== importCanon(key, L)) ent.patched.push(ref);
+      else if (importCanon(key, x1) === importCanon(key, L)) ent.same.push(ref);
       else if (importCanon(key, N) === importCanon(key, L)) ent.keptLocal.push(ref);
       else if (k.fam === "L" || (k.fam === "B" && (tf > tl || (tf === 0 && tl === 0)))) ent.fromFile.push(ref);
       else ent.patched.push(ref);
@@ -6849,7 +6871,10 @@ function planMergeImport(cur, d, opts = {}) {
   totals.deletedSkipped = deletedSkipped.length;
   const detail = { kinds, cats: catsRes ? { newCats: catsRes.catsNew, newBrands: catsRes.brandsAdded } : null, deleted, totals };
 
-  // notes 的顺序(R19):KA 的行 → PA 的行 → 删过不加那一行
+  // notes 的顺序(spec_b7_trial R36):新增试拼台 → 定稿组 → KA → PA → 删过不加
+  const benchNote = benchImportNote(finalAdd.creations, lang);
+  if (benchNote) notes.push(benchNote);
+  if (cMarks) notes.push(...cMarks.notes);
   if (kMarks && kMarks.n > 0) notes.push(zh ? `· ${kMarks.n} 条已有知识的员工必读 / 要点用了文件里较新的` : `· 既存ナレッジ ${kMarks.n} 件のスタッフ必読・ポイントをファイルの新しい方に更新`);
   // PA(spec_purchase_order R31):已有的供货商按修改时间换成了文件的 / 同名的合成一家 —— 各一行,放在 KA 那行后面(spec_merge_plan R19 的顺序)
   if (supRes && supRes.updated > 0) notes.push(zh ? `· 已有供货商 ${supRes.updated} 家:按修改时间取新的一边` : `· 既存仕入先 ${supRes.updated} 社:新しい方を採用`);
@@ -6880,6 +6905,7 @@ function planMergeImport(cur, d, opts = {}) {
     prepCfgDiffN: prepCfgDiff.size,
     detail,                   // R21 的预览分组
     deletedSkipped,           // 「你删过的」这次没加回来的(detail.deleted 里同一批对象)
+    cPairs,                   // 第 7 批:组合产品定稿组的并发兜底
     kPairs,                   // KA:applyMergePlan 兜底时对 prev 重做标记合并要用
     supIdMap,                 // PA:文件供货商 id → 本机 id(本店原料那一步、applyMergePlan 兜底都用)
   };
@@ -6901,7 +6927,8 @@ function applyMergePlan(plan, base, set, d, opts = {}) {
   if (plan.next.cats !== base.cats) go("cats", (prev) => mergeCatsPlan(prev, d.cats, genId).result);
   if (plan.add.components.length > 0) go("components", (prev) => appendTo(prev, plan.add.components));
   if (plan.add.recipes.length > 0) go("recipes", (prev) => appendTo(prev, plan.add.recipes));
-  if (plan.add.creations.length > 0) go("creations", (prev) => appendTo(prev, plan.add.creations));
+  if (plan.add.creations.length > 0 || plan.next.creations !== base.creations)
+    go("creations", (prev) => appendTo(mergeCreationTrialMarks(prev, plan.cPairs || [], opts.lang).list, plan.add.creations));
   if (plan.add.knowledge.length > 0 || plan.next.knowledge !== base.knowledge)
     go("knowledge", (prev) => appendTo(mergeKnowledgeStaffMarks(prev, plan.kPairs || []).list, plan.add.knowledge));
   if (Array.isArray(d.brands)) go("brands", (prev) => mergeByIdPlan(prev, d.brands, (l, x) => mergeByNewer(l, x, []), plan.skipIdx.brands));
@@ -7269,6 +7296,52 @@ const hoverOnly = (fn, mm) => (canHover(mm) ? fn : undefined);
 // 不过渡 transform 和尺寸。
 // ═══════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
+/* 成品结构：独立图例不受薄层高度约束。 */
+.k-section-view { padding: 20px 0; min-width: 0; }
+.k-section-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(220px, 1fr); gap: 28px; align-items: center; }
+.k-section-art { width: 100%; max-width: 520px; margin: 0 auto; min-width: 0; }
+.k-section-legend { display: grid; min-width: 0; }
+.k-section-action { font: inherit; font-size: 13px; color: ${T.body}; background: ${T.surface}; border: 1px solid ${T.border}; padding: 7px 12px; min-height: 40px; border-radius: ${T.radius}; cursor: pointer; }
+.k-section-action[aria-pressed="true"] { background: ${T.ink}; color: ${T.surface}; border-color: ${T.ink}; }
+.k-section-row { font: inherit; font-size: 14px; line-height: 1.6; color: ${T.ink}; background: transparent; border: 0; border-bottom: 1px solid ${T.line}; padding: 12px 0; text-align: left; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 10px; min-height: 52px; cursor: pointer; }
+.k-section-row:last-child { border-bottom: 0; }
+.k-section-name { overflow-wrap: anywhere; }
+.k-section-row[aria-pressed="true"] .k-section-name { text-decoration: underline; text-underline-offset: 5px; font-weight: 500; }
+.k-section-row:hover, .k-section-action:hover { background: ${T.sunken}; color: ${T.ink}; }
+@media (max-width: 600px) {
+  .k-section-layout { grid-template-columns: minmax(0,1fr); gap: 12px; }
+  .k-section-row { min-height: 48px; padding: 9px 0; }
+  .k-section-art { max-width: 380px; }
+  .k-section-action { min-height: 44px; }
+}
+@media print { .k-section-heading button { display: none !important; } .k-section-view { break-inside: avoid; } }
+/* Append inside GLOBAL_CSS; the T interpolations intentionally use its existing template literal. */
+.sp-editor{border:1px solid ${T.border};background:${T.surface};padding:${T.sp.l}px;margin:${T.sp.xl}px 0;color:${T.ink};font-family:${T.fontSans};min-width:0}
+.sp-editor-heading,.sp-editor-actions,.sp-editor-footer{display:flex;align-items:center;gap:${T.sp.s}px;flex-wrap:wrap}
+.sp-editor-heading{justify-content:space-between}
+.sp-editor-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.8fr);gap:${T.sp.xl}px;align-items:start}
+.sp-editor-list,.sp-editor-preview{min-width:0}
+.sp-editor-row{border:1px solid ${T.border};margin-bottom:${T.sp.s}px;background:${T.paper}}
+.sp-editor-row>summary{padding:${T.sp.m}px;cursor:pointer;min-height:44px;box-sizing:border-box;overflow-wrap:anywhere}
+.sp-editor-row>summary:focus-visible{outline:2px solid ${T.info};outline-offset:2px}
+.sp-editor-summary{display:inline-flex;flex-direction:column;gap:${T.sp.xs}px;vertical-align:middle;max-width:calc(100% - 24px)}
+.sp-editor-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:${T.sp.m}px;padding:0 ${T.sp.m}px ${T.sp.m}px}
+.sp-editor-field{display:flex;flex-direction:column;gap:${T.sp.xs}px;min-width:0;font-size:12px;line-height:1.5;color:${T.body}}
+.sp-editor-field-wide{grid-column:1/-1;min-width:0}
+.sp-editor-field select,.sp-editor-field input{width:100%;min-width:0;min-height:44px;padding:8px;box-sizing:border-box;border:1px solid ${T.border};border-radius:${T.radius};background:${T.surface};color:${T.ink};font:inherit}
+.sp-editor-field input::placeholder{color:${T.muted}}
+.sp-editor-field select:focus-visible,.sp-editor-field input:focus-visible{outline:2px solid ${T.info};outline-offset:2px}
+.sp-editor-field small{color:${T.secondary};font-size:12px}
+.sp-editor-actions .k-btn{min-height:40px;white-space:normal}
+.sp-editor-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:${T.sp.s}px;align-items:end;margin-top:${T.sp.l}px}
+.sp-editor-add .k-btn{min-height:44px}
+.sp-editor-footer{border-top:1px solid ${T.border};padding-top:${T.sp.l}px;margin-top:${T.sp.xl}px}
+@media(max-width:900px){.sp-editor-layout{grid-template-columns:minmax(0,1fr)}.sp-editor-preview{grid-row:1}.sp-editor{padding:${T.sp.m}px}}
+@media(max-width:420px){.sp-editor-add{grid-template-columns:minmax(0,1fr)}.sp-editor-add .k-btn{width:100%}.sp-editor-fields{column-gap:${T.sp.s}px}.sp-editor-footer>.sp-editor-actions{width:100%}}
+.sp-editor-preview .k-section-layout { grid-template-columns: minmax(0,1fr); gap: 8px; }
+.sp-editor-preview .k-section-art { max-width: 360px; }
+@media(max-width:600px) { .sp-editor-field select,.sp-editor-field input { font-size:16px; } }
+
 /* 中日文字体按当前语言切换（App 里的 useEffect 往 <html> 写 data-lang）。
    默认(含未设置时)走中文栈 —— 这个 app 是中文优先的。 */
 :root {
@@ -10193,6 +10266,260 @@ const printScaleText = (item, lang) => {
 };
 // ─── END scale helpers ───
 
+// ─── BEGIN creation-section helpers ───
+const SECTION_DENSITY = Object.freeze({ biscuit: 0.5, mousse: 0.8, jelly: 1.1, accent: 0.7, glaze: 1.3 });
+const SECTION_GEOM = Object.freeze({ W: 160, INNER_X: 24, INNER_W: 112, PX_PER_MM: 4,
+  BODY_MIN: 48, BODY_MAX: 220, BODY_PROP: 160, MIN_PX: 4, UNKNOWN_PX: 16, SURFACE_PX: 12 });
+const SECTION_H_RE = /[×xX*]?\s*(?:(?<![A-WYZa-wyz])[Hh]|高さ?|深さ?)\s*[:：]?\s*(?:约|約)?\s*(\d+(?:\.\d+)?)\s*(cm|mm)?/g;
+
+const sectionDensityOf = (cat) => (typeof cat === "string" && Object.prototype.hasOwnProperty.call(SECTION_DENSITY, cat)) ? SECTION_DENSITY[cat] : 1;
+const sectionMoldOf = (c) => {
+  for (const from of ["size", "mold"]) {
+    const raw = c && c[from];
+    const direct = parseMoldSize(raw);
+    if (direct) return { m: direct, from, hCm: null };
+    let text = String(raw === undefined || raw === null ? "" : raw).normalize("NFKC");
+    for (let previous = null; previous !== text;) {
+      previous = text;
+      text = text.replace(/\([^()]*\)/g, " ");
+    }
+    const heights = [...text.matchAll(SECTION_H_RE)];
+    if (heights.length !== 1) continue;
+    const m = parseMoldSize(text.replace(SECTION_H_RE, " "));
+    if (!m) continue;
+    const height = parseFloat(heights[0][1]);
+    const hCm = /^mm$/i.test(heights[0][2] || "") ? height / 10 : height;
+    return { m, from, hCm: hCm > 0 ? hCm : null };
+  }
+  return null;
+};
+const sectionMmText = (t) => t < 1 ? "<1" : t < 10 ? String(Math.round(t * 2) / 2) : String(Math.round(t));
+const sectionCoordText = (v) => String(Number(v.toFixed(2)));
+
+const creationSectionModel = (c) => {
+  if (!c || typeof c !== "object" || creationStructureOf(c) !== "stack" || !Array.isArray(c.layers) || !c.layers.length) return { show: false };
+  const mold = sectionMoldOf(c);
+  const area = mold ? _moldTrueArea(mold.m) : 0;
+  const serves = parseFloat(c.serves) > 0 ? parseFloat(c.serves) : 1;
+  const innerFlags = c.layers.map(l => !!l && typeof l === "object" && l.inner === true);
+  const rows = c.layers.map((part, idx) => {
+    const l = part && typeof part === "object" ? part : {};
+    const cat = typeof l.componentCategory === "string" ? l.componentCategory : "";
+    const rho = sectionDensityOf(cat);
+    const used = parseUsedAmount(l.usedAmount, l.unit);
+    const uc = _scUnitClass(l.unit);
+    const unitKind = uc.k === "g" ? "g" : uc.k === "ml" ? "ml" : "count";
+    const reason = !(used > 0) ? "noUsed" : unitKind === "count" ? "count" : "";
+    const g = reason ? null : used * uc.f / serves;
+    const v = g === null ? null : unitKind === "ml" ? g : g / rho;
+    const t = v !== null && area > 0 ? v * 10 / area : null;
+    return { idx, cat, rho, unitKind, used, g, v, t,
+      amb: v !== null && usedAmountAmbiguous(l.usedAmount), reason,
+      kind: "band", host: null, x: 0, y: 0, w: 0, h: 0, own: 0,
+      mm: null, withInner: false, mmAmb: false, mmLabel: null };
+  });
+  let surfaceCount = 0;
+  while (surfaceCount < rows.length && rows[surfaceCount].cat === "decor" && !innerFlags[surfaceCount]) surfaceCount++;
+  if (surfaceCount === rows.length) surfaceCount = 0;
+  rows.forEach((r, i) => {
+    if (i < surfaceCount) { r.kind = "surface"; return; }
+    if (!innerFlags[i]) return;
+    let host = null;
+    for (let j = i - 1; j >= surfaceCount; j--) if (!innerFlags[j]) { host = j; break; }
+    if (host === null) for (let j = i + 1; j < rows.length; j++) if (!innerFlags[j]) { host = j; break; }
+    if (host !== null) { r.kind = "inner"; r.host = host; }
+  });
+  let V = 0;
+  rows.forEach(r => { if (r.kind !== "surface" && r.v !== null) V += r.v; });
+  const mode = V > 0 ? (area > 0 ? "mm" : "prop") : "order";
+  const k = mode === "mm" ? Math.min(Math.max(SECTION_GEOM.PX_PER_MM * 10 / area, SECTION_GEOM.BODY_MIN / V), SECTION_GEOM.BODY_MAX / V)
+    : mode === "prop" ? SECTION_GEOM.BODY_PROP / V : 0;
+  const own = (r) => r.kind === "surface" ? SECTION_GEOM.SURFACE_PX
+    : r.v !== null && k > 0 ? Math.max(SECTION_GEOM.MIN_PX, r.v * k) : SECTION_GEOM.UNKNOWN_PX;
+  let bodyH = 0;
+  rows.forEach(r => {
+    if (r.kind === "inner") return;
+    const ins = rows.filter(q => q.kind === "inner" && q.host === r.idx);
+    const hin = ins.reduce((sum, q) => sum + own(q), 0);
+    r.x = 0; r.w = SECTION_GEOM.W; r.y = bodyH; r.own = own(r); r.h = r.own + hin;
+    let innerY = r.y + (r.h - hin) / 2;
+    ins.forEach(q => {
+      q.x = SECTION_GEOM.INNER_X; q.w = SECTION_GEOM.INNER_W; q.y = innerY; q.own = q.h = own(q);
+      innerY += q.h;
+    });
+    bodyH += r.h;
+    if (r.kind === "band" && mode === "mm" && r.t !== null) {
+      r.mm = r.t; r.mmAmb = r.amb;
+      ins.forEach(q => { if (q.t !== null) { r.mm += q.t; r.withInner = true; if (q.amb) r.mmAmb = true; } });
+      const number = sectionMmText(r.mm);
+      r.mmLabel = (number === "<1" ? "<1 mm" : "≈" + number + " mm") + (r.mmAmb ? "?" : "");
+    }
+  });
+  const parts = rows.filter(r => r.kind !== "surface");
+  const allKnown = mode === "mm" && parts.every(r => r.t !== null);
+  const total = allKnown ? parts.reduce((sum, r) => sum + r.t, 0) : null;
+  const totalText = total === null ? null : sectionMmText(total);
+  const unknownN = parts.filter(r => r.v === null).length;
+  const notes = [];
+  if (mold === null) notes.push({ code: "noMold" });
+  if (mode === "order") notes.push({ code: "noUsedAll", n: parts.length });
+  else if (unknownN > 0) notes.push({ code: "unknown", n: unknownN });
+  if (mode === "mm") notes.push({ code: "mmBasis" });
+  const last = rows[rows.length - 1];
+  if (rows.length >= 2 && last.cat === "decor" && last.kind === "band") notes.push({ code: "decorLast", idx: rows.length - 1 });
+  if (total !== null && mold.hCm !== null && total > mold.hCm * 10) notes.push({ code: "overHeight" });
+  return { show: true, mode, mold, area, serves, V, k, rows, bodyH, total, totalText, notes };
+};
+// ─── END creation-section helpers ───
+
+// BEGIN section-plan helpers
+// 成品空间编排和配方部件独立；纯读取不补 ID，不按重量推断位置或尺寸。
+const SECTION_PLAN_ROLES = [
+  { id: "band", zh: "平铺", ja: "平らな層" },
+  { id: "inner", zh: "夹心", ja: "インサート" },
+  { id: "brush", zh: "涂刷", ja: "塗り・シロップ" },
+  { id: "decor", zh: "表面", ja: "表面の飾り" },
+  { id: "shell", zh: "底与围边", ja: "底・側面" },
+];
+const SECTION_PLAN_APPEARANCES = [
+  { id: "plain", zh: "素色", ja: "無地" },
+  { id: "cream", zh: "奶油 / 慕斯", ja: "クリーム・ムース" },
+  { id: "sponge", zh: "蛋糕体", ja: "スポンジ" },
+  { id: "pastry", zh: "酥皮 / 挞皮", ja: "パイ・タルト生地" },
+  { id: "chocolate", zh: "巧克力", ja: "チョコレート" },
+  { id: "fruit", zh: "水果", ja: "フルーツ" },
+  { id: "jelly", zh: "果冻 / 果酱", ja: "ジュレ・コンフィ" },
+  { id: "crunch", zh: "酥脆层", ja: "クランチ" },
+];
+const SECTION_PLAN_MAX_ROWS = 40;
+const _sectionPlanObj = x => !!x && typeof x === "object" && !Array.isArray(x);
+const _sectionPlanId = x => typeof x === "string" && x.length > 0 && x === x.trim();
+const _sectionPlanHas = (o, key) => Object.prototype.hasOwnProperty.call(o, key);
+// 只在用户明确开始编排/添加图形位置时用；输入相同，生成结果相同，不读时间或随机数。
+const sectionPlanNextId = (used, prefix = "section_part") => {
+  const taken = new Set(used || []);
+  let n = 1;
+  while (taken.has(`${prefix}_${n}`)) n++;
+  return `${prefix}_${n}`;
+};
+const sectionPlanSuggestedAppearance = layer => ({ mousse: "cream", jelly: "jelly", crunch: "crunch" })[(layer || {}).componentCategory] || "plain";
+const sectionPlanWidthPct = row => row && row.widthPct != null ? row.widthPct : (row && row.role === "inner" ? 80 : 100);
+const sectionPlanDraft = c => {
+  const source = _sectionPlanObj(c) ? c : {};
+  const oldLayers = Array.isArray(source.layers) ? source.layers : [];
+  const oldPlan = source.sectionPlan;
+  const counts = new Map();
+  oldLayers.forEach(l => { if (_sectionPlanObj(l) && _sectionPlanId(l.sectionId)) counts.set(l.sectionId, (counts.get(l.sectionId) || 0) + 1); });
+  // 删除过的部件 ID 仍由旧图形占用：新部件不能碰巧拿到它，从而悄悄接管旧引用。
+  const reserved = new Set([...counts.keys(), ...((_sectionPlanObj(oldPlan) && Array.isArray(oldPlan.rows)) ? oldPlan.rows.filter(_sectionPlanObj).map(r => r.partId) : [])]);
+  const layers = oldLayers.map(l => {
+    if (!_sectionPlanObj(l)) return l;
+    if (_sectionPlanId(l.sectionId) && counts.get(l.sectionId) === 1) return l;
+    const sectionId = sectionPlanNextId(reserved);
+    reserved.add(sectionId);
+    return { ...l, sectionId };
+  });
+  // 已有图形不自动加行/翻转/重绑。冲突 ID 全部换新后，原引用会明确失联，须用户重新选择。
+  if (oldPlan != null) return { ...source, layers, sectionPlan: oldPlan };
+  const rowIds = new Set();
+  const rows = layers.filter(_sectionPlanObj).map(l => {
+    const id = sectionPlanNextId(rowIds, "section_row"); rowIds.add(id);
+    return { id, partId: l.sectionId, role: "band", appearance: sectionPlanSuggestedAppearance(l) };
+  });
+  return { ...source, layers, sectionPlan: { version: 1, confirmed: false, rows } };
+};
+const sectionPlanIssues = c => {
+  if (!_sectionPlanObj(c) || c.sectionPlan == null) return [];
+  const plan = c.sectionPlan, out = [];
+  const issue = (code, extra = {}) => out.push({ code, ...extra });
+  if (!_sectionPlanObj(plan)) { issue("plan_invalid"); return out; }
+  if (plan.version !== 1) issue("plan_version");
+  if (!Array.isArray(plan.rows)) { issue("rows_invalid"); return out; }
+  const rows = plan.rows, layers = Array.isArray(c.layers) ? c.layers : [];
+  if (!rows.length) issue("rows_empty");
+  if (rows.length > SECTION_PLAN_MAX_ROWS) issue("rows_limit");
+  const parts = new Map(), ids = new Map();
+  layers.forEach((layer, layerIndex) => {
+    if (!_sectionPlanObj(layer) || !_sectionPlanId(layer.sectionId)) { issue("part_id_missing", { layerIndex }); return; }
+    const list = parts.get(layer.sectionId) || [];
+    list.push({ layer, idx: layerIndex }); parts.set(layer.sectionId, list);
+  });
+  rows.forEach((row, rowIndex) => {
+    if (!_sectionPlanObj(row)) { issue("row_invalid", { rowIndex }); return; }
+    if (_sectionPlanId(row.id)) { const list = ids.get(row.id) || []; list.push(row); ids.set(row.id, list); }
+  });
+  rows.forEach((row, rowIndex) => {
+    if (!_sectionPlanObj(row)) return;
+    const at = { rowIndex, ...(_sectionPlanId(row.id) ? { rowId: row.id } : {}) };
+    if (!_sectionPlanId(row.id)) issue("row_id_missing", at);
+    else if (ids.get(row.id).length !== 1) issue("row_id_duplicate", at);
+    const matched = _sectionPlanId(row.partId) ? parts.get(row.partId) || [] : [];
+    if (!matched.length) issue("part_missing", { ...at, partId: row.partId });
+    else if (matched.length !== 1) issue("part_ambiguous", { ...at, partId: row.partId });
+    if (!SECTION_PLAN_ROLES.some(r => r.id === row.role)) issue("role_invalid", at);
+    if (!SECTION_PLAN_APPEARANCES.some(a => a.id === row.appearance)) issue("appearance_invalid", at);
+    if (_sectionPlanHas(row, "thicknessMm") && row.thicknessMm != null && (typeof row.thicknessMm !== "number" || !Number.isFinite(row.thicknessMm) || row.thicknessMm < 1 || row.thicknessMm > 300)) issue("thickness_invalid", at);
+    if (_sectionPlanHas(row, "widthPct") && row.widthPct != null && (typeof row.widthPct !== "number" || !Number.isFinite(row.widthPct) || row.widthPct < 20 || row.widthPct > 100)) issue("width_invalid", at);
+    const needsHost = row.role === "inner" || row.role === "brush";
+    const hasHost = row.hostId != null && row.hostId !== "";
+    if (needsHost && !hasHost) issue("host_required", at);
+    if (!needsHost && hasHost) issue("host_unexpected", at);
+    if (hasHost) {
+      const matches = ids.get(row.hostId) || [];
+      if (!_sectionPlanId(row.hostId) || matches.length !== 1) issue("host_missing", at);
+      else if (row.hostId === row.id) issue("host_self", at);
+      else if (matches[0].role !== "band" && matches[0].role !== "shell") issue("host_role", at);
+      const seen = new Set([row.id]); let cursor = row.hostId;
+      while (cursor && ids.has(cursor) && ids.get(cursor).length === 1) {
+        if (seen.has(cursor)) { issue("host_cycle", at); break; }
+        seen.add(cursor); cursor = ids.get(cursor)[0].hostId;
+      }
+    }
+  });
+  return out;
+};
+const sectionPlanRows = c => {
+  if (!_sectionPlanObj(c) || !_sectionPlanObj(c.sectionPlan) || !Array.isArray(c.sectionPlan.rows)) return [];
+  const layers = Array.isArray(c.layers) ? c.layers : [], issues = sectionPlanIssues(c);
+  return c.sectionPlan.rows.map((raw, rowIndex) => {
+    const row = _sectionPlanObj(raw) ? raw : {};
+    const matched = layers.map((layer, idx) => ({ layer, idx })).filter(p => _sectionPlanObj(p.layer) && _sectionPlanId(row.partId) && p.layer.sectionId === row.partId);
+    return { ...row, layer: matched.length === 1 ? matched[0].layer : null, idx: matched.length === 1 ? matched[0].idx : -1,
+      issues: issues.filter(x => x.rowIndex === rowIndex) };
+  });
+};
+const sectionPlanIssueText = (issue, lang = "zh") => {
+  const ja = lang === "ja";
+  const labels = {
+    plan_invalid: ["结构记录格式不完整，请重新编排。", "構造の記録が不完全です。編成し直してください。"],
+    plan_version: ["此结构版本暂不支持，请重新编排。", "この構造バージョンには未対応です。編成し直してください。"],
+    rows_invalid: ["图形位置记录不完整，请重新编排。", "図形の位置情報が不完全です。編成し直してください。"],
+    rows_empty: ["至少添加一个图形位置后再确认。", "図形を一つ以上追加してから確定してください。"],
+    rows_limit: ["最多可编排 40 个图形位置，请移除多余位置。", "図形は 40 個までです。余分な位置を削除してください。"],
+    part_id_missing: ["部件尚未取得结构编号，请点「整理部件编号」。", "パーツの構造番号が未設定です。「パーツ番号を整える」を押してください。"],
+    row_invalid: ["图形记录不完整，请移除此位置并重新添加。", "図形の記録が不完全です。この位置を削除して追加し直してください。"],
+    row_id_missing: ["图形编号缺失，请移除此位置并重新添加。", "図形の番号がありません。この位置を削除して追加し直してください。"],
+    row_id_duplicate: ["图形编号重复，请移除重复位置并重新添加。", "図形の番号が重複しています。重複する位置を削除して追加し直してください。"],
+    part_missing: ["原部件已不存在，请重新选择部件或移除此位置。", "元のパーツがありません。パーツを選び直すか、この位置を削除してください。"],
+    part_ambiguous: ["部件编号重复，请先整理编号，再重新选择部件。", "パーツ番号が重複しています。番号を整えてからパーツを選び直してください。"],
+    role_invalid: ["请选择图形位置的作用。", "図形の役割を選んでください。"],
+    appearance_invalid: ["请选择外观。", "見た目を選んでください。"],
+    thickness_invalid: ["实测厚度须为 1–300 mm；未知时请留空。", "実測の厚さは 1–300 mm で入力し、不明なら空欄にしてください。"],
+    width_invalid: ["宽度须为 20%–100%。", "幅は 20%–100% で入力してください。"],
+    host_required: ["夹心或涂刷须明确选择所属的平铺层或底与围边。", "インサートや塗りには、対象の平らな層または底・側面を指定してください。"],
+    host_unexpected: ["此作用不需要归属，请重新选择作用以清除旧归属。", "この役割には対象が不要です。役割を選び直して古い対象を解除してください。"],
+    host_missing: ["归属图形已不存在或编号重复，请重新选择。", "対象の図形がないか番号が重複しています。選び直してください。"],
+    host_self: ["不能归属于自身，请选择另一个平铺层或底与围边。", "自分自身は選べません。別の平らな層または底・側面を選んでください。"],
+    host_role: ["归属只可选择平铺层或底与围边。", "対象には平らな層または底・側面を選んでください。"],
+    host_cycle: ["归属形成循环，请重新选择平铺层或底与围边。", "対象の指定が循環しています。平らな層または底・側面を選び直してください。"],
+  };
+  const pair = labels[issue.code] || ["请检查结构编排。", "構造の編成を確認してください。"];
+  const prefix = Number.isInteger(issue.rowIndex) ? (ja ? `図形 ${issue.rowIndex + 1}：` : `图形 ${issue.rowIndex + 1}：`)
+    : Number.isInteger(issue.layerIndex) ? (ja ? `パーツ ${issue.layerIndex + 1}：` : `部件 ${issue.layerIndex + 1}：`) : "";
+  return prefix + pair[ja ? 1 : 0];
+};
+// END section-plan helpers
+
 // 配方详情 / 组件详情的「缩放计算」那一行(第 5 批第 0 步从两个详情页抽出来;S2 加缩放方式:按个数 / 按模具 / 按某样原料 / 按总重)。
 // variant "recipe" = 配方页压成一行的样式,"component" = 组件页 RURU 框的样式。
 // 状态 sc 在详情页里(useScaleState,按条目 id 认、不存本机),倍数只从 scaleFactorOf 出(info);下拉选项和 info 用同一个 ctx。
@@ -10458,6 +10785,226 @@ function useScaleState(obj, ctx) {
   return [sc, setSc];
 }
 
+// 第 7 批第 0 步:只抽共享展示。直接调用渲染 helper,保留原树形及行 key。
+
+function AddToShopBtn({ ings, lang, materials = [], shopMaterials = [], setShopMaterials, showToast }) {
+  return typeof setShopMaterials === "function" && (() => {
+  const linkedIds = new Set(shopMaterials.map(x => x && x.materialId).filter(Boolean));
+  const seen = new Set();
+  const uniqueMissing = [];
+  (ings || []).forEach(ing => {
+    if (ing && ing.materialId && !linkedIds.has(ing.materialId) && !seen.has(ing.materialId)) {
+      seen.add(ing.materialId);
+      uniqueMissing.push(ing);
+    }
+  });
+  if (uniqueMissing.length === 0) return null;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+    <WhyNote>{lang === "zh" ? "以参考价加入，之后可修改" : "参考価格で追加し、あとで変更できます"}</WhyNote>
+    <Btn size="sm" variant="success" onClick={() => {
+      const now = new Date().toISOString();   // 第 4 批:修改时间和价格记录同一个时间,在 updater 外面定好
+      setShopMaterials(prev => {
+        const existing = new Set(prev.map(x => x && x.materialId).filter(Boolean));
+        const add = [];
+        uniqueMissing.forEach(ing => {
+          if (existing.has(ing.materialId)) return;
+          const m = materials.find(x => x.id === ing.materialId);
+          // 第 5 批复查修(r3-money-1):材料没价、拿这一行的手填价兜底时,行价是「每这一行单位」的价(S1 起成本链会再乘克重系数),
+          // 照 saveIngPricesToShop(R32)折回每克价:g 行原样(和以前逐字节一样)、kg / L ÷ 1000、按个写填了克重的 ÷ 克重;
+          // 按个写没克重的折不成每克价 → 不写价(以前把每本价当每克价存);币种跟着价的来处(行价 → 行的币种)
+          const mRef = (m && m.priceRange && m.priceRange.mid) || (m && m.pricePerG);
+          let ref = "", cur = m ? curOf(m) : curOf(ing);
+          if (mRef) ref = mRef;
+          else {
+            const f = m ? ingGramFactor(ing, m) : ingWeightFactor(ing.unit), p = parseFloat(ing.unitPrice);
+            if (f > 0 && p > 0) { ref = f === 1 ? String(ing.unitPrice) : String(Number((p / f).toPrecision(12))); cur = curOf(ing); }
+          }
+          const sm = {
+            id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
+            materialId: ing.materialId,
+            pricePerG: String(ref),
+            currency: cur,   // v17: 价取自百科就用百科币种,取自手写价就用手写价的币种
+            packSize: (m && m.packSize) || "",
+            casePack: (m && m.casePack) || "",
+            note: "",
+            updatedAt: now,   // 合并导入按修改时间取新的一边(mergeByNewer)
+          };
+          const ph = withPriceHistory(null, sm, "shop", "add", now);   // 第 4 批:有价才记一条「加入本店原料」
+          add.push(ph ? { ...sm, priceHistory: ph } : sm);
+        });
+        return [...prev, ...add];
+      });
+      if (typeof showToast === "function") showToast(lang === "zh" ? `✓ 加入本店原料 ${uniqueMissing.length} 条(以参考价)` : `✓ 仕入れ原料に ${uniqueMissing.length} 件追加`);
+    }} title={lang === "zh" ? `把本配方 ${uniqueMissing.length} 条未添加的原料一键加入本店原料(以参考价,可后续修改)` : `${uniqueMissing.length} 件を仕入れ原料に一括追加`}>
+      {lang === "zh" ? `+ 本店原料 (${uniqueMissing.length})` : `+ 仕入 (${uniqueMissing.length})`}
+    </Btn>
+    </span>
+  );
+  })();
+}
+
+function IngTableHead({ lang, scale }) {
+  return (
+  <div className="rc-ing-head" style={{ display: "grid", gridTemplateColumns: ING_COLS, ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+    <div style={{ paddingLeft: T.sp.xl }}>
+      {lang === "zh" ? "原料名称" : "原材料"}
+      {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
+    </div>
+    <div style={{ textAlign: "right" }}>{lang === "zh" ? "用量" : "分量"}</div>
+    <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl }}>{lang === "zh" ? "品牌" : "ブランド"}</div>
+    <div style={{ textAlign: "right" }}>{lang === "zh" ? "成本" : "原価"}</div>
+  </div>
+  );
+}
+
+function IngGroupTitle({ gk, n, lang }) {
+  const g = GROUPS[gk];
+  return gk !== "none" && (
+  <div style={{ display: "flex", alignItems: "center", gap: 9, padding: `22px 0 9px ${T.sp.xl}px` }}>
+    <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, flexShrink: 0 }} />
+    <span style={{ ...T.fs.label, letterSpacing: "0.16em", color: T.body }}>
+      {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
+    </span>
+    <span style={{ flex: 1, height: 1, background: T.line }} />
+    <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{n}</span>
+  </div>
+  );
+}
+
+function IngViewRow({ ing, scale, lang, materials = [], brands = [], onNavigateToMaterial, gk, rowKey }) {
+  const g = GROUPS[gk];
+  const n = pickLang(ing, "name", lang);
+  const sub = rawLang(ing, "name", lang);
+  const scaledQty = (parseFloat(ing.qty) || 0) * scale;
+  const scaledCost = getIngLiveCost(ing, materials, brands, []) * scale;
+  // 🔗 材料百科关联
+  const linkedMat = ing.materialId ? materials.find(x => x.id === ing.materialId) : null;
+  const canJump = linkedMat && onNavigateToMaterial;
+  // 属性徽章 · 9px 描边无底色，只标事实。一行最多 2 个，第 3 个起折叠成「+N」
+  const src = getIngPriceSource(ing, materials);
+  const badges = [];
+  if (src === "shop") badges.push({ t: lang === "zh" ? "本店" : "仕入", c: T.success, tip: lang === "zh" ? "本店采购价" : "仕入れ価" });
+  else if (src === "ref") badges.push({ t: lang === "zh" ? "参考" : "参考", c: T.secondary, tip: lang === "zh" ? "百科参考价" : "百科参考価" });
+  else if (src === "manual") badges.push({ t: lang === "zh" ? "手写" : "手入", c: T.info, tip: lang === "zh" ? "手写单价" : "手入力" });
+  // 第 4 批 B4-6(critic M1):不计价 / 来自组件。组件里有原料没价时组件徽章用警示色(这一行也算进「N 项没价」)
+  else if (src === "nocost") badges.push({ t: lang === "zh" ? "不计价" : "原価外", c: T.muted, tip: lang === "zh" ? "这一行不计价,成本按 0 算" : "原価に入れない行" });
+  else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "パーツ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "パーツ:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
+  else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? (ingLiveComp(ing, materials) ? "来自组件,但算不出单价(组件没填产出量 / 单位对不上 / 循环 / 没价)" : "无价格信息") : "価格情報なし" });
+  // 第 5 批 2.4(S1,R21):按个写、关联了按克计价的材料 —— 没填克重 →「单位不符」(警示色);填了 →「≈2.2g/本」(灰)
+  if (ingUnitUnconverted(ing, materials)) { const u = _normTxt(ing.unit); badges.push({ t: lang === "zh" ? "单位不符" : "単位不一致", c: T.warning, tip: lang === "zh" ? `按「${u}」写、关联了按克计价的材料,没填 1 ${u} 约几克 → 成本按 1 ${u} = 1 g 算,少算了` : `「${u}」単位で g 単価の材料と連動、1${u} あたりの g が未入力 → 1${u} = 1 g で計算(過少)` }); }
+  else if (linkedMat && ingWeightFactor(ing.unit) === 0 && ingPieceGrams(ing, linkedMat) > 0) { const u = _normTxt(ing.unit); badges.push({ t: `≈${fmtQty(ingPieceGrams(ing, linkedMat))}g/${u}`, c: T.muted, tip: lang === "zh" ? `按 1 ${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g 换算成克` : `1${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g で換算` }); }
+  if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
+  else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のパーツは削除済み" });
+  const shown = badges.slice(0, 2), rest = badges.slice(2);
+  return (
+    <div
+      key={rowKey}
+      className="k-row rc-ing-row"
+      style={{
+        display: "grid", gridTemplateColumns: ING_COLS, alignItems: "baseline",
+        padding: "11px 0", borderBottom: `1px solid ${T.lineFaint}`,
+        borderLeft: `3px solid ${g.border}`,
+        cursor: canJump ? "pointer" : "default",
+      }}
+      onClick={canJump ? () => onNavigateToMaterial(linkedMat.id) : undefined}
+      title={canJump ? (lang === "zh" ? `点击跳转百科：${linkedMat.nameZh || linkedMat.nameJa}` : "事典へ跳ぶ") : ""}
+    >
+      <div className="k-fluid" style={{ paddingLeft: T.sp.xl }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.s, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 16, fontWeight: 500, letterSpacing: "0.01em", color: T.ink }}>{n}</span>
+          {sub && sub !== n && <span style={{ ...T.fs.caption, color: T.subtle }}>{sub}</span>}
+          {shown.map((b, bi) => (
+            <span key={bi} title={b.tip} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}{(b.c === T.warning || b.t === (lang === "zh" ? "组件" : "パーツ")) && <TapTip tipId="ingredient-badge" text={b.tip} lang={lang} />}</span>
+          ))}
+          {rest.length > 0 && (
+            <span className="k-more" style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${T.border}`, color: T.secondary, cursor: "default" }} tabIndex={0}>
+              +{rest.length}
+              <span className="k-more-pop">
+                {rest.map((b, bi) => (
+                  <span key={bi} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}</span>
+                ))}
+              </span>
+            </span>
+          )}
+        </div>
+        {ing.nameFr && <div className="k-desktop-only" style={{ ...T.fs.label, color: T.muted, fontStyle: "italic", marginTop: 2, letterSpacing: 0 }}>{ing.nameFr}</div>}
+        {ing.note && <div style={{ ...T.fs.label, color: T.danger, marginTop: 4, lineHeight: 1.5, letterSpacing: 0 }}>{ing.note}</div>}
+      </div>
+      <div style={{ textAlign: "right", fontSize: 17, fontWeight: 400, ...T.num, color: scale !== 1 ? T.accent : T.ink, whiteSpace: "nowrap" }}>
+        {/* 2026-09-29 体检第 2 批:以前缩放后一律留 1 位小数,0.1g 皮屑缩小后显示 0.0;「适量」这类显示成 0.0 */}
+        {scale === 1 ? ing.qty : (isFinite(parseFloat(ing.qty)) ? fmtQty(scaledQty) : ing.qty)}
+        <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
+      </div>
+      <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
+      <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{fmtCost(scaledCost)}{canJump && <span data-tl-cap="encyclopedia-link" aria-hidden="true" style={{ marginLeft: 6 }}>›</span>}</div>
+    </div>
+  );
+}
+
+function StepsBlock({ steps, lang, title }) {
+  return steps && steps.length > 0 && (
+    <div style={{ marginBottom: T.sp.gap }}>
+      <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+        {title === undefined ? (lang === "zh" ? "制作流程" : "製法") : title}
+      </div>
+      <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {steps.map((s, i) => {
+          // 把【①】【②】【③】替换成彩色标签
+          const bowlMap = { "①": "bowl1", "②": "bowl2", "③": "bowl3", "④": "bowl4", "⑤": "bowl5" };
+          const parts = s.split(/(【[①②③④⑤]】)/g);
+          return (
+            <li key={i} className="k-row" style={{ display: "grid", gridTemplateColumns: "44px 1fr", padding: "12px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
+              <div style={{ ...T.fs.caption, color: T.muted, ...T.num, paddingTop: 2, fontFamily: T.fontSerif }}>{String(i + 1).padStart(2, "0")}</div>
+              <div className="k-fluid" style={{ ...T.fs.body, color: T.ink }}>
+                {parts.map((part, pi) => {
+                  const match = part.match(/【([①②③④⑤])】/);
+                  if (match) {
+                    const gk = bowlMap[match[1]];
+                    const g = GROUPS[gk];
+                    return (
+                      <span key={pi} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "1px 8px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${g.labelBorder}`, color: g.labelColor, marginRight: 5, verticalAlign: "middle" }}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, display: "inline-block" }} />
+                        {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
+                      </span>
+                    );
+                  }
+                  return <span key={pi}>{part}</span>;
+                })}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function RelatedKnowledgeBlock({ items, lang, onOpen }) {
+  return items.length > 0 && (
+  <div style={{ marginBottom: T.sp.gap }}>
+    <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+      {lang === "zh" ? "相关知识点" : "関連ナレッジ"}
+    </div>
+    <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", paddingTop: 12 }}>
+      {items.map(k => {
+        const kTitle = pickLang(k, "title", lang);
+        return (
+          <button
+            key={k.id}
+            className="k-btn k-tap"
+            onClick={() => onOpen && onOpen(k.id)}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.surface, color: T.info, padding: "4px 10px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${T.info}`, cursor: "pointer", fontFamily: T.fontSans }}
+          >
+            {kTitle} <span style={{ fontSize: 10, opacity: 0.7 }}>→</span>
+          </button>
+        );
+      })}
+    </div>
+  </div>
+  );
+}
+
 // ─── Recipe View (read-only) ──────────────────────────────────────
 function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes = [], components = [], creations = [], onNavigateToKnowledge, onPrint, materials = [], brands = [], onNavigateToMaterial, shopMaterials = [], setShopMaterials, showToast, onPrintLabel, onKitchen,
   prepStock = null, onPrepOp, onOpenPrep, today, products = [], onGoTab, confirmDialog,   // 备货(E 线):标了备货或账上有这一样时,头部下面挂紧凑的备货卡 + 标签;都没有时 DOM 不变
@@ -10517,60 +11064,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {/* v11: 一键把本配方所有有 materialId 的 ingredient 加到本店原料 */}
-          {typeof setShopMaterials === "function" && (() => {
-            const linkedIds = new Set(shopMaterials.map(x => x && x.materialId).filter(Boolean));
-            const seen = new Set();
-            const uniqueMissing = [];
-            (r.ingredients || []).forEach(ing => {
-              if (ing && ing.materialId && !linkedIds.has(ing.materialId) && !seen.has(ing.materialId)) {
-                seen.add(ing.materialId);
-                uniqueMissing.push(ing);
-              }
-            });
-            if (uniqueMissing.length === 0) return null;
-            return (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <WhyNote>{lang === "zh" ? "以参考价加入，之后可修改" : "参考価格で追加し、あとで変更できます"}</WhyNote>
-              <Btn size="sm" variant="success" onClick={() => {
-                const now = new Date().toISOString();   // 第 4 批:修改时间和价格记录同一个时间,在 updater 外面定好
-                setShopMaterials(prev => {
-                  const existing = new Set(prev.map(x => x && x.materialId).filter(Boolean));
-                  const add = [];
-                  uniqueMissing.forEach(ing => {
-                    if (existing.has(ing.materialId)) return;
-                    const m = materials.find(x => x.id === ing.materialId);
-                    // 第 5 批复查修(r3-money-1):材料没价、拿这一行的手填价兜底时,行价是「每这一行单位」的价(S1 起成本链会再乘克重系数),
-                    // 照 saveIngPricesToShop(R32)折回每克价:g 行原样(和以前逐字节一样)、kg / L ÷ 1000、按个写填了克重的 ÷ 克重;
-                    // 按个写没克重的折不成每克价 → 不写价(以前把每本价当每克价存);币种跟着价的来处(行价 → 行的币种)
-                    const mRef = (m && m.priceRange && m.priceRange.mid) || (m && m.pricePerG);
-                    let ref = "", cur = m ? curOf(m) : curOf(ing);
-                    if (mRef) ref = mRef;
-                    else {
-                      const f = m ? ingGramFactor(ing, m) : ingWeightFactor(ing.unit), p = parseFloat(ing.unitPrice);
-                      if (f > 0 && p > 0) { ref = f === 1 ? String(ing.unitPrice) : String(Number((p / f).toPrecision(12))); cur = curOf(ing); }
-                    }
-                    const sm = {
-                      id: "sm_" + Date.now() + Math.random().toString(36).slice(2, 6),
-                      materialId: ing.materialId,
-                      pricePerG: String(ref),
-                      currency: cur,   // v17: 价取自百科就用百科币种,取自手写价就用手写价的币种
-                      packSize: (m && m.packSize) || "",
-                      casePack: (m && m.casePack) || "",
-                      note: "",
-                      updatedAt: now,   // 合并导入按修改时间取新的一边(mergeByNewer)
-                    };
-                    const ph = withPriceHistory(null, sm, "shop", "add", now);   // 第 4 批:有价才记一条「加入本店原料」
-                    add.push(ph ? { ...sm, priceHistory: ph } : sm);
-                  });
-                  return [...prev, ...add];
-                });
-                if (typeof showToast === "function") showToast(lang === "zh" ? `✓ 加入本店原料 ${uniqueMissing.length} 条(以参考价)` : `✓ 仕入れ原料に ${uniqueMissing.length} 件追加`);
-              }} title={lang === "zh" ? `把本配方 ${uniqueMissing.length} 条未添加的原料一键加入本店原料(以参考价,可后续修改)` : `${uniqueMissing.length} 件を仕入れ原料に一括追加`}>
-                {lang === "zh" ? `+ 本店原料 (${uniqueMissing.length})` : `+ 仕入 (${uniqueMissing.length})`}
-              </Btn>
-              </span>
-            );
-          })()}
+          {AddToShopBtn({ ings: r.ingredients, lang, materials, shopMaterials, setShopMaterials, showToast })}
           {/* 第 3 批 F4:厨房视图(大字、打勾、常亮;不显示钱)。缩放过就带着缩放后的个数 */}
           {onKitchen && <Btn size="sm" disabled={kitchenLocked}
             title={kitchenLocked ? (lang === "ja" ? "型で換算中はキッチン表示が合わないため、キッチン用を印刷してください" : "按模具缩放时厨房视图算不对,请打印厨房版") : undefined}
@@ -10696,100 +11190,16 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
         })()}
 
         {/* 表头：10px 全大写微标签，下面压一条 1px ink 实线 */}
-        <div className="rc-ing-head" style={{ display: "grid", gridTemplateColumns: ING_COLS, ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
-          <div style={{ paddingLeft: T.sp.xl }}>
-            {lang === "zh" ? "原料名称" : "原材料"}
-            {scale !== 1 && <span style={{ color: T.accent, marginLeft: 6 }}>×{scale.toFixed(2)}</span>}
-          </div>
-          <div style={{ textAlign: "right" }}>{lang === "zh" ? "用量" : "分量"}</div>
-          <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl }}>{lang === "zh" ? "品牌" : "ブランド"}</div>
-          <div style={{ textAlign: "right" }}>{lang === "zh" ? "成本" : "原価"}</div>
-        </div>
+        {IngTableHead({ lang, scale })}
 
         {GROUP_ORDER.map(gk => {
           const arr = grouped[gk]; if (!arr || !arr.length) return null;
-          const g = GROUPS[gk];
+
           return (
             <div key={gk}>
               {/* 分组标题 = 22px 上留白 + 色点 + 标签 + 发丝线 + 条数 */}
-              {gk !== "none" && (
-                <div style={{ display: "flex", alignItems: "center", gap: 9, padding: `22px 0 9px ${T.sp.xl}px` }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, flexShrink: 0 }} />
-                  <span style={{ ...T.fs.label, letterSpacing: "0.16em", color: T.body }}>
-                    {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
-                  </span>
-                  <span style={{ flex: 1, height: 1, background: T.line }} />
-                  <span style={{ ...T.fs.micro, color: T.muted, ...T.num }}>{arr.length}</span>
-                </div>
-              )}
-              {arr.map((ing, i) => {
-                const n = pickLang(ing, "name", lang);
-                const sub = rawLang(ing, "name", lang);
-                const scaledQty = (parseFloat(ing.qty) || 0) * scale;
-                const scaledCost = getIngLiveCost(ing, materials, brands, []) * scale;
-                // 🔗 材料百科关联
-                const linkedMat = ing.materialId ? materials.find(x => x.id === ing.materialId) : null;
-                const canJump = linkedMat && onNavigateToMaterial;
-                // 属性徽章 · 9px 描边无底色，只标事实。一行最多 2 个，第 3 个起折叠成「+N」
-                const src = getIngPriceSource(ing, materials);
-                const badges = [];
-                if (src === "shop") badges.push({ t: lang === "zh" ? "本店" : "仕入", c: T.success, tip: lang === "zh" ? "本店采购价" : "仕入れ価" });
-                else if (src === "ref") badges.push({ t: lang === "zh" ? "参考" : "参考", c: T.secondary, tip: lang === "zh" ? "百科参考价" : "百科参考価" });
-                else if (src === "manual") badges.push({ t: lang === "zh" ? "手写" : "手入", c: T.info, tip: lang === "zh" ? "手写单价" : "手入力" });
-                // 第 4 批 B4-6(critic M1):不计价 / 来自组件。组件里有原料没价时组件徽章用警示色(这一行也算进「N 项没价」)
-                else if (src === "nocost") badges.push({ t: lang === "zh" ? "不计价" : "原価外", c: T.muted, tip: lang === "zh" ? "这一行不计价,成本按 0 算" : "原価に入れない行" });
-                else if (src === "component") { const cr = componentRowPrice(ing, materials); badges.push({ t: lang === "zh" ? "组件" : "パーツ", c: cr.incomplete ? T.warning : T.info, tip: (lang === "zh" ? "来自组件:" : "パーツ:") + pickLang(cr.comp || {}, "name", lang) + (cr.incomplete ? (lang === "zh" ? "(组件里有原料没价,成本不全)" : "(一部価格なし)") : "") }); }
-                else badges.push({ t: lang === "zh" ? "无价" : "価格なし", c: T.warning, tip: lang === "zh" ? (ingLiveComp(ing, materials) ? "来自组件,但算不出单价(组件没填产出量 / 单位对不上 / 循环 / 没价)" : "无价格信息") : "価格情報なし" });
-                // 第 5 批 2.4(S1,R21):按个写、关联了按克计价的材料 —— 没填克重 →「单位不符」(警示色);填了 →「≈2.2g/本」(灰)
-                if (ingUnitUnconverted(ing, materials)) { const u = _normTxt(ing.unit); badges.push({ t: lang === "zh" ? "单位不符" : "単位不一致", c: T.warning, tip: lang === "zh" ? `按「${u}」写、关联了按克计价的材料,没填 1 ${u} 约几克 → 成本按 1 ${u} = 1 g 算,少算了` : `「${u}」単位で g 単価の材料と連動、1${u} あたりの g が未入力 → 1${u} = 1 g で計算(過少)` }); }
-                else if (linkedMat && ingWeightFactor(ing.unit) === 0 && ingPieceGrams(ing, linkedMat) > 0) { const u = _normTxt(ing.unit); badges.push({ t: `≈${fmtQty(ingPieceGrams(ing, linkedMat))}g/${u}`, c: T.muted, tip: lang === "zh" ? `按 1 ${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g 换算成克` : `1${u} ≈ ${fmtQty(ingPieceGrams(ing, linkedMat))} g で換算` }); }
-                if (linkedMat) badges.push({ t: lang === "zh" ? "百科" : "事典", c: T.muted, tip: lang === "zh" ? "已关联材料百科" : "事典連動" });
-                else if (ing.componentId !== undefined && ing.componentId !== null && ing.componentId !== "" && !ingLiveComp(ing, materials)) badges.push({ t: lang === "zh" ? "组件已删" : "削除済", c: T.warning, tip: lang === "zh" ? "原来来自的组件已经删了,按上次存下的单价算" : "元のパーツは削除済み" });
-                const shown = badges.slice(0, 2), rest = badges.slice(2);
-                return (
-                  <div
-                    key={i}
-                    className="k-row rc-ing-row"
-                    style={{
-                      display: "grid", gridTemplateColumns: ING_COLS, alignItems: "baseline",
-                      padding: "11px 0", borderBottom: `1px solid ${T.lineFaint}`,
-                      borderLeft: `3px solid ${g.border}`,
-                      cursor: canJump ? "pointer" : "default",
-                    }}
-                    onClick={canJump ? () => onNavigateToMaterial(linkedMat.id) : undefined}
-                    title={canJump ? (lang === "zh" ? `点击跳转百科：${linkedMat.nameZh || linkedMat.nameJa}` : "事典へ跳ぶ") : ""}
-                  >
-                    <div className="k-fluid" style={{ paddingLeft: T.sp.xl }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.s, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 16, fontWeight: 500, letterSpacing: "0.01em", color: T.ink }}>{n}</span>
-                        {sub && sub !== n && <span style={{ ...T.fs.caption, color: T.subtle }}>{sub}</span>}
-                        {shown.map((b, bi) => (
-                          <span key={bi} title={b.tip} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}{(b.c === T.warning || b.t === (lang === "zh" ? "组件" : "パーツ")) && <TapTip tipId="ingredient-badge" text={b.tip} lang={lang} />}</span>
-                        ))}
-                        {rest.length > 0 && (
-                          <span className="k-more" style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${T.border}`, color: T.secondary, cursor: "default" }} tabIndex={0}>
-                            +{rest.length}
-                            <span className="k-more-pop">
-                              {rest.map((b, bi) => (
-                                <span key={bi} style={{ fontSize: 9, letterSpacing: "0.1em", padding: "2px 6px", border: `1px solid ${b.c}`, color: b.c, whiteSpace: "nowrap" }}>{b.t}</span>
-                              ))}
-                            </span>
-                          </span>
-                        )}
-                      </div>
-                      {ing.nameFr && <div className="k-desktop-only" style={{ ...T.fs.label, color: T.muted, fontStyle: "italic", marginTop: 2, letterSpacing: 0 }}>{ing.nameFr}</div>}
-                      {ing.note && <div style={{ ...T.fs.label, color: T.danger, marginTop: 4, lineHeight: 1.5, letterSpacing: 0 }}>{ing.note}</div>}
-                    </div>
-                    <div style={{ textAlign: "right", fontSize: 17, fontWeight: 400, ...T.num, color: scale !== 1 ? T.accent : T.ink, whiteSpace: "nowrap" }}>
-                      {/* 2026-09-29 体检第 2 批:以前缩放后一律留 1 位小数,0.1g 皮屑缩小后显示 0.0;「适量」这类显示成 0.0 */}
-                      {scale === 1 ? ing.qty : (isFinite(parseFloat(ing.qty)) ? fmtQty(scaledQty) : ing.qty)}
-                      <span style={{ ...T.fs.label, color: T.subtle, marginLeft: 3 }}>{ing.unit}</span>
-                    </div>
-                    <div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl, ...T.fs.caption, color: T.body }}>{ing.brand || "—"}</div>
-                    <div style={{ textAlign: "right", ...T.fs.small, color: T.body, ...T.num }}>{fmtCost(scaledCost)}{canJump && <span data-tl-cap="encyclopedia-link" aria-hidden="true" style={{ marginLeft: 6 }}>›</span>}</div>
-                  </div>
-                );
-              })}
+              {IngGroupTitle({ gk, n: arr.length, lang })}
+              {arr.map((ing, i) => IngViewRow({ ing, scale, lang, materials, brands, onNavigateToMaterial, gk, rowKey: i }))}
             </div>
           );
         })}
@@ -10828,44 +11238,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
       </div>
 
       {/* Steps */}
-      {(() => {
-        const displaySteps = pickSteps(r, lang);
-        return displaySteps && displaySteps.length > 0 && (
-          <div style={{ marginBottom: T.sp.gap }}>
-            <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
-              {lang === "zh" ? "制作流程" : "製法"}
-            </div>
-            <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {displaySteps.map((s, i) => {
-                // 把【①】【②】【③】替换成彩色标签
-                const bowlMap = { "①": "bowl1", "②": "bowl2", "③": "bowl3", "④": "bowl4", "⑤": "bowl5" };
-                const parts = s.split(/(【[①②③④⑤]】)/g);
-                return (
-                  <li key={i} className="k-row" style={{ display: "grid", gridTemplateColumns: "44px 1fr", padding: "12px 0", borderBottom: `1px solid ${T.lineFaint}` }}>
-                    <div style={{ ...T.fs.caption, color: T.muted, ...T.num, paddingTop: 2, fontFamily: T.fontSerif }}>{String(i + 1).padStart(2, "0")}</div>
-                    <div className="k-fluid" style={{ ...T.fs.body, color: T.ink }}>
-                      {parts.map((part, pi) => {
-                        const match = part.match(/【([①②③④⑤])】/);
-                        if (match) {
-                          const gk = bowlMap[match[1]];
-                          const g = GROUPS[gk];
-                          return (
-                            <span key={pi} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "1px 8px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${g.labelBorder}`, color: g.labelColor, marginRight: 5, verticalAlign: "middle" }}>
-                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.border, display: "inline-block" }} />
-                              {lang === "zh" ? g.zh : lang === "ja" ? g.ja : g.fr}
-                            </span>
-                          );
-                        }
-                        return <span key={pi}>{part}</span>;
-                      })}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
-        );
-      })()}
+      {StepsBlock({ steps: pickSteps(r, lang), lang })}
 
       {/* 过敏原汇总 + 配料表草稿(第 3 批 F3)。手写的 allergens 在卡片里和算出来的并排,下面的备注块不再重复显示 */}
       <AllergenSummaryCard kind="recipe" entity={r} lang={lang} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} handwritten={r.allergens} onPrintLabel={onPrintLabel} flat />
@@ -10898,28 +11271,7 @@ function RecipeView({ recipe: r, lang, onEdit, onBack, knowledge = [], recipes =
       <ImageUrlsDisplay urls={r.imageUrls} />
 
       {/* 关联知识点（反向跳转） */}
-      {relatedKnowledge.length > 0 && (
-        <div style={{ marginBottom: T.sp.gap }}>
-          <div style={{ ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
-            {lang === "zh" ? "相关知识点" : "関連ナレッジ"}
-          </div>
-          <div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap", paddingTop: 12 }}>
-            {relatedKnowledge.map(k => {
-              const kTitle = pickLang(k, "title", lang);
-              return (
-                <button
-                  key={k.id}
-                  className="k-btn k-tap"
-                  onClick={() => onNavigateToKnowledge && onNavigateToKnowledge(k.id)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T.surface, color: T.info, padding: "4px 10px", borderRadius: T.radius, ...T.fs.caption, border: `1px solid ${T.info}`, cursor: "pointer", fontFamily: T.fontSans }}
-                >
-                  {kTitle} <span style={{ fontSize: 10, opacity: 0.7 }}>→</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {RelatedKnowledgeBlock({ items: relatedKnowledge, lang, onOpen: onNavigateToKnowledge })}
     </div>
   );
 }
@@ -11345,11 +11697,11 @@ function CompImpactCardBody({ impact, components, creations, recipes, materials,
 function ComponentsView({ components, setComponents, cats, onUpdateCats, brands = [], materials = [], setMaterials, setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, confirmDialog, knowledge, recipes = [], creations = [], onNavigateToKnowledge, onQuickAddKnowledge, onPrintComponent, customCompCats = [], onAddCustomCompCat, products = [], setRecipes = null, setCreations = null,
   prepStock = null, onPrepOp, onOpenPrep, today, onPrepDrop,   // 备货第 0 步:新 prop 只透传给详情 / 编辑页;onPrepDrop(key) / 删除时的库存由 G 线接
   onKnowledgeCheck,   // 第 5 批第 0 步(E3):组件保存后检查知识按钮(App 的 knowledgeCheckOnSave)
-  onJump }) {   // 第 5 批 E2:「改前 → 改后」卡里锁定产品那一行「去看新版本 →」(App 的 jumpToItem;没传就不给链接)
+  onJump, initialQuery = "" }) {   // 第 5 批 E2:「改前 → 改后」卡里锁定产品那一行「去看新版本 →」(App 的 jumpToItem;没传就不给链接)
   // 2026-09-29 体检第 2 批:products 只用来在删组件时列出挂着它的商品(没传就只列组合产品)
   const [filterCat, setFilterCat] = useState("all");
   const [compViewMode, setCompViewMode] = useState("list"); // "list" | "matrix"
-  const [compSearch, setCompSearch] = useState("");
+  const [compSearch, setCompSearch] = useState(initialQuery);
   // 第 5 批 E2:保存后的「改前 → 改后」卡(只存「改前」快照 + 组件 id;「改后」在详情页卡片第一次画出来时算)。看别的组件 / 离开组件 tab 就没了,不写数据
   const [impact, setImpact] = useState(null);
   const impactSeq = useRef(0);
@@ -12502,6 +12854,475 @@ function ingredientQueryHit(ing, k, matById, brandKeys) {
     if (m && materialQueryRank(m, k, brandKeys) < 9) return true;
   }
   return false;
+}
+
+// ─── BEGIN recipe-list helpers ───
+// 第 7 批第 0 步：判定先就位，列表与保存入口在 T 线通过独立参照模型后接入。
+const CREATION_TRIAL_TOKEN = /(?:^|[^0-9a-z.])v0(?:\.\d+)*(?![0-9a-z.])|草稿|下書き|draft/i;
+function _trialNameMarked(s) {
+  return CREATION_TRIAL_TOKEN.test(String(s || "").normalize("NFKC"));
+}
+function creationTrialDefault(c) {
+  if (!c || typeof c !== "object" || c.onSale) return "done";
+  return [c.nameZh, c.nameJa, c.nameFr].some(_trialNameMarked) ? "bench" : "done";
+}
+function creationTrialOf(c) {
+  return c && typeof c === "object" && (c.trial === "bench" || c.trial === "done") ? c.trial : creationTrialDefault(c);
+}
+function isCreationOnBench(c) {
+  return !!c && typeof c === "object" && creationTrialOf(c) === "bench" && !c.onSale;
+}
+function creationUsedWarnCount(c) {
+  const layers = c.layers || [];
+  return layers.filter(l => l && ((parseFloat(l.yield) > 0 && !(parseUsedAmount(l.usedAmount, l.unit) > 0)) || usedAmountAmbiguous(l.usedAmount))).length;
+}
+// 第 7 批 A4：配方一览专用搜索。旧组件 / 材料搜索继续使用原有规范化。
+const RLIST_SEP = /[\s,，、;；]+/;
+const RLIST_ALIASES = [
+  ["可露丽", "可丽露", "卡娜蕾"], ["玛德琳", "马德琳", "玛德莲"], ["芝士", "奶酪", "起司"],
+  ["萨布雷", "沙布列"], ["费南雪", "金砖"], ["千层", "拿破仑"],
+];
+const RLIST_KIND_WORDS = ["组合", "組み合わせ", "組立"];
+const rlistKey = (s) => normSearch(s)
+  .replace(/[\-‐‑‒–—―=＝・·•･'’`]/g, "")
+  .replace(/[ァ-ヶ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+function rlistTerms(q) {
+  const terms = [], seen = new Set();
+  String(q == null ? "" : q).split(RLIST_SEP).forEach(raw => {
+    const key = rlistKey(raw);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const alts = [{ raw, key, norm: normSearch(raw) }];
+    const group = RLIST_ALIASES.find(g => g.some(a => rlistKey(a) === key));
+    if (group) group.forEach(a => {
+      const aliasKey = rlistKey(a);
+      if (aliasKey !== key) alts.push({ raw: a, key: aliasKey, norm: normSearch(a), alias: true });
+    });
+    terms.push({ raw, alts });
+  });
+  return terms;
+}
+const rlistWhole = (q) => String(q == null ? "" : q).split(RLIST_SEP).map(rlistKey).join("");
+const rlistIsObj = (x) => !!x && typeof x === "object";
+const rlistText = (v) => v == null ? "" : String(v);
+const rlistLang = (lang) => lang === "ja" ? "ja" : "zh";
+
+function rlistFieldsOf(kind, x, ctx = {}) {
+  if (!rlistIsObj(x)) return null;
+  const lang = rlistLang(ctx.lang), zh = lang === "zh";
+  const families = Array.isArray(ctx.families) ? ctx.families : [];
+  const components = Array.isArray(ctx.components) ? ctx.components : [];
+  const tags = [], parts = [], flavors = [];
+  const tag = (t, values, text) => tags.push({ t, keys: values.map(rlistKey), text: rlistText(text) });
+  const family = x.familyId ? families.find(f => rlistIsObj(f) && f.id === x.familyId) : null;
+  if (family) tag("family", [family.nameZh, family.nameJa], pickLang(family, "name", lang));
+  if (kind === "recipe") {
+    if (x.variantLabel) tag("variant", [x.variantLabel], x.variantLabel);
+    if (x.category) {
+      const cat = RECIPE_CATEGORIES.find(c => c.v === x.category);
+      tag("cat", cat ? [x.category, cat.zh, cat.ja] : [x.category], recipeCatLabel(x.category, lang));
+    }
+  } else if (kind === "creation") {
+    tag("kind", RLIST_KIND_WORDS, zh ? "组合" : "組み合わせ");
+    const status = creationStatusInfo(x.status, lang);
+    tag("status", [x.status, status.zh, status.ja], status.label);
+    const structure = CREATION_STRUCTURES.find(s => s.id === creationStructureOf(x));
+    tag("structure", [structure.zh, structure.ja], structure[lang]);
+    [x.flavorName, x.chef, ...(Array.isArray(x.flavorTags) ? x.flavorTags : [])].forEach(v => {
+      flavors.push({ key: rlistKey(v), text: rlistText(v) });
+    });
+    (Array.isArray(x.layers) ? x.layers : []).filter(rlistIsObj).forEach(layer => {
+      const cp = layer.sourceComponentId ? components.find(c => rlistIsObj(c) && c.id === layer.sourceComponentId) : null;
+      const text = rlistText(layer.customName || (zh ? (layer.nameZh || layer.nameJa) : (layer.nameJa || layer.nameZh)) || layer.nameFr || "");
+      const orderedNames = o => zh ? [o.nameZh, o.nameJa, o.nameFr] : [o.nameJa, o.nameZh, o.nameFr];
+      parts.push({ text, cp, names: [layer.customName, ...orderedNames(layer), ...(cp ? orderedNames(cp) : [])] });
+    });
+  }
+  const ingredients = kind === "creation"
+    ? (Array.isArray(x.layers) ? x.layers : []).filter(rlistIsObj).flatMap(l => Array.isArray(l.ingredients) ? l.ingredients : [])
+    : (Array.isArray(x.ingredients) ? x.ingredients : []);
+  return {
+    names: [x.nameZh, x.nameJa, x.nameFr].map(rlistKey).filter(Boolean),
+    tags, flavors, parts, ingredients: ingredients.filter(rlistIsObj), lang,
+    matById: ctx.matById && typeof ctx.matById.get === "function" ? ctx.matById : null,
+    brandKeys: ctx.brandKeys,
+  };
+}
+
+function rlistAltMatch(fields, alt) {
+  if (fields.names.some(k => k.startsWith(alt.key))) return { tier: 1 };
+  if (fields.names.some(k => k.includes(alt.key))) return { tier: 2 };
+  const tag = fields.tags.find(t => t.keys.some(k => k.includes(alt.key)));
+  if (tag) return { tier: 3, hit: { t: tag.t, text: tag.text } };
+  const flavor = fields.flavors.find(f => f.key.includes(alt.key));
+  if (flavor) return { tier: 4, hit: { t: "flavor", text: flavor.text } };
+  for (const part of fields.parts) {
+    const hitName = part.names.find(n => rlistKey(n).includes(alt.key));
+    if (hitName !== undefined) {
+      const hit = { t: "part", text: part.text };
+      if (rlistText(hitName) !== part.text) hit.eq = rlistText(hitName);
+      if (part.cp) hit.compId = part.cp.id;
+      return { tier: 5, hit };
+    }
+  }
+  const ing = fields.ingredients.find(i => ingredientQueryHit(i, alt.norm, fields.matById, fields.brandKeys));
+  if (!ing) return null;
+  const hit = { t: "ing", text: rlistText(pickLang(ing, "name", fields.lang) || ing.nameFr || "") };
+  if ([ing.nameZh, ing.nameJa, ing.nameFr].some(n => normSearch(n).includes(alt.norm))) return { tier: 6, hit };
+  if (alt.norm.length >= 2 && normSearch(ing.brand).includes(alt.norm)) {
+    hit.via = "brand";
+    hit.viaText = rlistText(ing.brand);
+  } else {
+    const material = fields.matById.get(ing.materialId);
+    hit.via = "material";
+    hit.viaText = rlistText(pickLang(material, "name", fields.lang) || material.nameFr || "");
+  }
+  return { tier: 6, hit };
+}
+function rlistMatch(fields, terms, q) {
+  if (!fields) return null;
+  let tier = 0;
+  const hits = [];
+  for (const term of terms) {
+    let best = null;
+    for (const alt of term.alts) {
+      const match = rlistAltMatch(fields, alt);
+      if (match && (!best || match.tier < best.tier)) best = { ...match, alt };
+    }
+    if (!best) return null;
+    tier = Math.max(tier, best.tier);
+    if (best.hit) hits.push(best.alt.alias ? { ...best.hit, alias: best.alt.raw } : best.hit);
+    else if (best.alt.alias) hits.push({ t: "name", alias: best.alt.raw });
+  }
+  if (fields.names.some(k => k === rlistWhole(q))) tier = 0;
+  return { tier, hits };
+}
+function rlistSearch(items, q, ctx = {}) {
+  const list = Array.isArray(items) ? items : [], terms = rlistTerms(q);
+  if (!terms.length) return { main: list.map(it => ({ ...it, tier: 0, hits: [] })), deep: [], short: false, terms };
+  const matched = [];
+  list.forEach(it => {
+    if (!rlistIsObj(it)) return;
+    const result = rlistMatch(rlistFieldsOf(it.kind, it.x, ctx), terms, q);
+    if (result) matched.push({ ...it, tier: result.tier, hits: result.hits });
+  });
+  const band = t => t === 0 ? 0 : t <= 2 ? 1 : t;
+  matched.sort((a, b) => band(a.tier) - band(b.tier) || (b.x.onSale ? 1 : 0) - (a.x.onSale ? 1 : 0) || a.i - b.i);
+  return { main: matched.filter(e => e.tier <= 4), deep: matched.filter(e => e.tier >= 5), short: terms.every(t => [...t.alts[0].key].length === 1), terms };
+}
+function rlistBenchHits(creations, q, ctx = {}) {
+  const terms = rlistTerms(q);
+  if (!terms.length) return 0;
+  return (Array.isArray(creations) ? creations : []).filter(c => isCreationOnBench(c) && rlistMatch(rlistFieldsOf("creation", c, ctx), terms, q) !== null).length;
+}
+function rlistCompHits(components, q, ctx = {}) {
+  if (!rlistTerms(q).length) return 0;
+  const cq = String(q == null ? "" : q).trim().toLowerCase();
+  const qctx = { qk: normSearch(cq), matById: ctx.matById, brandKeys: ctx.brandKeys };
+  return (Array.isArray(components) ? components : []).filter(c => {
+    if (!rlistIsObj(c)) return false;
+    // 旧组件函数对非字符串名字会抛错；损坏条目不应打断配方搜索。
+    try { const match = componentQueryMatch(c, cq, qctx); return Array.isArray(match) && match.length === 0; }
+    catch { return false; }
+  }).length;
+}
+function rlistFamilyView(families, items, q, ctx = {}) {
+  const terms = rlistTerms(q), list = Array.isArray(items) ? items.filter(it => rlistIsObj(it) && rlistIsObj(it.x)) : [];
+  const fams = (Array.isArray(families) ? families : []).filter(rlistIsObj);
+  const result = rlistSearch(list, q, ctx), byI = new Map([...result.main, ...result.deep].map(e => [e.i, e]));
+  const cards = [];
+  fams.forEach(fam => {
+    const members = list.filter(it => it.x.familyId === fam.id);
+    const full = !terms.length || terms.every(t => t.alts.some(a => [fam.nameZh, fam.nameJa].some(n => rlistKey(n).includes(a.key))));
+    const matched = members.map(it => byI.get(it.i)).filter(Boolean);
+    if (full || matched.length) cards.push({ fam, full, members: full ? members.map(it => byI.get(it.i)) : matched, k: matched.length, n: members.length });
+  });
+  const orphans = list.filter(it => !it.x.familyId || !fams.some(f => f.id === it.x.familyId)).map(it => byI.get(it.i)).filter(Boolean);
+  return { active: !!terms.length, cards, orphans };
+}
+function rlistProductMatch(p, terms, ctx = {}) {
+  if (!terms.length) return true;
+  if (!rlistIsObj(p)) return false;
+  const names = [p.nameZh, p.nameJa];
+  (Array.isArray(p.items) ? p.items : []).forEach(item => {
+    if (!rlistIsObj(item)) return;
+    const list = item.linkedType === "recipe" ? ctx.recipes : item.linkedType === "creation" ? ctx.creations : item.linkedType === "component" ? ctx.components : null;
+    const linked = (Array.isArray(list) ? list : []).find(x => rlistIsObj(x) && x.id === item.linkedId);
+    if (linked) names.push(linked.nameZh, linked.nameJa, linked.nameFr);
+  });
+  const keys = names.map(rlistKey).filter(Boolean);
+  return terms.every(t => t.alts.some(a => keys.some(k => k.includes(a.key))));
+}
+
+const RLIST_TXT = {
+  zh: {
+    found: (n, a, b) => `找到 ${n} 个 · 名字 ${a} · 原料 / 部分 ${b}`,
+    benchHit: m => `· 试拼台里还有 ${m} 个 →`, compHit: (q, k) => `· 组件仓库里名字有「${q}」的 ${k} 个 →`,
+    deepTitle: (q, n) => `原料 / 部分里有「${q}」· ${n}`, deepOpen: n => `展开 ${n} 个 ▸`, deepClose: "收起 ▴",
+    shortHint: "只有一个字,原料里中的先收起来了", partGoAria: x => `去组件仓库看「${x}」`, famHit: (k, n) => `中 ${k} / 共 ${n}`,
+    emptyTitle: q => `没有找到「${q}」`,
+    emptyHint: "名字、家族、分类、风味、组合产品的部分和原料都搜过了;组件(卡仕达、面团这类)在组件仓库。换个叫法试试(中 / 日 / 法都行)。",
+    emptyOnsale: n => `在售的里没有;全部配方里有 ${n} 个`, emptyBench: (m, q) => `试拼台里有 ${m} 个有「${q}」→`,
+    chipOnsale: "在售中", chipFamily: "家族模式", ph: "搜名字、原料、组合里的部分(中 / 日 / 法)", clear: "清除搜索",
+    hitIng: text => `含:原料「${text}」`, hitPart: text => `含:部分「${text}」`, hitFamily: text => `家族:${text}`,
+    hitCat: text => `分类:${text}`, hitStatus: text => `状态:${text}`, hitFlavor: text => `风味:${text}`, hitVariant: text => `版本:${text}`,
+    hitBrand: text => `(品牌 ${text})`, hitMaterial: text => `(材料 ${text})`, hitAlias: text => `(按「${text}」找的)`, hitMore: n => `等 ${n} 处`,
+  },
+  ja: {
+    found: (n, a, b) => `${n} 件 · 名前 ${a} · 材料・パーツ ${b}`,
+    benchHit: m => `· 試作台にも ${m} 件 →`, compHit: (q, k) => `· パーツ庫で名前に「${q}」を含むもの ${k} 件 →`,
+    deepTitle: (q, n) => `材料・パーツに「${q}」· ${n}`, deepOpen: n => `${n} 件を表示 ▸`, deepClose: "閉じる ▴",
+    shortHint: "1 文字なので、材料の一致はたたんでいます", partGoAria: x => `パーツ庫で「${x}」を見る`, famHit: (k, n) => `${k} / ${n} 件`,
+    emptyTitle: q => `「${q}」は見つかりません`,
+    emptyHint: "名前・ファミリー・分類・風味・パーツ・材料を探しました。パーツ(カスタード・生地など)はパーツ庫にあります。別の言い方(中・日・仏)でお試しください。",
+    emptyOnsale: n => `販売中にはありません。全レシピに ${n} 件あります`, emptyBench: (m, q) => `試作台に「${q}」が ${m} 件 →`,
+    chipOnsale: "販売中", chipFamily: "ファミリー表示", ph: "名前・材料・パーツで検索(中・日・仏)", clear: "検索をクリア",
+    hitIng: text => `材料「${text}」を含む`, hitPart: text => `パーツ「${text}」を含む`, hitFamily: text => `ファミリー:${text}`,
+    hitCat: text => `分類:${text}`, hitStatus: text => `状態:${text}`, hitFlavor: text => `風味:${text}`, hitVariant: text => `バージョン:${text}`,
+    hitBrand: text => `(ブランド ${text})`, hitMaterial: text => `(材料 ${text})`, hitAlias: text => `(「${text}」で検索)`, hitMore: n => `ほか ${n} 件`,
+  },
+};
+function rlistHitText(hit, lang) {
+  if (!hit || hit.t === "kind" || hit.t === "structure") return "";
+  const text = RLIST_TXT[rlistLang(lang)], keys = { ing: "hitIng", part: "hitPart", family: "hitFamily", cat: "hitCat", status: "hitStatus", flavor: "hitFlavor", variant: "hitVariant" };
+  if (hit.t !== "name" && !keys[hit.t]) return "";
+  let out = hit.t === "name" ? "" : text[keys[hit.t]](hit.text);
+  if (hit.t === "part" && hit.eq !== undefined) out += `= ${hit.eq}`;
+  if (hit.t === "ing" && hit.via === "brand") out += text.hitBrand(hit.viaText);
+  if (hit.t === "ing" && hit.via === "material") out += text.hitMaterial(hit.viaText);
+  if (hit.alias !== undefined) out += text.hitAlias(hit.alias);
+  return out;
+}
+function rlistHitItems(hits, lang) {
+  const items = [];
+  (Array.isArray(hits) ? hits : []).forEach(hit => {
+    const text = rlistHitText(hit, lang);
+    if (text && !items.some(i => i.text === text)) items.push(hit.t === "part" && hit.compId !== undefined ? { text, compId: hit.compId } : { text });
+  });
+  return items;
+}
+function rlistHitNote(hits, lang) {
+  const items = rlistHitItems(hits, lang);
+  return items.slice(0, 2).map(i => i.text).join(" · ") + (items.length > 2 ? " " + RLIST_TXT[rlistLang(lang)].hitMore(items.length) : "");
+}
+
+// spec_b7_trial R6/R16/R17/R22/R23/R27/R32/R33/R35/R40。只有纯数据操作；不在这里接 React 或存档。
+const _trialIsObj = (x) => !!x && typeof x === "object";
+const _trialHas = (x, k) => Object.prototype.hasOwnProperty.call(x, k);
+const _trialStamp = (x) => Date.parse(x || "") || 0;
+function _trialNames(names, lang, max) {
+  return names.slice(0, max).map(name => `「${name}」`).join("、")
+    + (names.length > max ? (lang === "ja" ? ` ほか ${names.length} 件` : ` 等 ${names.length} 个`) : "");
+}
+function rlistItemsOf(recipes, creations) {
+  const rs = Array.isArray(recipes) ? recipes : [], cs = Array.isArray(creations) ? creations : [];
+  return [...rs.filter(_trialIsObj).map(x => ({ kind: "recipe", id: x.id, x })),
+    ...cs.filter(c => _trialIsObj(c) && !isCreationOnBench(c)).map(x => ({ kind: "creation", id: x.id, x }))]
+    .map((o, i) => ({ ...o, i }));
+}
+function setCreationTrial(c, to, now) {
+  if (!_trialIsObj(c) || (to !== "bench" && to !== "done")) return { next: c, written: null };
+  const next = { ...c, trial: to, trialAt: now };
+  const wroteUpd = to === "bench" && !!c.onSale;
+  if (wroteUpd) { next.onSale = false; next.updatedAt = now; }
+  return { next, written: { trial: to, trialAt: now, onSale: !!next.onSale, ...(wroteUpd ? { updatedAt: now } : {}) } };
+}
+function undoCreationTrial(cur, written, prev) {
+  if (!_trialIsObj(cur) || !_trialIsObj(written) || !_trialIsObj(prev)) return null;
+  if (cur.trial !== written.trial || cur.trialAt !== written.trialAt || !!cur.onSale !== written.onSale) return null;
+  if (_trialHas(written, "updatedAt") && cur.updatedAt !== written.updatedAt) return null;
+  const keys = _trialHas(written, "updatedAt") ? ["trial", "trialAt", "onSale", "updatedAt"] : ["trial", "trialAt"];
+  const out = { ...cur };
+  keys.forEach(k => { if (_trialHas(prev, k)) out[k] = prev[k]; else delete out[k]; });
+  return out;
+}
+function pinCreationTrial(before, after) {
+  if (!_trialIsObj(before) || !_trialIsObj(after)) return after;
+  const wasBench = isCreationOnBench(before);
+  if (wasBench === isCreationOnBench(after)) return after;
+  const { trialAt, ...rest } = after;
+  return { ...rest, trial: wasBench ? "bench" : "done" };
+}
+const TRIAL_CARRY = ["trial", "trialAt", "onSale"];
+function carryTrialKeys(x, c) {
+  const out = { ...c };
+  TRIAL_CARRY.forEach(k => { if (_trialHas(x, k)) out[k] = x[k]; else delete out[k]; });
+  return out;
+}
+function copyCreationToBench(c, all, nowIso, components, matIds) {
+  if (!_trialIsObj(c)) return null;
+  const at = (typeof nowIso === "string" && nowIso) ? nowIso : new Date().toISOString();
+  const names = copyNamesFor(c, all, "试拼") || { nameZh: _normTxt(c.nameZh), nameJa: _normTxt(c.nameJa), nameFr: "" };
+  const base = unlockCreation(JSON.parse(JSON.stringify(c)), components, matIds);
+  const { id: _i, onSale: _s, tasting: _t, rating: _r, copiedFrom: _c, updatedAt: _u, trial: _a, trialAt: _b, ...rest } = base;
+  const imgs = Array.isArray(rest.imageUrls) ? rest.imageUrls : null;
+  const kept = imgs ? imgs.filter(img => !(img && typeof img === "object" && img.imageId)) : null;
+  if (imgs) rest.imageUrls = kept;
+  const cs = Array.isArray(all) ? all : (_trialIsObj(all) && Array.isArray(all.creations) ? all.creations : []);
+  const ids = new Set(cs.filter(_trialIsObj).map(x => x.id));
+  const ms = Date.parse(at), stem = "creation_" + (Number.isFinite(ms) ? ms : 0);
+  let id = stem;
+  for (let k = 2; ids.has(id); k++) id = stem + "_" + k;
+  const out = { ...rest, id, nameZh: names.nameZh, nameJa: names.nameJa, nameFr: "",
+    trial: "bench", trialAt: at, updatedAt: at,
+    copiedFrom: { kind: "creation", id: c.id, nameZh: _normTxt(c.nameZh) || _normTxt(c.nameJa) || _normTxt(c.nameFr), at } };
+  Object.defineProperty(out, "_copyMeta", { value: { droppedImages: imgs ? imgs.length - kept.length : 0,
+    srcName: out.copiedFrom.nameZh, srcNameJa: _normTxt(c.nameJa) }, enumerable: false });
+  return out;
+}
+function mergeCreationTrialMarks(local, pairs, lang = "zh") {
+  if (!Array.isArray(local)) return { list: local, n: 0, notes: [] };
+  const cur = local.slice(), blocked = new Set();
+  for (const p of (Array.isArray(pairs) ? pairs : [])) {
+    if (!Array.isArray(p)) continue;
+    const [id, inc] = p;
+    if (id === undefined || id === null || !_trialIsObj(inc)) continue;
+    const i = local.findIndex(x => _trialIsObj(x) && x.id === id);
+    if (i < 0) continue;
+    const run = cur[i], tl = _trialStamp(run.trialAt), tf = _trialStamp(inc.trialAt);
+    if (!(tf > tl)) continue;
+    const g = { ...run };
+    ["trial", "trialAt"].forEach(k => { if (_trialHas(inc, k)) g[k] = inc[k]; else delete g[k]; });
+    if (creationTrialOf(g) === "bench" && run.onSale) {
+      if (!inc.onSale && tf > _trialStamp(run.updatedAt)) { g.onSale = false; g.updatedAt = inc.trialAt; }
+      else { blocked.add(i); continue; }
+    }
+    cur[i] = g;
+    blocked.delete(i);
+  }
+  const keys = ["trial", "trialAt", "onSale", "updatedAt"];
+  const changed = (i) => _trialIsObj(local[i]) && keys.some(k => _trialHas(local[i], k) !== _trialHas(cur[i], k) || local[i][k] !== cur[i][k]);
+  const list = local.some((_, i) => changed(i)) ? local.map((x, i) => changed(i) ? cur[i] : x) : local;
+  let n = 0;
+  const saleOff = [], kept = [];
+  local.forEach((x, i) => {
+    if (!_trialIsObj(x)) return;
+    if (isCreationOnBench(x) !== isCreationOnBench(cur[i])) n++;
+    if (x.onSale && !cur[i].onSale) saleOff.push(itemName("creations", cur[i], lang));
+    if (blocked.has(i) && cur[i].onSale) kept.push(itemName("creations", cur[i], lang));
+  });
+  const notes = [], ja = lang === "ja";
+  if (n > 0) notes.push(ja ? `· 組み合わせ ${n} 件の確定状態をもう一台に合わせました` : `· ${n} 个组合产品的定稿状态按另一台更新了`);
+  if (saleOff.length) notes.push(ja ? `· うち${_trialNames(saleOff, lang, 5)}は販売中も解除しました` : `· 其中${_trialNames(saleOff, lang, 5)}也取消了在售`);
+  if (kept.length) notes.push(ja ? `· ${_trialNames(kept, lang, 5)}はもう一台で試作台に戻されましたが、こちらで後から変更があり販売中のため、レシピ一覧に残しました` : `· ${_trialNames(kept, lang, 5)}在另一台退回了试拼台,这台之后又改过、还在售,留在配方一览`);
+  return { list, n, notes };
+}
+function benchImportNote(added, lang) {
+  const xs = (Array.isArray(added) ? added : []).filter(isCreationOnBench);
+  if (!xs.length) return null;
+  const m = xs.length, names = _trialNames(xs.map(x => itemName("creations", x, lang)), lang, 3);
+  return lang === "ja" ? `· うち ${m} 件は名前に v0 / 草稿 がある(またはファイルで指定)ため試作台に入りました:${names}`
+    : `· 其中 ${m} 个名字带 v0 / 草稿(或包里写了放试拼台),放在试拼台:${names}`;
+}
+function pkgTrialProblems(pkg) {
+  return (Array.isArray(pkg && pkg.creations) ? pkg.creations : []).flatMap((c, k) => {
+    if (!_trialIsObj(c)) return [];
+    const tag = `creations[${k}]「${c.nameZh || c.nameJa || c.id || ""}」`, out = [];
+    if (_trialHas(c, "trialAt")) out.push(`${tag} 写了 trialAt(录入包不许写)`);
+    if (_trialHas(c, "trial") && c.trial !== "bench" && c.trial !== "done") out.push(`${tag} 的 trial 只能是 "bench" 或 "done"`);
+    return out;
+  });
+}
+// ─── END recipe-list helpers ───
+
+// 第 7 批 A4：搜索框自己的草稿和输入法状态不进入 App 存档。
+function RecipeListSearch({ query = "", onChange, lang = "zh", result, benchHits = 0, compHits = 0, onBench, onComponents, hotkeyOn = true }) {
+  const X = RLIST_TXT[rlistLang(lang)];
+  const [draft, setDraft] = useState(query);
+  const inputRef = useRef(null), composing = useRef(false), pointerType = useRef("");
+  useEffect(() => { if (!composing.current) setDraft(query); }, [query]);
+  useEffect(() => {
+    const hotkey = e => {
+      if (composing.current || e.isComposing || e.keyCode === 229) return;
+      if (!hotkeyOn || e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target;
+      if (target && typeof target.closest === "function" && target.closest("input,textarea,select,[contenteditable]")) return;
+      e.preventDefault();
+      if (inputRef.current) inputRef.current.focus();
+    };
+    window.addEventListener("keydown", hotkey);
+    return () => window.removeEventListener("keydown", hotkey);
+  }, [hotkeyOn]);
+  const commit = text => { setDraft(text); onChange(text); };
+  const clear = () => {
+    composing.current = false;
+    commit("");
+    let touch = pointerType.current === "touch" || pointerType.current === "pen";
+    if (!pointerType.current) { try { touch = window.matchMedia("(pointer: coarse)").matches; } catch { /* 无设备查询时按电脑 */ } }
+    if (inputRef.current) { if (touch) inputRef.current.blur(); else inputRef.current.focus(); }
+    pointerType.current = "";
+  };
+  const mainN = result ? result.main.length : 0, deepN = result ? result.deep.length : 0;
+  const active = rlistTerms(query).length > 0, qShow = String(query ?? "").trim();
+  const linkStyle = { background: "transparent", border: "none", padding: "0 4px", minHeight: 40, color: T.secondary, fontFamily: T.fontSans, ...T.fs.caption, cursor: "pointer", textAlign: "left" };
+  return (
+    <div data-rlist-search="1" style={{ marginBottom: T.sp.l }}>
+      <div style={{ position: "relative", maxWidth: 480 }}>
+        <input ref={inputRef} type="text" inputMode="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+          className="k-input" aria-label={X.ph} placeholder={X.ph} value={draft}
+          style={{ width: "100%", height: 40, boxSizing: "border-box", padding: "8px 44px 8px 12px", border: `1px solid ${T.border}`, borderRadius: T.radius, background: T.surface, color: T.ink, fontFamily: T.fontSans, ...T.fs.small }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={e => { composing.current = false; commit(e.currentTarget.value); }}
+          onChange={e => { const text = e.target.value; setDraft(text); if (!composing.current && !e.nativeEvent.isComposing) onChange(text); }}
+          onKeyDown={e => {
+            if (composing.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+            else if (e.key === "Escape") { e.preventDefault(); if (draft) commit(""); else e.currentTarget.blur(); }
+          }} />
+        {draft !== "" && <button type="button" className="k-btn k-btn-ghost" aria-label={X.clear} title={X.clear}
+          onPointerDown={e => { pointerType.current = e.pointerType; }} onClick={clear}
+          style={{ position: "absolute", top: 0, right: 0, width: 40, height: 40, padding: 0, border: "none", background: "transparent", color: T.secondary, fontSize: 18, fontFamily: T.fontSans, cursor: "pointer" }}>×</button>}
+      </div>
+      {active && mainN + deepN > 0 && <div data-rlist-summary="1" style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, marginTop: T.sp.s }}>
+        <span>{X.found(mainN + deepN, mainN, deepN)}</span>
+        {benchHits > 0 && <> <button type="button" className="k-btn k-btn-ghost" onClick={onBench} style={linkStyle}>{X.benchHit(benchHits)}</button></>}
+        {compHits > 0 && <> <button type="button" className="k-btn k-btn-ghost" onClick={() => onComponents(qShow)} style={linkStyle}>{X.compHit(qShow, compHits)}</button></>}
+      </div>}
+    </div>
+  );
+}
+
+function RlistHitNote({ hits, lang = "zh", components = [], onOpenComponent }) {
+  const items = rlistHitItems(hits, lang), X = RLIST_TXT[rlistLang(lang)];
+  if (!items.length) return null;
+  return <span data-rlist-hit-note="1" style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+    {items.slice(0, 2).map((item, i) => {
+      const cp = item.compId !== undefined ? components.find(c => c && c.id === item.compId) : null;
+      const name = cp ? pickLang(cp, "name", rlistLang(lang)) || cp.nameFr || item.text : item.text;
+      return <Fragment key={i}>{i > 0 ? " · " : ""}{item.compId !== undefined
+        ? <button type="button" className="k-btn k-btn-ghost" aria-label={X.partGoAria(name)}
+            onClick={e => { e.stopPropagation(); if (onOpenComponent) onOpenComponent(item.compId); }}
+            style={{ minHeight: 40, padding: "0 4px", border: "none", background: "transparent", color: T.secondary, fontFamily: T.fontSans, ...T.fs.caption, cursor: "pointer", textAlign: "left", whiteSpace: "normal" }}>{item.text} ›</button>
+        : item.text}</Fragment>;
+    })}{items.length > 2 ? " " + X.hitMore(items.length) : ""}
+  </span>;
+}
+
+function RlistDeepSection({ query, count, short, lang = "zh", children }) {
+  const [open, setOpen] = useState(false), X = RLIST_TXT[rlistLang(lang)];
+  useEffect(() => { setOpen(false); }, [query]);
+  if (!count) return null;
+  return <section data-rlist-deep="1" style={{ marginTop: T.sp.xl }}>
+    <div style={{ ...T.fs.caption, color: T.secondary, borderTop: `1px solid ${T.border}`, paddingTop: T.sp.m }}>{X.deepTitle(String(query ?? "").trim(), count)}</div>
+    {short && <>
+      {!open && <div style={{ ...T.fs.caption, color: T.muted, marginTop: T.sp.s }}>{X.shortHint}</div>}
+      <Btn variant="ghost" size="lg" onClick={() => setOpen(v => !v)} style={{ marginTop: T.sp.s }}>{open ? X.deepClose : X.deepOpen(count)}</Btn>
+    </>}
+    {(!short || open) && children}
+  </section>;
+}
+
+function RlistSearchEmpty({ query, mode, totalHits, benchHits, compHits, lang = "zh", onClearQuery, onClearMode, onBench, onComponents }) {
+  const X = RLIST_TXT[rlistLang(lang)], qShow = String(query ?? "").trim();
+  const chips = [{ label: `「${qShow}」`, onRemove: onClearQuery }];
+  if (mode === "onsale" || mode === "family") chips.push({ label: mode === "onsale" ? X.chipOnsale : X.chipFamily, onRemove: onClearMode });
+  const linkStyle = { background: "transparent", border: "none", padding: "0 4px", minHeight: 40, color: T.secondary, fontFamily: T.fontSans, ...T.fs.caption, cursor: "pointer", textAlign: "left" };
+  return <div data-rlist-empty="1">
+    <EmptyState variant="filter" lang={rlistLang(lang)} title={X.emptyTitle(qShow)} hint={mode === "onsale" && totalHits > 0 ? X.emptyOnsale(totalHits) : X.emptyHint}
+      chips={chips} onClearAll={() => { onClearQuery(); onClearMode(); }} />
+    {benchHits > 0 && <div><button type="button" className="k-btn k-btn-ghost" onClick={onBench} style={linkStyle}>{X.emptyBench(benchHits, qShow)}</button></div>}
+    {compHits > 0 && <div><button type="button" className="k-btn k-btn-ghost" onClick={() => onComponents(qShow)} style={linkStyle}>{X.compHit(qShow, compHits).replace(/^· /, "")}</button></div>}
+  </div>;
 }
 
 // 中文名 / 日文名输入框 + 联想下拉(三个编辑页共用,IngredientTable 里用)。
@@ -14422,13 +15243,13 @@ function FamilyEditForm({ family, onSave, onDelete, onBack, lang = "zh" }) {
 }
 
 // ─── 家族详情（包含对比功能） ─────────────
-function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, onViewRecipe, onViewCreation }) {
+function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, onViewRecipe, onViewCreation, benchCount = 0 }) {
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState([]);
 
-  const familyRecipes = recipes.filter(r => r.familyId === family.id);
+  const familyRecipes = recipes.filter(r => r && typeof r === "object" && r.familyId === family.id);
   // v17.8: 挂了这个家族的组合产品(比如 Framboisier)也列出来;不参与原料对比
-  const familyCreations = (creations || []).filter(c => c && c.familyId === family.id);
+  const familyCreations = (creations || []).filter(c => c && typeof c === "object" && !isCreationOnBench(c) && c.familyId === family.id);
   const fam = family;
   const famName = lang === "zh" ? (fam.nameZh || fam.nameJa) : (fam.nameJa || fam.nameZh);
   const color = FAMILY_COLORS[fam.colorIdx || 0];
@@ -14495,6 +15316,7 @@ function FamilyDetail({ family, recipes, creations = [], lang, onEdit, onBack, o
         )}
       </div>
 
+      {benchCount > 0 && <div data-family-bench="1" style={{ ...T.fs.caption, color: T.subtle, marginBottom: T.sp.l }}>{lang === "ja" ? `ほかに試作台に ${benchCount} 件` : `另有 ${benchCount} 个在试拼台`}</div>}
       {/* 变体列表 / 对比模式切换 */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 500, fontSize: 14 }}>{lang === "ja" ? "🧪 バリエーション一覧" : "🧪 变体列表"}（{familyRecipes.length}）</div>
@@ -17041,7 +17863,7 @@ const creationWords = (structure, lang = "zh") => {
     isStack: stack,
     partCount: (n) => stack ? `${n} ${zh ? "层" : "層"}` : `${n} ${zh ? "个部分" : "パーツ"}`,
     unit: stack ? "台" : (zh ? "个" : "個"),
-    sectionTitle: stack ? (zh ? "🎂 层结构（自上而下）" : "🎂 層構成（上から下へ）") : (zh ? "🧩 组成部分" : "🧩 構成パーツ"),
+    sectionTitle: zh ? "组成部分" : "構成パーツ",
     // 复查第 3 轮修(r3-ui-02):第 5 批 S2 起每一部分自己选「这一批一共 / 每台(每个)」,新产品默认「每台」—— 两句不再叫她一律按这一批写;日文界面给日文
     sectionHint: zh ? (stack ? "每层可设自定义名称；用量在每层里选「这一批一共」或「每台」再填" : "每部分可设自定义名称；用量在每部分里选「这一批一共」或「每个」再填")
       : (stack ? "各層に名前を付けられます。使用量は層ごとに「バッチ合計」か「1台あたり」を選んで入力" : "各パーツに名前を付けられます。使用量はパーツごとに「バッチ合計」か「1個あたり」を選んで入力"),
@@ -17168,18 +17990,355 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 };
 
 // ─── 组合产品 View ───────────────────────────────────────────────
+// 独立成品结构：几何只读 sectionPlan，不用配方重量推断成品厚度。
+function sectionDrawingModel(c, exploded = false) {
+  const rows = sectionPlanRows(c);
+  const roots = rows.filter(r => r.role !== "inner" && r.role !== "brush");
+  const mm = r => { const n = Number(r.thicknessMm); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const bodies = rows.filter(r => r.role !== "decor" && r.role !== "brush");
+  // 仅当所有实体层均有实测厚度时使用同一比例；否则明确只画位置。
+  const measured = bodies.length > 0 && bodies.every(r => mm(r) > 0);
+  const total = roots.reduce((n, r) => n + (r.role === "decor" ? 0 : mm(r)), 0);
+  const scale = measured && total > 0 ? Math.min(6, 200 / total) : 0;
+  const childrenOf = r => rows.filter(q => q.hostId === r.id && q.role === "inner");
+  const estimate = r => measured ? Math.max(4, mm(r) * scale) : r.role === "decor" ? 36 : r.role === "shell" ? 30 : r.appearance === "cream" ? 42 : r.appearance === "jelly" || r.appearance === "crunch" ? 19 : 30;
+  let top = 28;
+  const placed = [];
+  roots.forEach(r => {
+    const children = childrenOf(r);
+    const contentH = children.reduce((n, q) => n + estimate(q), 0);
+    const height = Math.max(estimate(r), contentH + (children.length ? 20 : 0));
+    const width = 300 * Math.max(20, Math.min(100, Number(r.widthPct) || 100)) / 100;
+    const item = { ...r, x: 200 - width / 2, y: top, w: width, h: height };
+    placed.push(item);
+    let innerY = top + (height - contentH) / 2;
+    children.forEach(q => {
+      const w = width * Math.min(92, Math.max(20, Number(q.widthPct) || 80)) / 100;
+      placed.push({ ...q, x: 200 - w / 2, y: innerY, w, h: estimate(q) });
+      innerY += estimate(q);
+    });
+    rows.filter(q => q.role === "brush" && q.hostId === r.id).forEach((q, i) => {
+      const w = width * Math.max(20, Math.min(100, Number(q.widthPct) || 100)) / 100;
+      placed.push({ ...q, x: 200 - w / 2, y: top + 3 + i * 4, w, h: 3 });
+    });
+    top += height + (exploded ? 18 : 0);
+  });
+  // 宿主先画，再画内嵌/涂刷，保证包裹可见。
+  const paint = [...placed.filter(r => r.role !== "inner" && r.role !== "brush"), ...placed.filter(r => r.role === "inner"), ...placed.filter(r => r.role === "brush")];
+  return { rows, paint, height: top + 30, measured };
+}
+
+function CreationSection({ c, lang, variant, onLayerClick, onSelect, onEdit }) {
+  const [selected, setSelected] = useState(null);
+  const [exploded, setExploded] = useState(false);
+  const ja = lang === "ja", menu = variant === "menu", draft = variant === "draft";
+  const plan = c && c.sectionPlan;
+  const issues = plan ? sectionPlanIssues(c) : [];
+  const configured = plan && Array.isArray(plan.rows) && plan.rows.length > 0;
+  const allowed = configured && issues.length === 0 && (plan.confirmed === true || draft);
+  const text = (zh, jp) => ja ? jp : zh;
+  const roles = { band: text("平铺", "平らな層"), inner: text("夹心", "インサート"), brush: text("涂刷", "塗布"), decor: text("表面装饰", "表面の飾り"), shell: text("底与围边", "底・側面") };
+  const name = r => (r.layer && (r.layer.customName || pickLang(r.layer, "name", ja ? "ja" : "zh"))) || text("未命名部分", "名称未入力");
+  if (!allowed) {
+    if (menu) return null;
+    return <div className="k-section-empty" data-creation-section="unconfirmed" style={{ padding: "16px 0", color: T.body, ...T.fs.small }}>
+      <div>{issues.length ? text("成品结构的关联需要修正。", "完成断面の参照を修正してください。") : text("成品结构尚未确认。", "完成断面は未確認です。")}</div>
+      <div style={{ ...T.fs.caption, marginTop: 4 }}>{text("配方部件顺序不代表成品上下；在编辑页单独编排。", "パーツの記載順は完成品の上下とは異なります。編集画面で配置します。")}</div>
+      {onEdit && <button type="button" className="k-tap k-section-action" onClick={onEdit} style={{ marginTop: 8 }}>{text("编排成品结构", "完成断面を配置")}</button>}
+    </div>;
+  }
+  const model = sectionDrawingModel(c, exploded && !menu);
+  const active = model.rows.find(r => r.id === selected);
+  const choose = id => setSelected(prev => prev === id ? null : id);
+  const visit = r => {
+    if (onLayerClick) onLayerClick(r.idx);
+    else if (onSelect) onSelect(r.idx);
+    else if (typeof document !== "undefined") document.getElementById(`cpart-${r.idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const palette = r => T.sectionFood[r.appearance] || T.sectionFood.plain;
+  const renderPart = r => {
+    const p = palette(r), { x, y, w, h } = r;
+    const opacity = selected && selected !== r.id ? 0.25 : 1;
+    const common = { fill: p.fill, stroke: p.line, strokeWidth: 1.4 };
+    const texture = r.appearance;
+    const strawberry = /草莓|苺|いちご|イチゴ|fraise/i.test(name(r));
+    let shape;
+    if (r.role === "brush") {
+      shape = <path d={`M${x},${y} H${x + w}`} fill="none" stroke={p.line} strokeWidth={3} strokeDasharray="7 3" />;
+    } else if (r.role === "shell") {
+      shape = <><path d={`M${x},${y - 12} Q${x - 6},${y - 17} ${x - 7},${y - 6} L${x},${y + h - 5} Q${x + 3},${y + h} ${x + 12},${y + h} H${x + w - 12} Q${x + w - 3},${y + h} ${x + w},${y + h - 5} L${x + w + 7},${y - 6} Q${x + w + 6},${y - 17} ${x + w},${y - 12} L${x + w - 13},${y + 7} H${x + 13}Z`} {...common} />
+        {[0.5,0.74].map((v,i)=><path key={i} d={`M${x + 8},${y + h*v} Q${x + w/2},${y + h*v+8} ${x + w-8},${y+h*v}`} stroke={p.detail} strokeWidth={2} fill="none" />)}</>;
+    } else if (r.role === "decor" && texture === "fruit") {
+      const count = 5, size = Math.min(h, w / 7);
+      shape = Array.from({length:count},(_,i) => {
+        const cx=x+w*(i+0.5)/count, cy=y+h-size;
+        return strawberry ? <g key={i} transform={`translate(${cx},${cy})`}>
+          <path d={`M${-size*.4},${size*.15} Q0,${-size*.13} ${size*.4},${size*.15} Q${size*.58},${size*.46} 0,${size} Q${-size*.58},${size*.46} ${-size*.4},${size*.15}Z`} {...common}/>
+          <path d={`M${-size*.25},${size*.25} Q0,${size*.14} ${size*.25},${size*.25} Q${size*.3},${size*.45} 0,${size*.76} Q${-size*.3},${size*.45} ${-size*.25},${size*.25}Z`} fill={p.detail}/>
+          <path d={`M${-size*.13},${size*.12} L${-size*.27},${-size*.08} L0,0 L${size*.1},${-size*.14} L${size*.13},0 L${size*.3},${-size*.05} L${size*.2},${size*.13}Z`} fill={T.sectionLeaf}/>
+        </g> : <g key={i}><circle cx={cx} cy={cy+size*.57} r={size*.43} {...common}/><path d={`M${cx-size*.15},${cy+size*.34} q${size*.16},${-size*.12} ${size*.28},0`} stroke={p.detail} fill="none" strokeWidth={2}/></g>;
+      });
+    } else if (r.role === "decor" || (texture === "cream" && r.role === "band")) {
+      const bumps = 7, s = w/bumps, rise = Math.min(h*.5,s*.45);
+      const top = Array.from({length:bumps},()=>`q${s/2},${-rise*2} ${s},0`).join(" ");
+      shape = <><path d={`M${x},${y+rise} ${top} L${x+w},${y+h} H${x}Z`} {...common}/>
+        {Array.from({length:bumps-1},(_,i)=><path key={i} d={`M${x+(i+1)*s},${y+rise+3} q-5,${h*.2} 2,${h*.35}`} stroke={p.detail} strokeWidth={1.5} fill="none" />)}</>;
+    } else {
+      shape = <><rect x={x} y={y} width={w} height={h} rx={texture === "jelly" ? 2 : 0} {...common}/>
+        {(texture === "sponge" || texture === "crunch") && Array.from({length:Math.min(24,Math.max(5,Math.floor(w/15)))},(_,i)=><circle key={i} cx={x+8+(i*23)%(Math.max(1,w-16))} cy={y+Math.min(h-3,4+(i*7)%Math.max(1,h-8))} r={texture === "crunch" ? 1.6 : 1.2} fill={p.detail}/>)}
+        {texture === "pastry" && [0.3,0.6,0.85].map((v,i)=><path key={i} d={`M${x+3},${y+h*v} H${x+w-3}`} stroke={p.detail} strokeWidth={1.6}/>)}
+      </>;
+    }
+    return <g key={r.id} data-sec-row={r.id} data-sec-kind={r.role} data-sec-part={r.partId} data-sec-host={r.hostId || ""} opacity={opacity}>
+      <title>{name(r)}</title>{shape}
+    </g>;
+  };
+  return <section data-creation-section="2" className="k-section-view" aria-label={text("成品结构", "完成断面")}>
+    <div className="k-section-heading" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+      <span style={{ ...T.fs.strong }}>{text("成品结构", "完成断面")}{draft && plan.confirmed !== true && <span style={{ ...T.fs.caption, color: T.warning, marginLeft: 8 }}>{text("待确认", "未確認")}</span>}</span>
+      {!menu && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" className="k-tap k-section-action" aria-pressed={!exploded} onClick={()=>setExploded(false)}>{text("成品剖面", "完成断面")}</button>
+        <button type="button" className="k-tap k-section-action" aria-pressed={exploded} onClick={()=>setExploded(true)}>{text("分解组装", "分解図")}</button>
+        {onEdit && <button type="button" className="k-tap k-section-action" onClick={onEdit}>{text("调整结构", "配置を編集")}</button>}
+      </div>}
+    </div>
+    <div className="k-section-layout">
+      <div className="k-section-art"><svg viewBox={`0 0 400 ${model.height}`} role="img" aria-label={text("从顶部到底部的成品结构示意", "完成品を上から下へ示す模式図")} style={{ display: "block", width: "100%", maxHeight: 440 }}>
+        {model.paint.map(renderPart)}<path d={`M42,${model.height-12} H358`} stroke={T.border} strokeWidth={1}/>
+      </svg></div>
+      <div className="k-section-legend">{model.rows.map((r,i)=>{
+        const host = model.rows.find(h=>h.id===r.hostId);
+        return <button key={r.id} type="button" className="k-tap k-section-row" aria-pressed={selected === r.id} onClick={()=>choose(r.id)}>
+          <span style={{ ...T.num, color: T.textSecondary }}>{String(i+1).padStart(2,"0")}</span>
+          <span style={{ minWidth: 0 }}><span className="k-section-name">{name(r)}</span>{!menu && <span style={{ display: "block", ...T.fs.caption, color: T.body, marginTop: 3 }}>{roles[r.role]}{host ? text(` · ${name(host)}${r.role === "brush" ? "表面" : "内"}`, ` · ${name(host)}${r.role === "brush" ? "の表面" : "の中"}`) : ""}{r.thicknessMm ? text(` · 实测 ${r.thicknessMm} mm`, ` · 実測 ${r.thicknessMm} mm`) : ""}</span>}</span>
+        </button>;
+      })}</div>
+    </div>
+    <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 10, marginTop: 10, ...T.fs.caption, color: T.body, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <span>{text("顶部 → 底部", "上 → 下")}</span>
+      <span>{exploded && !menu ? text("分解示意 · 间距不代表实际距离", "分解模式図 · 間隔は実寸ではありません") : text("位置示意 · 不按实际厚度", "位置の模式図 · 実寸ではありません")}</span>
+    </div>
+    {!menu && active && !draft && <button type="button" className="k-tap k-section-action" style={{ marginTop: 8 }} onClick={()=>visit(active)}>{text(`查看「${name(active)}」配方`, `「${name(active)}」のレシピを見る`)}</button>}
+  </section>;
+}
+
+// BEGIN section-plan editor
+// 放在 CreationSection 后。依赖 section-plan helpers / T / Btn / InlineError / React hooks。
+function CreationSectionEditor({ c, onChange, lang = "zh" }) {
+  const ja = lang === "ja", L = ja ? "ja" : "zh";
+  const [addPartId, setAddPartId] = useState("");
+  const [lastRemoved, setLastRemoved] = useState(null);
+  const layers = Array.isArray(c.layers) ? c.layers : [];
+  const plan = c.sectionPlan;
+  const partName = (layer, idx) => (layer && (layer.customName || (ja ? layer.nameJa || layer.nameZh : layer.nameZh || layer.nameJa) || layer.nameFr)) || (ja ? `パーツ ${idx + 1}` : `部件 ${idx + 1}`);
+  const commonHeader = <div style={{ ...T.fs.strong, marginBottom: T.sp.s }}>{ja ? "完成品の断面を配置" : "编排成品结构"}</div>;
+  const explain = <p style={{ ...T.fs.small, color: T.body, margin: `0 0 ${T.sp.l}px` }}>{ja
+    ? "完成した形を上から下へ並べます。同じパーツを何度配置しても、配合量や原価は変わりません。"
+    : "按成品从上到下排列。同一部件可以放到多个图形位置，配方用量和成本不变。"}</p>;
+  const start = () => { setLastRemoved(null); onChange(sectionPlanDraft(c)); };
+  const reset = () => { const { sectionPlan: ignored, ...base } = c; setLastRemoved(null); onChange(sectionPlanDraft(base)); };
+  if (plan == null) return <section className="sp-editor" data-section-editor="empty">
+    {commonHeader}{explain}
+    <span data-section-action="start"><Btn type="button" size="lg" onClick={start} disabled={!layers.length}>{ja ? "完成品の断面を配置" : "编排成品结构"}</Btn></span>
+    {!layers.length && <p style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "先にレシピパーツを追加してください。" : "请先添加配方部件。"}</p>}
+  </section>;
+  const issues = sectionPlanIssues(c);
+  if (!_sectionPlanObj(plan) || plan.version !== 1 || !Array.isArray(plan.rows)) return <section className="sp-editor" data-section-editor="invalid">
+    {commonHeader}<InlineError title={ja ? "構造の記録を確認してください" : "请检查结构记录"} detail={issues.map(x => sectionPlanIssueText(x, lang)).join(" ")}
+      actionLabel={ja ? "構造を編成し直す" : "重新编排结构"} onAction={reset} />
+  </section>;
+  const rows = sectionPlanRows(c);
+  const changeRows = nextRows => onChange({ ...c, sectionPlan: { ...plan, rows: nextRows, confirmed: false } });
+  const updateRow = (idx, patch) => changeRows(plan.rows.map((row, i) => i === idx ? { ...(_sectionPlanObj(row) ? row : {}), ...patch } : row));
+  const updateNumber = (idx, key, raw) => changeRows(plan.rows.map((row, i) => {
+    if (i !== idx) return row;
+    const next = { ...row };
+    if (raw === "") delete next[key]; else next[key] = Number(raw);
+    return next;
+  }));
+  const changeRole = (idx, role) => changeRows(plan.rows.map((row, i) => {
+    if (i !== idx) return row;
+    const next = { ...row, role };
+    if (role !== "inner" && role !== "brush") delete next.hostId;
+    return next;
+  }));
+  const moveRow = (idx, delta) => {
+    const target = idx + delta;
+    if (target < 0 || target >= plan.rows.length) return;
+    const next = plan.rows.slice(); [next[idx], next[target]] = [next[target], next[idx]]; changeRows(next);
+  };
+  const newRowId = () => sectionPlanNextId([...plan.rows.filter(_sectionPlanObj).flatMap(row => [row.id, row.hostId]),
+    ...(lastRemoved && _sectionPlanObj(lastRemoved.row) ? [lastRemoved.row.id, lastRemoved.row.hostId] : [])], "section_row");
+  const duplicateRow = idx => {
+    if (rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const next = plan.rows.slice(); next.splice(idx + 1, 0, { ...next[idx], id: newRowId() }); changeRows(next);
+  };
+  const removeRow = idx => { setLastRemoved({ row: plan.rows[idx], idx }); changeRows(plan.rows.filter((_, i) => i !== idx)); };
+  const undoRemove = () => {
+    if (!lastRemoved || rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const next = plan.rows.slice(); next.splice(Math.min(lastRemoved.idx, next.length), 0, lastRemoved.row); changeRows(next); setLastRemoved(null);
+  };
+  const selectableParts = layers.map((layer, idx) => ({ layer, idx })).filter(p => _sectionPlanObj(p.layer) && _sectionPlanId(p.layer.sectionId) && layers.filter(l => l && l.sectionId === p.layer.sectionId).length === 1);
+  const chosenPartId = selectableParts.some(p => p.layer.sectionId === addPartId) ? addPartId : (selectableParts[0]?.layer.sectionId || "");
+  const addRow = () => {
+    if (!chosenPartId || rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const chosen = selectableParts.find(p => p.layer.sectionId === chosenPartId);
+    changeRows([...plan.rows, { id: newRowId(), partId: chosenPartId, role: "band", appearance: sectionPlanSuggestedAppearance(chosen.layer) }]);
+  };
+  const tidyParts = () => { const next = sectionPlanDraft(c); onChange({ ...next, sectionPlan: { ...next.sectionPlan, confirmed: false } }); };
+  const confirm = () => { if (!sectionPlanIssues(c).length) onChange({ ...c, sectionPlan: { ...plan, confirmed: true } }); };
+  const globalIssues = issues.filter(issue => !Number.isInteger(issue.rowIndex));
+  const partIssues = issues.some(issue => issue.code === "part_id_missing" || issue.code === "part_ambiguous");
+  return <section className="sp-editor" data-section-editor={plan.confirmed ? "confirmed" : "draft"}>
+    <div className="sp-editor-heading">{commonHeader}<span style={{ ...T.fs.caption, color: plan.confirmed && !issues.length ? T.success : T.secondary }}>{plan.confirmed && !issues.length ? (ja ? "確認済み・製品の保存が必要" : "已确认 · 仍需保存产品") : (ja ? "編成中・未確認" : "编排中 · 未确认")}</span></div>
+    {explain}
+    <p style={{ ...T.fs.caption, color: T.secondary, margin: `0 0 ${T.sp.l}px` }}>{ja
+      ? "厚さは実測値のみ入力します。不明な部分は空欄のままにすると、位置だけの模式図になります。図形は最大 40 個です。"
+      : "厚度只填实测值；未知时留空，图中仅表达位置。最多可编排 40 个图形位置。"}</p>
+    {issues.length > 0 && <div role="alert" data-section-issues style={{ marginBottom: T.sp.l }}><InlineError
+      title={ja ? "下の項目を修正してから確認してください" : "请先修正下列位置，再确认结构"}
+      detail={globalIssues.length ? globalIssues.map(x => sectionPlanIssueText(x, lang)).join(" ") : (ja ? "各図形の下に修正方法を表示しています。" : "每个图形下方已列出具体修正方法。")}
+      {...(partIssues ? { actionLabel: ja ? "パーツ番号を整える" : "整理部件编号", onAction: tidyParts } : {})} /></div>}
+    <div className="sp-editor-layout">
+      <div className="sp-editor-list">
+        {rows.map((row, idx) => {
+          const roleLabel = SECTION_PLAN_ROLES.find(x => x.id === row.role)?.[L] || (ja ? "役割未設定" : "未选作用");
+          const hosts = rows.map((host, hostIdx) => ({ host, hostIdx })).filter(({ host }) => host.id !== row.id && _sectionPlanId(host.id) && rows.filter(r => r.id === host.id).length === 1 && (host.role === "band" || host.role === "shell"));
+          const needsHost = row.role === "inner" || row.role === "brush";
+          return <details className="sp-editor-row" data-section-row={row.id || "missing"} data-section-row-index={idx} key={row.id && rows.filter(r => r.id === row.id).length === 1 ? row.id : `invalid_${idx}`} open={idx === 0}>
+            <summary><span className="sp-editor-summary"><span style={{ ...T.fs.small }}>{idx + 1}. {row.layer ? partName(row.layer, row.idx) : (ja ? "パーツを選び直してください" : "请重新选择部件")}</span><span style={{ ...T.fs.caption, color: T.secondary }}>{roleLabel}{row.issues.length ? (ja ? " · 要修正" : " · 待修正") : ""}</span></span></summary>
+            <div className="sp-editor-fields">
+              <label className="sp-editor-field sp-editor-field-wide"><span>{ja ? "レシピパーツ" : "配方部件"}</span>
+                <select data-section-field="part" value={row.layer ? row.partId : ""} onChange={e => updateRow(idx, { partId: e.target.value })}>
+                  <option value="" disabled>{ja ? "パーツを選択" : "选择部件"}</option>
+                  {selectableParts.map(p => <option key={p.layer.sectionId} value={p.layer.sectionId}>{p.idx + 1}. {partName(p.layer, p.idx)}</option>)}
+                </select>
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "図形の役割" : "图形作用"}</span>
+                <select data-section-field="role" value={row.role || ""} onChange={e => changeRole(idx, e.target.value)}>
+                  {!SECTION_PLAN_ROLES.some(r => r.id === row.role) && <option value="" disabled>{ja ? "役割を選択" : "选择作用"}</option>}
+                  {SECTION_PLAN_ROLES.map(r => <option key={r.id} value={r.id}>{r[L]}</option>)}
+                </select>
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "見た目" : "外观"}</span>
+                <select data-section-field="appearance" value={row.appearance || ""} onChange={e => updateRow(idx, { appearance: e.target.value })}>
+                  {!SECTION_PLAN_APPEARANCES.some(a => a.id === row.appearance) && <option value="" disabled>{ja ? "見た目を選択" : "选择外观"}</option>}
+                  {SECTION_PLAN_APPEARANCES.map(a => <option key={a.id} value={a.id}>{a[L]}</option>)}
+                </select>
+              </label>
+              {needsHost && <label className="sp-editor-field sp-editor-field-wide"><span>{row.role === "inner" ? (ja ? "包む図形" : "包裹它的图形") : (ja ? "塗る対象の図形" : "涂刷到哪个图形")}</span>
+                <select data-section-field="host" value={hosts.some(h => h.host.id === row.hostId) ? row.hostId : ""} onChange={e => updateRow(idx, { hostId: e.target.value })}>
+                  <option value="" disabled>{ja ? "対象を明確に選択" : "明确选择归属"}</option>
+                  {hosts.map(({ host, hostIdx }) => <option key={host.id} value={host.id}>{hostIdx + 1}. {partName(host.layer, host.idx)}</option>)}
+                </select>
+                {!hosts.length && <small>{ja ? "先に「平らな層」または「底・側面」を追加してください。" : "请先添加一个平铺层或底与围边。"}</small>}
+              </label>}
+              <label className="sp-editor-field"><span>{ja ? "実測の厚さ (mm)" : "实测厚度 (mm)"}</span>
+                <input data-section-field="thickness" type="number" min="1" max="300" step="0.1" inputMode="decimal" value={row.thicknessMm ?? ""} placeholder={ja ? "不明なら空欄" : "未知时留空"} onChange={e => updateNumber(idx, "thicknessMm", e.target.value)} />
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "幅 (%)" : "宽度 (%)"}</span>
+                <input data-section-field="width" type="number" min="20" max="100" step="1" inputMode="decimal" value={row.widthPct ?? ""} placeholder={String(row.role === "inner" ? 80 : 100)} onChange={e => updateNumber(idx, "widthPct", e.target.value)} />
+              </label>
+              {row.issues.length > 0 && <div className="sp-editor-field-wide" role="alert"><InlineError title={ja ? "この位置を修正してください" : "请修正这个位置"} detail={row.issues.map(x => sectionPlanIssueText(x, lang)).join(" ")} /></div>}
+              <div className="sp-editor-actions sp-editor-field-wide">
+                <span data-section-action="up"><Btn type="button" size="sm" disabled={idx === 0} onClick={() => moveRow(idx, -1)}>{ja ? "↑ 上へ" : "↑ 上移"}</Btn></span>
+                <span data-section-action="down"><Btn type="button" size="sm" disabled={idx === rows.length - 1} onClick={() => moveRow(idx, 1)}>{ja ? "↓ 下へ" : "↓ 下移"}</Btn></span>
+                <span data-section-action="duplicate"><Btn type="button" size="sm" disabled={rows.length >= SECTION_PLAN_MAX_ROWS || !row.layer} onClick={() => duplicateRow(idx)}>{ja ? "同じパーツを追加" : "再放一次"}</Btn></span>
+                <span data-section-action="remove"><Btn type="button" size="sm" variant="danger" onClick={() => removeRow(idx)}>{ja ? "図形を削除" : "移除图形"}</Btn></span>
+              </div>
+            </div>
+          </details>;
+        })}
+        {lastRemoved && <div className="sp-editor-actions" role="status" style={{ marginBottom: T.sp.l }}><span style={T.fs.caption}>{ja ? "図形を一つ削除しました。レシピパーツは残っています。" : "已移除一个图形位置，配方部件仍保留。"}</span><span data-section-action="undo"><Btn type="button" size="sm" disabled={rows.length >= SECTION_PLAN_MAX_ROWS} onClick={undoRemove}>{ja ? "元に戻す" : "撤销"}</Btn></span></div>}
+        <div className="sp-editor-add">
+          <label className="sp-editor-field"><span>{ja ? "追加するレシピパーツ" : "要添加的配方部件"}</span><select data-section-field="add-part" value={chosenPartId} onChange={e => setAddPartId(e.target.value)}>
+            {!selectableParts.length && <option value="">{ja ? "選択できるパーツがありません" : "暂无可选部件"}</option>}
+            {selectableParts.map(p => <option key={p.layer.sectionId} value={p.layer.sectionId}>{p.idx + 1}. {partName(p.layer, p.idx)}</option>)}
+          </select></label>
+          <span data-section-action="add"><Btn type="button" disabled={!chosenPartId || rows.length >= SECTION_PLAN_MAX_ROWS} onClick={addRow}>{ja ? "+ 図形を追加" : "+ 添加图形位"}</Btn></span>
+        </div>
+        {rows.length >= SECTION_PLAN_MAX_ROWS && <p style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "図形は 40 個までです。追加するには一つ削除してください。" : "最多 40 个图形位置；需要新增时请先移除一个。"}</p>}
+      </div>
+      <div className="sp-editor-preview"><CreationSection c={c} lang={lang} variant="draft" /></div>
+    </div>
+    <div className="sp-editor-footer">
+      <span data-section-action="confirm"><Btn type="button" size="lg" variant="primary" disabled={issues.length > 0 || plan.confirmed === true} onClick={confirm}>{plan.confirmed && !issues.length ? (ja ? "構造を確認済み" : "结构已确认") : (ja ? "構造を確認" : "确认结构")}</Btn></span>
+      <span style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "確認後、ページの「保存」で製品に反映します。" : "确认后，还需点击页面的「保存」写入产品。"}</span>
+    </div>
+  </section>;
+}
+// END section-plan editor
+
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
   onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel, onOpenKitchen,
   setMaterials, onKnowledgeCheck,   // 第 5 批第 0 步接好(先不用):部分编辑页「存进材料百科」(S1)、保存后检查知识按钮(E3)
-  onGoComponents }) {   // 第 5 批 E1:选组件弹窗里组件库是空的 →「去组件仓库新建」(App 的 goTab("components"))
+  onGoComponents, shopMaterials = [], productFamilies = [], onGoList, onAfterDelete, onNavigateToMaterial, onJump }) {   // 第 5 批 E1:选组件弹窗里组件库是空的 →「去组件仓库新建」(App 的 goTab("components"))
   // 2026-09-29 体检第 2 批:products 只用来在删组合产品时列出挂着它的商品
   // v17.8: 详情页就地改一个产品(部分的「跟组件库 / 本产品专用」标记)
-  const updateCreation = (id, updater) => setCreations(prev => prev.map(x => x.id === id ? { ...updater(x), updatedAt: new Date().toISOString() } : x));
+  const updateCreation = (id, updater) => { const now = new Date().toISOString(); setCreations(prev => prev.map(x => x && x.id === id ? pinCreationTrial(x, { ...updater(x), updatedAt: now }) : x)); };
+  const trialScrollTop = () => { try { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); } catch (e) {} };
+  const setTrial = (id, to) => {
+    const c = creations.find(x => x && x.id === id);
+    if (!c) return;
+    const now = new Date().toISOString();
+    let pre = null, written = null;
+    setCreations(prev => {
+      const i = prev.findIndex(x => x && x.id === id);
+      if (i < 0) return prev;
+      const r = setCreationTrial(prev[i], to, now);
+      if (!r.written) return prev;
+      pre = prev[i]; written = r.written;
+      const out = prev.slice(); out[i] = r.next; return out;
+    });
+    const name = pickLang(c, "name", lang) || c.nameFr || "", ja = lang === "ja";
+    const usedBy = products.filter(p => p && typeof p === "object" && (p.items || []).some(it => it && it.linkedType === "creation" && String(it.linkedId) === String(id)));
+    const p1 = usedBy[0] ? (pickLang(usedBy[0], "name", lang) || usedBy[0].nameZh || usedBy[0].nameJa || "") : "";
+    const msg = to === "done"
+      ? (ja ? `✓「${name}」を確定しました。今後はレシピ一覧に表示されます` : `✓「${name}」定稿了,以后在配方一览里`)
+      : (ja ? `「${name}」を試作台に戻しました` : `「${name}」退回试拼台了`)
+        + (c.onSale ? (ja ? "・販売中も解除" : " · 也取消了在售") : "")
+        + (usedBy.length ? (ja ? `・商品「${p1}」${usedBy.length > 1 ? `ほか ${usedBy.length} 件` : ""}はそのまま販売できます`
+          : ` · 商品「${p1}」${usedBy.length > 1 ? `等 ${usedBy.length} 个` : ""}照常能卖`) : "");
+    showToast(msg, { undo: () => {
+      let back = false;
+      setCreations(prev => {
+        const i = prev.findIndex(x => x && x.id === id);
+        if (i < 0 || !pre || !written) return prev;
+        const r = undoCreationTrial(prev[i], written, pre);
+        if (!r) return prev;
+        back = true; const out = prev.slice(); out[i] = r; return out;
+      });
+      setTimeout(() => { if (!back) showToast(creationLockTxt(lang).noUndo); }, 0);
+    } });
+    trialScrollTop();
+  };
+  const copyToBench = (c) => {
+    const now = new Date().toISOString();
+    const copy = copyCreationToBench(c, { recipes, components, creations }, now, components, new Set(materials.map(m => m && m.id)));
+    if (!copy) return;
+    setCreations(prev => [...prev, copy]); setViewId(copy.id); trialScrollTop();
+    const name = pickLang(copy, "name", lang) || copy.nameFr || "", src = pickLang(c, "name", lang) || c.nameFr || "";
+    const dropped = copy._copyMeta.droppedImages;
+    showToast((lang === "ja" ? `⧉ 試作台に複製しました:「${name}」。元の「${src}」はそのままレシピ一覧にあります`
+      : `⧉ 已复制到试拼台:「${name}」。原来的「${src}」照常在配方一览`)
+      + (dropped > 0 ? (lang === "ja" ? `・端末内の写真 ${dropped} 枚は複製していません` : ` · 本机照片 ${dropped} 张没复制`) : ""), { undo: () => {
+        let back = false;
+        setCreations(prev => {
+          const i = prev.findIndex(x => x && x.id === copy.id);
+          if (i < 0) return prev;
+          const x = prev[i];
+          if (x.updatedAt !== copy.updatedAt || x.trial !== copy.trial || x.trialAt !== copy.trialAt) return prev;
+          back = true; return [...prev.slice(0, i), ...prev.slice(i + 1)];
+        });
+        setTimeout(() => { if (back) { setViewId(c.id); trialScrollTop(); } else showToast(creationLockTxt(lang).noUndo); }, 0);
+      } });
+  };
   if (editTarget !== null) {
     return (
       <CreationEditForm
         creation={editTarget === "new" ? null : editTarget}
         components={components}
+        productFamilies={productFamilies}
         cats={cats}
         onUpdateCats={onUpdateCats}
         brands={brands}
@@ -17189,11 +18348,13 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         confirmDialog={confirmDialog}
         showToast={showToast}
         onSave={(c) => {
+          const x0 = creations.find(x => x && x.id === c.id);
+          const renamed = x0 && isCreationOnBench(x0) && creationTrialDefault(x0) === "bench" && creationTrialDefault(carryTrialKeys(x0, c)) === "done";
           setCreations(prev => {
-            const found = prev.find(x => x.id === c.id);
-            return found ? prev.map(x => x.id === c.id ? c : x) : [...prev, c];
+            const found = prev.find(x => x && x.id === c.id);
+            return found ? prev.map(x => x && x.id === c.id ? pinCreationTrial(x, carryTrialKeys(x, c)) : x) : [...prev, c];
           });
-          showToast(uiTxt(lang).savedCreation);
+          showToast(uiTxt(lang).savedCreation + (renamed ? (lang === "ja" ? "・名前から v0 / 草稿 が外れました。レシピ一覧に移すには「✓ 確定」" : " · 名字里已经没有 v0 / 草稿;要搬进配方一览,点「✓ 定稿」") : ""));
           setViewId(c.id);
           setEditTarget(null);
           if (onKnowledgeCheck) onKnowledgeCheck("creation", c);   // 第 5 批(E3):改名 / 新建以后检查知识按钮
@@ -17201,14 +18362,15 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
         onDelete={() => {
           // 2026-09-29 体检第 2 批:以前只问「删除这个组合产品吗？」,不说哪些商品挂着它(删了商品页只剩「已删除」、
           // 采购计划悄悄少算),也不能撤销。照删配方:有商品挂着 → 确认框列出来;没有 → 直接删 + 撤销
-          const snap = creations.find(x => x.id === editTarget.id) || editTarget;
+          const snap = creations.find(x => x && x.id === editTarget.id) || editTarget;
           const cName = pickLang(snap, "name", lang) || snap.nameFr || "";
           const usedByProducts = (products || []).filter(p => (p.items || []).some(it => it && it.linkedType === "creation" && String(it.linkedId) === String(snap.id)));
           const refs = usedByProducts.map(p => `${lang === "zh" ? "商品" : "商品"}：${pickLang(p, "name", lang) || p.nameZh || p.nameJa || ""}`);
           // 第 6 批 R(spec_bin R22):进回收站;撤销先过 binRestorePlan,放回原位
           const doDelete = () => {
             binDeleteRun(_binAppEnv || binLocalEnv({ lang, showToast, tables: { creations, products }, set: { creations: setCreations } }), "creation", snap, { name: cName });
-            setEditTarget(null);
+            setEditTarget(null); setViewId(null);
+            if (onAfterDelete) onAfterDelete(!isCreationOnBench(snap));
           };
           if (refs.length > 0) {
             binConfirm(confirmDialog, "creation", lang,
@@ -17240,10 +18402,21 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
   }
 
   if (viewId) {
-    const cr = creations.find(c => c.id === viewId);
+    const cr = creations.find(c => c && c.id === viewId);
     if (cr) {
+      if (!isCreationOnBench(cr)) return (
+        <CreationRecipeView creation={cr} lang={lang} components={components} materials={materials} brands={brands} recipes={recipes}
+          creations={creations} knowledge={knowledge} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} products={products}
+          showToast={showToast} onEdit={() => { setEditTarget(cr); setViewId(null); }}
+          onBack={() => { if (onReturnToList) onReturnToList(); else setViewId(null); }}
+          backLabel={lang === "ja" ? "← レシピ一覧へ" : "← 返回配方一览"} onUpdateCreation={updateCreation} onSetTrial={setTrial} onCopyToBench={copyToBench}
+          onPrint={onPrintCreation} onKitchen={onOpenKitchen ? (qty) => onOpenKitchen("creation", cr.id, qty) : undefined}
+          onNavigateToKnowledge={onNavigateToKnowledge} onNavigateToMaterial={onNavigateToMaterial ? (id) => onNavigateToMaterial(id, cr) : undefined}
+          onJump={onJump} onPrintLabel={onPrintLabel} />
+      );
       return (
         <CreationDetail
+          onJump={onJump} onNavigateToMaterial={onNavigateToMaterial ? id => onNavigateToMaterial(id, cr) : undefined}
           creation={cr}
           lang={lang}
           knowledge={knowledge}
@@ -17254,8 +18427,9 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           brands={brands}
           onNavigateToKnowledge={onNavigateToKnowledge}
           onEdit={() => { setEditTarget(cr); setViewId(null); }}
-          onBack={() => { if (returnToList && onReturnToList) onReturnToList(); else setViewId(null); }}
-          backLabel={returnToList ? (lang === "zh" ? "← 返回配方一览" : "← レシピ一覧へ") : null}
+          onBack={() => setViewId(null)}
+          backLabel={lang === "ja" ? "← 試作台へ" : "← 返回试拼台"}
+          onSetTrial={setTrial}
           onUpdateCreation={updateCreation}
           showToast={showToast}
           onPrint={onPrintCreation}
@@ -17266,34 +18440,31 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
     }
   }
 
+  const benchItems = creations.filter(isCreationOnBench);
+  const doneCount = creations.filter(c => c && typeof c === "object" && !isCreationOnBench(c)).length;
+  const goList = onGoList || onReturnToList;
   const listMatIds = new Set((materials || []).map(m => m && m.id));   // 第 5 批 E1:卡片上的锁定标记(组件库有没有新版本)用
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `组合产品（${creations.length}）` : `組み合わせ（${creations.length}）`}</div>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>{lang === "zh" ? `试拼台(${benchItems.length})` : `試作台(${benchItems.length})`}</div>
           {saved && <span style={{ fontSize: 12, color: "#0F6E56" }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "+ 新建组合产品" : "+ 組み合わせ新規"}</Btn>
+          <Btn variant="primary" onClick={() => setEditTarget("new")}>{lang === "zh" ? "＋ 新拼一个" : "＋ 新しく組む"}</Btn>
         </div>
       </div>
 
-      {creations.length === 0 && (
-        <div style={{ textAlign: "center", padding: "3rem", color: T.textSecondary, fontSize: 13, lineHeight: 1.8 }}>
-          {lang === "zh" ? "还没有组合产品。" : "まだ組み合わせがありません。"}<br />
-          <span style={{ fontSize: 12, color: T.textTertiary, fontStyle: "italic" }}>
-            {lang === "zh" ? (
-              <>从「组件仓库」挑选组件像搭积木一样创建新产品（蛋糕、泡芙、塔……），<br />记录试吃反馈与改进方向。</>
-            ) : (
-              <>パーツを組み合わせて新しい製品（ケーキ、シュー、タルト…）を作成し、<br />試食フィードバックと改善方向を記録します。</>
-            )}
-          </span>
-        </div>
-      )}
+      <div style={{ ...T.fs.caption, color: T.subtle, lineHeight: 1.7, marginBottom: T.sp.l }}>{lang === "ja" ? "パーツを組み合わせて試す場所です。できたら「✓ 確定」でレシピ一覧へ移ります。" : "拼一拼现有组件、试新组合的地方。拼好了点「✓ 定稿」,它就搬进配方一览。"}</div>
+      {benchItems.length === 0 && <EmptyState variant="first" lang={lang}
+        title={lang === "ja" ? "試作台は空です" : "试拼台是空的"}
+        hint={lang === "ja" ? "パーツ庫から選んで組み合わせます。確定するとレシピ一覧に移ります。" : "从组件仓库挑几个组件拼一个新产品;定稿以后放进配方一览。"}
+        actions={[{ label: lang === "ja" ? "＋ 新しく組む" : "＋ 新拼一个", onClick: () => setEditTarget("new") },
+          { label: lang === "ja" ? "レシピ一覧へ" : "去配方一览", onClick: () => goList && goList() }]} />}
 
       <div style={{ display: "grid", gap: 10 }}>
-        {creations.map(c => {
+        {benchItems.map(c => {
           const name = pickLang(c, "name", lang);
           const nameSub = rawLang(c, "name", lang);
           const layers = c.layers || [];
@@ -17306,7 +18477,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           // 第 4 批 B4-1:颜色和「算不全」和详情页同一个判定(creationMarginView → marginInfo);以前卡片只提醒用量,原料没价的照样绿
           const cardMargin = priceNum > 0 && costPerPortion > 0 ? creationMarginView({ batch: creationBatch(c, null, components, materials, brands), priceNum, costPerPortion, marginPercent: marginPct, lang }) : null;
           // 2026-09-29 体检第 2 批:列表上以前看不出哪款的用量没填 / 读不准(成本按 0 或只按开头的数算)
-          const usedWarnCount = layers.filter(l => l && ((parseFloat(l.yield) > 0 && !(parseUsedAmount(l.usedAmount, l.unit) > 0)) || usedAmountAmbiguous(l.usedAmount))).length;
+          const usedWarnCount = creationUsedWarnCount(c);
 
           // 状态(key 和编辑页的下拉框一致:季節限定是日文汉字「節」)。第 6 批 L1:三张表合成 CREATION_STATUS,认不出的按「試作」
           const statusInfo = creationStatusInfo(c.status, lang);
@@ -17315,7 +18486,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           return (
             <div
               key={c.id}
-              onClick={() => { if (onOpenFromList) onOpenFromList(); setViewId(c.id); }}
+              onClick={() => { if (onOpenFromList) onOpenFromList(); setViewId(c.id); trialScrollTop(); }}
               style={{
                 background: T.bgCard,
                 border: `0.5px solid ${T.border}`,
@@ -17431,6 +18602,7 @@ function CreationsView({ creations, setCreations, components, recipes = [], cats
           );
         })}
       </div>
+      {doneCount > 0 && goList && <Btn variant="ghost" size="lg" onClick={goList} style={{ marginTop: T.sp.l }}>{lang === "ja" ? `確定済みの ${doneCount} 件はレシピ一覧 →` : `已定稿的 ${doneCount} 个在配方一览 →`}</Btn>}
     </div>
   );
 }
@@ -17534,6 +18706,275 @@ const creationIncompleteText = (batch, lang) => {
     names2.length ? (zh ? "单位不符：" : "単位不一致：") + names2.join("、") : ""].filter(Boolean).join("\n");
   return Object.defineProperty({ text: segs.join(""), title }, "parts", { value: segs, enumerable: false });
 };
+
+function CreationLockBars({ act, lang }) {
+ const { locked, lockView, LT, differsIdx, W, useLibLocked, relock, applyLib, onUpdateCreation } = act; const viewMode="detail";
+ return <>{/* 第 5 批 E1:锁定的产品,列表顶上 ① 组件库有新版本 ② 没锁住(≥ 2 个才出这一条)—— 都在下面今天那条「和组件库不一样」前面 */}
+        {locked && viewMode === "detail" && lockView.newVer.length > 0 && (
+          <div data-lock-row="1" style={{ border: `0.5px solid ${T.warning}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200, color: T.warning }}>{LT.newVerBar(lockView.newVer.length)}</span>
+            {lockView.newVer.length >= 2 && onUpdateCreation && (
+              <Btn size="sm" onClick={() => useLibLocked(lockView.newVer)}>{LT.btnUseLibAll}</Btn>
+            )}
+          </div>
+        )}
+        {locked && viewMode === "detail" && lockView.byOld.length >= 2 && (
+          <div data-lock-row="1" style={{ border: `0.5px solid ${T.warning}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200, color: T.warning }}>{LT.byOldBar(lockView.byOld.length)}</span>
+            {onUpdateCreation && (
+              <Btn size="sm" onClick={() => relock(lockView.byOld, LT.relockN(lockView.byOld.length))}>{LT.btnRelockAll}</Btn>
+            )}
+          </div>
+        )}
+        {/* v17.8: 老数据里和组件库现在的内容不一样的部分,先照旧显示产品里存的版本,点了才换 */}
+        {viewMode === "detail" && differsIdx.length > 0 && (
+          <div style={{ border: `0.5px solid ${T.danger}`, background: "#FFFFFF", padding: "8px 12px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ flex: 1, minWidth: 200 }}>
+              {lang === "zh"
+                ? `${differsIdx.length} 个${W.isStack ? "层" : "部分"}和组件库现在的内容不一样（老数据）。现在显示的还是这个产品里存的版本，在下面逐个选用哪个。`
+                : `${differsIdx.length} 件がパーツ庫の現在の内容と異なります（旧データ）。下で個別に選択してください。`}
+            </span>
+            {differsIdx.length >= 2 && onUpdateCreation && (
+              <Btn size="sm" onClick={() => (locked ? useLibLocked(differsIdx) : applyLib(differsIdx))}>{lang === "zh" ? "全部用组件库的" : "すべてパーツ庫に合わせる"}</Btn>
+            )}
+          </div>
+        )}
+
+</>;
+}
+function LayerLinkRows({ act, i, lang }) {
+ const { layers, locked, lockView, LT, linkStates, matIds, components, layerTitle, compOfLayer, useLibLocked, keepLocked, relock, applyLib, keepLocal, onUpdateCreation } = act; const l=layers[i],viewMode="detail",isExpanded=true;
+ return <>{/* 第 5 批 E1:锁定的产品里,这一部分没锁住(被另一台还没刷新的设备解开 / 加进来的)→「重新锁上」 */}
+                    {locked && viewMode === "detail" && onUpdateCreation && lockView.byOld.includes(i) && (
+                      <div data-lock-row="1" style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.warning}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.warning }}>
+                          {linkStates[i] === "follow" ? LT.byOldFollow(layerTitle(l)) : LT.byOldDiffers(layerTitle(l))}
+                        </span>
+                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); relock([i], LT.relock1(layerTitle(l))); }}>{LT.btnRelock}</Btn>
+                      </div>
+                    )}
+                    {/* 第 5 批 E1:锁定的部分,组件库有她没看过的新内容 → 用组件库的(仍锁定)/ 保持现在的 */}
+                    {locked && viewMode === "detail" && onUpdateCreation && lockView.newVer.includes(i) && (
+                      <div data-lock-row="1" style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.warning}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.warning }}>
+                          {LT.newVerRow(layerDiffLabels(l, compOfLayer(l), matIds, lang).join(lang === "zh" ? "、" : "・"))}
+                        </span>
+                        <Btn size="sm" onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnUseLib}</Btn>
+                        <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocked(i); }}>{LT.btnKeep}</Btn>
+                      </div>
+                    )}
+                    {/* v17.8: 和组件库不一样(老数据)→ 两个按钮;本产品专用 → 可改回跟组件库。都是先做 + 给撤销
+                        第 5 批 E1:锁定的产品里换成「用组件库的(仍锁定)」/「保持现在的」(保持内容、锁上),没有按钮会改回不锁的跟组件库 */}
+                    {viewMode === "detail" && onUpdateCreation && linkStates[i] === "differs" && (
+                      <div style={{ marginTop: 8, marginLeft: 22, padding: "6px 10px", background: "#FFFFFF", border: `0.5px solid ${T.danger}`, fontSize: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ flex: 1, minWidth: 160, color: T.danger }}>
+                          {lang === "zh" ? "和组件库现在的内容不一样" : "パーツ庫と相違"}
+                          {(() => { const comp = components.find(x => x && x.id === l.sourceComponentId); const d = layerDiffLabels(l, comp, matIds, lang); return d.length ? (lang === "zh" ? `（差在：${d.join("、")}）` : `（${d.join("・")}）`) : ""; })()}
+                        </span>
+                        {locked ? (
+                          <>
+                            <Btn size="sm" style={LOCK_BTN_WRAP} onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnUseLibLocked}</Btn>
+                            <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); relock([i], LT.keep(layerTitle(l))); }}>{LT.btnKeep}</Btn>
+                          </>
+                        ) : (
+                          <>
+                            <Btn size="sm" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "用组件库的" : "パーツ庫に合わせる"}</Btn>
+                            <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); keepLocal(i); }}>{lang === "zh" ? "保留（本产品专用）" : "この製品専用で残す"}</Btn>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {viewMode === "detail" && onUpdateCreation && linkStates[i] === "local" && isExpanded && (
+                      <div style={{ marginTop: 8, marginLeft: 22 }}>
+                        {locked
+                          ? <Btn size="sm" variant="ghost" style={LOCK_BTN_WRAP} onClick={(e) => { e.stopPropagation(); useLibLocked([i]); }}>{LT.btnRevertLocked}</Btn>
+                          : <Btn size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); applyLib([i]); }}>{lang === "zh" ? "↺ 改回跟组件库" : "↺ パーツ庫に戻す"}</Btn>}
+                      </div>
+                    )}
+
+                    </>;
+}
+// 第七批 A2：展示始终从现有批量配方/成本链取数。
+const CPAGE_TXT = {
+  zh: { kicker: "配方详情 · 组合", back: "← 返回配方一览", menuBtn: "📗 对外展示", menuBack: "← 回到配方", reset: "重置", stripStack: "配方组成部分", stripAsm: "组成部分", assembly: "组装", notes: "备注", tasting: "试吃笔记", goComp: "去组件库看 →", fFlavor: "风味 / 出处(一句话)", fFlavorPh: "例:开心果 × 覆盆子 / 吉田守秀", fFamily: "家族", fNoFamily: "(不属于家族)", fAssembly: "整体组装步骤", fAddStep: "+ 追加一步", fStepZh: "中文步骤", fStepJa: "日文步骤", fNotesZh: "整体备注(中文)", fNotesJa: "整体备注(日文)", fStepUp: "上移这一步", fStepDown: "下移这一步", fStepDel: "删除这一步" },
+  ja: { kicker: "レシピ詳細 · 組み合わせ", back: "← レシピ一覧へ", menuBtn: "📗 展示用", menuBack: "← レシピに戻る", reset: "リセット", stripStack: "レシピの構成パーツ", stripAsm: "構成パーツ", assembly: "組み立て・仕上げ", notes: "メモ", tasting: "試食メモ", goComp: "パーツ庫で見る →", fFlavor: "風味・出典(一言)", fFlavorPh: "例:ピスタチオ × フランボワーズ / 吉田守秀", fFamily: "ファミリー", fNoFamily: "(なし)", fAssembly: "組み立て・仕上げ工程", fAddStep: "+ 工程を追加", fStepZh: "中国語の工程", fStepJa: "日本語の工程", fNotesZh: "全体メモ(中国語)", fNotesJa: "全体メモ(日本語)", fStepUp: "この工程を上へ", fStepDown: "この工程を下へ", fStepDel: "この工程を削除" },
+};
+function CreationPageButton({ style, ...props }) { return Btn({ ...props, style: { minHeight: 40, ...style } }); }
+function CreationPageAddToShop(props) {
+  const el = AddToShopBtn(props);
+  if (!el) return null;
+  const children = Array.isArray(el.props.children) ? el.props.children : [el.props.children];
+  return cloneElement(el, {}, ...children.map(child => isValidElement(child) ? cloneElement(child, { style: { ...child.props.style, minHeight: 40 } }) : child));
+}
+const creationPageLang = lang => lang === "ja" ? "ja" : "zh";
+const creationPageN = text => { const x = parseFloat(String(text).normalize("NFKC")); return Number.isFinite(x) && x > 0 ? x : null; };
+const creationPartNeed = p => p.needed !== null ? (!p.noUsed && usedAmountAmbiguous(p.layer.usedAmount) ? "≈" : "") + fmtQty(p.needed) : "—";
+const creationPartMoney = p => p.noUsed ? "—" : (fmtCost(p.cost) || "—");
+function useCreationBatchText(c, components, materials, brands) {
+  const initial = String(creationBatch(c, null, components, materials, brands).serves);
+  const [state, setState] = useState(() => ({ id: c.id, text: initial }));
+  if (state.id !== c.id) setState({ id: c.id, text: initial });
+  return [state.id === c.id ? state.text : initial, text => setState({ id: c.id, text })];
+}
+function creationPageMargin(c, ci) {
+  const mi = marginInfo({ price: c.price, priceCurrency: priceCurOf(c), cost: ci.perPortion, incomplete: ci.unsure });
+  return { ...mi, color: mi.pct === null ? T.muted : mi.color, hint: mi.pct === null ? "" : ci.incomplete ? "incomplete" : ci.unsure ? "unsure" : "" };
+}
+const creationPageHint = (hint, lang) => hint === "incomplete" ? (lang === "ja" ? "原価不完全・粗利率は過大" : "成本不全·毛利率虚高") : hint === "unsure" ? (lang === "ja" ? "使用量要確認" : "用量待确认") : "";
+function CreationLinkTag({ act, i, lang }) {
+  const tag = act && LAYER_LINK_TAGS[act.tagKeys[i]];
+  if (!tag) return null;
+  return <span style={{ ...T.fs.label, color: tag.color }}>{lang === "ja" ? tag.ja : tag.zh}<TapTip lang={lang} tipId="layer-link" text={lang === "ja" ? tag.hintJa : tag.hint} /></span>;
+}
+function CreationIngRow({ ing, scale, lang, materials, brands, onNavigateToMaterial, gk, rowKey, moneyMode }) {
+  // 复用配方页的完整原料行，只在组合页的两个非现做分支覆盖成本文字。
+  const row = IngViewRow({ ing, scale, lang, materials, brands, onNavigateToMaterial, gk, rowKey });
+  const cells = [...row.props.children], qty = cells[1], cost = cells[3];
+  cells[1] = cloneElement(qty, {}, <span data-pm="qty">{qty.props.children[0]}</span>, qty.props.children[1]);
+  cells[3] = cloneElement(cost, {}, <span data-pm="cost">{moneyMode === "nouse" ? "—" : moneyMode === "stock" ? "" : cost.props.children[0]}</span>, cost.props.children[1]);
+  return cloneElement(row, { "data-pm-row": rowKey }, ...cells);
+}
+function CreationPartsStrip({ c, batch, b: suppliedBatch, n, lang, components = [], materials = [], brands = [], layerActions, onEdit }) {
+  const L = creationPageLang(lang), X = CPAGE_TXT[L], W = creationWords(creationStructureOf(c), L);
+  const b = suppliedBatch || batch || creationBatch(c, creationPageN(n), components, materials, brands);
+  return <div style={{ marginBottom: T.sp.gap }}>
+    <div style={{ display: "flex", gap: T.sp.m, justifyContent: "space-between", borderBottom: `1px solid ${T.ink}`, paddingBottom: T.sp.m, ...T.fs.caption }}>
+      <span>{W.isStack ? X.stripStack : X.stripAsm}</span><span>{L === "zh" ? "这一批 " : "今回 "}<strong data-pm="strip-total">{fmtCost(b.cost) || "—"}</strong></span>
+    </div>
+    <CreationSection c={c} lang={L} onEdit={onEdit} />
+    {b.parts.map(p => { const cat = getCompCat(p.layer.componentCategory), need = creationPartNeed(p); return <div key={p.idx} data-pm-strip={p.idx} className="k-row" style={{ display: "flex", alignItems: "center", gap: T.sp.s, borderBottom: `1px solid ${T.lineFaint}` }}>
+      <button type="button" className="k-tap" onClick={() => document.getElementById(`cpart-${p.idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+      style={{ display: "flex", flex: 1, minWidth: 0, alignItems: "center", gap: T.sp.m, minHeight: 51, background: "none", border: "none", padding: "8px 0", textAlign: "left", color: T.ink, fontFamily: T.fontSans, cursor: "pointer" }}>
+      <span style={{ width: 4, height: 20, background: cat.color, flexShrink: 0 }} /><span style={{ ...T.num, color: T.muted }}>{String(p.idx + 1).padStart(2, "0")}</span>
+      <span style={{ flex: 1, minWidth: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.layer.customName || pickLang(p.layer, "name", L)}</span>
+      <span style={{ whiteSpace: "nowrap", ...T.num }}><span data-pm="need">{need}</span>{need !== "—" && <small> {p.layer.unit || "g"}</small>}</span><span data-pm="cost" style={{ minWidth: 46, textAlign: "right", ...T.num }}>{creationPartMoney(p)}</span>
+      </button><CreationLinkTag act={layerActions} i={p.idx} lang={L} />
+    </div>; })}
+  </div>;
+}
+function CreationWholeRecipe({ c, n, setN, lang, components = [], materials = [], brands = [], onPrint, onEdit, onNavigateToMaterial, layerActions, onJump, compact = false }) {
+  const L = creationPageLang(lang), zh = L === "zh", X = CPAGE_TXT[L], W = creationWords(creationStructureOf(c), L);
+  const initial = String(creationBatch(c, null, components, materials, brands).serves);
+  const nText = n === undefined ? initial : n;
+  const b = creationBatch(c, creationPageN(nText), components, materials, brands), ci = creationCostInfo(c, components, materials, brands), M = creationPageMargin(c, ci);
+  const portions = parseFloat(c.portions) || 1, [open, setOpen] = useState({});
+  let lines = ci.incomplete ? creationIncompleteText(ci.batch, L).title.split("\n").filter(Boolean) : [];
+  if (ci.incomplete && !lines.length) lines = [zh ? "各部分的原料成本加起来是 0,还算不出(部分里没有原料、用量是 0,或者都标了不计价)" : "原価の合計が 0 のため計算できません"];
+  const box = { marginBottom: T.sp.gap, padding: compact ? T.sp.l : 0 };
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: T.sp.m, minHeight: 56, borderBottom: `1px solid ${T.line}`, marginBottom: T.sp.gap }}>
+      <label style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: T.sp.s, ...T.fs.caption }}>
+        <span>{zh ? `按「${W.servesLabel} ${fmtQty(b.serves)}」写 · 做` : `${W.servesLabel} ${fmtQty(b.serves)} 基準 ·`}</span>
+        <input className="k-input" data-pm="n" inputMode="decimal" value={nText} onChange={e => setN && setN(e.target.value)} aria-label={zh ? "做几个" : "仕込む数"} style={{ width: 72, minHeight: 40, textAlign: "right", ...T.num }} /><span>{W.unit}</span>
+      </label>
+      {b.factor !== 1 && <><span data-pm="factor" style={{ color: T.accent, ...T.num }}>{"×" + fmtQty(b.factor)}</span><CreationPageButton size="sm" className="k-tap" onClick={() => setN && setN(initial)}>{X.reset}</CreationPageButton></>}
+      {onPrint && <CreationPageButton size="sm" onClick={() => onPrint({ creation: c, batch: b })}>{zh ? "🖨 打印" : "🖨 印刷"}</CreationPageButton>}
+      {creationMoldLine(c, L) && <div data-p5="cmold" style={{ width: "100%", color: T.muted, ...T.fs.caption }}>{creationMoldLine(c, L)}</div>}
+    </div>
+    {ci.incomplete && <InlineError title={zh ? "成本算不全" : "原価が出せません"} detail={<>{lines.map((line, i) => <div key={i} data-pm-ic={i}>{line}</div>)}</>} actionLabel={zh ? "去编辑" : "編集へ"} onAction={() => onEdit && onEdit(c)} />}
+    {layerActions && <CreationLockBars act={layerActions} lang={L} />}
+    <CreationPartsStrip c={c} batch={b} lang={L} layerActions={layerActions} onEdit={onEdit} />
+    {!b.parts.length && <div style={{ ...box, color: T.muted }}>{W.emptyDetail}</div>}
+    {b.parts.map(p => {
+      const l = p.layer, cat = getCompCat(l.componentCategory), kind = p.stock ? "stock" : p.noUsed ? "nouse" : "normal", s = kind === "normal" ? p.scale : 1;
+      const need = creationPartNeed(p), used = creationUsedLine(l, c.serves, W.unit, L, false), steps = pickSteps(l, L), notes = pickLang(l, "notes", L) || l.notes;
+      const rows = kind === "normal" ? p.ings : (l.ingredients || []).filter(i => i && (_normTxt(i.nameZh) || _normTxt(i.nameJa))).map(ing => ({ ing }));
+      const pmold = p.stock ? "" : partMoldText(p, L), pts = !p.stock && p.comp ? pickLang(p.comp, "kitchenNotes", L) : "";
+      const mult = kind === "normal" && p.scale !== 1 ? "×" + (p.scale < 0.01 ? "<0.01" : fmtQty(p.scale)) : null;
+      const showRows = kind !== "stock" || open[`${p.idx}:batch`];
+      return <section id={`cpart-${p.idx}`} key={p.idx} data-pm-part={p.idx} data-pm-kind={kind} style={box}>
+        <div style={{ display: "flex", gap: T.sp.m, alignItems: "baseline", padding: "14px 0", borderTop: `2px solid ${cat.color}`, flexWrap: "wrap" }}>
+          <span style={{ ...T.num, color: cat.color }}>{String(p.idx + 1).padStart(2, "0")}</span><strong style={{ flex: 1 }}>{l.customName || pickLang(l, "name", L)}</strong>
+          <span style={{ ...T.fs.label, color: p.stock ? T.warning : T.muted }}>{p.stock ? (zh ? "备货" : "作り置き") : (zh ? "现做" : "当日仕込み")}</span><CreationLinkTag act={layerActions} i={p.idx} lang={L} />
+          <span>{zh ? "需要 " : "必要量 "}<strong data-pm="need">{need}</strong>{need !== "—" && <small> {l.unit || "g"}</small>}</span>
+          {p.needed === null && p.yieldNum === 0 && kind !== "stock" && <small style={{ color: T.muted }}>{zh ? "整批" : "全量"} × {fmtQty(b.factor)}</small>}
+        </div>
+        {l.customName && l.customName !== pickLang(l, "name", L) && <div style={{ ...T.fs.caption, color: T.muted }}>{pickLang(l, "name", L)}</div>}
+        {used && <div style={{ ...T.fs.caption, color: T.muted, marginBottom: T.sp.s }}>{zh ? "用量：" : "使用量："}{used.text}</div>}
+        {used && used.stale && <div data-used-warn="sheetstale" style={{ color: T.warning, ...T.fs.caption }}>⚠ {usedStaleText(used.stale, creationStructureOf(c), L)}</div>}
+        {p.noUsed && <div style={{ color: T.danger, ...T.fs.caption, marginBottom: T.sp.s }}>⚠ {zh ? "这一部分没填用量（或读不出数字），下面是组件的整批配方，没按个数算。去「编辑」里填上用量。" : "使用量が未入力のため、下は全量レシピです。"}</div>}
+        {!p.noUsed && usedAmountAmbiguous(l.usedAmount) && <div style={{ color: T.warning, ...T.fs.caption }}>⚠ {zh ? `用量只认开头的数字，按 ${fmtQty(p.used)} ${l.unit || "g"} 一批算。不对的话去「编辑」改成纯数字。` : `先頭の数字 ${fmtQty(p.used)} ${l.unit || "g"} で計算しています。`}</div>}
+        {layerActions && <LayerLinkRows act={layerActions} i={p.idx} lang={L} />}
+        {pmold && <div data-p5="pmold" style={{ ...T.fs.caption, color: T.body, margin: "8px 0" }}>{pmold}</div>}
+        {_normTxt(pts) && <div data-p5="ppoints" style={{ ...T.fs.caption, whiteSpace: "pre-wrap", border: `1px solid ${T.line}`, padding: T.sp.m }}>{zh ? "厨房要点 · " : "ポイント · "}{pts}</div>}
+        {p.stock && <div style={{ margin: "10px 0" }}>{zh ? "从库存取" : "ストックから"}{need !== "—" && <> {need} {l.unit || "g"}</>}<div><CreationPageButton variant="ghost" size="sm" onClick={() => setOpen(prev => ({ ...prev, [`${p.idx}:batch`]: !prev[`${p.idx}:batch`] }))}>{showRows ? "▾" : "▸"} {zh ? "整批配方" : "全量レシピ"}{p.yieldNum > 0 ? ` (${fmtQty(p.yieldNum)} ${l.unit || "g"})` : ""}</CreationPageButton></div></div>}
+        {showRows && <>
+          <div className="rc-ing-head" style={{ display: "grid", gridTemplateColumns: ING_COLS, ...T.fs.micro, color: T.subtle, paddingBottom: 10, borderBottom: `1px solid ${T.ink}`, fontFamily: T.fontSerif }}>
+            <div style={{ paddingLeft: T.sp.xl }}>{zh ? "原料名称" : "原材料"}{mult && <span data-pm="mult" style={{ color: T.accent, marginLeft: 6 }}>{mult}</span>}</div><div style={{ textAlign: "right" }}>{zh ? "用量" : "分量"}</div><div className="k-desktop-only" style={{ paddingLeft: T.sp.xxl }}>{zh ? "品牌" : "ブランド"}</div><div style={{ textAlign: "right" }}>{zh ? "成本" : "原価"}</div>
+          </div>
+          {GROUP_ORDER.map(gk => { const group = rows.map((row, k) => ({ ...row, k })).filter(({ ing }) => (GROUP_ORDER.includes(ing.group) ? ing.group : "none") === gk); return group.length ? <Fragment key={gk}>{IngGroupTitle({ gk, n: group.length, lang: L })}{group.map(({ ing, k }) => <CreationIngRow key={k} ing={ing} scale={s} lang={L} materials={materials} brands={brands} onNavigateToMaterial={onNavigateToMaterial} gk={gk} rowKey={`${p.idx}:${k}`} moneyMode={kind} />)}</Fragment> : null; })}
+        </>}
+        <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${T.line}`, padding: "10px 0", ...T.fs.caption }}><span>{W.isStack ? (zh ? "这一层" : "この層") : (zh ? "这一部分" : "このパーツ")}{p.noUsed && <small> ({zh ? "没填用量" : "使用量未入力"})</small>}</span><strong data-pm="sub" style={T.num}>{creationPartMoney(p)}</strong></div>
+        {showRows && StepsBlock({ steps, lang: L })}
+        {notes && <div><CreationPageButton variant="ghost" size="sm" onClick={() => setOpen(prev => ({ ...prev, [`${p.idx}:notes`]: !prev[`${p.idx}:notes`] }))}>{open[`${p.idx}:notes`] ? "▾" : "▸"} {X.notes}</CreationPageButton>{open[`${p.idx}:notes`] && <div style={{ whiteSpace: "pre-wrap", ...T.fs.caption, lineHeight: 1.7 }}>{notes}</div>}</div>}
+        {p.comp && onJump && <CreationPageButton variant="ghost" size="sm" onClick={() => onJump({ kind: "componentView", id: p.comp.id })}>{X.goComp}</CreationPageButton>}
+      </section>;
+    })}
+    {b.parts.length > 0 && <div className="rc-ing-total" style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: T.sp.l, padding: "18px 0", borderTop: `2px solid ${T.ink}`, marginBottom: T.sp.gap }}>
+      <span>{zh ? "原料总成本(这一批 " : "原価合計("}<span data-pm="batchN">{fmtQty(b.N)}</span> {W.unit})</span>
+      <div><strong data-pm="margin" data-pm-level={M.level} style={{ color: M.color, ...T.num }}>{M.text}</strong>{M.hint && <div data-pm="hint" style={{ color: T.warning, ...T.fs.caption }}>{creationPageHint(M.hint, L)}</div>}</div>
+      <div style={{ textAlign: "right" }}><strong data-pm="total" style={{ ...T.num, fontSize: 24 }}>{fmtCost(b.cost) || "—"}</strong><div style={{ color: T.muted, ...T.fs.caption }}>{zh ? W.perUnitCost : W.isStack ? "1 台の原価" : "1 個の原価"} <span data-pm="unit">{fmtCost(ci.perUnit) || "—"}</span>{portions > 1 && <> · {zh ? "每份" : "1 人分"} <span data-pm="portion">{fmtCost(ci.perPortion) || "—"}</span></>}</div></div>
+    </div>}
+    {StepsBlock({ steps: pickSteps(c, L), lang: L, title: X.assembly })}
+    {pickLang(c, "notes", L) && <div style={box}><div style={{ ...T.fs.micro, color: T.muted }}>{X.notes}</div><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{pickLang(c, "notes", L)}</div></div>}
+  </div>;
+}
+function CreationRecipeView({ creation: c, lang, components = [], materials = [], brands = [], recipes = [], creations = [], knowledge = [], shopMaterials = [], setShopMaterials, products = [], showToast, onEdit, onBack, backLabel, onPrint, onKitchen, onUpdateCreation, onSetTrial, onCopyToBench, onNavigateToKnowledge, onNavigateToMaterial, onJump, onPrintLabel }) {
+  const L = creationPageLang(lang), zh = L === "zh", X = CPAGE_TXT[L], W = creationWords(creationStructureOf(c), L);
+  const [n, setN] = useCreationBatchText(c, components, materials, brands), [menu, setMenu] = useState(false), [tastingOpen, setTastingOpen] = useState(false);
+  const b = creationBatch(c, creationPageN(n), components, materials, brands), ci = creationCostInfo(c, components, materials, brands), M = creationPageMargin(c, ci);
+  const act = useCreationLayerActions({ c, components, materials, brands, lang: L, onUpdateCreation, showToast });
+  const priceCNY = toCNY(c.price, priceCurOf(c)), portions = parseFloat(c.portions) || 1;
+  const S = marginInfo({ price: 0, priceCurrency: "CNY", cost: ci.perPortion, incomplete: ci.unsure });
+  const suggest = S.suggested === null ? "—" : (S.suggestedAtLeast ? MO_TXT[L].atLeast : "") + moMoney(S.suggested);
+  const name = pickLang(c, "name", L), other = rawLang(c, "name", L), status = creationStatusInfo(c.status, L), related = knowledgeLinksTo("creation", c.id, knowledge, recipes, components, creations);
+  const tasting = c.tasting || {}, hasTasting = !!(tasting.notes || tasting.feedback || tasting.improvement || c.rating);
+  if (menu) return <div><CreationPageButton variant="ghost" onClick={() => setMenu(false)}>{X.menuBack}</CreationPageButton><div className="rc-title" style={{ margin: "24px 0" }}><h1 style={{ fontFamily: T.fontSerif }}>{name}</h1><p>{c.flavorName}</p><p style={{ whiteSpace: "pre-wrap" }}>{c.description}</p>{priceCNY > 0 && <div>{fmtSellPrice(c.price, c)}</div>}</div><CreationSection c={c} lang={L} variant="menu" /><ol>{(c.layers || []).map((l, i) => <li key={i}>{l.customName || pickLang(l, "name", L)}</li>)}</ol><ImageUrlsDisplay urls={c.imageUrls} /></div>;
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: T.sp.m, marginBottom: T.sp.gap }}>
+      <span style={{ ...T.fs.micro, color: T.muted }}>{X.kicker}</span><div style={{ display: "flex", gap: T.sp.s, flexWrap: "wrap" }}>
+        <CreationPageAddToShop ings={(c.layers || []).flatMap(l => l.ingredients || [])} lang={L} materials={materials} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} />
+        {onKitchen && <CreationPageButton size="sm" onClick={() => onKitchen(b.N !== b.serves ? b.N : undefined)}>{zh ? "👩‍🍳 厨房视图" : "👩‍🍳 キッチン"}</CreationPageButton>}
+        {onPrint && <CreationPageButton size="sm" onClick={() => onPrint({ creation: c, batch: b })}>{zh ? "打印" : "印刷"}</CreationPageButton>}
+        {onUpdateCreation && <CreationPageButton size="sm" onClick={act.toggleLock}>{act.locked ? act.LT.btnUnlock : act.LT.btnLock}</CreationPageButton>}
+        {onCopyToBench && <CreationPageButton size="sm" onClick={() => onCopyToBench(c)}>{zh ? "⧉ 复制到试拼台" : "⧉ 試作台にコピー"}</CreationPageButton>}
+        {onEdit && <CreationPageButton size="sm" onClick={() => onEdit(c)}>{zh ? "编辑" : "編集"}</CreationPageButton>}<CreationPageButton size="sm" variant="ghost" onClick={onBack}>{backLabel || X.back}</CreationPageButton>
+      </div>
+    </div>
+    <div className="rc-title" style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: T.sp.gap, padding: "24px 0", borderTop: `1px solid ${T.ink}`, marginBottom: T.sp.gap }}>
+      <div style={{ minWidth: 0 }}>{c.nameFr && <div style={{ fontFamily: T.fontSerif, fontSize: 32 }}>{c.nameFr}</div>}<h1 style={{ margin: "8px 0", fontFamily: T.fontSerif, fontSize: 24 }}>{name}</h1>{other && other !== name && <div style={{ color: T.muted }}>{other}</div>}
+        <CopiedFromNote obj={c} lang={L} list={creations} onOpen={onJump ? id => onJump({ kind: "creationView", id }) : undefined} />
+        {c.flavorName && <p style={{ ...T.fs.caption, color: T.muted }}>{c.flavorName}</p>}{c.chef && <div style={{ ...T.fs.caption }}>{zh ? "师承:" : "師事:"}{c.chef}</div>}{c.description && <p style={{ ...T.fs.caption, whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{c.description}</p>}
+        <div style={{ ...T.fs.caption, color: T.muted }}>{[creationMoldLine(c, L), `${W.servesLabel} ${fmtQty(b.serves)} ${W.unit}`, `${(c.layers || []).length} ${zh ? (W.isStack ? "层" : "个部分") : "パーツ"}`, c.prepTime, c.shelfLife, status.label].filter(Boolean).join(" · ")}</div>
+        {act.locked && <div style={{ ...T.fs.caption, color: T.muted, marginTop: T.sp.s }}>{act.LT.cover(lockMdOf(c.lockedAt))}</div>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: T.sp.m, alignItems: "center", marginTop: T.sp.m }}>
+          {c.trial === "done" && c.trialAt && Number.isFinite(Date.parse(c.trialAt)) && <span style={{ ...T.fs.caption, color: T.muted }}>{zh ? "定稿" : "確定"} {new Date(c.trialAt).getMonth() + 1}/{new Date(c.trialAt).getDate()}</span>}
+          <CreationPageButton size="sm" variant="ghost" className="k-tap" style={{ minHeight: 40 }} onClick={() => setMenu(true)}>{X.menuBtn}</CreationPageButton>{onSetTrial && <CreationPageButton size="sm" variant="ghost" className="k-tap" style={{ minHeight: 40 }} onClick={() => onSetTrial(c.id, "bench")}>{zh ? "退回试拼台" : "試作台に戻す"}</CreationPageButton>}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", alignSelf: "start" }}>{priceCNY > 0 ? <>
+        <div style={{ color: T.muted, ...T.fs.caption }}>{zh ? "售价 / " : "売価 / "}{portions > 1 ? (zh ? "份" : "1 人分") : W.unit}</div><div data-pm="rc-price" style={{ fontSize: 30, ...T.num }}>{fmtSellPrice(c.price, c)}</div>
+        <div style={{ ...T.fs.caption }}>{zh ? "原料毛利率 " : "原材料粗利率 "}<span data-pm="rc-margin" data-pm-level={M.level} style={{ color: M.color }}>{M.text}</span></div>{M.hint && <div data-pm="rc-hint" style={{ color: T.warning, ...T.fs.caption }}>{creationPageHint(M.hint, L)}</div>}
+      </> : <><div style={{ color: T.muted, ...T.fs.caption }}>{portions > 1 ? (zh ? "每份成本" : "1 人分の原価") : zh ? W.perUnitCost : W.isStack ? "1 台の原価" : "1 個の原価"}</div><div data-pm="rc-cost" style={{ fontSize: 30, ...T.num }}>{fmtCost(portions > 1 ? ci.perPortion : ci.perUnit) || "—"}</div><div style={{ ...T.fs.caption }}>{zh ? "建议售价 " : "推奨売価 "}<span data-pm="rc-suggest">{suggest}</span></div>{S.suggested !== null && <div style={{ color: T.muted, ...T.fs.label }}>{zh ? "(按目标原料成本率 " : "(目標原材料率 "}{fmtQty(getTargetCostRate() * 100)}%)</div>}</>}</div>
+    </div>
+    <CreationWholeRecipe c={c} n={n} setN={setN} lang={L} components={components} materials={materials} brands={brands} onEdit={onEdit} onNavigateToMaterial={onNavigateToMaterial} layerActions={act} onJump={onJump} />
+    <AllergenSummaryCard kind="creation" entity={c} lang={L} materials={materials} brands={brands} components={components} recipes={recipes} creations={creations} onPrintLabel={onPrintLabel} flat />
+    {hasTasting && <div style={{ marginBottom: T.sp.gap }}><CreationPageButton variant="ghost" onClick={() => setTastingOpen(v => !v)}>{X.tasting} {c.rating ? "★".repeat(Math.max(0, Math.min(5, Number(c.rating) || 0))) : ""} {tastingOpen ? "▾" : "▸"}</CreationPageButton>{tastingOpen && <div>
+      {tasting.date && <div style={{ ...T.fs.caption, color: T.muted, margin: "8px 0" }}>📅 {tasting.date}</div>}
+      <div className={fgClass("1fr 1fr")} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: T.sp.m }}>
+        {(tasting.notes || tasting.feedback) && <div style={{ padding: T.sp.l, border: `1px solid ${T.line}`, borderRadius: T.radius }}><div style={{ ...T.fs.caption, color: T.success }}>{zh ? "✨ 好评点 / 整体感想" : "✨ 好評点・全体の感想"}</div>{tasting.notes && <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{tasting.notes}</p>}{tasting.feedback && <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>💬 {tasting.feedback}</p>}</div>}
+        {tasting.improvement && <div style={{ padding: T.sp.l, border: `1px solid ${T.line}`, borderRadius: T.radius }}><div style={{ ...T.fs.caption, color: T.warning }}>{zh ? "🔧 改进方向" : "🔧 改善方向"}</div><p style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{tasting.improvement}</p></div>}
+      </div>
+    </div>}</div>}
+    <ImageUrlsDisplay urls={c.imageUrls} />{RelatedKnowledgeBlock({ items: related, lang: L, onOpen: onNavigateToKnowledge })}
+  </div>;
+}
+
+function CreationTrialRecipe({ c, components, materials, brands, lang, onPrint, onUpdateCreation, showToast, onEdit, onJump, onNavigateToMaterial }) {
+  const [n, setN] = useCreationBatchText(c, components, materials, brands);
+  const act = useCreationLayerActions({ c, components, materials, brands, lang, onUpdateCreation, showToast });
+  return <CreationWholeRecipe c={c} n={n} setN={setN} components={components} materials={materials} brands={brands} lang={lang} onPrint={onPrint} onEdit={onEdit} layerActions={act} onJump={onJump} onNavigateToMaterial={onNavigateToMaterial} compact />;
+}
 
 function CreationRecipeSheet({ c, lang, components = [], materials = [], brands = [], onPrint }) {
   const zh = lang === "zh";
@@ -17736,11 +19177,8 @@ const creationMarginView = ({ batch, priceNum, costPerPortion, marginPercent, la
   };
 };
 
-function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge, onPrintLabel, onKitchen }) {
-  const [expandedLayer, setExpandedLayer] = useState(null);
-  const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
-  const name = pickLang(c, "name", lang);
-  const description = c.description || "";
+// 第 7 批第 0 步：原详情页动作原样共用，保留锁定与按部分身份撤销。
+function useCreationLayerActions({ c, components = [], materials = [], brands = [], lang, onUpdateCreation, showToast }) {
   const layers = c.layers || [];
   const W = creationWords(creationStructureOf(c), lang);  // 叠层 / 拼装的叫法
 
@@ -17771,7 +19209,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         let n = 0;
         // 同一个组件用了两次、中间又删了一个时,「第几个」会错位到另一部分上:部分名和用量也得对得上才还原(审查发现)
         const samePart = (l, b) => (l.customName || "") === (b.customName || "") && String(l.usedAmount || "") === String(b.usedAmount || "");
-        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); const b = key ? before[key] : undefined; if (b !== undefined && samePart(l, b)) { n++; return b; } return l; });
+        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); const b = key ? before[key] : undefined; if (b !== undefined && samePart(l, b)) { n++; return l.sectionId ? { ...b, sectionId: l.sectionId } : b; } return l; });
         restored = n;
         return { ...cr, layers: next };
       });
@@ -17833,13 +19271,24 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         const a = seq(cur.layers), b = seq(post.layers);
         if (a.length !== b.length || a.some((x, i) => x !== b[i])) return cur;
         back = true;
-        const r = { ...cur, layers: pre.layers };
+        const r = { ...cur, layers: Array.isArray(pre.layers) ? pre.layers.map((l, i) => cur.layers[i]?.sectionId ? { ...l, sectionId: cur.layers[i].sectionId } : l) : pre.layers };
         if (Object.prototype.hasOwnProperty.call(pre, "lockedAt")) r.lockedAt = pre.lockedAt; else delete r.lockedAt;
         return r;
       });
       setTimeout(() => { if (!back) showToast(LT.noUndo); }, 0);   // 更新函数在 React 渲染时才跑,等它跑完再看撤没撤
     } });
   };
+
+  return { onUpdateCreation, components, layers, W, matIds, linkStates, differsIdx, layerTitle, patchLayers, applyLib, keepLocal, locked, LT, lockView, tagKeys, compOfLayer, perUnitOf, perUnitAfter, useLibLocked, keepLocked, relock, toggleLock };
+}
+
+function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, onUpdateCreation, showToast, onPrint, knowledge = [], recipes = [], components = [], creations = [], materials = [], brands = [], onNavigateToKnowledge, onPrintLabel, onKitchen, onSetTrial = null, onJump, onNavigateToMaterial }) {
+  const [expandedLayer, setExpandedLayer] = useState(null);
+  const [viewMode, setViewMode] = useState("detail"); // "detail" | "recipe" | "menu"
+  const name = pickLang(c, "name", lang);
+  const description = c.description || "";
+  const act = useCreationLayerActions({ c, components, materials, brands, lang, onUpdateCreation, showToast });
+  const { layers, W, matIds, linkStates, differsIdx, layerTitle, patchLayers, applyLib, keepLocal, locked, LT, lockView, tagKeys, compOfLayer, perUnitOf, perUnitAfter, useLibLocked, keepLocked, relock, toggleLock } = act;
 
   // 🧮 单层实际成本:按这一层的配料实时算,不读存下来的 totalCost(没有币种,见 getIngsLiveCost)
   const calcLayerActualCost = (l) => calcLayerLiveCost(l, materials, brands);
@@ -17874,6 +19323,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
               <Btn size="sm" onClick={toggleLock} title={locked ? undefined : LT.btnLockTitle}>{locked ? LT.btnUnlock : LT.btnLock}</Btn>{!locked && <TapTip tipId="creation-lock" text={LT.btnLockTitle} lang={lang} />}
             </span>
           )}
+          {onSetTrial && isCreationOnBench(c) && <span style={{ display: "inline-flex", alignItems: "center" }}><Btn size="lg" variant="primary" onClick={() => onSetTrial(c.id, "done")}>{lang === "ja" ? "✓ 確定" : "✓ 定稿"}</Btn><TapTip tipId="trial-finalize" lang={lang} text={lang === "ja" ? "確定するとレシピ一覧に移り、ほかのレシピと一緒に見たり、販売中にしたり、粗利を見たりできます。パーツ庫との連動とロックはそのまま。いつでも試作台に戻せます。" : "定稿 = 搬进配方一览,和别的配方一起看、标在售、算毛利。跟组件库走和锁定照旧。随时能退回试拼台。"} /></span>}
           <Btn size="sm" onClick={onEdit}>{lang === "zh" ? "编辑" : "編集"}</Btn>
           <Btn onClick={onBack}>{backLabel || (lang === "zh" ? "← 返回" : "← 戻る")}</Btn>
         </div>
@@ -18063,7 +19513,7 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
 
       {/* 📘 配方模式 = 整体配方(v17.8):按个数算、能打印,组装步骤和整体备注也在里面 */}
       {viewMode === "recipe" && (
-        <CreationRecipeSheet key={c.id} c={c} lang={lang} components={components} materials={materials} brands={brands} onPrint={onPrint} />
+        <CreationTrialRecipe key={c.id} c={c} lang={lang} components={components} materials={materials} brands={brands} onPrint={onPrint} onEdit={onEdit} onUpdateCreation={onUpdateCreation} showToast={showToast} onJump={onJump} onNavigateToMaterial={onNavigateToMaterial} />
       )}
 
       {/* 🎂 层结构（带示意图） */}
@@ -18103,27 +19553,9 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
         )}
 
         {layers.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: W.isStack ? "60px 1fr" : "1fr", gap: 12 }}>
-            {/* 左侧：示意图(只有叠层画;拼装不分上下,不画) */}
-            {W.isStack && <div style={{ display: "flex", flexDirection: "column", gap: 2, position: "sticky", top: 10, alignSelf: "start" }}>
-              {layers.map((l, i) => {
-                const cat = getCompCat(l.componentCategory);
-                const usedAmount = parseUsedAmount(l.usedAmount, l.unit);  // 2026-09-29 体检第 2 批:和成本同一个读法
-                // 根据用量动态调整高度（最小20px，最大60px）
-                const heightPct = usedAmount > 0 ? Math.min(60, Math.max(20, usedAmount / 30)) : 28;
-                const isHovered = expandedLayer === i;
-                return (
-                  <TapTip key={i} tipId="layer-block" text={l.customName || pickLang(l, "name", lang)} label={l.customName || pickLang(l, "name", lang)} lang={lang} trigger={<div data-tl-min="40"
-                    className="k-tap"
-                    onClick={() => setExpandedLayer(expandedLayer === i ? null : i)}
-                    title={l.customName || l.nameZh || l.nameJa}
-                    style={{ background: cat.color, height: heightPct, display: "flex", alignItems: "center", justifyContent: "center", color: "#FFFFFF", fontSize: 11, fontWeight: 500, cursor: "pointer", opacity: isHovered ? 1 : 0.85, transition: "opacity 0.15s" }}
-                  >
-                    {i + 1}
-                  </div>} />
-                );
-              })}
-            </div>}
+          <div style={{ minWidth: 0 }}>
+            <CreationSection c={c} lang={lang} variant={viewMode === "menu" ? "menu" : undefined} onEdit={viewMode === "menu" ? undefined : onEdit}
+              onLayerClick={i => setExpandedLayer(expandedLayer === i ? null : i)} />
 
             {/* 右侧：层列表 */}
             <div>
@@ -18548,9 +19980,27 @@ function CreationLockNote({ form, lang = "zh" }) {
   );
 }
 
+function StepsEditor({ rows, onChange, lang }) {
+  const X = CPAGE_TXT[creationPageLang(lang)];
+  const resize = el => { if (el) { el.style.height = "auto"; el.style.height = Math.max(64, el.scrollHeight || 64) + "px"; } };
+  const edit = (i, key, value) => onChange(rows.map((row, k) => k === i ? { ...row, [key]: value } : row));
+  const move = (i, dir) => { if (i + dir < 0 || i + dir >= rows.length) return; const next = rows.slice(); [next[i], next[i + dir]] = [next[i + dir], next[i]]; onChange(next); };
+  const action = (label, text, onClick, disabled = false) => cloneElement(Btn({ size: "sm", children: text, onClick, disabled, style: { minWidth: 40, minHeight: 40 } }), { "aria-label": label, className: "k-btn k-btn-default k-tap" });
+  return <div data-cpage-steps="1">
+    {rows.map((row, i) => <div key={i} style={{ padding: "12px 0", borderBottom: `1px solid ${T.line}`, marginBottom: T.sp.m }}>
+      <div style={{ ...T.fs.caption, color: T.muted, marginBottom: T.sp.s }}>{String(i + 1).padStart(2, "0")}</div>
+      {[["textZh", X.fStepZh], ["textJa", X.fStepJa]].map(([key, label]) => <label key={key} style={{ display: "block", ...T.fs.caption, marginBottom: T.sp.s }}>{label}
+        <textarea className="k-input" rows={2} aria-label={`${label} ${i + 1}`} ref={resize} value={row[key]} onChange={e => { resize(e.target); edit(i, key, e.target.value); }} style={{ display: "block", boxSizing: "border-box", width: "100%", resize: "vertical", minHeight: 64, padding: T.sp.m, lineHeight: 1.7 }} />
+      </label>)}
+      <div style={{ display: "flex", gap: T.sp.s }}>{action(X.fStepUp, "↑", () => move(i, -1), i === 0)}{action(X.fStepDown, "↓", () => move(i, 1), i === rows.length - 1)}{action(X.fStepDel, "×", () => onChange(rows.filter((_, k) => k !== i)))}</div>
+    </div>)}
+    <Btn size="sm" className="k-tap" style={{ minHeight: 40 }} onClick={() => onChange([...rows, { textZh: "", textJa: "" }])}>{X.fAddStep}</Btn>
+  </div>;
+}
+
 function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [], materials = [], setShopMaterials, onSave, onDelete, onBack, onUpdateComponent, confirmDialog, showToast, knowledge = [], lang = "zh",
   setMaterials,   // 第 5 批第 0 步:透传给部分编辑页(S1「存进材料百科」用,先不用)
-  onGoComponents }) {   // 第 5 批 E1:选组件弹窗「去组件仓库新建」
+  onGoComponents, productFamilies = [] }) {   // 第 5 批 E1:选组件弹窗「去组件仓库新建」
   const isNew = !creation;
   const matIds = useMemo(() => new Set((materials || []).map(m => m && m.id)), [materials]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -18578,7 +20028,11 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
   const [showComponentPicker, setShowComponentPicker] = useState(false);
   const [editingLayerIdx, setEditingLayerIdx] = useState(null);
   const [newFlavorTag, setNewFlavorTag] = useState("");
-  const dirtyBind = useDirtyGuard(() => form);   // 没保存就切页时 App 先问一句(部分编辑页另有自己的)
+  const [asmSteps, setAsmSteps] = useState(() => stepRows(creation || {}).map(row => ({ textZh: row.zh, textJa: row.ja })));
+  const [asmTouched, setAsmTouched] = useState(false);
+  const pageX = CPAGE_TXT[creationPageLang(lang)];
+  const changeAssembly = rows => { setAsmSteps(rows); setAsmTouched(true); };
+  const dirtyBind = useDirtyGuard(() => ({ form, steps: asmSteps }));   // 没保存就切页时 App 先问一句(部分编辑页另有自己的)
   const leave = () => confirmLeave(dirtyBind.isDirty, confirmDialog, lang, onBack);   // C15:「← 返回」「取消」有改动先问
   // v17.8: 编辑期间组件库变了(比如刚「↻ 同步回组件库」),表单里跟组件库走的部分也换成最新内容,
   // 不然打开同组件的另一部分看到的是旧的,原样保存会被当成「改过」而变成本产品专用
@@ -18625,7 +20079,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       follow: true,
       ...layerUsedDefaults(form),
     }));
-    if (newLayers.length) setForm(prev => ({ ...prev, layers: [...(prev.layers || []), ...newLayers] }));
+    if (newLayers.length) setForm(prev => { const next = { ...prev, layers: [...(prev.layers || []), ...newLayers] }; return prev.sectionPlan ? sectionPlanDraft(next) : next; });
     setShowComponentPicker(false);
   };
 
@@ -18645,7 +20099,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       notesZh: "", notesJa: "",
       totalCost: 0,
     };
-    setForm(prev => ({ ...prev, layers: [...(prev.layers || []), newLayer] }));
+    setForm(prev => { const next = { ...prev, layers: [...(prev.layers || []), newLayer] }; return prev.sectionPlan ? sectionPlanDraft(next) : next; });
   };
 
   // 第 6 批 R(spec_bin R38 / 待看 15):删一个部分 = 直接删 + 提示条撤销(只改表单,不保存就不进主数据,不进回收站);去掉 window.confirm 兜底。
@@ -18725,13 +20179,21 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     }
     // 第 5 批 E1(R18):锁定的产品保存前先过一遍 lockCreation —— 新加的部分、编辑时回到跟组件库的、被旧版解开的都锁上(lockedAt 不变)。
     // 没锁的不经过它,输出和以前逐字节一样
-    const F = isCreationLocked(form) ? lockCreation(form, components, matIds, new Date().toISOString()) : form;
+    if (form.sectionPlan && sectionPlanIssues(form).length) {
+      setErrorMsg(lang === "ja" ? "完成断面の参照を修正してから保存してください。" : "请先修正成品结构里的关联，再保存产品。");
+      return;
+    }
+    const savedForm = asmTouched ? { ...form, ...stepsForSave(asmSteps) } : form;
+    if (asmTouched) delete savedForm.steps; // 旧steps只在实际改过组装时退出回退，未操作保存保持原样
+    const now = new Date().toISOString();
+    const F = isCreationLocked(savedForm) ? lockCreation(savedForm, components, matIds, now) : savedForm;
     onSave({
       ...F,
       id: creation ? creation.id : "creation_" + Date.now(),
       structure,
       layers: (F.layers || []).map(({ _lid, ...rest }) => rest),
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
+      ...(!creation ? { trial: "bench", trialAt: now } : {}),
     });
   };
 
@@ -18808,6 +20270,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         </div>
       </div>
 
+        <div style={{ marginTop: T.sp.m }}><label style={{ display: "block", ...T.fs.caption, color: T.muted, marginBottom: T.sp.s }}>{pageX.fFlavor}</label><input data-cpage-field="flavorName" className="k-input" value={form.flavorName || ""} onChange={f("flavorName")} placeholder={pageX.fFlavorPh} style={inpStyle} /></div>
       {/* 📦 规格与商品化 */}
       <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
         <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 15, marginBottom: 12, color: T.textPrimary }}>📦 规格与售卖</div>
@@ -18850,6 +20313,12 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
         </div>
 
+        <div style={{ marginBottom: T.sp.m }}><label style={{ display: "block", ...T.fs.caption, color: T.muted, marginBottom: T.sp.s }}>{pageX.fFamily}</label>
+          <select data-cpage-field="familyId" className="k-input" value={form.familyId || ""} onChange={e => { const value = e.target.value, found = productFamilies.find(x => String(x.id) === value); setForm(prev => ({ ...prev, familyId: found ? found.id : value })); }} style={inpStyle}>
+            <option value="">{pageX.fNoFamily}</option>{productFamilies.map(x => <option key={x.id} value={x.id}>{pickLang(x, "name", lang) || x.id}</option>)}
+            {form.familyId && !productFamilies.some(x => x.id === form.familyId) && <option value={form.familyId}>{lang === "ja" ? "⚠ 削除されたファミリー(番号 " : "⚠ 已丢失的家族(编号 "}{form.familyId})</option>}
+          </select>
+        </div>
         {/* 🎨 口味标签 */}
         <div>
           <label style={{ fontSize: 11, color: T.textTertiary, display: "block", marginBottom: 5, letterSpacing: "0.3px" }}>{lang === "zh" ? "🎨 口味标签" : "🎨 フレーバータグ"}</label>
@@ -18990,6 +20459,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                         <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {lang === "zh" ? cat.zh : (cat.ja || cat.zh)}</span>
                         <span style={{ fontSize: 13, color: cat.color }}>{name}</span>
                         {linkTag && <span title={lang === "zh" ? linkTag.hint : linkTag.hintJa} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{lang === "zh" ? linkTag.zh : linkTag.ja}<TapTip tipId="edit-layer-link" text={lang === "zh" ? linkTag.hint : linkTag.hintJa} lang={lang} /></span>}
+
                       </div>
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                         <button className="k-tap" aria-label={uiTxt(lang).moveUp} onClick={() => moveLayer(idx, -1)} disabled={idx === 0} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: 12 }}>↑</button>
@@ -19009,6 +20479,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
         )}
       </div>
+
+      <CreationSectionEditor c={form} onChange={setForm} lang={lang} />
 
       {/* 试吃笔记 */}
       <div style={{ background: "#FFFBEB", border: "0.5px solid #FDE68A", borderRadius: "12px", padding: "1.25rem", marginBottom: "1rem" }}>
@@ -19041,6 +20513,11 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
         </div>
       </div>
 
+      <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1.25rem 1.5rem", marginBottom: "1rem" }}>
+        <div style={{ ...T.fs.caption, marginBottom: T.sp.m }}>{pageX.fAssembly}</div><StepsEditor rows={asmSteps} onChange={changeAssembly} lang={lang} />
+        <label style={{ display: "block", ...T.fs.caption, marginTop: T.sp.l }}>{pageX.fNotesZh}<textarea data-cpage-field="notesZh" className="k-input" rows={3} value={form.notesZh || ""} onChange={f("notesZh")} style={{ ...inpStyle, resize: "vertical" }} /></label>
+        <label style={{ display: "block", ...T.fs.caption, marginTop: T.sp.m }}>{pageX.fNotesJa}<textarea data-cpage-field="notesJa" className="k-input" rows={3} value={form.notesJa || ""} onChange={f("notesJa")} style={{ ...inpStyle, resize: "vertical" }} /></label>
+      </div>
       {/* 🖼️ 图片链接 */}
       <ImageUrlsEditor lang={lang}
         urls={form.imageUrls || []}
@@ -21969,7 +23446,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
   searchQ = "", setSearchQ = () => {},
   brandViewId, setBrandViewId, brandEditTarget, setBrandEditTarget,
   materialViewId, setMaterialViewId, materialEditTarget, setMaterialEditTarget,
-  materialReturnTo, setMaterialReturnTo,
+  materialReturnTo, setMaterialReturnTo, setCreationViewId,
   setTab, setViewId,
   // v17.3 厂家管理:由外层 MaterialsView 提供(状态 + 删/合并的唯一写出口)
   // 第 4 批:材料详情「你的使用情况」每一行点了去那一条的查看页(App 的 jumpToItem)
@@ -22108,6 +23585,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
         // v11: 如果是从配方/组件跳转过来的,回到源头;否则回百科列表
         if (materialReturnTo && typeof setTab === "function") {
           if (materialReturnTo.viewId != null && typeof setViewId === "function") setViewId(materialReturnTo.viewId);
+          if (materialReturnTo.creationViewId != null && typeof setCreationViewId === "function") setCreationViewId(materialReturnTo.creationViewId);
           setTab(materialReturnTo.tab);
           if (typeof setMaterialReturnTo === "function") setMaterialReturnTo(null);
         }
@@ -22117,7 +23595,7 @@ function MaterialsViewBody({ brands, setBrands, materials, setMaterials, shopMat
       shopMaterials={shopMaterials}
       setShopMaterials={setShopMaterials}
       showToast={showToast}
-      returnLabel={materialReturnTo && materialReturnTo.tab === "view" ? (lang === "zh" ? "← 返回配方" : "← レシピへ戻る") : null}
+      returnLabel={materialReturnTo && (materialReturnTo.tab === "view" || materialReturnTo.tab === "creations") ? (lang === "zh" ? "← 返回配方" : "← レシピへ戻る") : null}
       onOpenUsage={onOpenUsage}
     />;
   }
@@ -26315,12 +27793,14 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
 
   const recipePool = recipes.map(r => ({ id: r.id, name: mLabel(r), cat: r.category || "" })).filter(filterByQuery);
   const componentPool = components.map(c => ({ id: c.id, name: mLabel(c), cat: c.category || "" })).filter(filterByQuery);
-  const creationPool = creations.map(c => ({ id: c.id, name: mLabel(c), cat: "" })).filter(filterByQuery);
+  const validCreations = creations.filter(c => c && typeof c === "object");
+  const creationPool = [...validCreations.filter(c => !isCreationOnBench(c)), ...validCreations.filter(isCreationOnBench)]
+    .map(c => ({ id: c.id, name: mLabel(c), cat: "", bench: isCreationOnBench(c) })).filter(filterByQuery);
 
   // 搜索时强制展开所有段
   const isSearching = !!query.trim();
   const totalMatched = recipePool.length + componentPool.length + creationPool.length;
-  const totalAll = recipes.length + components.length + creations.length;
+  const totalAll = recipes.length + components.length + validCreations.length;
 
   const Section = ({ title, emoji, pool, type, color, originCount }) => {
     if (originCount === 0) return null;
@@ -26338,7 +27818,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
           <div style={{ display: "grid", gap: 4 }}>
             {pool.map(item => (
               <div key={type + item.id} onClick={() => onPick(item.id, type)} style={{ padding: "10px 14px", background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>{item.name}</div>
+                <div>{item.name}{item.bench && <span data-picker-bench="1" style={{ ...T.fs.micro, color: T.subtle, marginLeft: 8 }}>{lang === "ja" ? "試作台" : "试拼台"}</span>}</div>
                 {item.cat && <div style={{ fontSize: 11, color: T.textTertiary }}>{type === "recipe" ? recipeCatLabel(item.cat, lang) : item.cat}</div>}
               </div>
             ))}
@@ -26366,7 +27846,7 @@ function ProductItemPicker({ recipes, components, creations, mLabel, lang, onPic
       />
       <Section title={lang === "zh" ? "配方" : "レシピ"} emoji="🧁" pool={recipePool} type="recipe" color="#a87b3e" originCount={recipes.length} />
       <Section title={lang === "zh" ? "组件" : "パーツ"} emoji="🧩" pool={componentPool} type="component" color="#5b8aa3" originCount={components.length} />
-      <Section title={lang === "zh" ? "组合产品" : "組み合わせ"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={creations.length} />
+      <Section title={lang === "zh" ? "组合产品" : "組み合わせ"} emoji="🎂" pool={creationPool} type="creation" color="#a05a8d" originCount={validCreations.length} />
     </div>
   );
 }
@@ -28855,7 +30335,7 @@ const marginOverviewRows = (data) => {
       unitKind: "unit", unit: ci.unit, cost: ci.unitCost, mi, issues: finishIssues(issues, mi) });
   });
   creations.forEach(c => {
-    if (!c) return;
+    if (!c || (typeof data.listCreation === "function" && !data.listCreation(c))) return;
     const ci = creationCostInfo(c, components, materials, brands);
     const mi = marginInfo({ price: c.price, priceCurrency: priceCurOf(c), cost: ci.perPortion, incomplete: ci.unsure });
     const issues = [];
@@ -28996,7 +30476,7 @@ const moIssueText = (it, X) => {
   return typeof f === "function" ? f(it.n) : f;
 };
 function MarginOverview({ recipes = [], creations = [], products = [], components = [], materials = [], brands = [], shopMaterials = [], productFamilies = [],
-  appSettings = {}, setAppSettings, lang, onOpen, emptyActions = [], ui = null, setUi = null }) {
+  appSettings = {}, setAppSettings, lang, onOpen, emptyActions = [], ui = null, setUi = null, match = null, query = "", onClearQuery , listCreation = null, benchCount = 0 }) {
   const zh = lang !== "ja";
   const X = MO_TXT[zh ? "zh" : "ja"];
   // 审查 b4s2:分段 / 筛选 / 排序存在 App(ui / setUi,同「待换国产」看板),点一行进详情再返回还在(以前一跳走就卸载、全回默认,逐条修「有问题的」每次都要重勾);
@@ -29012,12 +30492,15 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   const setSeg = (v) => patchUi({ seg: v }), setScope = (v) => patchUi({ scope: v }), setFam = (v) => patchUi({ fam: v });
   const setProblemsOnly = (v) => patchUi({ problemsOnly: !!v }), setSortBy = (v) => patchUi({ sortBy: v });
   // 纯函数算行;本店价 / 组件库 / 汇率 / 目标率变了都要重算(那几样是渲染期注入的全局,所以把它们的来源也列进依赖)
-  const rows = useMemo(() => marginOverviewRows({ recipes, creations, products, components, materials, brands, productFamilies }),
-    [recipes, creations, products, components, materials, brands, productFamilies, shopMaterials, appSettings.targetCostRate, appSettings.fxJpyToCny]);
+  const rows = useMemo(() => marginOverviewRows({ recipes, creations, products, components, materials, brands, productFamilies, listCreation }),
+    [recipes, creations, products, components, materials, brands, productFamilies, shopMaterials, appSettings.targetCostRate, appSettings.fxJpyToCny, listCreation]);
   const nameOf = (x) => pickLang(x, "name", lang) || x.nameFr || "";
   const famOf = (id) => productFamilies.find(f => f && f.id === id);
   const list = seg === "items" ? rows.items : rows.products;
+  const searchTerms = rlistTerms(query);
   const filtered = list.filter(r => {
+    if (seg === "items" && match && !match(r.kind, r.id)) return false;
+    if (seg === "products" && !rlistProductMatch(r.x, searchTerms, { recipes, creations, components })) return false;
     if (seg === "items") {
       if (scope === "onSale" && !r.onSale) return false;
       if (fam === "__none" ? !!r.familyId : fam && r.familyId !== fam) return false;
@@ -29083,6 +30566,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   );
   const selStyle = { ...T.fs.label, padding: "4px 8px", border: `1px solid ${T.border}`, borderRadius: T.radiusSm, background: T.bgCard, color: T.body, fontFamily: T.fontSans, maxWidth: "100%" };
   const chips = [
+    ...(searchTerms.length ? [{ label: `「${String(query ?? "").trim()}」`, onRemove: onClearQuery }] : []),
     ...(scope !== "all" ? [{ label: scope === "onSale" ? X.onSale : X.hasPrice, onRemove: () => setScope("all") }] : []),
     ...(seg === "items" && fam ? [{ label: fam === "__none" ? X.noFamily : ((famOf(fam) && (pickLang(famOf(fam), "name", lang) || famOf(fam).nameZh)) || fam), onRemove: () => setFam("") }] : []),
     ...(problemsOnly ? [{ label: X.problems, onRemove: () => setProblemsOnly(false) }] : []),
@@ -29093,7 +30577,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
   return (
     <div data-margin-overview="1">
       <div data-tl-legend="margin" style={{ ...T.fs.caption, color: T.subtle, marginBottom: 12 }}>{lang === "zh" ? "≈ = 日元折算 · 至少 = 有原料没价，实际只会更高 · 建议价向上取整" : "≈ = 円から換算 · 以上 = 単価のない材料あり · 推奨価格は切り上げ"}</div>
-      <div style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, marginBottom: T.sp.m }}>{X.hint}</div>
+      <div style={{ ...T.fs.caption, color: T.secondary, lineHeight: 1.6, marginBottom: T.sp.m }}>{X.hint}{benchCount > 0 && <span data-margin-bench="1">{lang === "ja" ? ` 試作台の組み合わせ ${benchCount} 件は含みません` : ` 另有 ${benchCount} 个在试拼台的组合产品没列`}</span>}</div>
       <TargetCostRateInput appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
       <div style={{ display: "flex", gap: T.sp.xl, marginTop: T.sp.l, alignItems: "center", flexWrap: "wrap" }}>
         {segBtn("items", X.segItems, rows.items.length)}
@@ -29123,7 +30607,7 @@ function MarginOverview({ recipes = [], creations = [], products = [], component
         <EmptyState variant="first" lang={lang} title={isProd ? X.emptyProducts : X.emptyFirst} actions={isProd ? [] : emptyActions} />
       ) : sorted.length === 0 ? (
         <EmptyState variant="filter" lang={lang} title={X.empty} chips={chips}
-          onClearAll={() => { setScope("all"); setFam(""); setProblemsOnly(false); }} />
+          onClearAll={() => { setScope("all"); setFam(""); setProblemsOnly(false); if (searchTerms.length && onClearQuery) onClearQuery(); }} />
       ) : (
         <>
           {/* 电脑 / 平板:表格(太宽时只在表格里横滚,页面不横滚) */}
@@ -35520,6 +37004,7 @@ function App() {
       return { ...prev, dismissedSeedIds: absent };
     });
   }, [recipes, components, creations, knowledge, productFamilies]);
+  const [rlistQuery, setRlistQuery] = useState(""); // 第 7 批：四种模式共用，切页保留，不写存档
   const [familyViewMode, setFamilyViewMode] = useState("flat"); // "flat" | "family" | "onsale" | "margin"(第 4 批 B4-1 毛利一览)
   // 审查 b4s2:毛利一览的分段 / 筛选 / 排序放这里(点一行进详情再返回还在,同 domesticBoardUi);切出毛利一览模式就清
   const [marginUi, setMarginUi] = useState(null);
@@ -35529,8 +37014,8 @@ function App() {
   const toggleOnSale = (id) => setRecipes(prev => prev.map(r =>
     r.id === id ? { ...r, onSale: !r.onSale, updatedAt: new Date().toISOString() } : r));
   // v17.8: 组合产品也能标「在售中」,和配方一起列在配方一览
-  const toggleCreationOnSale = (id) => setCreations(prev => prev.map(c =>
-    c.id === id ? { ...c, onSale: !c.onSale, updatedAt: new Date().toISOString() } : c));
+  const toggleCreationOnSale = (id) => { const now = new Date().toISOString(); setCreations(prev => prev.map(c =>
+    c && c.id === id ? (isCreationOnBench(c) ? c : pinCreationTrial(c, { ...c, onSale: !c.onSale, updatedAt: now })) : c)); };
   const [familyEditTarget, setFamilyEditTarget] = useState(null); // 正在编辑的家族
   const [familyViewId, setFamilyViewId] = useState(null); // 正在查看的家族详情
   // 打印:配方 / 组件 / 组合产品 —— 弹窗阶段 { type, src(原对象), scale?(详情页当下的 scaleInfo), n?(组合产品个数), stage: "settings" };
@@ -35568,18 +37053,30 @@ function App() {
   const [recipeNewSeq, setRecipeNewSeq] = useState(0);
   // 组件库 & 组合蛋糕 & 知识库 状态
   const [compViewId, setCompViewId] = useState(null);
+  const [compSearchSeed, setCompSearchSeed] = useState("");
   const [compEditTarget, setCompEditTarget] = useState(null);
   const [creationViewId, setCreationViewId] = useState(null);
   const [creationEditTarget, setCreationEditTarget] = useState(null);
   // v17.8: 从配方一览点进组合产品时记 "list",详情页「返回」回配方一览而不是组合产品列表。
   // 离开组合产品 tab(点导航去别处)就作废,免得以后从组合产品列表点进去,返回却跳到配方一览
   const [creationReturnTo, setCreationReturnTo] = useState(null);
+  const rlistItems = useMemo(() => rlistItemsOf(recipes, creations), [recipes, creations]);
+  const rlistCtx = useMemo(() => ({ families: productFamilies, components, matById: materialMapOf(materials), brandKeys: brandKeyMapOf(brands), lang }), [productFamilies, components, materials, brands, lang]);
+  const rlistResult = useMemo(() => rlistSearch(rlistItems, rlistQuery, rlistCtx), [rlistItems, rlistQuery, rlistCtx]);
+  const rlistOnsaleResult = useMemo(() => rlistSearch(rlistItems.filter(it => !!it.x.onSale), rlistQuery, rlistCtx), [rlistItems, rlistQuery, rlistCtx]);
+  const rlistFamilyResult = useMemo(() => rlistFamilyView(productFamilies, rlistItems, rlistQuery, rlistCtx), [productFamilies, rlistItems, rlistQuery, rlistCtx]);
+  const rlistBenchCount = useMemo(() => rlistBenchHits(creations, rlistQuery, rlistCtx), [creations, rlistQuery, rlistCtx]);
+  const rlistCompCount = useMemo(() => rlistCompHits(components, rlistQuery, rlistCtx), [components, rlistQuery, rlistCtx]);
+  const rlistActive = rlistResult.terms.length > 0;
+  const rlistEmptyState = mode => (<RlistSearchEmpty query={rlistQuery} mode={mode} totalHits={rlistResult.main.length + rlistResult.deep.length} benchHits={rlistBenchCount} compHits={rlistCompCount} lang={lang}
+      onClearQuery={() => setRlistQuery("")} onClearMode={() => setFamilyViewMode("flat")} onBench={() => goTab("creations")} onComponents={openRlistComponents} />);
+  const openRlistComponents = q => { setCompSearchSeed(q); setCompViewId(null); goTab("components"); };
   useEffect(() => { if (tab !== "creations") setCreationReturnTo(null); }, [tab]);
   // 2026-09-29 体检修:离开组件 / 组合产品页就关掉编辑页。以前「正在编辑哪一条」留在 App 上,
   // 切回来编辑页还开着、里面是切走前的旧内容,这时保存会把中间改过的在用 / 在售标记改回去;
   // 从知识库点「关联组件」打开的也是这个旧编辑页
   useEffect(() => {
-    if (tab !== "components") setCompEditTarget(null);
+    if (tab !== "components") { setCompEditTarget(null); setCompSearchSeed(""); }
     if (tab !== "creations") setCreationEditTarget(null);
     // 2026-09-29 第 2 批 2b(施工时发现):商品 / 供货商 / 材料百科的编辑页同样会留着。商品最危险 ——
     // 编辑页开着切去卖货,库存变了,回来一保存,表单里切走前的旧库存数把新的盖掉。
@@ -35588,16 +37085,39 @@ function App() {
     if (tab !== "suppliers") setSupplierEditTarget(null);
     if (tab !== "materialsPedia") { setBrandEditTarget(null); setMaterialEditTarget(null); }
   }, [tab]);
+  const latestCreationOpen = creationEditTarget && typeof creationEditTarget === "object"
+    ? (creations.find(c => c && c.id === creationEditTarget.id) || creationEditTarget)
+    : creationEditTarget === "new" ? null : creations.find(c => c && c.id === creationViewId);
+  const creationOpenIsDone = !!latestCreationOpen && !isCreationOnBench(latestCreationOpen);
+  const navActiveTab = (tab === "view" || tab === "edit") ? "list" : (tab === "creations" && creationOpenIsDone) ? "list" : tab;
+  const listScrollRef = useRef(0);
+  const listScrollTop = () => { try { if (typeof window !== "undefined" && window.scrollTo) window.scrollTo(0, 0); } catch (e) {} };
+  const returnToRecipeList = () => {
+    setCreationViewId(null); setCreationEditTarget(null); setCreationReturnTo(null); setTab("list");
+    const restore = () => { try { if (window.scrollTo) window.scrollTo(0, listScrollRef.current); } catch (e) {} };
+    try { if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(restore); else restore(); } catch (e) {}
+  };
+  const openListItem = (kind, id) => {
+    try { listScrollRef.current = window.scrollY || 0; } catch (e) {}
+    setFamilyViewId(null);
+    if (kind === "recipe" || kind === "recipeView") { setViewId(id); setTab("view"); }
+    else if (kind === "creation" || kind === "creationView") { setCreationReturnTo(null); setCreationEditTarget(null); setCreationViewId(id); setTab("creations"); }
+    else jumpToItem({ kind, id });
+    listScrollTop();
+  };
   // 导航按钮切页:编辑页有没保存的改动先问一句(以前直接切走,十几行配料当场丢)
   const goTab = (t, newProduct) => {
+    const leavingDone = t === "creations" && tab === "creations" && creationOpenIsDone;
     // 2026-09-29 体检第 2 批:家族详情 / 编辑是盖满屏的一层,以前点底栏切了页它还盖在上面,像导航失灵 —— 切页时一起关掉
     // 备货 ux2(10-02 LuLu 实测):备货卡 / 备货设置的「去新建商品 →」带 newProduct = { kind, id } → 直接打开新建商品,组成里已加好这一样 × 1、名字照它的中文名;
     // 这一样已经不在了(新配方还没存)就和以前一样只切到商品列表。预填的是编辑页的起点,不算「改过」(useDirtyGuard 第一次按键才拍快照),取消什么都不建
     const np = newProduct && t === "products" ? (newProduct.kind === "component" ? components : recipes).find(o => o && newProduct.id !== undefined && String(o.id) === String(newProduct.id)) : null;
     const go = () => { setTab(t); setMoreOpen(false); setFamilyViewId(null); setFamilyEditTarget(null);
+      if (leavingDone) { setCreationEditTarget(null); setCreationViewId(null); }
+      else if (t === "creations" && creations.some(c => c && c.id === creationViewId && !isCreationOnBench(c))) setCreationViewId(null);
       if (np) { setProductViewId(null); setProductEditTarget({ _new: true, _prefill: { nameZh: np.nameZh || "", ...(np.nameJa ? { nameJa: np.nameJa } : {}), items: [{ linkedId: np.id, linkedType: newProduct.kind === "component" ? "component" : "recipe", qty: 1 }] } }); } };
     // 家族编辑层开着时,点当前这个 tab 也会关掉它,所以也要问
-    if ((t !== tab || familyEditTarget !== null) && anyEditorDirty()) {
+    if ((t !== tab || familyEditTarget !== null || leavingDone) && anyEditorDirty()) {
       confirmDialog(
         lang === "zh" ? "这一页有还没保存的修改。现在离开,刚才改的内容会丢。" : "保存していない変更があります。移動すると失われます。",
         go,
@@ -36349,7 +37869,7 @@ function App() {
           const hit = cur.findIndex((l, i) => l && dhLayerKey(cur, i) === key && (l.customName || "") === (l0.customName || "") && String(l.usedAmount || "") === String(l0.usedAmount || ""));
           if (hit < 0) return c;
           back = true;
-          const next = cur.slice(); next[hit] = l0;
+          const next = cur.slice(); next[hit] = cur[hit].sectionId ? { ...l0, sectionId: cur[hit].sectionId } : l0;
           return { ...c, layers: next };
         }));
         setTimeout(() => { if (!back) dhNoUndo(); }, 0);
@@ -36590,7 +38110,7 @@ function App() {
 
   // 顶部 tab：下划线式（active = 2px ink 底边），不再是白胶囊
   const navBtn = (t, label, badge) => {
-    const on = tab === t;
+    const on = navActiveTab === t;
     return (
       <button
         key={t} onClick={() => goTab(t)} className="k-tab"
@@ -37160,7 +38680,7 @@ function App() {
     { id: "purchase", zh: "采购", ja: "仕入" },
     { id: "list", zh: "配方一览", ja: "レシピ一覧", mZh: "配方", mJa: "レシピ" },
     { id: "components", zh: "组件仓库", ja: "パーツ庫", mZh: "组件", mJa: "パーツ" },
-    { id: "creations", zh: "组合产品", ja: "組み合わせ" },
+    { id: "creations", zh: "试拼台", ja: "試作台" },
     { id: "knowledge", zh: "知识库", ja: "ナレッジ" },
     { id: "shopMaterials", zh: "本店原料", ja: "仕入れ原料" },
     { id: "suppliers", zh: "供货商", ja: "仕入先" },
@@ -38161,12 +39681,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               <FamilyDetail
                 family={fm}
                 recipes={recipes}
-                creations={creations}
+                creations={creations.filter(c => c && typeof c === "object" && !isCreationOnBench(c))}
+                benchCount={creations.filter(c => c && c.familyId === fm.id && isCreationOnBench(c)).length}
                 lang={lang}
                 onEdit={() => { setFamilyEditTarget(fm); setFamilyViewId(null); }}
                 onBack={() => setFamilyViewId(null)}
-                onViewRecipe={(rid) => { setFamilyViewId(null); setViewId(rid); setTab("view"); }}
-                onViewCreation={(cid) => { setFamilyViewId(null); setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(cid); setTab("creations"); }}
+                onViewRecipe={(rid) => openListItem("recipe", rid)}
+                onViewCreation={(cid) => openListItem("creation", cid)}
               />
             </div>
           </div>
@@ -38226,7 +39747,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       }}>
         {MOBILE_NAV.map(id => {
           const n = NAV.find(x => x.id === id);
-          const on = tab === id;
+          const on = navActiveTab === id;
           const badge = n.badge ? n.badge() : 0;
           return (
             <button key={id} onClick={() => goTab(id)}
@@ -38270,8 +39791,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
                   minHeight: 56, padding: "0 16px", background: "transparent", cursor: "pointer",
                   border: "none", borderBottom: `1px solid ${T.lineFaint}`,
-                  borderLeft: tab === n.id ? `3px solid ${T.ink}` : "3px solid transparent",
-                  color: tab === n.id ? T.ink : T.body, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
+                  borderLeft: navActiveTab === n.id ? `3px solid ${T.ink}` : "3px solid transparent",
+                  color: navActiveTab === n.id ? T.ink : T.body, fontSize: 16, fontFamily: T.fontSans, textAlign: "left",
                 }}>
                 <span>{lang === "zh" ? n.zh : n.ja}{(() => { const b = n.badge ? n.badge() : 0; return b > 0 ? <span data-drawer-badge={n.id} style={{ fontFamily: T.fontSerif, fontSize: 11, color: T.danger, marginLeft: 6, ...T.num }}>{b}</span> : null; })()}</span>
                 <span style={{ color: T.muted }}>→</span>
@@ -38316,7 +39837,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <div>
               <div style={{ ...T.fs.micro, color: T.subtle, fontFamily: T.fontSerif }}>{lang === "zh" ? "配方一览" : "レシピ一覧"}</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: T.sp.m, marginTop: T.sp.s }}>
-                <div style={{ ...T.fs.titleL, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>{recipes.length + creations.length}</div>
+                <div style={{ ...T.fs.titleL, fontFamily: T.fontSerif, ...T.num, color: T.ink }}>{rlistItemsOf(recipes, creations).length}</div>
                 {saved && <span style={{ ...T.fs.caption, color: T.success }}>{lang === "zh" ? "✓ 已保存" : "✓ 保存済み"}</span>}
               </div>
             </div>
@@ -38329,7 +39850,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <div style={{ display: "flex", gap: T.sp.xxl, marginTop: T.sp.l, marginBottom: T.sp.xxl, alignItems: "center", flexWrap: "wrap" }}>
             {[
               ["flat", lang === "zh" ? "全部配方" : "全レシピ"],
-              ["onsale", (() => { const k = recipes.filter(r => r.onSale).length + creations.filter(c => c.onSale).length; return `${lang === "zh" ? "在售中" : "販売中"}${k ? " " + k : ""}`; })()],
+              ["onsale", (() => { const k = rlistItemsOf(recipes, creations).filter(it => it.x.onSale).length; return `${lang === "zh" ? "在售中" : "販売中"}${k ? " " + k : ""}`; })()],
               ["family", lang === "zh" ? "家族模式" : "ファミリー表示"],
               ["margin", lang === "zh" ? "毛利一览" : "粗利一覧"],   // 第 4 批 B4-1
             ].map(([m, label]) => (
@@ -38348,8 +39869,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             )}
           </div>
 
+          <RecipeListSearch query={rlistQuery} onChange={setRlistQuery} lang={lang}
+            result={familyViewMode === "onsale" ? rlistOnsaleResult : rlistResult} benchHits={rlistBenchCount} compHits={rlistCompCount}
+            onBench={() => goTab("creations")} onComponents={openRlistComponents} hotkeyOn={!printTarget && !confirmState && !familyViewId && !familyEditTarget} />
+
           {/* 审查 b4r3:毛利一览由 MarginOverview 自己出空状态(带同样两个动作),这里不再叠一块;只有商品时商品段上面也不挂「还没有配方」 */}
-          {recipes.length === 0 && creations.length === 0 && familyViewMode !== "margin" && (
+          {!rlistActive && rlistItemsOf(recipes, creations).length === 0 && familyViewMode !== "margin" && (
             <EmptyState
               variant="first" lang={lang}
               title={lang === "zh" ? "还没有配方" : "まだレシピがありません"}
@@ -38357,6 +39882,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               actions={[
                 { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => openRecipeEditor(null) },
                 { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
+                ...(creations.some(isCreationOnBench) ? [{ label: lang === "ja" ? "試作台へ" : "去试拼台", onClick: () => goTab("creations") }] : []),
               ]}
             />
           )}
@@ -38365,8 +39891,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {/* v17: 「在售中」复用同一套行渲染,只换数据源 —— 平铺是「在售的排最前」,在售页是「只看在售」 */}
           {(familyViewMode === "flat" || familyViewMode === "onsale") && (() => {
             // v17.8: 组合产品和配方混在一起列(带「组合」标签),在售圆点、在售中一页一起算
-            const items = [...recipes.map(r => ({ kind: "recipe", x: r })), ...creations.map(c => ({ kind: "creation", x: c }))];
+            const items = rlistItemsOf(recipes, creations);
             const onSaleList = items.filter(it => it.x.onSale);
+            const searchResult = familyViewMode === "onsale" ? rlistOnsaleResult : rlistResult;
             const listItems = familyViewMode === "onsale"
               ? onSaleList
               : [...items].sort((a, b) => (b.x.onSale ? 1 : 0) - (a.x.onSale ? 1 : 0));   // 稳定排序,同组内保持原顺序
@@ -38380,9 +39907,10 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 />
               );
             }
-            return (
+            if (rlistActive && searchResult.main.length + searchResult.deep.length === 0) return rlistEmptyState(familyViewMode);
+            const renderRows = rows => (
             <div>
-              {listItems.map(it => {
+              {rows.map(it => {
                 if (it.kind === "creation") {
                   // 组合产品行:样式照配方行,多一个「组合」标签;单个成本 = 总成本 ÷ 制作个数 ÷ 每个分几份(和组合产品页同一口径)
                   const c = it.x;
@@ -38398,10 +39926,11 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   // 第 4 批 B4-1:以前这里按 50 / 30 上色、完全不看算不全(组合产品页是 65 / 50,同一款两处颜色不同)。
                   // 现在和组合产品详情同一个判定(creationMarginView → marginInfo):跟目标原料成本率,算不全 / 用量读不准不给绿色并标出来
                   const cMv = cPrice > 0 && cPer > 0 ? creationMarginView({ batch: creationBatch(c, null, components, materials, brands), priceNum: cPrice, costPerPortion: cPer, marginPercent: cMargin, lang }) : null;
-                  const openCreation = () => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); };
+                  const openCreation = () => openListItem("creation", c.id);
                   return (
                     <div
                       key={"creation_row_" + c.id}
+                      data-rlist-row={"creation:" + c.id}
                       className="k-row rc-recipe-row"
                       onClick={openCreation}
                       style={{
@@ -38447,23 +39976,25 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                             </span>
                           )}
                         </div>
+                        {rlistHitNote(it.hits, lang) && <div><RlistHitNote hits={it.hits} lang={lang} components={components} onOpenComponent={id => jumpToItem({ kind: "componentView", id })} /></div>}
                         <div style={{ ...T.fs.label, color: T.muted, marginTop: 5, letterSpacing: "0.04em" }}>
                           {[c.size || c.mold, c.serves ? `${c.serves} ${Wc.unit}` : null, (c.layers || []).length ? Wc.partCount(c.layers.length) : null, c.shelfLife].filter(Boolean).join("  ·  ")}
+                          {creationUsedWarnCount(c) > 0 && <span data-used-warning="1" style={{ color: T.warning, marginLeft: 8 }}>{lang === "ja" ? `⚠ 使用量要確認 ${creationUsedWarnCount(c)}` : `⚠ ${creationUsedWarnCount(c)} ${Wc.isStack ? "层" : "部分"}用量没填或读不准`}</span>}
                         </div>
                       </div>
                       <div style={{ textAlign: "right", ...T.fs.caption, ...T.num, color: cMv ? cMv.color : T.danger }}>
-                        {cPrice > 0 && cPer > 0 ? `${cMargin.toFixed(1)}%` : ""}
+                        <span data-pm="list-margin" style={{ color: cMv ? cMv.color : T.danger }}>{cPrice > 0 && cPer > 0 ? `${cMargin.toFixed(1)}%` : ""}</span>
                         {cMv && cMv.unsure && (
                           <div data-rowincomplete="1" style={{ ...T.fs.label, color: T.muted }} title={cMv.note}>
-                            {cMv.incomplete
+                            <span data-pm="list-hint">{cMv.incomplete
                               ? (lang === "zh" ? <>成本不全<br />毛利率虚高</> : <>原価不完全<br />粗利率過大</>)
-                              : cMv.badge}
+                              : cMv.badge}</span>
                           {cMv.note && <TapTip tipId="creation-row-margin" text={cMv.note} lang={lang} />}</div>
                         )}
                       </div>
                       <div style={{ textAlign: "right", fontFamily: T.fontSerif, ...T.num, color: T.ink }}>
                         {cPrice > 0
-                          ? <span style={{ fontSize: 18 }}>{fmtSellPrice(c.price, c)}</span>
+                          ? <span style={{ fontSize: 18 }}>{fmtSellPrice(c.price, c)}{(parseFloat(c.portions) || 1) > 1 && <span style={{ ...T.fs.micro, marginLeft: 4 }}>{lang === "ja" ? "1 カット" : "每份"}</span>}</span>
                           : <span style={{ ...T.fs.micro, color: T.muted }}>{lang === "zh" ? "未定价" : "未設定"}</span>}
                       </div>
                     </div>
@@ -38490,8 +40021,9 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                 return (
                   <div
                     key={r.id}
+                    data-rlist-row={"recipe:" + r.id}
                     className="k-row rc-recipe-row"
-                    onClick={() => { setViewId(r.id); setTab("view"); }}
+                    onClick={() => openListItem("recipe", r.id)}
                     style={{
                       display: "grid", gridTemplateColumns: "1fr 130px 110px",
                       alignItems: "center", gap: T.sp.xl,
@@ -38535,6 +40067,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                           <span style={{ ...T.fs.micro, color: T.secondary, background: T.sunken, padding: "2px 6px", textTransform: "none", letterSpacing: "0.06em" }}>{r.variantLabel}</span>
                         )}
                       </div>
+                      {rlistHitNote(it.hits, lang) && <div><RlistHitNote hits={it.hits} lang={lang} components={components} onOpenComponent={id => jumpToItem({ kind: "componentView", id })} /></div>}
                       {/* 规格行 */}
                       <div style={{ ...T.fs.label, color: T.muted, marginTop: 5, letterSpacing: "0.04em" }}>
                         {[r.mold, r.yield ? `${r.yield} ${unitOr(r.unit, lang)}` : null, r.temp, r.baketime ? `${r.baketime}` : (r.time ? `${r.time}分` : null)].filter(Boolean).join("  ·  ")}
@@ -38565,7 +40098,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               })}
             </div>
             );
+            return <>{renderRows(rlistActive ? searchResult.main : listItems)}
+              {rlistActive && <RlistDeepSection query={rlistQuery} count={searchResult.deep.length} short={searchResult.short} lang={lang}>{renderRows(searchResult.deep)}</RlistDeepSection>}
+            </>;
           })()}
+
+          {familyViewMode === "flat" && !rlistActive && creations.some(isCreationOnBench) && <Btn variant="ghost" size="lg" onClick={() => goTab("creations")} style={{ marginTop: T.sp.l }}>{lang === "ja" ? `試作台に未確定が ${creations.filter(isCreationOnBench).length} 件 →` : `试拼台里还有 ${creations.filter(isCreationOnBench).length} 个没定稿的 →`}</Btn>}
 
           {/* 🏷 家族模式 */}
           {familyViewMode === "family" && (
@@ -38577,14 +40115,18 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                   <span style={{ ...T.fs.caption, color: T.muted }}>{lang === "zh" ? "例如：巴斯克家族、费南雪家族、戚风家族…" : "例：バスク / フィナンシェ / シフォン…"}</span>
                 </div>
               )}
-              {productFamilies.map(fm => {
-                const famRecipes = recipes.filter(r => r.familyId === fm.id);
-                const famCreations = creations.filter(c => c.familyId === fm.id);   // v17.8
+              {rlistActive && rlistFamilyResult.cards.length === 0 && rlistFamilyResult.orphans.length === 0 && rlistEmptyState("family")}
+              {(rlistActive ? rlistFamilyResult.cards.map(card => card.fam) : productFamilies).map(fm => {
+                const searchCard = rlistActive ? rlistFamilyResult.cards.find(card => card.fam === fm) : null;
+                const famRecipes = searchCard ? searchCard.members.filter(e => e.kind === "recipe").map(e => e.x) : recipes.filter(r => r && typeof r === "object" && r.familyId === fm.id);
+                const famCreations = searchCard ? searchCard.members.filter(e => e.kind === "creation").map(e => e.x) : creations.filter(c => c && typeof c === "object" && !isCreationOnBench(c) && c.familyId === fm.id);   // v17.8
                 const famName = lang === "zh" ? (fm.nameZh || fm.nameJa) : (fm.nameJa || fm.nameZh);
                 const color = FAMILY_COLORS[fm.colorIdx || 0];
                 return (
                   <div
                     key={fm.id}
+                    data-rlist-family={fm.id}
+                    data-rlist-family-full={searchCard ? String(searchCard.full) : "true"}
                     className="k-row"
                     onClick={() => setFamilyViewId(fm.id)}
                     style={{
@@ -38599,8 +40141,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                         {famName}
                       </div>
                       <span style={{ ...T.fs.label, color: T.muted, ...T.num }}>
-                        {famRecipes.length} {lang === "zh" ? "个变体" : "バリエーション"}
-                        {famCreations.length > 0 && ` · ${famCreations.length} ${lang === "zh" ? "个组合" : "組み合わせ"}`}
+                        {searchCard && !searchCard.full ? RLIST_TXT[rlistLang(lang)].famHit(searchCard.k, searchCard.n) : <>{famRecipes.length} {lang === "zh" ? "个变体" : "バリエーション"}
+                        {famCreations.length > 0 && ` · ${famCreations.length} ${lang === "zh" ? "个组合" : "組み合わせ"}`}</>}
                       </span>
                     </div>
                     {fm.description && (
@@ -38610,7 +40152,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     )}
                     {famRecipes.length > 0 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: T.sp.s }}>
-                        {famRecipes.slice(0, 5).map(r => {
+                        {(searchCard && !searchCard.full ? famRecipes : famRecipes.slice(0, 5)).map(r => {
                           const rn = lang === "zh" ? (r.nameZh || r.nameJa) : (r.nameJa || r.nameZh);
                           return (
                             <span key={r.id} style={{ background: T.sunken, color: T.body, padding: "3px 10px", borderRadius: T.radius, ...T.fs.label }}>
@@ -38618,7 +40160,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                             </span>
                           );
                         })}
-                        {famRecipes.length > 5 && (
+                        {(!searchCard || searchCard.full) && famRecipes.length > 5 && (
                           <span style={{ ...T.fs.label, color: T.muted, padding: "3px 6px" }}>
                             +{famRecipes.length - 5}
                           </span>
@@ -38627,12 +40169,12 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                     )}
                     {famCreations.length > 0 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: T.sp.s }}>
-                        {famCreations.slice(0, 5).map(c => (
+                        {(searchCard && !searchCard.full ? famCreations : famCreations.slice(0, 5)).map(c => (
                           <span key={c.id} style={{ background: T.sunken, color: T.body, padding: "3px 10px", borderRadius: T.radius, ...T.fs.label }}>
                             <span style={{ color: T.info, marginRight: 4 }}>{lang === "zh" ? "组合" : "組み合わせ"}</span>{pickLang(c, "name", lang)}
                           </span>
                         ))}
-                        {famCreations.length > 5 && (
+                        {(!searchCard || searchCard.full) && famCreations.length > 5 && (
                           <span style={{ ...T.fs.label, color: T.muted, padding: "3px 6px" }}>+{famCreations.length - 5}</span>
                         )}
                       </div>
@@ -38644,8 +40186,8 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
               {/* 未归属家族的配方（独立）+ v17.8 没挂家族(或家族已删)的组合产品 */}
               {(() => {
                 // 2026-09-29 体检第 2 批:挂着已不存在的家族的配方(熔岩巧克力 / 波尔多可丽露 / 纽约芝士)以前在家族模式里哪都看不到,和组合产品一样归到这里
-                const orphanRecipes = recipes.filter(r => !r.familyId || !productFamilies.some(f => f.id === r.familyId));
-                const orphanCreations = creations.filter(c => !c.familyId || !productFamilies.some(f => f.id === c.familyId));
+                const orphanRecipes = rlistActive ? rlistFamilyResult.orphans.filter(e => e.kind === "recipe").map(e => e.x) : recipes.filter(r => r && typeof r === "object" && (!r.familyId || !productFamilies.some(f => f && f.id === r.familyId)));
+                const orphanCreations = rlistActive ? rlistFamilyResult.orphans.filter(e => e.kind === "creation").map(e => e.x) : creations.filter(c => c && typeof c === "object" && !isCreationOnBench(c) && (!c.familyId || !productFamilies.some(f => f && f.id === c.familyId)));
                 if (orphanRecipes.length === 0 && orphanCreations.length === 0) return null;
                 return (
                   <div style={{ marginTop: T.sp.block }}>
@@ -38660,17 +40202,19 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
                       {orphanRecipes.map(r => {
                         const name = pickLang(r, "name", lang);
                         return (
-                          <div key={r.id} className="k-row" onClick={() => { setViewId(r.id); setTab("view"); }} style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
-                            {name}
+                          <div key={r.id} data-rlist-orphan={"recipe:" + r.id} className="k-row" onClick={() => openListItem("recipe", r.id)} style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
+                            {name}{rlistActive ? " " : ""}
+                            {rlistActive && <RlistHitNote hits={rlistFamilyResult.orphans.find(e => e.x === r)?.hits} lang={lang} components={components} onOpenComponent={id => jumpToItem({ kind: "componentView", id })} />}
                           </div>
                         );
                       })}
                       {orphanCreations.map(c => (
-                        <div key={"creation_row_" + c.id} className="k-row"
-                          onClick={() => { setCreationReturnTo("list"); setCreationEditTarget(null); setCreationViewId(c.id); setTab("creations"); }}
+                        <div key={"creation_row_" + c.id} data-rlist-orphan={"creation:" + c.id} className="k-row"
+                          onClick={() => openListItem("creation", c.id)}
                           style={{ padding: `13px 0 13px ${T.sp.xl}px`, borderBottom: `1px solid ${T.lineFaint}`, cursor: "pointer", ...T.fs.small, color: T.body }}>
                           <span style={{ ...T.fs.micro, color: T.info, border: `1px solid ${T.info}`, padding: "1px 5px", marginRight: 8, textTransform: "none", letterSpacing: "0.06em" }}>{lang === "zh" ? "组合" : "組み合わせ"}</span>
-                          {pickLang(c, "name", lang)}
+                          {pickLang(c, "name", lang)}{rlistActive ? " " : ""}
+                          {rlistActive && <RlistHitNote hits={rlistFamilyResult.orphans.find(e => e.x === c)?.hits} lang={lang} components={components} onOpenComponent={id => jumpToItem({ kind: "componentView", id })} />}
                         </div>
                       ))}
                     </div>
@@ -38684,15 +40228,14 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           {familyViewMode === "margin" && (
             <MarginOverview recipes={recipes} creations={creations} products={products} components={components} materials={materials} brands={brands}
               productFamilies={productFamilies} shopMaterials={shopMaterials} appSettings={appSettings} setAppSettings={setAppSettings} lang={lang}
-              ui={marginUi} setUi={setMarginUi}
+              query={rlistQuery} onClearQuery={() => setRlistQuery("")} match={(kind, id) => !rlistActive || [...rlistResult.main, ...rlistResult.deep].some(e => e.kind === kind && e.id === id)}
+              ui={marginUi} setUi={setMarginUi} listCreation={c => !isCreationOnBench(c)} benchCount={creations.filter(isCreationOnBench).length}
               emptyActions={[
                 { label: lang === "zh" ? "＋ 新建配方" : "＋ レシピ新規", onClick: () => openRecipeEditor(null) },
                 { label: lang === "zh" ? "去导入" : "インポート", onClick: () => setTab("data") },
               ]}
               onOpen={(kind, id) => {
-                jumpToItem({ kind, id });
-                // 从这里点进组合产品,详情页返回键回配方一览(和平铺模式点进去一样);jumpToItem 先清了 returnTo,同一批更新里这句在后面生效
-                if (kind === "creationView") setCreationReturnTo("list");
+                openListItem(kind, id);
               }} />
           )}
         </div>
@@ -38703,7 +40246,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
           </div>
-          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, () => setTab("list"))} onPrint={(s) => setPrintTarget({ type: "recipe", src: viewingRecipe, scale: isScaleInfo(s) ? s : null, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); })} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
+          <RecipeView recipe={viewingRecipe} lang={lang} knowledge={knowledge} recipes={recipes} components={components} creations={creations} onNavigateToKnowledge={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setKnowledgeViewId(id); setTab("knowledge"); })} onEdit={() => confirmLeaveEditor(confirmDialog, lang, () => { setEditTarget(viewingRecipe); setTab("edit"); })} onBack={() => confirmLeaveEditor(confirmDialog, lang, returnToRecipeList)} onPrint={(s) => setPrintTarget({ type: "recipe", src: viewingRecipe, scale: isScaleInfo(s) ? s : null, stage: "settings" })} materials={materials} brands={brands} onNavigateToMaterial={(id) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "view", viewId: viewingRecipe.id }); setMaterialViewId(id); setTab("materialsPedia"); })} shopMaterials={shopMaterials} setShopMaterials={setShopMaterials} showToast={showToast} onPrintLabel={openLabelPrint} onKitchen={(qty) => openKitchenView("recipe", viewingRecipe.id, qty)}
             prepStock={prepStock} onPrepOp={onPrepOp} onOpenPrep={openPrep} today={today} products={products} onGoTab={goTab} confirmDialog={confirmDialog}
             // 第 5 批 E2:「⧉ 复制为新版本」→ 预填好的新建编辑页(保存以后才真的出现);「复制自」点了去原版
             onCopy={(src) => confirmLeaveEditor(confirmDialog, lang, () => openRecipeEditor(copyAsNewVersion("recipe", src, { recipes, components, creations }, new Date().toISOString())))}
@@ -39005,6 +40548,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setMaterialEditTarget={setMaterialEditTarget}
           materialReturnTo={materialReturnTo}
           setMaterialReturnTo={setMaterialReturnTo}
+          setCreationViewId={setCreationViewId}
           setTab={setTab}
           setViewId={setViewId}
           onOpenUsage={jumpToItem}
@@ -39020,6 +40564,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
       {/* 组件仓库 */}
       {tab === "components" && (
         <ComponentsView
+          initialQuery={compSearchSeed}
           components={components}
           setComponents={setComponents}
           cats={cats}
@@ -39162,8 +40707,13 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           knowledge={knowledge}
           onNavigateToKnowledge={(id) => { setKnowledgeViewId(id); setTab("knowledge"); }}
           onPrintCreation={(payload) => setPrintTarget({ type: "creation", src: payload && payload.creation, n: payload && payload.batch ? payload.batch.N : undefined, stage: "settings" })}
-          returnToList={creationReturnTo === "list"}
-          onReturnToList={() => { setCreationReturnTo(null); setCreationViewId(null); setTab("list"); }}
+          shopMaterials={shopMaterials}
+          productFamilies={productFamilies}
+          onReturnToList={returnToRecipeList}
+          onGoList={returnToRecipeList}
+          onAfterDelete={(wasDone) => { if (wasDone) returnToRecipeList(); }}
+          onJump={jumpToItem}
+          onNavigateToMaterial={(id, cr) => confirmLeaveEditor(confirmDialog, lang, () => { setMaterialReturnTo({ tab: "creations", creationViewId: cr.id }); setMaterialViewId(id); setTab("materialsPedia"); })}
           onOpenFromList={() => setCreationReturnTo(null)}
           onPrintLabel={openLabelPrint}
           onOpenKitchen={openKitchenView}
