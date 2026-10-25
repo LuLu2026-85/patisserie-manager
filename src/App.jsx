@@ -59,6 +59,19 @@ const T = {
   danger: "#B0442F",       // 缺货 / 删除 / 关键备注
   dangerBg: "#FFFFFF",
 
+  // 成品结构的食材色只用于剖面图，界面仍沿用中性色。
+  sectionFood: {
+    plain: { fill: "#E8E4D9", line: "#9C9788", detail: "#C0BAAA" },
+    cream: { fill: "#F2DCAD", line: "#CFB67E", detail: "#D4BE8F" },
+    sponge: { fill: "#C8A66F", line: "#A98550", detail: "#8F6D42" },
+    pastry: { fill: "#BE8443", line: "#966332", detail: "#E9BC78" },
+    chocolate: { fill: "#6A4434", line: "#4C3028", detail: "#A17C61" },
+    fruit: { fill: "#B0442F", line: "#963B2F", detail: "#EBA58C" },
+    jelly: { fill: "#BD776D", line: "#9E554E", detail: "#E4B8AC" },
+    crunch: { fill: "#C9B37F", line: "#9E8653", detail: "#8F7447" },
+  },
+  sectionLeaf: "#5D7049",
+
   // 圆角 —— 这套几乎是方的
   radius: "2px",           // 输入框 / 标签
   radiusLg: "0",           // 面 / 卡片 / 表格
@@ -7283,6 +7296,52 @@ const hoverOnly = (fn, mm) => (canHover(mm) ? fn : undefined);
 // 不过渡 transform 和尺寸。
 // ═══════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
+/* 成品结构：独立图例不受薄层高度约束。 */
+.k-section-view { padding: 20px 0; min-width: 0; }
+.k-section-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(220px, 1fr); gap: 28px; align-items: center; }
+.k-section-art { width: 100%; max-width: 520px; margin: 0 auto; min-width: 0; }
+.k-section-legend { display: grid; min-width: 0; }
+.k-section-action { font: inherit; font-size: 13px; color: ${T.body}; background: ${T.surface}; border: 1px solid ${T.border}; padding: 7px 12px; min-height: 40px; border-radius: ${T.radius}; cursor: pointer; }
+.k-section-action[aria-pressed="true"] { background: ${T.ink}; color: ${T.surface}; border-color: ${T.ink}; }
+.k-section-row { font: inherit; font-size: 14px; line-height: 1.6; color: ${T.ink}; background: transparent; border: 0; border-bottom: 1px solid ${T.line}; padding: 12px 0; text-align: left; display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 10px; min-height: 52px; cursor: pointer; }
+.k-section-row:last-child { border-bottom: 0; }
+.k-section-name { overflow-wrap: anywhere; }
+.k-section-row[aria-pressed="true"] .k-section-name { text-decoration: underline; text-underline-offset: 5px; font-weight: 500; }
+.k-section-row:hover, .k-section-action:hover { background: ${T.sunken}; color: ${T.ink}; }
+@media (max-width: 600px) {
+  .k-section-layout { grid-template-columns: minmax(0,1fr); gap: 12px; }
+  .k-section-row { min-height: 48px; padding: 9px 0; }
+  .k-section-art { max-width: 380px; }
+  .k-section-action { min-height: 44px; }
+}
+@media print { .k-section-heading button { display: none !important; } .k-section-view { break-inside: avoid; } }
+/* Append inside GLOBAL_CSS; the T interpolations intentionally use its existing template literal. */
+.sp-editor{border:1px solid ${T.border};background:${T.surface};padding:${T.sp.l}px;margin:${T.sp.xl}px 0;color:${T.ink};font-family:${T.fontSans};min-width:0}
+.sp-editor-heading,.sp-editor-actions,.sp-editor-footer{display:flex;align-items:center;gap:${T.sp.s}px;flex-wrap:wrap}
+.sp-editor-heading{justify-content:space-between}
+.sp-editor-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.8fr);gap:${T.sp.xl}px;align-items:start}
+.sp-editor-list,.sp-editor-preview{min-width:0}
+.sp-editor-row{border:1px solid ${T.border};margin-bottom:${T.sp.s}px;background:${T.paper}}
+.sp-editor-row>summary{padding:${T.sp.m}px;cursor:pointer;min-height:44px;box-sizing:border-box;overflow-wrap:anywhere}
+.sp-editor-row>summary:focus-visible{outline:2px solid ${T.info};outline-offset:2px}
+.sp-editor-summary{display:inline-flex;flex-direction:column;gap:${T.sp.xs}px;vertical-align:middle;max-width:calc(100% - 24px)}
+.sp-editor-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:${T.sp.m}px;padding:0 ${T.sp.m}px ${T.sp.m}px}
+.sp-editor-field{display:flex;flex-direction:column;gap:${T.sp.xs}px;min-width:0;font-size:12px;line-height:1.5;color:${T.body}}
+.sp-editor-field-wide{grid-column:1/-1;min-width:0}
+.sp-editor-field select,.sp-editor-field input{width:100%;min-width:0;min-height:44px;padding:8px;box-sizing:border-box;border:1px solid ${T.border};border-radius:${T.radius};background:${T.surface};color:${T.ink};font:inherit}
+.sp-editor-field input::placeholder{color:${T.muted}}
+.sp-editor-field select:focus-visible,.sp-editor-field input:focus-visible{outline:2px solid ${T.info};outline-offset:2px}
+.sp-editor-field small{color:${T.secondary};font-size:12px}
+.sp-editor-actions .k-btn{min-height:40px;white-space:normal}
+.sp-editor-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:${T.sp.s}px;align-items:end;margin-top:${T.sp.l}px}
+.sp-editor-add .k-btn{min-height:44px}
+.sp-editor-footer{border-top:1px solid ${T.border};padding-top:${T.sp.l}px;margin-top:${T.sp.xl}px}
+@media(max-width:900px){.sp-editor-layout{grid-template-columns:minmax(0,1fr)}.sp-editor-preview{grid-row:1}.sp-editor{padding:${T.sp.m}px}}
+@media(max-width:420px){.sp-editor-add{grid-template-columns:minmax(0,1fr)}.sp-editor-add .k-btn{width:100%}.sp-editor-fields{column-gap:${T.sp.s}px}.sp-editor-footer>.sp-editor-actions{width:100%}}
+.sp-editor-preview .k-section-layout { grid-template-columns: minmax(0,1fr); gap: 8px; }
+.sp-editor-preview .k-section-art { max-width: 360px; }
+@media(max-width:600px) { .sp-editor-field select,.sp-editor-field input { font-size:16px; } }
+
 /* 中日文字体按当前语言切换（App 里的 useEffect 往 <html> 写 data-lang）。
    默认(含未设置时)走中文栈 —— 这个 app 是中文优先的。 */
 :root {
@@ -10312,6 +10371,154 @@ const creationSectionModel = (c) => {
   return { show: true, mode, mold, area, serves, V, k, rows, bodyH, total, totalText, notes };
 };
 // ─── END creation-section helpers ───
+
+// BEGIN section-plan helpers
+// 成品空间编排和配方部件独立；纯读取不补 ID，不按重量推断位置或尺寸。
+const SECTION_PLAN_ROLES = [
+  { id: "band", zh: "平铺", ja: "平らな層" },
+  { id: "inner", zh: "夹心", ja: "インサート" },
+  { id: "brush", zh: "涂刷", ja: "塗り・シロップ" },
+  { id: "decor", zh: "表面", ja: "表面の飾り" },
+  { id: "shell", zh: "底与围边", ja: "底・側面" },
+];
+const SECTION_PLAN_APPEARANCES = [
+  { id: "plain", zh: "素色", ja: "無地" },
+  { id: "cream", zh: "奶油 / 慕斯", ja: "クリーム・ムース" },
+  { id: "sponge", zh: "蛋糕体", ja: "スポンジ" },
+  { id: "pastry", zh: "酥皮 / 挞皮", ja: "パイ・タルト生地" },
+  { id: "chocolate", zh: "巧克力", ja: "チョコレート" },
+  { id: "fruit", zh: "水果", ja: "フルーツ" },
+  { id: "jelly", zh: "果冻 / 果酱", ja: "ジュレ・コンフィ" },
+  { id: "crunch", zh: "酥脆层", ja: "クランチ" },
+];
+const SECTION_PLAN_MAX_ROWS = 40;
+const _sectionPlanObj = x => !!x && typeof x === "object" && !Array.isArray(x);
+const _sectionPlanId = x => typeof x === "string" && x.length > 0 && x === x.trim();
+const _sectionPlanHas = (o, key) => Object.prototype.hasOwnProperty.call(o, key);
+// 只在用户明确开始编排/添加图形位置时用；输入相同，生成结果相同，不读时间或随机数。
+const sectionPlanNextId = (used, prefix = "section_part") => {
+  const taken = new Set(used || []);
+  let n = 1;
+  while (taken.has(`${prefix}_${n}`)) n++;
+  return `${prefix}_${n}`;
+};
+const sectionPlanSuggestedAppearance = layer => ({ mousse: "cream", jelly: "jelly", crunch: "crunch" })[(layer || {}).componentCategory] || "plain";
+const sectionPlanWidthPct = row => row && row.widthPct != null ? row.widthPct : (row && row.role === "inner" ? 80 : 100);
+const sectionPlanDraft = c => {
+  const source = _sectionPlanObj(c) ? c : {};
+  const oldLayers = Array.isArray(source.layers) ? source.layers : [];
+  const oldPlan = source.sectionPlan;
+  const counts = new Map();
+  oldLayers.forEach(l => { if (_sectionPlanObj(l) && _sectionPlanId(l.sectionId)) counts.set(l.sectionId, (counts.get(l.sectionId) || 0) + 1); });
+  // 删除过的部件 ID 仍由旧图形占用：新部件不能碰巧拿到它，从而悄悄接管旧引用。
+  const reserved = new Set([...counts.keys(), ...((_sectionPlanObj(oldPlan) && Array.isArray(oldPlan.rows)) ? oldPlan.rows.filter(_sectionPlanObj).map(r => r.partId) : [])]);
+  const layers = oldLayers.map(l => {
+    if (!_sectionPlanObj(l)) return l;
+    if (_sectionPlanId(l.sectionId) && counts.get(l.sectionId) === 1) return l;
+    const sectionId = sectionPlanNextId(reserved);
+    reserved.add(sectionId);
+    return { ...l, sectionId };
+  });
+  // 已有图形不自动加行/翻转/重绑。冲突 ID 全部换新后，原引用会明确失联，须用户重新选择。
+  if (oldPlan != null) return { ...source, layers, sectionPlan: oldPlan };
+  const rowIds = new Set();
+  const rows = layers.filter(_sectionPlanObj).map(l => {
+    const id = sectionPlanNextId(rowIds, "section_row"); rowIds.add(id);
+    return { id, partId: l.sectionId, role: "band", appearance: sectionPlanSuggestedAppearance(l) };
+  });
+  return { ...source, layers, sectionPlan: { version: 1, confirmed: false, rows } };
+};
+const sectionPlanIssues = c => {
+  if (!_sectionPlanObj(c) || c.sectionPlan == null) return [];
+  const plan = c.sectionPlan, out = [];
+  const issue = (code, extra = {}) => out.push({ code, ...extra });
+  if (!_sectionPlanObj(plan)) { issue("plan_invalid"); return out; }
+  if (plan.version !== 1) issue("plan_version");
+  if (!Array.isArray(plan.rows)) { issue("rows_invalid"); return out; }
+  const rows = plan.rows, layers = Array.isArray(c.layers) ? c.layers : [];
+  if (!rows.length) issue("rows_empty");
+  if (rows.length > SECTION_PLAN_MAX_ROWS) issue("rows_limit");
+  const parts = new Map(), ids = new Map();
+  layers.forEach((layer, layerIndex) => {
+    if (!_sectionPlanObj(layer) || !_sectionPlanId(layer.sectionId)) { issue("part_id_missing", { layerIndex }); return; }
+    const list = parts.get(layer.sectionId) || [];
+    list.push({ layer, idx: layerIndex }); parts.set(layer.sectionId, list);
+  });
+  rows.forEach((row, rowIndex) => {
+    if (!_sectionPlanObj(row)) { issue("row_invalid", { rowIndex }); return; }
+    if (_sectionPlanId(row.id)) { const list = ids.get(row.id) || []; list.push(row); ids.set(row.id, list); }
+  });
+  rows.forEach((row, rowIndex) => {
+    if (!_sectionPlanObj(row)) return;
+    const at = { rowIndex, ...(_sectionPlanId(row.id) ? { rowId: row.id } : {}) };
+    if (!_sectionPlanId(row.id)) issue("row_id_missing", at);
+    else if (ids.get(row.id).length !== 1) issue("row_id_duplicate", at);
+    const matched = _sectionPlanId(row.partId) ? parts.get(row.partId) || [] : [];
+    if (!matched.length) issue("part_missing", { ...at, partId: row.partId });
+    else if (matched.length !== 1) issue("part_ambiguous", { ...at, partId: row.partId });
+    if (!SECTION_PLAN_ROLES.some(r => r.id === row.role)) issue("role_invalid", at);
+    if (!SECTION_PLAN_APPEARANCES.some(a => a.id === row.appearance)) issue("appearance_invalid", at);
+    if (_sectionPlanHas(row, "thicknessMm") && row.thicknessMm != null && (typeof row.thicknessMm !== "number" || !Number.isFinite(row.thicknessMm) || row.thicknessMm < 1 || row.thicknessMm > 300)) issue("thickness_invalid", at);
+    if (_sectionPlanHas(row, "widthPct") && row.widthPct != null && (typeof row.widthPct !== "number" || !Number.isFinite(row.widthPct) || row.widthPct < 20 || row.widthPct > 100)) issue("width_invalid", at);
+    const needsHost = row.role === "inner" || row.role === "brush";
+    const hasHost = row.hostId != null && row.hostId !== "";
+    if (needsHost && !hasHost) issue("host_required", at);
+    if (!needsHost && hasHost) issue("host_unexpected", at);
+    if (hasHost) {
+      const matches = ids.get(row.hostId) || [];
+      if (!_sectionPlanId(row.hostId) || matches.length !== 1) issue("host_missing", at);
+      else if (row.hostId === row.id) issue("host_self", at);
+      else if (matches[0].role !== "band" && matches[0].role !== "shell") issue("host_role", at);
+      const seen = new Set([row.id]); let cursor = row.hostId;
+      while (cursor && ids.has(cursor) && ids.get(cursor).length === 1) {
+        if (seen.has(cursor)) { issue("host_cycle", at); break; }
+        seen.add(cursor); cursor = ids.get(cursor)[0].hostId;
+      }
+    }
+  });
+  return out;
+};
+const sectionPlanRows = c => {
+  if (!_sectionPlanObj(c) || !_sectionPlanObj(c.sectionPlan) || !Array.isArray(c.sectionPlan.rows)) return [];
+  const layers = Array.isArray(c.layers) ? c.layers : [], issues = sectionPlanIssues(c);
+  return c.sectionPlan.rows.map((raw, rowIndex) => {
+    const row = _sectionPlanObj(raw) ? raw : {};
+    const matched = layers.map((layer, idx) => ({ layer, idx })).filter(p => _sectionPlanObj(p.layer) && _sectionPlanId(row.partId) && p.layer.sectionId === row.partId);
+    return { ...row, layer: matched.length === 1 ? matched[0].layer : null, idx: matched.length === 1 ? matched[0].idx : -1,
+      issues: issues.filter(x => x.rowIndex === rowIndex) };
+  });
+};
+const sectionPlanIssueText = (issue, lang = "zh") => {
+  const ja = lang === "ja";
+  const labels = {
+    plan_invalid: ["结构记录格式不完整，请重新编排。", "構造の記録が不完全です。編成し直してください。"],
+    plan_version: ["此结构版本暂不支持，请重新编排。", "この構造バージョンには未対応です。編成し直してください。"],
+    rows_invalid: ["图形位置记录不完整，请重新编排。", "図形の位置情報が不完全です。編成し直してください。"],
+    rows_empty: ["至少添加一个图形位置后再确认。", "図形を一つ以上追加してから確定してください。"],
+    rows_limit: ["最多可编排 40 个图形位置，请移除多余位置。", "図形は 40 個までです。余分な位置を削除してください。"],
+    part_id_missing: ["部件尚未取得结构编号，请点「整理部件编号」。", "パーツの構造番号が未設定です。「パーツ番号を整える」を押してください。"],
+    row_invalid: ["图形记录不完整，请移除此位置并重新添加。", "図形の記録が不完全です。この位置を削除して追加し直してください。"],
+    row_id_missing: ["图形编号缺失，请移除此位置并重新添加。", "図形の番号がありません。この位置を削除して追加し直してください。"],
+    row_id_duplicate: ["图形编号重复，请移除重复位置并重新添加。", "図形の番号が重複しています。重複する位置を削除して追加し直してください。"],
+    part_missing: ["原部件已不存在，请重新选择部件或移除此位置。", "元のパーツがありません。パーツを選び直すか、この位置を削除してください。"],
+    part_ambiguous: ["部件编号重复，请先整理编号，再重新选择部件。", "パーツ番号が重複しています。番号を整えてからパーツを選び直してください。"],
+    role_invalid: ["请选择图形位置的作用。", "図形の役割を選んでください。"],
+    appearance_invalid: ["请选择外观。", "見た目を選んでください。"],
+    thickness_invalid: ["实测厚度须为 1–300 mm；未知时请留空。", "実測の厚さは 1–300 mm で入力し、不明なら空欄にしてください。"],
+    width_invalid: ["宽度须为 20%–100%。", "幅は 20%–100% で入力してください。"],
+    host_required: ["夹心或涂刷须明确选择所属的平铺层或底与围边。", "インサートや塗りには、対象の平らな層または底・側面を指定してください。"],
+    host_unexpected: ["此作用不需要归属，请重新选择作用以清除旧归属。", "この役割には対象が不要です。役割を選び直して古い対象を解除してください。"],
+    host_missing: ["归属图形已不存在或编号重复，请重新选择。", "対象の図形がないか番号が重複しています。選び直してください。"],
+    host_self: ["不能归属于自身，请选择另一个平铺层或底与围边。", "自分自身は選べません。別の平らな層または底・側面を選んでください。"],
+    host_role: ["归属只可选择平铺层或底与围边。", "対象には平らな層または底・側面を選んでください。"],
+    host_cycle: ["归属形成循环，请重新选择平铺层或底与围边。", "対象の指定が循環しています。平らな層または底・側面を選び直してください。"],
+  };
+  const pair = labels[issue.code] || ["请检查结构编排。", "構造の編成を確認してください。"];
+  const prefix = Number.isInteger(issue.rowIndex) ? (ja ? `図形 ${issue.rowIndex + 1}：` : `图形 ${issue.rowIndex + 1}：`)
+    : Number.isInteger(issue.layerIndex) ? (ja ? `パーツ ${issue.layerIndex + 1}：` : `部件 ${issue.layerIndex + 1}：`) : "";
+  return prefix + pair[ja ? 1 : 0];
+};
+// END section-plan helpers
 
 // 配方详情 / 组件详情的「缩放计算」那一行(第 5 批第 0 步从两个详情页抽出来;S2 加缩放方式:按个数 / 按模具 / 按某样原料 / 按总重)。
 // variant "recipe" = 配方页压成一行的样式,"component" = 组件页 RURU 框的样式。
@@ -17656,7 +17863,7 @@ const creationWords = (structure, lang = "zh") => {
     isStack: stack,
     partCount: (n) => stack ? `${n} ${zh ? "层" : "層"}` : `${n} ${zh ? "个部分" : "パーツ"}`,
     unit: stack ? "台" : (zh ? "个" : "個"),
-    sectionTitle: stack ? (zh ? "🎂 层结构（自上而下）" : "🎂 層構成（上から下へ）") : (zh ? "🧩 组成部分" : "🧩 構成パーツ"),
+    sectionTitle: zh ? "组成部分" : "構成パーツ",
     // 复查第 3 轮修(r3-ui-02):第 5 批 S2 起每一部分自己选「这一批一共 / 每台(每个)」,新产品默认「每台」—— 两句不再叫她一律按这一批写;日文界面给日文
     sectionHint: zh ? (stack ? "每层可设自定义名称；用量在每层里选「这一批一共」或「每台」再填" : "每部分可设自定义名称；用量在每部分里选「这一批一共」或「每个」再填")
       : (stack ? "各層に名前を付けられます。使用量は層ごとに「バッチ合計」か「1台あたり」を選んで入力" : "各パーツに名前を付けられます。使用量はパーツごとに「バッチ合計」か「1個あたり」を選んで入力"),
@@ -17783,81 +17990,284 @@ const layerDiffLabels = (l, comp, matIds, lang = "zh") => {
 };
 
 // ─── 组合产品 View ───────────────────────────────────────────────
-function CreationSection({ c, lang, variant, onLayerClick, onSelect }) {
-  const m = creationSectionModel(c);
-  if (!m.show) return null;
-  const L = lang === "ja" ? "ja" : "zh", ja = L === "ja", menu = variant === "menu";
-  const fullName = (idx) => {
-    const l = c.layers[idx] && typeof c.layers[idx] === "object" ? c.layers[idx] : {};
-    return _scStripNote(_normTxt(l.customName) || pickLang(l, "name", L) || (ja ? "無題" : "未命名"));
-  };
-  const shortName = (idx) => { const chars = Array.from(fullName(idx)); return chars.length > 10 ? chars.slice(0, 9).join("") + "…" : chars.join(""); };
-  const reasonText = (r) => r.reason === "noUsed" ? (ja ? "使用量未入力" : "没填用量")
-    : r.reason === "count" ? (ja ? `「${_normTxt((c.layers[r.idx] || {}).unit)}」単位のため厚さ不明` : `按「${_normTxt((c.layers[r.idx] || {}).unit)}」写,算不了厚度`) : "";
-  const detailText = (r) => {
-    if (menu) return "";
-    if (r.kind === "surface") return ja ? "表面の飾り" : "表面装饰";
-    if (r.kind === "inner") return (ja ? "インサート" : "夹心") + (r.reason ? (ja ? "・" : " · ") + reasonText(r) : "");
-    return r.mmLabel !== null ? r.mmLabel + (r.withInner ? (ja ? "(インサート込み)" : "(含夹心)") : "") : reasonText(r);
-  };
-  const labels = m.rows.map(r => {
-    const ins = m.rows.filter(q => q.kind === "inner" && q.host === r.idx);
-    const hin = ins.reduce((sum, q) => sum + q.h, 0);
-    return { r, anchor: r.kind === "band" && ins.length ? r.y + (r.h - hin) / 4 : r.y + r.h / 2 };
-  }).sort((a, b) => a.anchor - b.anchor || a.r.idx - b.r.idx);
-  let previousY = -10;
-  labels.forEach(label => { label.y = Math.max(label.anchor, previousY + 20); previousY = label.y; });
-  const height = Math.max(m.bodyH, labels.length ? labels[labels.length - 1].y + 10 : 0) + 4;
-  const select = (idx) => {
-    if (onLayerClick) onLayerClick(idx);
-    else if (onSelect) onSelect(idx);
-    else if (typeof document !== "undefined") {
-      const target = document.getElementById(`cpart-${idx}`);
-      if (target && target.scrollIntoView) target.scrollIntoView({ block: "start", behavior: "smooth" });
-    }
-  };
-  const activate = (e, idx) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(idx); } };
-  const noteText = (note) => {
-    if (note.code === "noMold") return ja ? "型のサイズが読めないため比率だけで描いています(厚さなし)。編集で「φ15 cm」「18×18 cm」のように入れると計算します。"
-      : "读不出模具尺寸,只按比例画、不标厚度。在编辑页「尺寸 / 模具」写成「φ15 cm」或「18×18 cm」就能算。";
-    if (note.code === "noUsedAll") return ja ? `${note.n} 層とも使用量が読めないため、順番だけ描いています。` : `${note.n} 层都读不出用量,只画了顺序。`;
-    if (note.code === "unknown") return ja ? `${note.n} 層は使用量が読めません(点線)。位置だけで厚さではありません。` : `${note.n} 层读不出用量(虚线那几层),画的是位置,不是厚度。`;
-    if (note.code === "mmBasis") return ja ? `厚さは ${_moldNameJa(m.mold.m)}・1 台あたりの使用量・おおよその比重からの目安です。` : `厚度按 ${_moldNameZh(m.mold.m)}、每台用量和大致密度估算,只作参考。`;
-    if (note.code === "decorLast") return ja ? `「${fullName(note.idx)}」は飾りですが一番下にあります。断面は上から順に描いています。上に置くには編集で先頭へ移動してください。`
-      : `「${fullName(note.idx)}」是装饰,排在最下面。切面是自上而下画的;要放到最上面,去编辑把它挪到第一个。`;
-    if (note.code === "overHeight") return ja ? `各層の合計は ≈${m.totalText} mm で、型の高さ ${fmtQty(m.mold.hCm * 10)} mm を超えています。使用量が全量やロス込みの場合や、平らな一層ではないパーツ(タルトの側面など)が考えられます。`
-      : `各层加起来 ≈${m.totalText} mm,比模具高 ${fmtQty(m.mold.hCm * 10)} mm 还高:用量可能写的是整份或含损耗,也可能有的部分不是平铺的一层(比如挞皮围边)。`;
-    return "";
-  };
-  const densityTip = ja ? "比重(g/cm³):生地・底0.5、ムース・クリーム0.8、脆い層0.7、ゼリー・ジャム1.1、グラサージュ・ソース1.3、その他1。生地や底を焼く前の重さで計算する場合は、おおよその目安です。"
-    : "密度(g/cm³):饼底 0.5、慕斯·奶油 0.8、脆片 0.7、果冻·果酱 1.1、淋面·酱汁 1.3,其他 1。饼底按面糊 / 面团的克数算时只是个大概。";
-  return <div data-creation-section="1" style={{ maxWidth: 360, width: "100%", minWidth: 0 }}>
-    <svg data-sec-mode={m.mode} viewBox={`0 0 360 ${height}`} width="100%" role="group" aria-label={ja ? "断面模式図" : "切面示意"} style={{ display: "block", maxWidth: 360, overflow: "visible" }}>
-      {[...m.rows.filter(r => r.kind !== "inner"), ...m.rows.filter(r => r.kind === "inner")].map(r => {
-        const color = getCompCat(r.cat).color;
-        const geometry = { "data-sec-idx": r.idx, "data-sec-kind": r.kind, "data-sec-y": sectionCoordText(r.y), "data-sec-h": sectionCoordText(r.h) };
-        const common = { ...geometry, fill: r.v === null ? "none" : color, fillOpacity: 0.85, stroke: r.v === null ? color : r.kind === "inner" ? T.surface : color, strokeWidth: 1, strokeDasharray: r.v === null ? "4 3" : undefined };
-        const surface = r.kind === "surface";
-        const surfacePath = surface ? Array.from({ length: 8 }, (_, i) => `M${i * 20},${r.y + r.h} a10,${r.h} 0 0 1 20,0 Z`).join(" ") : "";
-        return <g key={r.idx} role="button" tabIndex={0} aria-label={fullName(r.idx)} onClick={() => select(r.idx)} onKeyDown={e => activate(e, r.idx)} style={{ cursor: "pointer" }}>
-          {surface ? <path {...common} d={surfacePath} /> : <rect {...common} x={r.x} y={r.y} width={r.w} height={r.h} />}
-        </g>;
-      })}
-      {labels.map(({ r, anchor, y }) => <g key={r.idx} data-sec-label={r.idx} role="button" tabIndex={0} aria-label={fullName(r.idx)} onClick={() => select(r.idx)} onKeyDown={e => activate(e, r.idx)} style={{ cursor: "pointer" }}>
-        <path d={`M${r.x + r.w},${anchor} L172,${y}`} fill="none" stroke={T.muted} strokeWidth="0.7" />
-        <text x="176" y={y - 2} data-sec-name="1" fill={T.body} style={{ fontFamily: T.fontSans, fontSize: T.fs.label.fontSize }}>{shortName(r.idx)}</text>
-        <text x="176" y={y + 10} data-sec-mm="1" fill={T.muted} style={{ fontFamily: T.fontSans, fontSize: T.fs.label.fontSize }}>{detailText(r)}</text>
-      </g>)}
-    </svg>
-    {!menu && m.totalText !== null && <div data-sec-total="1" style={{ ...T.fs.caption, color: T.body, marginTop: 8 }}>
-      {ja ? `合計 ${m.totalText === "<1" ? "<1" : "≈" + m.totalText} mm` : `总高 ${m.totalText === "<1" ? "<1" : "≈" + m.totalText} mm`}
-      {m.mold.hCm ? (ja ? ` · 型の高さ ${fmtQty(m.mold.hCm * 10)} mm` : ` · 模具高 ${fmtQty(m.mold.hCm * 10)} mm`) : ""}
-    </div>}
-    {!menu && m.notes.map((note, idx) => <div key={idx} data-sec-note={note.code} style={{ ...T.fs.caption, color: note.code === "overHeight" ? T.warning : T.muted, marginTop: 6, lineHeight: 1.6 }}>
-      {noteText(note)}{note.code === "mmBasis" && <TapTip lang={L} text={densityTip} />}
-    </div>)}
-  </div>;
+// 独立成品结构：几何只读 sectionPlan，不用配方重量推断成品厚度。
+function sectionDrawingModel(c, exploded = false) {
+  const rows = sectionPlanRows(c);
+  const roots = rows.filter(r => r.role !== "inner" && r.role !== "brush");
+  const mm = r => { const n = Number(r.thicknessMm); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const bodies = rows.filter(r => r.role !== "decor" && r.role !== "brush");
+  // 仅当所有实体层均有实测厚度时使用同一比例；否则明确只画位置。
+  const measured = bodies.length > 0 && bodies.every(r => mm(r) > 0);
+  const total = roots.reduce((n, r) => n + (r.role === "decor" ? 0 : mm(r)), 0);
+  const scale = measured && total > 0 ? Math.min(6, 200 / total) : 0;
+  const childrenOf = r => rows.filter(q => q.hostId === r.id && q.role === "inner");
+  const estimate = r => measured ? Math.max(4, mm(r) * scale) : r.role === "decor" ? 36 : r.role === "shell" ? 30 : r.appearance === "cream" ? 42 : r.appearance === "jelly" || r.appearance === "crunch" ? 19 : 30;
+  let top = 28;
+  const placed = [];
+  roots.forEach(r => {
+    const children = childrenOf(r);
+    const contentH = children.reduce((n, q) => n + estimate(q), 0);
+    const height = Math.max(estimate(r), contentH + (children.length ? 20 : 0));
+    const width = 300 * Math.max(20, Math.min(100, Number(r.widthPct) || 100)) / 100;
+    const item = { ...r, x: 200 - width / 2, y: top, w: width, h: height };
+    placed.push(item);
+    let innerY = top + (height - contentH) / 2;
+    children.forEach(q => {
+      const w = width * Math.min(92, Math.max(20, Number(q.widthPct) || 80)) / 100;
+      placed.push({ ...q, x: 200 - w / 2, y: innerY, w, h: estimate(q) });
+      innerY += estimate(q);
+    });
+    rows.filter(q => q.role === "brush" && q.hostId === r.id).forEach((q, i) => {
+      const w = width * Math.max(20, Math.min(100, Number(q.widthPct) || 100)) / 100;
+      placed.push({ ...q, x: 200 - w / 2, y: top + 3 + i * 4, w, h: 3 });
+    });
+    top += height + (exploded ? 18 : 0);
+  });
+  // 宿主先画，再画内嵌/涂刷，保证包裹可见。
+  const paint = [...placed.filter(r => r.role !== "inner" && r.role !== "brush"), ...placed.filter(r => r.role === "inner"), ...placed.filter(r => r.role === "brush")];
+  return { rows, paint, height: top + 30, measured };
 }
+
+function CreationSection({ c, lang, variant, onLayerClick, onSelect, onEdit }) {
+  const [selected, setSelected] = useState(null);
+  const [exploded, setExploded] = useState(false);
+  const ja = lang === "ja", menu = variant === "menu", draft = variant === "draft";
+  const plan = c && c.sectionPlan;
+  const issues = plan ? sectionPlanIssues(c) : [];
+  const configured = plan && Array.isArray(plan.rows) && plan.rows.length > 0;
+  const allowed = configured && issues.length === 0 && (plan.confirmed === true || draft);
+  const text = (zh, jp) => ja ? jp : zh;
+  const roles = { band: text("平铺", "平らな層"), inner: text("夹心", "インサート"), brush: text("涂刷", "塗布"), decor: text("表面装饰", "表面の飾り"), shell: text("底与围边", "底・側面") };
+  const name = r => (r.layer && (r.layer.customName || pickLang(r.layer, "name", ja ? "ja" : "zh"))) || text("未命名部分", "名称未入力");
+  if (!allowed) {
+    if (menu) return null;
+    return <div className="k-section-empty" data-creation-section="unconfirmed" style={{ padding: "16px 0", color: T.body, ...T.fs.small }}>
+      <div>{issues.length ? text("成品结构的关联需要修正。", "完成断面の参照を修正してください。") : text("成品结构尚未确认。", "完成断面は未確認です。")}</div>
+      <div style={{ ...T.fs.caption, marginTop: 4 }}>{text("配方部件顺序不代表成品上下；在编辑页单独编排。", "パーツの記載順は完成品の上下とは異なります。編集画面で配置します。")}</div>
+      {onEdit && <button type="button" className="k-tap k-section-action" onClick={onEdit} style={{ marginTop: 8 }}>{text("编排成品结构", "完成断面を配置")}</button>}
+    </div>;
+  }
+  const model = sectionDrawingModel(c, exploded && !menu);
+  const active = model.rows.find(r => r.id === selected);
+  const choose = id => setSelected(prev => prev === id ? null : id);
+  const visit = r => {
+    if (onLayerClick) onLayerClick(r.idx);
+    else if (onSelect) onSelect(r.idx);
+    else if (typeof document !== "undefined") document.getElementById(`cpart-${r.idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const palette = r => T.sectionFood[r.appearance] || T.sectionFood.plain;
+  const renderPart = r => {
+    const p = palette(r), { x, y, w, h } = r;
+    const opacity = selected && selected !== r.id ? 0.25 : 1;
+    const common = { fill: p.fill, stroke: p.line, strokeWidth: 1.4 };
+    const texture = r.appearance;
+    const strawberry = /草莓|苺|いちご|イチゴ|fraise/i.test(name(r));
+    let shape;
+    if (r.role === "brush") {
+      shape = <path d={`M${x},${y} H${x + w}`} fill="none" stroke={p.line} strokeWidth={3} strokeDasharray="7 3" />;
+    } else if (r.role === "shell") {
+      shape = <><path d={`M${x},${y - 12} Q${x - 6},${y - 17} ${x - 7},${y - 6} L${x},${y + h - 5} Q${x + 3},${y + h} ${x + 12},${y + h} H${x + w - 12} Q${x + w - 3},${y + h} ${x + w},${y + h - 5} L${x + w + 7},${y - 6} Q${x + w + 6},${y - 17} ${x + w},${y - 12} L${x + w - 13},${y + 7} H${x + 13}Z`} {...common} />
+        {[0.5,0.74].map((v,i)=><path key={i} d={`M${x + 8},${y + h*v} Q${x + w/2},${y + h*v+8} ${x + w-8},${y+h*v}`} stroke={p.detail} strokeWidth={2} fill="none" />)}</>;
+    } else if (r.role === "decor" && texture === "fruit") {
+      const count = 5, size = Math.min(h, w / 7);
+      shape = Array.from({length:count},(_,i) => {
+        const cx=x+w*(i+0.5)/count, cy=y+h-size;
+        return strawberry ? <g key={i} transform={`translate(${cx},${cy})`}>
+          <path d={`M${-size*.4},${size*.15} Q0,${-size*.13} ${size*.4},${size*.15} Q${size*.58},${size*.46} 0,${size} Q${-size*.58},${size*.46} ${-size*.4},${size*.15}Z`} {...common}/>
+          <path d={`M${-size*.25},${size*.25} Q0,${size*.14} ${size*.25},${size*.25} Q${size*.3},${size*.45} 0,${size*.76} Q${-size*.3},${size*.45} ${-size*.25},${size*.25}Z`} fill={p.detail}/>
+          <path d={`M${-size*.13},${size*.12} L${-size*.27},${-size*.08} L0,0 L${size*.1},${-size*.14} L${size*.13},0 L${size*.3},${-size*.05} L${size*.2},${size*.13}Z`} fill={T.sectionLeaf}/>
+        </g> : <g key={i}><circle cx={cx} cy={cy+size*.57} r={size*.43} {...common}/><path d={`M${cx-size*.15},${cy+size*.34} q${size*.16},${-size*.12} ${size*.28},0`} stroke={p.detail} fill="none" strokeWidth={2}/></g>;
+      });
+    } else if (r.role === "decor" || (texture === "cream" && r.role === "band")) {
+      const bumps = 7, s = w/bumps, rise = Math.min(h*.5,s*.45);
+      const top = Array.from({length:bumps},()=>`q${s/2},${-rise*2} ${s},0`).join(" ");
+      shape = <><path d={`M${x},${y+rise} ${top} L${x+w},${y+h} H${x}Z`} {...common}/>
+        {Array.from({length:bumps-1},(_,i)=><path key={i} d={`M${x+(i+1)*s},${y+rise+3} q-5,${h*.2} 2,${h*.35}`} stroke={p.detail} strokeWidth={1.5} fill="none" />)}</>;
+    } else {
+      shape = <><rect x={x} y={y} width={w} height={h} rx={texture === "jelly" ? 2 : 0} {...common}/>
+        {(texture === "sponge" || texture === "crunch") && Array.from({length:Math.min(24,Math.max(5,Math.floor(w/15)))},(_,i)=><circle key={i} cx={x+8+(i*23)%(Math.max(1,w-16))} cy={y+Math.min(h-3,4+(i*7)%Math.max(1,h-8))} r={texture === "crunch" ? 1.6 : 1.2} fill={p.detail}/>)}
+        {texture === "pastry" && [0.3,0.6,0.85].map((v,i)=><path key={i} d={`M${x+3},${y+h*v} H${x+w-3}`} stroke={p.detail} strokeWidth={1.6}/>)}
+      </>;
+    }
+    return <g key={r.id} data-sec-row={r.id} data-sec-kind={r.role} data-sec-part={r.partId} data-sec-host={r.hostId || ""} opacity={opacity}>
+      <title>{name(r)}</title>{shape}
+    </g>;
+  };
+  return <section data-creation-section="2" className="k-section-view" aria-label={text("成品结构", "完成断面")}>
+    <div className="k-section-heading" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+      <span style={{ ...T.fs.strong }}>{text("成品结构", "完成断面")}{draft && plan.confirmed !== true && <span style={{ ...T.fs.caption, color: T.warning, marginLeft: 8 }}>{text("待确认", "未確認")}</span>}</span>
+      {!menu && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" className="k-tap k-section-action" aria-pressed={!exploded} onClick={()=>setExploded(false)}>{text("成品剖面", "完成断面")}</button>
+        <button type="button" className="k-tap k-section-action" aria-pressed={exploded} onClick={()=>setExploded(true)}>{text("分解组装", "分解図")}</button>
+        {onEdit && <button type="button" className="k-tap k-section-action" onClick={onEdit}>{text("调整结构", "配置を編集")}</button>}
+      </div>}
+    </div>
+    <div className="k-section-layout">
+      <div className="k-section-art"><svg viewBox={`0 0 400 ${model.height}`} role="img" aria-label={text("从顶部到底部的成品结构示意", "完成品を上から下へ示す模式図")} style={{ display: "block", width: "100%", maxHeight: 440 }}>
+        {model.paint.map(renderPart)}<path d={`M42,${model.height-12} H358`} stroke={T.border} strokeWidth={1}/>
+      </svg></div>
+      <div className="k-section-legend">{model.rows.map((r,i)=>{
+        const host = model.rows.find(h=>h.id===r.hostId);
+        return <button key={r.id} type="button" className="k-tap k-section-row" aria-pressed={selected === r.id} onClick={()=>choose(r.id)}>
+          <span style={{ ...T.num, color: T.textSecondary }}>{String(i+1).padStart(2,"0")}</span>
+          <span style={{ minWidth: 0 }}><span className="k-section-name">{name(r)}</span>{!menu && <span style={{ display: "block", ...T.fs.caption, color: T.body, marginTop: 3 }}>{roles[r.role]}{host ? text(` · ${name(host)}${r.role === "brush" ? "表面" : "内"}`, ` · ${name(host)}${r.role === "brush" ? "の表面" : "の中"}`) : ""}{r.thicknessMm ? text(` · 实测 ${r.thicknessMm} mm`, ` · 実測 ${r.thicknessMm} mm`) : ""}</span>}</span>
+        </button>;
+      })}</div>
+    </div>
+    <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 10, marginTop: 10, ...T.fs.caption, color: T.body, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <span>{text("顶部 → 底部", "上 → 下")}</span>
+      <span>{exploded && !menu ? text("分解示意 · 间距不代表实际距离", "分解模式図 · 間隔は実寸ではありません") : text("位置示意 · 不按实际厚度", "位置の模式図 · 実寸ではありません")}</span>
+    </div>
+    {!menu && active && !draft && <button type="button" className="k-tap k-section-action" style={{ marginTop: 8 }} onClick={()=>visit(active)}>{text(`查看「${name(active)}」配方`, `「${name(active)}」のレシピを見る`)}</button>}
+  </section>;
+}
+
+// BEGIN section-plan editor
+// 放在 CreationSection 后。依赖 section-plan helpers / T / Btn / InlineError / React hooks。
+function CreationSectionEditor({ c, onChange, lang = "zh" }) {
+  const ja = lang === "ja", L = ja ? "ja" : "zh";
+  const [addPartId, setAddPartId] = useState("");
+  const [lastRemoved, setLastRemoved] = useState(null);
+  const layers = Array.isArray(c.layers) ? c.layers : [];
+  const plan = c.sectionPlan;
+  const partName = (layer, idx) => (layer && (layer.customName || (ja ? layer.nameJa || layer.nameZh : layer.nameZh || layer.nameJa) || layer.nameFr)) || (ja ? `パーツ ${idx + 1}` : `部件 ${idx + 1}`);
+  const commonHeader = <div style={{ ...T.fs.strong, marginBottom: T.sp.s }}>{ja ? "完成品の断面を配置" : "编排成品结构"}</div>;
+  const explain = <p style={{ ...T.fs.small, color: T.body, margin: `0 0 ${T.sp.l}px` }}>{ja
+    ? "完成した形を上から下へ並べます。同じパーツを何度配置しても、配合量や原価は変わりません。"
+    : "按成品从上到下排列。同一部件可以放到多个图形位置，配方用量和成本不变。"}</p>;
+  const start = () => { setLastRemoved(null); onChange(sectionPlanDraft(c)); };
+  const reset = () => { const { sectionPlan: ignored, ...base } = c; setLastRemoved(null); onChange(sectionPlanDraft(base)); };
+  if (plan == null) return <section className="sp-editor" data-section-editor="empty">
+    {commonHeader}{explain}
+    <span data-section-action="start"><Btn type="button" size="lg" onClick={start} disabled={!layers.length}>{ja ? "完成品の断面を配置" : "编排成品结构"}</Btn></span>
+    {!layers.length && <p style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "先にレシピパーツを追加してください。" : "请先添加配方部件。"}</p>}
+  </section>;
+  const issues = sectionPlanIssues(c);
+  if (!_sectionPlanObj(plan) || plan.version !== 1 || !Array.isArray(plan.rows)) return <section className="sp-editor" data-section-editor="invalid">
+    {commonHeader}<InlineError title={ja ? "構造の記録を確認してください" : "请检查结构记录"} detail={issues.map(x => sectionPlanIssueText(x, lang)).join(" ")}
+      actionLabel={ja ? "構造を編成し直す" : "重新编排结构"} onAction={reset} />
+  </section>;
+  const rows = sectionPlanRows(c);
+  const changeRows = nextRows => onChange({ ...c, sectionPlan: { ...plan, rows: nextRows, confirmed: false } });
+  const updateRow = (idx, patch) => changeRows(plan.rows.map((row, i) => i === idx ? { ...(_sectionPlanObj(row) ? row : {}), ...patch } : row));
+  const updateNumber = (idx, key, raw) => changeRows(plan.rows.map((row, i) => {
+    if (i !== idx) return row;
+    const next = { ...row };
+    if (raw === "") delete next[key]; else next[key] = Number(raw);
+    return next;
+  }));
+  const changeRole = (idx, role) => changeRows(plan.rows.map((row, i) => {
+    if (i !== idx) return row;
+    const next = { ...row, role };
+    if (role !== "inner" && role !== "brush") delete next.hostId;
+    return next;
+  }));
+  const moveRow = (idx, delta) => {
+    const target = idx + delta;
+    if (target < 0 || target >= plan.rows.length) return;
+    const next = plan.rows.slice(); [next[idx], next[target]] = [next[target], next[idx]]; changeRows(next);
+  };
+  const newRowId = () => sectionPlanNextId([...plan.rows.filter(_sectionPlanObj).flatMap(row => [row.id, row.hostId]),
+    ...(lastRemoved && _sectionPlanObj(lastRemoved.row) ? [lastRemoved.row.id, lastRemoved.row.hostId] : [])], "section_row");
+  const duplicateRow = idx => {
+    if (rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const next = plan.rows.slice(); next.splice(idx + 1, 0, { ...next[idx], id: newRowId() }); changeRows(next);
+  };
+  const removeRow = idx => { setLastRemoved({ row: plan.rows[idx], idx }); changeRows(plan.rows.filter((_, i) => i !== idx)); };
+  const undoRemove = () => {
+    if (!lastRemoved || rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const next = plan.rows.slice(); next.splice(Math.min(lastRemoved.idx, next.length), 0, lastRemoved.row); changeRows(next); setLastRemoved(null);
+  };
+  const selectableParts = layers.map((layer, idx) => ({ layer, idx })).filter(p => _sectionPlanObj(p.layer) && _sectionPlanId(p.layer.sectionId) && layers.filter(l => l && l.sectionId === p.layer.sectionId).length === 1);
+  const chosenPartId = selectableParts.some(p => p.layer.sectionId === addPartId) ? addPartId : (selectableParts[0]?.layer.sectionId || "");
+  const addRow = () => {
+    if (!chosenPartId || rows.length >= SECTION_PLAN_MAX_ROWS) return;
+    const chosen = selectableParts.find(p => p.layer.sectionId === chosenPartId);
+    changeRows([...plan.rows, { id: newRowId(), partId: chosenPartId, role: "band", appearance: sectionPlanSuggestedAppearance(chosen.layer) }]);
+  };
+  const tidyParts = () => { const next = sectionPlanDraft(c); onChange({ ...next, sectionPlan: { ...next.sectionPlan, confirmed: false } }); };
+  const confirm = () => { if (!sectionPlanIssues(c).length) onChange({ ...c, sectionPlan: { ...plan, confirmed: true } }); };
+  const globalIssues = issues.filter(issue => !Number.isInteger(issue.rowIndex));
+  const partIssues = issues.some(issue => issue.code === "part_id_missing" || issue.code === "part_ambiguous");
+  return <section className="sp-editor" data-section-editor={plan.confirmed ? "confirmed" : "draft"}>
+    <div className="sp-editor-heading">{commonHeader}<span style={{ ...T.fs.caption, color: plan.confirmed && !issues.length ? T.success : T.secondary }}>{plan.confirmed && !issues.length ? (ja ? "確認済み・製品の保存が必要" : "已确认 · 仍需保存产品") : (ja ? "編成中・未確認" : "编排中 · 未确认")}</span></div>
+    {explain}
+    <p style={{ ...T.fs.caption, color: T.secondary, margin: `0 0 ${T.sp.l}px` }}>{ja
+      ? "厚さは実測値のみ入力します。不明な部分は空欄のままにすると、位置だけの模式図になります。図形は最大 40 個です。"
+      : "厚度只填实测值；未知时留空，图中仅表达位置。最多可编排 40 个图形位置。"}</p>
+    {issues.length > 0 && <div role="alert" data-section-issues style={{ marginBottom: T.sp.l }}><InlineError
+      title={ja ? "下の項目を修正してから確認してください" : "请先修正下列位置，再确认结构"}
+      detail={globalIssues.length ? globalIssues.map(x => sectionPlanIssueText(x, lang)).join(" ") : (ja ? "各図形の下に修正方法を表示しています。" : "每个图形下方已列出具体修正方法。")}
+      {...(partIssues ? { actionLabel: ja ? "パーツ番号を整える" : "整理部件编号", onAction: tidyParts } : {})} /></div>}
+    <div className="sp-editor-layout">
+      <div className="sp-editor-list">
+        {rows.map((row, idx) => {
+          const roleLabel = SECTION_PLAN_ROLES.find(x => x.id === row.role)?.[L] || (ja ? "役割未設定" : "未选作用");
+          const hosts = rows.map((host, hostIdx) => ({ host, hostIdx })).filter(({ host }) => host.id !== row.id && _sectionPlanId(host.id) && rows.filter(r => r.id === host.id).length === 1 && (host.role === "band" || host.role === "shell"));
+          const needsHost = row.role === "inner" || row.role === "brush";
+          return <details className="sp-editor-row" data-section-row={row.id || "missing"} data-section-row-index={idx} key={row.id && rows.filter(r => r.id === row.id).length === 1 ? row.id : `invalid_${idx}`} open={idx === 0}>
+            <summary><span className="sp-editor-summary"><span style={{ ...T.fs.small }}>{idx + 1}. {row.layer ? partName(row.layer, row.idx) : (ja ? "パーツを選び直してください" : "请重新选择部件")}</span><span style={{ ...T.fs.caption, color: T.secondary }}>{roleLabel}{row.issues.length ? (ja ? " · 要修正" : " · 待修正") : ""}</span></span></summary>
+            <div className="sp-editor-fields">
+              <label className="sp-editor-field sp-editor-field-wide"><span>{ja ? "レシピパーツ" : "配方部件"}</span>
+                <select data-section-field="part" value={row.layer ? row.partId : ""} onChange={e => updateRow(idx, { partId: e.target.value })}>
+                  <option value="" disabled>{ja ? "パーツを選択" : "选择部件"}</option>
+                  {selectableParts.map(p => <option key={p.layer.sectionId} value={p.layer.sectionId}>{p.idx + 1}. {partName(p.layer, p.idx)}</option>)}
+                </select>
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "図形の役割" : "图形作用"}</span>
+                <select data-section-field="role" value={row.role || ""} onChange={e => changeRole(idx, e.target.value)}>
+                  {!SECTION_PLAN_ROLES.some(r => r.id === row.role) && <option value="" disabled>{ja ? "役割を選択" : "选择作用"}</option>}
+                  {SECTION_PLAN_ROLES.map(r => <option key={r.id} value={r.id}>{r[L]}</option>)}
+                </select>
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "見た目" : "外观"}</span>
+                <select data-section-field="appearance" value={row.appearance || ""} onChange={e => updateRow(idx, { appearance: e.target.value })}>
+                  {!SECTION_PLAN_APPEARANCES.some(a => a.id === row.appearance) && <option value="" disabled>{ja ? "見た目を選択" : "选择外观"}</option>}
+                  {SECTION_PLAN_APPEARANCES.map(a => <option key={a.id} value={a.id}>{a[L]}</option>)}
+                </select>
+              </label>
+              {needsHost && <label className="sp-editor-field sp-editor-field-wide"><span>{row.role === "inner" ? (ja ? "包む図形" : "包裹它的图形") : (ja ? "塗る対象の図形" : "涂刷到哪个图形")}</span>
+                <select data-section-field="host" value={hosts.some(h => h.host.id === row.hostId) ? row.hostId : ""} onChange={e => updateRow(idx, { hostId: e.target.value })}>
+                  <option value="" disabled>{ja ? "対象を明確に選択" : "明确选择归属"}</option>
+                  {hosts.map(({ host, hostIdx }) => <option key={host.id} value={host.id}>{hostIdx + 1}. {partName(host.layer, host.idx)}</option>)}
+                </select>
+                {!hosts.length && <small>{ja ? "先に「平らな層」または「底・側面」を追加してください。" : "请先添加一个平铺层或底与围边。"}</small>}
+              </label>}
+              <label className="sp-editor-field"><span>{ja ? "実測の厚さ (mm)" : "实测厚度 (mm)"}</span>
+                <input data-section-field="thickness" type="number" min="1" max="300" step="0.1" inputMode="decimal" value={row.thicknessMm ?? ""} placeholder={ja ? "不明なら空欄" : "未知时留空"} onChange={e => updateNumber(idx, "thicknessMm", e.target.value)} />
+              </label>
+              <label className="sp-editor-field"><span>{ja ? "幅 (%)" : "宽度 (%)"}</span>
+                <input data-section-field="width" type="number" min="20" max="100" step="1" inputMode="decimal" value={row.widthPct ?? ""} placeholder={String(row.role === "inner" ? 80 : 100)} onChange={e => updateNumber(idx, "widthPct", e.target.value)} />
+              </label>
+              {row.issues.length > 0 && <div className="sp-editor-field-wide" role="alert"><InlineError title={ja ? "この位置を修正してください" : "请修正这个位置"} detail={row.issues.map(x => sectionPlanIssueText(x, lang)).join(" ")} /></div>}
+              <div className="sp-editor-actions sp-editor-field-wide">
+                <span data-section-action="up"><Btn type="button" size="sm" disabled={idx === 0} onClick={() => moveRow(idx, -1)}>{ja ? "↑ 上へ" : "↑ 上移"}</Btn></span>
+                <span data-section-action="down"><Btn type="button" size="sm" disabled={idx === rows.length - 1} onClick={() => moveRow(idx, 1)}>{ja ? "↓ 下へ" : "↓ 下移"}</Btn></span>
+                <span data-section-action="duplicate"><Btn type="button" size="sm" disabled={rows.length >= SECTION_PLAN_MAX_ROWS || !row.layer} onClick={() => duplicateRow(idx)}>{ja ? "同じパーツを追加" : "再放一次"}</Btn></span>
+                <span data-section-action="remove"><Btn type="button" size="sm" variant="danger" onClick={() => removeRow(idx)}>{ja ? "図形を削除" : "移除图形"}</Btn></span>
+              </div>
+            </div>
+          </details>;
+        })}
+        {lastRemoved && <div className="sp-editor-actions" role="status" style={{ marginBottom: T.sp.l }}><span style={T.fs.caption}>{ja ? "図形を一つ削除しました。レシピパーツは残っています。" : "已移除一个图形位置，配方部件仍保留。"}</span><span data-section-action="undo"><Btn type="button" size="sm" disabled={rows.length >= SECTION_PLAN_MAX_ROWS} onClick={undoRemove}>{ja ? "元に戻す" : "撤销"}</Btn></span></div>}
+        <div className="sp-editor-add">
+          <label className="sp-editor-field"><span>{ja ? "追加するレシピパーツ" : "要添加的配方部件"}</span><select data-section-field="add-part" value={chosenPartId} onChange={e => setAddPartId(e.target.value)}>
+            {!selectableParts.length && <option value="">{ja ? "選択できるパーツがありません" : "暂无可选部件"}</option>}
+            {selectableParts.map(p => <option key={p.layer.sectionId} value={p.layer.sectionId}>{p.idx + 1}. {partName(p.layer, p.idx)}</option>)}
+          </select></label>
+          <span data-section-action="add"><Btn type="button" disabled={!chosenPartId || rows.length >= SECTION_PLAN_MAX_ROWS} onClick={addRow}>{ja ? "+ 図形を追加" : "+ 添加图形位"}</Btn></span>
+        </div>
+        {rows.length >= SECTION_PLAN_MAX_ROWS && <p style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "図形は 40 個までです。追加するには一つ削除してください。" : "最多 40 个图形位置；需要新增时请先移除一个。"}</p>}
+      </div>
+      <div className="sp-editor-preview"><CreationSection c={c} lang={lang} variant="draft" /></div>
+    </div>
+    <div className="sp-editor-footer">
+      <span data-section-action="confirm"><Btn type="button" size="lg" variant="primary" disabled={issues.length > 0 || plan.confirmed === true} onClick={confirm}>{plan.confirmed && !issues.length ? (ja ? "構造を確認済み" : "结构已确认") : (ja ? "構造を確認" : "确认结构")}</Btn></span>
+      <span style={{ ...T.fs.caption, color: T.secondary }}>{ja ? "確認後、ページの「保存」で製品に反映します。" : "确认后，还需点击页面的「保存」写入产品。"}</span>
+    </div>
+  </section>;
+}
+// END section-plan editor
 
 function CreationsView({ creations, setCreations, components, recipes = [], cats, onUpdateCats, brands = [], materials = [], setShopMaterials, lang, setLang, viewId, setViewId, editTarget, setEditTarget, showToast, saved, onUpdateComponent, confirmDialog, knowledge, onNavigateToKnowledge,
   onPrintCreation, returnToList = false, onReturnToList, onOpenFromList, products = [], onPrintLabel, onOpenKitchen,
@@ -18386,8 +18796,8 @@ function LayerLinkRows({ act, i, lang }) {
 }
 // 第七批 A2：展示始终从现有批量配方/成本链取数。
 const CPAGE_TXT = {
-  zh: { kicker: "配方详情 · 组合", back: "← 返回配方一览", menuBtn: "📗 对外展示", menuBack: "← 回到配方", reset: "重置", stripStack: "层结构(自上而下)", stripAsm: "组成部分", assembly: "组装", notes: "备注", tasting: "试吃笔记", goComp: "去组件库看 →", fFlavor: "风味 / 出处(一句话)", fFlavorPh: "例:开心果 × 覆盆子 / 吉田守秀", fFamily: "家族", fNoFamily: "(不属于家族)", fAssembly: "整体组装步骤", fAddStep: "+ 追加一步", fStepZh: "中文步骤", fStepJa: "日文步骤", fNotesZh: "整体备注(中文)", fNotesJa: "整体备注(日文)", fStepUp: "上移这一步", fStepDown: "下移这一步", fStepDel: "删除这一步" },
-  ja: { kicker: "レシピ詳細 · 組み合わせ", back: "← レシピ一覧へ", menuBtn: "📗 展示用", menuBack: "← レシピに戻る", reset: "リセット", stripStack: "層構成(上から下)", stripAsm: "構成パーツ", assembly: "組み立て・仕上げ", notes: "メモ", tasting: "試食メモ", goComp: "パーツ庫で見る →", fFlavor: "風味・出典(一言)", fFlavorPh: "例:ピスタチオ × フランボワーズ / 吉田守秀", fFamily: "ファミリー", fNoFamily: "(なし)", fAssembly: "組み立て・仕上げ工程", fAddStep: "+ 工程を追加", fStepZh: "中国語の工程", fStepJa: "日本語の工程", fNotesZh: "全体メモ(中国語)", fNotesJa: "全体メモ(日本語)", fStepUp: "この工程を上へ", fStepDown: "この工程を下へ", fStepDel: "この工程を削除" },
+  zh: { kicker: "配方详情 · 组合", back: "← 返回配方一览", menuBtn: "📗 对外展示", menuBack: "← 回到配方", reset: "重置", stripStack: "配方组成部分", stripAsm: "组成部分", assembly: "组装", notes: "备注", tasting: "试吃笔记", goComp: "去组件库看 →", fFlavor: "风味 / 出处(一句话)", fFlavorPh: "例:开心果 × 覆盆子 / 吉田守秀", fFamily: "家族", fNoFamily: "(不属于家族)", fAssembly: "整体组装步骤", fAddStep: "+ 追加一步", fStepZh: "中文步骤", fStepJa: "日文步骤", fNotesZh: "整体备注(中文)", fNotesJa: "整体备注(日文)", fStepUp: "上移这一步", fStepDown: "下移这一步", fStepDel: "删除这一步" },
+  ja: { kicker: "レシピ詳細 · 組み合わせ", back: "← レシピ一覧へ", menuBtn: "📗 展示用", menuBack: "← レシピに戻る", reset: "リセット", stripStack: "レシピの構成パーツ", stripAsm: "構成パーツ", assembly: "組み立て・仕上げ", notes: "メモ", tasting: "試食メモ", goComp: "パーツ庫で見る →", fFlavor: "風味・出典(一言)", fFlavorPh: "例:ピスタチオ × フランボワーズ / 吉田守秀", fFamily: "ファミリー", fNoFamily: "(なし)", fAssembly: "組み立て・仕上げ工程", fAddStep: "+ 工程を追加", fStepZh: "中国語の工程", fStepJa: "日本語の工程", fNotesZh: "全体メモ(中国語)", fNotesJa: "全体メモ(日本語)", fStepUp: "この工程を上へ", fStepDown: "この工程を下へ", fStepDel: "この工程を削除" },
 };
 function CreationPageButton({ style, ...props }) { return Btn({ ...props, style: { minHeight: 40, ...style } }); }
 function CreationPageAddToShop(props) {
@@ -18424,14 +18834,14 @@ function CreationIngRow({ ing, scale, lang, materials, brands, onNavigateToMater
   cells[3] = cloneElement(cost, {}, <span data-pm="cost">{moneyMode === "nouse" ? "—" : moneyMode === "stock" ? "" : cost.props.children[0]}</span>, cost.props.children[1]);
   return cloneElement(row, { "data-pm-row": rowKey }, ...cells);
 }
-function CreationPartsStrip({ c, batch, b: suppliedBatch, n, lang, components = [], materials = [], brands = [], layerActions }) {
+function CreationPartsStrip({ c, batch, b: suppliedBatch, n, lang, components = [], materials = [], brands = [], layerActions, onEdit }) {
   const L = creationPageLang(lang), X = CPAGE_TXT[L], W = creationWords(creationStructureOf(c), L);
   const b = suppliedBatch || batch || creationBatch(c, creationPageN(n), components, materials, brands);
   return <div style={{ marginBottom: T.sp.gap }}>
     <div style={{ display: "flex", gap: T.sp.m, justifyContent: "space-between", borderBottom: `1px solid ${T.ink}`, paddingBottom: T.sp.m, ...T.fs.caption }}>
       <span>{W.isStack ? X.stripStack : X.stripAsm}</span><span>{L === "zh" ? "这一批 " : "今回 "}<strong data-pm="strip-total">{fmtCost(b.cost) || "—"}</strong></span>
     </div>
-    <CreationSection c={c} lang={L} />
+    <CreationSection c={c} lang={L} onEdit={onEdit} />
     {b.parts.map(p => { const cat = getCompCat(p.layer.componentCategory), need = creationPartNeed(p); return <div key={p.idx} data-pm-strip={p.idx} className="k-row" style={{ display: "flex", alignItems: "center", gap: T.sp.s, borderBottom: `1px solid ${T.lineFaint}` }}>
       <button type="button" className="k-tap" onClick={() => document.getElementById(`cpart-${p.idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
       style={{ display: "flex", flex: 1, minWidth: 0, alignItems: "center", gap: T.sp.m, minHeight: 51, background: "none", border: "none", padding: "8px 0", textAlign: "left", color: T.ink, fontFamily: T.fontSans, cursor: "pointer" }}>
@@ -18463,7 +18873,7 @@ function CreationWholeRecipe({ c, n, setN, lang, components = [], materials = []
     </div>
     {ci.incomplete && <InlineError title={zh ? "成本算不全" : "原価が出せません"} detail={<>{lines.map((line, i) => <div key={i} data-pm-ic={i}>{line}</div>)}</>} actionLabel={zh ? "去编辑" : "編集へ"} onAction={() => onEdit && onEdit(c)} />}
     {layerActions && <CreationLockBars act={layerActions} lang={L} />}
-    <CreationPartsStrip c={c} batch={b} lang={L} layerActions={layerActions} />
+    <CreationPartsStrip c={c} batch={b} lang={L} layerActions={layerActions} onEdit={onEdit} />
     {!b.parts.length && <div style={{ ...box, color: T.muted }}>{W.emptyDetail}</div>}
     {b.parts.map(p => {
       const l = p.layer, cat = getCompCat(l.componentCategory), kind = p.stock ? "stock" : p.noUsed ? "nouse" : "normal", s = kind === "normal" ? p.scale : 1;
@@ -18799,7 +19209,7 @@ function useCreationLayerActions({ c, components = [], materials = [], brands = 
         let n = 0;
         // 同一个组件用了两次、中间又删了一个时,「第几个」会错位到另一部分上:部分名和用量也得对得上才还原(审查发现)
         const samePart = (l, b) => (l.customName || "") === (b.customName || "") && String(l.usedAmount || "") === String(b.usedAmount || "");
-        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); const b = key ? before[key] : undefined; if (b !== undefined && samePart(l, b)) { n++; return b; } return l; });
+        const next = cur.map((l, i) => { const key = layerKeyAt(cur, i); const b = key ? before[key] : undefined; if (b !== undefined && samePart(l, b)) { n++; return l.sectionId ? { ...b, sectionId: l.sectionId } : b; } return l; });
         restored = n;
         return { ...cr, layers: next };
       });
@@ -18861,7 +19271,7 @@ function useCreationLayerActions({ c, components = [], materials = [], brands = 
         const a = seq(cur.layers), b = seq(post.layers);
         if (a.length !== b.length || a.some((x, i) => x !== b[i])) return cur;
         back = true;
-        const r = { ...cur, layers: pre.layers };
+        const r = { ...cur, layers: Array.isArray(pre.layers) ? pre.layers.map((l, i) => cur.layers[i]?.sectionId ? { ...l, sectionId: cur.layers[i].sectionId } : l) : pre.layers };
         if (Object.prototype.hasOwnProperty.call(pre, "lockedAt")) r.lockedAt = pre.lockedAt; else delete r.lockedAt;
         return r;
       });
@@ -19144,8 +19554,8 @@ function CreationDetail({ creation: c, lang, onEdit, onBack, backLabel = null, o
 
         {layers.length > 0 && (
           <div style={{ minWidth: 0 }}>
-            {W.isStack && <CreationSection c={c} lang={lang} variant={viewMode === "menu" ? "menu" : undefined}
-              onLayerClick={i => setExpandedLayer(expandedLayer === i ? null : i)} />}
+            <CreationSection c={c} lang={lang} variant={viewMode === "menu" ? "menu" : undefined} onEdit={viewMode === "menu" ? undefined : onEdit}
+              onLayerClick={i => setExpandedLayer(expandedLayer === i ? null : i)} />
 
             {/* 右侧：层列表 */}
             <div>
@@ -19669,7 +20079,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       follow: true,
       ...layerUsedDefaults(form),
     }));
-    if (newLayers.length) setForm(prev => ({ ...prev, layers: [...(prev.layers || []), ...newLayers] }));
+    if (newLayers.length) setForm(prev => { const next = { ...prev, layers: [...(prev.layers || []), ...newLayers] }; return prev.sectionPlan ? sectionPlanDraft(next) : next; });
     setShowComponentPicker(false);
   };
 
@@ -19689,7 +20099,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
       notesZh: "", notesJa: "",
       totalCost: 0,
     };
-    setForm(prev => ({ ...prev, layers: [...(prev.layers || []), newLayer] }));
+    setForm(prev => { const next = { ...prev, layers: [...(prev.layers || []), newLayer] }; return prev.sectionPlan ? sectionPlanDraft(next) : next; });
   };
 
   // 第 6 批 R(spec_bin R38 / 待看 15):删一个部分 = 直接删 + 提示条撤销(只改表单,不保存就不进主数据,不进回收站);去掉 window.confirm 兜底。
@@ -19769,6 +20179,10 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
     }
     // 第 5 批 E1(R18):锁定的产品保存前先过一遍 lockCreation —— 新加的部分、编辑时回到跟组件库的、被旧版解开的都锁上(lockedAt 不变)。
     // 没锁的不经过它,输出和以前逐字节一样
+    if (form.sectionPlan && sectionPlanIssues(form).length) {
+      setErrorMsg(lang === "ja" ? "完成断面の参照を修正してから保存してください。" : "请先修正成品结构里的关联，再保存产品。");
+      return;
+    }
     const savedForm = asmTouched ? { ...form, ...stepsForSave(asmSteps) } : form;
     if (asmTouched) delete savedForm.steps; // 旧steps只在实际改过组装时退出回退，未操作保存保持原样
     const now = new Date().toISOString();
@@ -20045,23 +20459,7 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
                         <span style={{ fontSize: 12, background: "#FFFFFF", color: cat.color, padding: "2px 10px", borderRadius: 20, fontWeight: 500 }}>{idx + 1}. {lang === "zh" ? cat.zh : (cat.ja || cat.zh)}</span>
                         <span style={{ fontSize: 13, color: cat.color }}>{name}</span>
                         {linkTag && <span title={lang === "zh" ? linkTag.hint : linkTag.hintJa} style={{ fontSize: 10, color: linkTag.color, border: `0.5px solid ${linkTag.color}`, borderRadius: T.radiusPill, padding: "0 6px", background: "#FFFFFF" }}>{lang === "zh" ? linkTag.zh : linkTag.ja}<TapTip tipId="edit-layer-link" text={lang === "zh" ? linkTag.hint : linkTag.hintJa} lang={lang} /></span>}
-                        {W.isStack && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                          <button type="button" className="k-tap" data-tl-min="40" data-sec-inner={idx} aria-pressed={layer.inner === true}
-                            onClick={() => {
-                              if (layer.inner === true) setForm(prev => ({ ...prev, layers: prev.layers.map((l, i) => {
-                                if (i !== idx) return l;
-                                const next = { ...l }; delete next.inner; return next;
-                              }) }));
-                              else updateLayerField("inner", true);
-                            }}
-                            style={{ ...T.fs.label, fontFamily: T.fontSans, minHeight: 40, minWidth: 40, padding: "4px 10px", border: `1px solid ${T.border}`, borderRadius: T.radiusPill,
-                              background: layer.inner === true ? T.ink : T.surface, color: layer.inner === true ? T.paper : T.body, cursor: "pointer" }}>
-                            {lang === "ja" ? "◎ インサート" : "◎ 夹心"}
-                          </button>
-                          <TapTip tipId="section-inner" lang={lang} text={lang === "ja"
-                            ? "オンにすると、断面模式図ではこのパーツを一つ上の層の内側にある、小さめのブロックとして描きます(ムースの中のゼリーやクリームの芯)。"
-                            : "打开后,切面示意把这一部分画成包在上一层里面、缩小一圈的一块(慕斯里的果冻 / 奶油芯)"} />
-                        </span>}
+
                       </div>
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                         <button className="k-tap" aria-label={uiTxt(lang).moveUp} onClick={() => moveLayer(idx, -1)} disabled={idx === 0} style={{ background: "#FFFFFF", border: "1px solid #CCCCCC", borderRadius: 4, padding: "4px 8px", cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, fontSize: 12 }}>↑</button>
@@ -20081,6 +20479,8 @@ function CreationEditForm({ creation, components, cats, onUpdateCats, brands = [
           </div>
         )}
       </div>
+
+      <CreationSectionEditor c={form} onChange={setForm} lang={lang} />
 
       {/* 试吃笔记 */}
       <div style={{ background: "#FFFBEB", border: "0.5px solid #FDE68A", borderRadius: "12px", padding: "1.25rem", marginBottom: "1rem" }}>
@@ -37469,7 +37869,7 @@ function App() {
           const hit = cur.findIndex((l, i) => l && dhLayerKey(cur, i) === key && (l.customName || "") === (l0.customName || "") && String(l.usedAmount || "") === String(l0.usedAmount || ""));
           if (hit < 0) return c;
           back = true;
-          const next = cur.slice(); next[hit] = l0;
+          const next = cur.slice(); next[hit] = cur[hit].sectionId ? { ...l0, sectionId: cur[hit].sectionId } : l0;
           return { ...c, layers: next };
         }));
         setTimeout(() => { if (!back) dhNoUndo(); }, 0);
