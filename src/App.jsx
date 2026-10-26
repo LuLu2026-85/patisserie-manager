@@ -450,7 +450,7 @@ SAFETY_TXT.devUi = {
     howExport: "↓ 导出完整备份",
     howOk: "知道了",
     meterMain: "约 {x} MB / 约 {q} MB · {p}%",   // plan 决定 40 的写法(配额是按 iPad Safari 估的,所以写「约」)
-    meterFull: "⚠ 快满了。浏览器给每个网站大约 {q} MB 放这些数据(按每个字 2 字节算,以前这里少算了一半)。满了以后新的修改存不进去,顶上会写「保存失败」。先导出一份完整备份;要从根上解决,得把数据搬进浏览器数据库(另议)。",
+    meterFull: "⚠ 快满了。浏览器给每个网站大约 {q} MB 放这些数据(按每个字 2 字节算,以前这里少算了一半)。满了以后新的修改存不进去,顶上会写「保存失败」。先导出一份完整备份，再点下方「升级保存空间」。不需要删除配方或原料。",
     restoreNote: "自动备份和数据存在同一个浏览器里:浏览器把数据清掉时备份也一起没了,所以还要定期导出文件。",
     renameLabel: "这台设备的名字(导出的文件名会带上它;空着 = 用猜的名字)",
   },
@@ -465,7 +465,7 @@ SAFETY_TXT.devUi = {
     howExport: "↓ フル出力",
     howOk: "わかりました",
     meterMain: "約 {x} MB / 約 {q} MB · {p}%",
-    meterFull: "⚠ 残りわずかです。ブラウザがサイトごとに使える容量は約 {q} MB です(1 文字 2 バイトで計算。以前の表示は半分に少なく出ていました)。いっぱいになると変更が保存できず、上に「保存失敗」と出ます。まずフル出力を。根本的にはデータをブラウザのデータベースへ移す必要があります(別途検討)。",
+    meterFull: "⚠ 残りわずかです。ブラウザがサイトごとに使える容量は約 {q} MB です(1 文字 2 バイトで計算。以前の表示は半分に少なく出ていました)。いっぱいになると変更が保存できず、上に「保存失敗」と出ます。まずフル出力し、下の「保存容量を拡張」を使ってください。レシピや原料の削除は不要です。",
     restoreNote: "自動バックアップはデータと同じブラウザ内にあります。ブラウザがデータを消すとバックアップも消えるので、定期的にファイルへ書き出してください。",
     renameLabel: "この端末の名前(書き出すファイル名に付きます。空 = 推測した名前)",
   },
@@ -5806,9 +5806,551 @@ function scanContentQuality(materials, brands) {
   return { jpMixed, imgMarkup };
 }
 
-function loadData() {
+// BEGIN snapshot-main-store helpers — 2026-10-26: local, atomic full-snapshot storage.
+// A separate schema from the historical big2 chunk proposal; no export-format changes.
+const SNAPSHOT_MAIN_DB = "korora_main_snapshot_v1";
+const SNAPSHOT_MAIN_TABLE = "snapshots";
+const SNAPSHOT_MAIN_KEY = "patisserie_v4";
+const SNAPSHOT_MAIN_MOVED_KEY = "korora_main_moved_v1";
+const SNAPSHOT_MAIN_JOURNAL_PREFIX = "korora_snapshot_journal_v1:";
+const SNAPSHOT_MAIN_SIGNAL_KEY = "korora_snapshot_revision_v1";
+
+function snapshotMainHash(raw) {
+  let a = 2166136261, b = 5381;
+  for (let i = 0; i < raw.length; i++) { const c = raw.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = Math.imul(b, 33) ^ c; }
+  return raw.length + ":" + (a >>> 0).toString(16) + ":" + (b >>> 0).toString(16);
+}
+function snapshotMainObject(raw) {
+  if (typeof raw !== "string" || !raw) throw new Error("invalid-payload");
+  const value = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.movedTo || (!Array.isArray(value.recipes) && !Array.isArray(value.cats))) throw new Error("invalid-payload");
+  for (const key of ["recipes", "cats", "components", "creations", "knowledge", "brands", "materials", "customCompCats", "productFamilies", "shopMaterials", "products", "salesLog", "productionLog", "suppliers"]) {
+    if (value[key] !== undefined && !Array.isArray(value[key])) throw new Error("invalid-payload:" + key);
+  }
+  return value;
+}
+function snapshotMainBody(raw) {
+  const value = snapshotMainObject(raw); delete value.savedAt; return JSON.stringify(value);
+}
+function snapshotMainJournal(baseRaw, nextRaw, baseRev, tabId, at) {
+  const before = snapshotMainObject(baseRaw), after = snapshotMainObject(nextRaw), changes = [];
+  for (const key of Object.keys(after)) {
+    const prev = before[key], next = after[key];
+    if (JSON.stringify(prev) === JSON.stringify(next)) continue;
+    if (Array.isArray(prev) && Array.isArray(next)) {
+      const items = [];
+      for (let i = 0; i < next.length; i++) if (i >= prev.length || JSON.stringify(prev[i]) !== JSON.stringify(next[i])) items.push([i, next[i]]);
+      changes.push([key, { array: true, length: next.length, items }]);
+    } else changes.push([key, { value: next }]);
+  }
+  const journal = { fmt: 1, tabId, at, baseRev, baseHash: snapshotMainHash(baseRaw), targetHash: snapshotMainHash(nextRaw), keys: Object.keys(after), changes };
+  if (JSON.stringify(after) !== nextRaw) journal.directRaw = nextRaw;
+  return journal;
+}
+function snapshotMainApplyJournal(baseRaw, journal) {
+  if (!journal || journal.fmt !== 1 || !Array.isArray(journal.keys) || !Array.isArray(journal.changes) || typeof journal.targetHash !== "string") throw new Error("invalid-journal");
+  if (snapshotMainHash(baseRaw) !== journal.baseHash) throw new Error("journal-base-mismatch");
+  const before = snapshotMainObject(baseRaw), patch = new Map(journal.changes), out = {};
+  for (const key of journal.keys) {
+    if (typeof key !== "string" || Object.prototype.hasOwnProperty.call(out, key)) throw new Error("invalid-journal");
+    const change = patch.get(key);
+    let value = before[key];
+    if (change) {
+      if (change.array === true) {
+        if (!Array.isArray(value) || !Number.isSafeInteger(change.length) || change.length < 0 || !Array.isArray(change.items)) throw new Error("invalid-journal");
+        value = value.slice(0, change.length); value.length = change.length;
+        for (const pair of change.items) {
+          if (!Array.isArray(pair) || pair.length !== 2 || !Number.isSafeInteger(pair[0]) || pair[0] < 0 || pair[0] >= change.length) throw new Error("invalid-journal");
+          value[pair[0]] = pair[1];
+        }
+      } else if (Object.prototype.hasOwnProperty.call(change, "value")) value = change.value;
+      else throw new Error("invalid-journal");
+    }
+    Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true });
+  }
+  const raw = journal.directRaw === undefined ? JSON.stringify(out) : journal.directRaw;
+  snapshotMainObject(raw);
+  if (snapshotMainHash(raw) !== journal.targetHash) throw new Error("journal-verification-failed");
+  return raw;
+}
+
+function createSnapshotMainStore(options = {}) {
+  const idb = options.indexedDB || (typeof indexedDB !== "undefined" ? indexedDB : null);
+  const ls = options.storage || (typeof localStorage !== "undefined" ? localStorage : null);
+  const now = options.now || (() => new Date().toISOString());
+  const tabId = String(options.tabId || ("w_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2)));
+  const ownJournalKey = SNAPSHOT_MAIN_JOURNAL_PREFIX + tabId;
+  const limits = { open: 5000, transaction: 10000, ...(options.timeouts || {}) };
+  let mode = "loading", conn = null, openPromise = null, record = null, lsRaw = null, pendingRaw = null, conflicts = [], closed = false, recoveryRaw = null;
+  let serial = Promise.resolve(), opN = 0, scheduledCommits = 0;
+  const stamp = () => { const value = now(); return value instanceof Date ? value.toISOString() : String(value); };
+  const fail = (error, extra = {}) => ({ ok: false, error: typeof error === "string" ? error : (error && (error.name || error.message)) || "storage-error", mode, ...extra });
+  const notify = error => { try { if (options.onExternal) options.onExternal({ error }); } catch {} };
+  const allowed = opts => !opts || !opts.ownerAllowed || opts.ownerAllowed() === true;
+  const getLS = key => { if (!ls) throw new Error("local-storage-unavailable"); return ls.getItem(key); };
+  const putLS = (key, value) => { if (!ls) throw new Error("local-storage-unavailable"); ls.setItem(key, value); };
+  const removeLSIf = (key, raw) => { if (getLS(key) === raw) ls.removeItem(key); };
+  const serially = fn => { const result = serial.then(fn, fn); serial = result.catch(() => {}); return result.catch(error => fail(error)); };
+  function validRecord(value, activeRequired = true) {
+    if (!value || !Number.isSafeInteger(value.rev) || value.rev < 1 || typeof value.active !== "boolean" || typeof value.sourceHash !== "string" || (activeRequired && value.active !== true)) throw new Error("corrupt");
+    snapshotMainObject(value.raw);
+    if (value.hash !== snapshotMainHash(value.raw)) throw new Error("corrupt");
+    return value;
+  }
+  function movedInfo(raw) {
+    if (!raw) return null;
+    try { const value = JSON.parse(raw); return value && value.movedTo && typeof value.movedTo === "object" ? value.movedTo : null; } catch { return null; }
+  }
+  function markerFor(value) {
+    return JSON.stringify({ movedTo: { db: SNAPSHOT_MAIN_DB, kind: "move", at: value.at, src: value.sourceHash || value.hash }, version: 17, savedAt: value.at });
+  }
+  function movedSentinel() { try { return JSON.parse(getLS(SNAPSHOT_MAIN_MOVED_KEY) || "null"); } catch { return true; } }
+  function currentResult(extra = {}) { return { ok: true, mode, raw: mode === "idb" ? record.raw : lsRaw, rev: record ? record.rev : 0, ...extra }; }
+  function openDB() {
+    if (closed) return Promise.reject(new Error("closed"));
+    if (conn) return Promise.resolve(conn);
+    if (openPromise) return openPromise;
+    if (!idb || typeof idb.open !== "function") return Promise.reject(new Error("indexeddb-unavailable"));
+    openPromise = new Promise((resolve, reject) => {
+      let req, settled = false;
+      const done = (error, db) => { if (settled) { if (db) db.close(); return; } settled = true; clearTimeout(timer); openPromise = null; if (error) reject(error); else resolve(db); };
+      const timer = setTimeout(() => done(new Error("open-timeout")), limits.open);
+      try {
+        req = idb.open(SNAPSHOT_MAIN_DB, 1);
+        req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(SNAPSHOT_MAIN_TABLE)) req.result.createObjectStore(SNAPSHOT_MAIN_TABLE); };
+        req.onerror = () => done(req.error || new Error("open-failed"));
+        req.onblocked = () => { /* timeout provides a bounded, retryable result */ };
+        req.onsuccess = () => {
+          const db = req.result;
+          if (settled || closed) { db.close(); if (!settled) done(new Error("closed")); return; }
+          if (!db.objectStoreNames.contains(SNAPSHOT_MAIN_TABLE)) { db.close(); done(new Error("corrupt")); return; }
+          conn = db;
+          db.onversionchange = () => { db.close(); if (conn === db) conn = null; notify("versionchange"); };
+          db.onclose = () => { if (conn === db) conn = null; };
+          done(null, db);
+        };
+      } catch (error) { done(error); }
+    });
+    return openPromise;
+  }
+  async function transaction(write, handler) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      let tx, settled = false, value, logicalError = null;
+      const done = error => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(value); };
+      const timer = setTimeout(() => { logicalError = new Error("transaction-timeout"); try { if (tx) tx.abort(); } catch {} done(logicalError); }, limits.transaction);
+      try {
+        try { tx = db.transaction([SNAPSHOT_MAIN_TABLE], write ? "readwrite" : "readonly", write ? { durability: "strict" } : undefined); }
+        catch (error) { if (error && (error.name === "TypeError" || error instanceof TypeError)) tx = db.transaction([SNAPSHOT_MAIN_TABLE], write ? "readwrite" : "readonly"); else throw error; }
+        tx.oncomplete = () => done(logicalError);
+        tx.onerror = () => { /* onabort confirms that no transaction writes committed */ };
+        tx.onabort = () => done(logicalError || tx.error || new Error("transaction-aborted"));
+        const stop = error => { logicalError = typeof error === "string" ? new Error(error) : error; try { tx.abort(); } catch {} done(logicalError); };
+        handler(tx.objectStore(SNAPSHOT_MAIN_TABLE), next => { value = next; }, stop);
+      } catch (error) { if (error && error.name === "InvalidStateError") { try { db.close(); } catch {} if (conn === db) conn = null; } done(error); }
+    });
+  }
+  const readKey = key => transaction(false, (table, result, stop) => { const req = table.get(key); req.onsuccess = () => result(req.result); req.onerror = () => stop(req.error); });
+  async function checkedCurrent(active = true) { const value = await readKey("current"); if (!value) throw new Error("missing"); return validRecord(value, active); }
+  function cache(value) { record = value; mode = "idb"; lsRaw = null; }
+  function conflictPayloads() {
+    return conflicts.filter(c => typeof c.payload === "string").map((c, i) => ({ name: "recovery-" + (i + 1), raw: c.payload, kind: c.kind, key: c.key }));
+  }
+  function blocked(error, raw) {
+    mode = "blocked";
+    let readable = null;
+    for (const candidate of [raw, record && record.raw, recoveryRaw, lsRaw]) {
+      try { snapshotMainObject(candidate); readable = candidate; break; } catch {}
+    }
+    return fail(error, { raw: readable, conflicts: conflicts.slice(), conflictPayloads: conflictPayloads() });
+  }
+  function allJournals() {
+    const list = [];
+    for (let i = 0; i < ls.length; i++) { const key = ls.key(i); if (typeof key === "string" && key.startsWith(SNAPSHOT_MAIN_JOURNAL_PREFIX)) { const raw = getLS(key); if (raw != null) list.push({ key, raw }); } }
+    return list.sort((a, b) => a.key.localeCompare(b.key));
+  }
+  function journalTarget(current, journal) {
+    if (current.hash === journal.baseHash && current.rev === journal.baseRev) return snapshotMainApplyJournal(current.raw, journal);
+    // Own in-flight commit may have completed immediately before the tab closed,
+    // before the newer journal could be rebased. One exact previous snapshot is retained.
+    const prior = current.prior;
+    if (current.writer === journal.tabId && prior && current.rev === journal.baseRev + 1 && prior.rev === journal.baseRev && prior.hash === journal.baseHash && prior.hash === snapshotMainHash(prior.raw)) return snapshotMainApplyJournal(prior.raw, journal);
+    return null;
+  }
+  function checkpoint(raw) {
+    if (mode !== "idb" || !record) return fail("not-ready");
+    try {
+      snapshotMainObject(raw); pendingRaw = raw;
+      if (snapshotMainBody(raw) === snapshotMainBody(record.raw) && scheduledCommits === 0) {
+        pendingRaw = null;
+        const old = getLS(ownJournalKey);
+        if (old) { const j = JSON.parse(old); if (j.tabId === tabId) removeLSIf(ownJournalKey, old); }
+        return { ok: true, skipped: true };
+      }
+      const journal = snapshotMainJournal(record.raw, raw, record.rev, tabId, stamp());
+      const text = JSON.stringify(journal);
+      putLS(ownJournalKey, text);
+      if (getLS(ownJournalKey) !== text) return fail("journal-verification-failed");
+      return { ok: true, bytes: text.length * 2 };
+    } catch (error) { return fail(error); }
+  }
+  function finishCheckpoint(raw, oldHash) {
+    try {
+      const text = getLS(ownJournalKey);
+      if (text) { const j = JSON.parse(text); if (j.targetHash === oldHash || j.targetHash === snapshotMainHash(raw)) removeLSIf(ownJournalKey, text); }
+      if (pendingRaw && snapshotMainBody(pendingRaw) === snapshotMainBody(raw) && scheduledCommits <= 1) pendingRaw = null;
+      if (pendingRaw) return checkpoint(pendingRaw);
+      return { ok: true };
+    } catch (error) { return fail(error); }
+  }
+  async function commitInner(raw, opts = {}) {
+    if (mode !== "idb" || !record) return fail("not-ready");
+    if (!allowed(opts)) return fail("not-owner");
+    let nextHash, expected, wrote;
+    try {
+      snapshotMainObject(raw); nextHash = snapshotMainHash(raw); expected = record;
+      if (opts.expectedRev !== undefined && opts.expectedRev !== expected.rev) return fail("stale");
+      wrote = await transaction(true, (table, result, stop) => {
+        const req = table.get("current");
+        req.onsuccess = () => {
+          try {
+            const current = req.result;
+            if (!current) return stop("missing");
+            validRecord(current);
+            if (!allowed(opts)) return stop("not-owner");
+            if (current.rev !== expected.rev || current.hash !== expected.hash || current.raw !== expected.raw) return stop("stale");
+            if (snapshotMainBody(raw) === snapshotMainBody(current.raw)) { result({ ...current, _skipped: true }); return; }
+            const next = { ...current, raw, hash: nextHash, rev: current.rev + 1, active: true, at: stamp(), writer: tabId, prior: { raw: current.raw, hash: current.hash, rev: current.rev } };
+            table.put(next, "current"); result(next);
+          } catch (error) { stop(error); }
+        };
+        req.onerror = () => stop(req.error);
+      });
+    } catch (error) {
+      // An ambiguous completion must be resolved by reading, never by reporting success early.
+      const name = error && (error.message || error.name);
+      if (expected && raw && name !== "stale" && name !== "missing" && name !== "corrupt" && name !== "not-owner") {
+        try { const check = await checkedCurrent(); if (check.raw === raw && check.rev === expected.rev + 1 && check.writer === tabId) wrote = check; } catch {}
+      }
+      if (!wrote) { if (name === "stale" || name === "missing" || name === "corrupt") notify(name); return fail(name || error); }
+    }
+    try {
+      const read = await checkedCurrent();
+      if (read.raw !== wrote.raw || read.rev !== wrote.rev || read.hash !== wrote.hash) { notify("stale"); return fail("stale"); }
+      cache(read);
+      const journal = finishCheckpoint(read.raw, nextHash);
+      try { putLS(SNAPSHOT_MAIN_SIGNAL_KEY, JSON.stringify({ rev: read.rev, hash: read.hash, tabId, at: read.at })); } catch { /* CAS and focus validation remain authoritative if notification storage is unavailable. */ }
+      return currentResult({ skipped: !!wrote._skipped, checkpoint: journal, pending: !!pendingRaw });
+    } catch (error) { return fail(error && error.message || error); }
+  }
+  async function recoverJournals() {
+    conflicts = [];
+    for (const entry of allJournals()) {
+      let j, payload = null;
+      try {
+        j = JSON.parse(entry.raw);
+        if (!j || j.fmt !== 1 || typeof j.tabId !== "string") throw new Error("invalid-journal");
+        if (j.targetHash === record.hash) { removeLSIf(entry.key, entry.raw); continue; }
+        payload = journalTarget(record, j);
+        if (!payload) {
+          // Keep a recoverable full candidate for the owner even when another writer won.
+          for (const candidate of [record.raw, record.prior && record.prior.raw]) {
+            if (typeof candidate === "string" && snapshotMainHash(candidate) === j.baseHash) { payload = snapshotMainApplyJournal(candidate, j); break; }
+          }
+          if (!payload) {
+            const legacy = await readKey("legacy-copy");
+            if (legacy && typeof legacy.raw === "string" && snapshotMainHash(legacy.raw) === j.baseHash) payload = snapshotMainApplyJournal(legacy.raw, j);
+          }
+          if (j.directRaw) { snapshotMainObject(j.directRaw); if (snapshotMainHash(j.directRaw) === j.targetHash) payload = j.directRaw; }
+          conflicts.push({ ...entry, kind: "journal", error: "journal-conflict", payload }); continue;
+        }
+        const result = await commitInner(payload);
+        if (!result.ok) throw new Error(result.error);
+        removeLSIf(entry.key, entry.raw);
+      } catch (error) { conflicts.push({ ...entry, kind: "journal", error: error && error.message || "invalid-journal", payload }); }
+    }
+    return conflicts.length === 0;
+  }
+  async function activatePending(value) {
+    const switched = await transaction(true, (table, result, stop) => {
+      const req = table.get("current");
+      req.onsuccess = () => { try { const cur = validRecord(req.result, false); if (cur.rev !== value.rev || cur.raw !== value.raw || cur.sourceHash !== value.sourceHash) return stop("stale"); const next = { ...cur, active: true }; table.put(next, "current"); result(next); } catch (e) { stop(e); } };
+      req.onerror = () => stop(req.error);
+    });
+    const verified = await checkedCurrent();
+    if (verified.raw !== switched.raw || verified.rev !== switched.rev) throw new Error("migration-verification-failed");
+    return verified;
+  }
+  function boot() { return serially(async () => {
+    if (closed) return fail("closed");
+    mode = "loading"; conflicts = []; recoveryRaw = null;
+    try {
+      const raw = getLS(SNAPSHOT_MAIN_KEY), marker = movedInfo(raw), sentinel = movedSentinel();
+      lsRaw = raw;
+      let current = await readKey("current");
+      if (!current) {
+        if (marker || sentinel) return blocked("missing", raw && !marker ? raw : null);
+        if (raw) snapshotMainObject(raw);
+        mode = "ls"; record = null; return currentResult();
+      }
+      recoveryRaw = typeof current.raw === "string" ? current.raw : null;
+      validRecord(current, false);
+      if (!current.active) {
+        if (marker && marker.db === SNAPSHOT_MAIN_DB && marker.src === current.sourceHash) current = await activatePending(current);
+        else if (marker || sentinel) return blocked("migration-incomplete", current.raw);
+        else { if (raw) snapshotMainObject(raw); mode = "ls"; record = null; return currentResult(); }
+      }
+      cache(current);
+      if (marker && marker.db !== SNAPSHOT_MAIN_DB) return blocked("different-database");
+      if (marker && marker.src !== current.sourceHash) return blocked("migration-marker-mismatch");
+      if (raw && !marker) {
+        let payload = null;
+        try { snapshotMainObject(raw); payload = raw; } catch {}
+        conflicts.push({ key: SNAPSHOT_MAIN_KEY, raw, payload, kind: "legacy", error: "legacy-conflict" });
+        return blocked("legacy-conflict");
+      }
+      // Repair only a missing marker. Never replace an unmarked full legacy payload silently.
+      if (!marker) putLS(SNAPSHOT_MAIN_KEY, markerFor(current));
+      putLS(SNAPSHOT_MAIN_MOVED_KEY, JSON.stringify({ db: SNAPSHOT_MAIN_DB, at: current.at, src: current.sourceHash }));
+      if (!await recoverJournals()) return blocked("journal-conflict");
+      return currentResult({ conflicts: [], conflictPayloads: [] });
+    } catch (error) { return blocked(error && error.message || error); }
+  }); }
+  function migrate(raw, opts = {}) { return serially(async () => {
+    if (closed) return fail("closed");
+    if (!allowed(opts)) return fail("not-owner");
+    try {
+      snapshotMainObject(raw);
+      const legacyRaw = Object.prototype.hasOwnProperty.call(opts, "expectedLegacyRaw") ? opts.expectedLegacyRaw : raw;
+      if (legacyRaw != null) snapshotMainObject(legacyRaw);
+      if (getLS(SNAPSHOT_MAIN_KEY) !== legacyRaw || movedInfo(legacyRaw)) return fail("stale");
+      const hash = snapshotMainHash(raw), legacyHash = legacyRaw == null ? null : snapshotMainHash(legacyRaw), at = stamp(), token = tabId + ":" + (++opN), source = { raw, hash, at };
+      let candidate = await transaction(true, (table, result, stop) => {
+        const req = table.get("current");
+        req.onsuccess = () => {
+          try {
+            if (!allowed(opts)) return stop("not-owner");
+            if (getLS(SNAPSHOT_MAIN_KEY) !== legacyRaw) return stop("stale");
+            const cur = req.result;
+            if (cur && cur.active) return stop("stale");
+            if (cur && (cur.sourceHash !== hash || cur.raw !== raw)) table.put({ ...cur, reason: "earlier-incomplete-migration" }, "rescue:migration:" + token);
+            const next = { raw, rev: 1, hash, active: false, at, sourceHash: hash, legacyHash, writer: tabId, migrationToken: token };
+            const old = table.get("legacy-copy");
+            old.onsuccess = () => {
+              if (!old.result && legacyRaw != null) table.put({ raw: legacyRaw, hash: legacyHash, at }, "legacy-copy");
+              else if (legacyRaw != null && old.result && old.result.raw !== legacyRaw) table.put({ raw: legacyRaw, hash: legacyHash, at, reason: "legacy-migration-source" }, "rescue:legacy:" + token);
+              if (raw !== legacyRaw) table.put({ ...source, reason: "latest-memory-migration-source" }, "rescue:source:" + token);
+              table.put(next, "current"); result(next);
+            };
+            old.onerror = () => stop(old.error);
+          } catch (error) { stop(error); }
+        };
+        req.onerror = () => stop(req.error);
+      });
+      let verify = await checkedCurrent(false);
+      if (verify.raw !== raw || verify.hash !== hash || verify.migrationToken !== token) return fail("migration-verification-failed");
+      if (!allowed(opts)) return fail("not-owner");
+      if (getLS(SNAPSHOT_MAIN_KEY) !== legacyRaw) return fail("stale");
+      const marker = markerFor(candidate);
+      putLS(SNAPSHOT_MAIN_KEY, marker);
+      // If this second write fails, the first marker still makes boot finish the verified migration.
+      putLS(SNAPSHOT_MAIN_MOVED_KEY, JSON.stringify({ db: SNAPSHOT_MAIN_DB, at, src: hash }));
+      if (!allowed(opts)) return fail("not-owner", { switched: true });
+      if (getLS(SNAPSHOT_MAIN_KEY) !== marker) return fail("legacy-conflict", { switched: true });
+      candidate = await activatePending(candidate);
+      cache(candidate);
+      return currentResult({ migrated: true });
+    } catch (error) { return fail(error && error.message || error); }
+  }); }
+  function readLatest() { return serially(async () => {
+    try { const value = await checkedCurrent(); return { ok: true, record: value, raw: value.raw, rev: value.rev, mode }; }
+    catch (error) { return fail(error && error.message || error); }
+  }); }
+  function checkExternal() { return serially(async () => {
+    if (mode !== "idb" || !record) return fail("not-ready");
+    try {
+      const value = await checkedCurrent();
+      if (value.rev !== record.rev || value.hash !== record.hash || value.raw !== record.raw) { notify("stale"); return fail("stale", { changed: true, rev: value.rev }); }
+      const raw = getLS(SNAPSHOT_MAIN_KEY), marker = movedInfo(raw);
+      if (raw && (!marker || marker.db !== SNAPSHOT_MAIN_DB)) { notify("stale"); return fail("stale", { changed: true }); }
+      return { ok: true, changed: false };
+    } catch (error) { notify(error && error.message || "storage-error"); return fail(error && error.message || error); }
+  }); }
+  function resolveConflictsToSaved(opts = {}) { return serially(async () => {
+    if (!allowed(opts)) return fail("not-owner");
+    if (!record || !conflicts.length) return fail("no-conflicts");
+    const copy = conflicts.slice(), expected = record;
+    try {
+      await transaction(true, (table, result, stop) => {
+        const req = table.get("current");
+        req.onsuccess = () => {
+          try {
+            const cur = validRecord(req.result);
+            if (!allowed(opts)) return stop("not-owner");
+            if (cur.rev !== expected.rev || cur.raw !== expected.raw) return stop("stale");
+            copy.forEach((item, i) => table.put({ ...item, at: stamp(), reason: "conflict-preserved" }, "rescue:conflict:" + tabId + ":" + (++opN) + ":" + i));
+            result(true);
+          } catch (error) { stop(error); }
+        };
+        req.onerror = () => stop(req.error);
+      });
+      if (!allowed(opts)) return fail("not-owner");
+      for (const item of copy) {
+        if (item.kind === "legacy") { if (getLS(item.key) === item.raw) putLS(item.key, markerFor(expected)); else return fail("stale"); }
+        else removeLSIf(item.key, item.raw);
+      }
+      conflicts = []; cache(expected); return currentResult();
+    } catch (error) { return fail(error && error.message || error); }
+  }); }
+  return {
+    get mode() { return mode; },
+    getRaw: () => record && (mode === "idb" || mode === "blocked") ? record.raw : lsRaw,
+    getRevision: () => record ? record.rev : 0,
+    info: () => ({ mode, rawBytes: ((record && record.raw || lsRaw || "").length * 2), revision: record ? record.rev : 0, pending: !!pendingRaw, conflicts: conflicts.length }),
+    boot, migrate, checkpoint,
+    commit: (raw, opts) => { scheduledCommits++; return serially(() => commitInner(raw, opts)).finally(() => { scheduledCommits--; }); },
+    flush: () => { scheduledCommits++; return serially(() => pendingRaw ? commitInner(pendingRaw) : currentResult({ skipped: true })).finally(() => { scheduledCommits--; }); },
+    readLatest, checkExternal,
+    listConflict: () => conflicts.slice(), resolveConflictsToSaved,
+    getLegacyCopy: () => serially(async () => { try { const value = await readKey("legacy-copy"); if (!value) return fail("missing-legacy-copy"); snapshotMainObject(value.raw); if (value.hash !== snapshotMainHash(value.raw)) return fail("corrupt"); return { ok: true, raw: value.raw, at: value.at }; } catch (error) { return fail(error && error.message || error); } }),
+    close: () => { closed = true; if (conn) conn.close(); conn = null; },
+  };
+}
+// END snapshot-main-store helpers
+
+// ─── BEGIN snapshot-main UI ───
+let activeSnapshotStore = null;
+let activeSnapshotRuntime = null;
+const snapshotMainText = (lang) => lang === "ja" ? {
+  loading: "保存データを確認しています…", blocked: "保存データを安全に開けませんでした", blockedHint: "データを上書きせずに停止しています。まず読み出せるデータを書き出し、再試行してください。",
+  retry: "再試行", export: "読み出せるデータを書き出す", conflict: "別のウィンドウの未保存データが残っています。コピーを保存してから、最後に保存済みのデータを開けます。",
+  recover: "未保存分を保管して保存済みデータを開く", rescue: "未保存コピーを書き出す", staff: "この端末の保存を確認する必要があります。店長に対応を依頼してください。",
+  upgrade: "保存容量を拡張", upgrading: "バックアップと保存先を確認しています。完了までこの画面を開いたままにしてください。", upgradeHint: "レシピや原料を削除せず、このブラウザ内の大容量データベースへ移します。元のデータは復旧用に保管します。",
+  main: "現在の主データ", site: "このサイト全体", estimateUnknown: "ブラウザから容量情報を取得できませんでした", siteHint: "サイト全体には画像・バックアップ・オフライン用ファイルも含まれます。主データの容量とは異なります。",
+  fail: "保存できませんでした。まず「データ」からフル出力してください。", changed: "確認中にデータが変わりました。最新の状態で再試行してください。", backupFail: "固定バックアップを保存できなかったため、移行を中止しました。先にフル出力してください。",
+  migrated: "保存先の移行が完了しました。再読み込みします。", idb: "大容量保存を使用中", old: "従来の保存領域", detail: "主データの内訳", unknown: "不明", resume: "保存済みデータを再確認",
+} : {
+  loading: "正在核对保存的数据…", blocked: "暂时无法安全打开存档", blockedHint: "已停止加载，避免覆盖现有数据。请先导出能读取的存档，再重试。",
+  retry: "重试", export: "导出可读取的存档", conflict: "发现其他窗口留下的未保存修改。可先保留这些副本，再打开最后保存成功的存档。",
+  recover: "保留未保存副本并打开已存档", rescue: "导出未保存副本", staff: "这台设备的保存需要核对，请店长处理。",
+  upgrade: "升级保存空间", upgrading: "正在备份并核对新的保存位置，请保持此页面打开。", upgradeHint: "把完整存档搬到此浏览器容量更大的数据库，配方和原料不用删。原存档会保留一份用于恢复。",
+  main: "当前主存档", site: "此网站总占用", estimateUnknown: "浏览器未提供可用的容量信息", siteHint: "网站总占用包括图片、备份和离线缓存，与单份主存档大小不同。",
+  fail: "保存失败，请先到「数据」页导出完整备份。", changed: "核对期间数据有变化，请用最新状态重试。", backupFail: "固定备份未能保存，已停止升级。请先导出完整备份。",
+  migrated: "保存空间已升级，即将刷新。", idb: "已使用扩展保存空间", old: "原有保存空间", detail: "主存档占用明细", unknown: "未知", resume: "重新核对已存档",
+};
+function snapshotPayloadOf(values, at = Date.now()) {
+  return JSON.stringify({ ...values, version: 17, savedAt: new Date(at).toISOString() });
+}
+function snapshotDownloadRaw(raw, name) {
+  if (typeof raw !== "string" || !raw) return false;
+  const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+  const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+function SnapshotBootGate() {
+  const [lang, setLang] = useState("zh");
+  const [boot, setBoot] = useState({ loading: true });
+  const [busy, setBusy] = useState(false);
+  const [staff, setStaff] = useState(readStaffMode);
+  const staffEpoch = useRef(0), bootPromise = useRef(null);
+  const [store] = useState(() => {
+    const created = createSnapshotMainStore({ indexedDB: typeof indexedDB !== "undefined" ? indexedDB : null, storage: typeof localStorage !== "undefined" ? localStorage : null,
+      onExternal: e => { if (activeSnapshotRuntime?.store === created) activeSnapshotRuntime.onExternal(e); } });
+    return created;
+  });
+  const U = snapshotMainText(lang);
+  const readBoot = async () => {
+    const result = await store.boot();
+    if (result.ok) {
+      try {
+        if (result.mode === "idb" && !result.raw) throw new Error("missing");
+        if (result.raw && !loadData(result.raw)) throw new Error("corrupt");
+      } catch (e) { return { ...result, ok: false, error: "corrupt" }; }
+    }
+    return result;
+  };
+  useEffect(() => {
+    let live = true;
+    if (!bootPromise.current) bootPromise.current = readBoot();
+    bootPromise.current.then(result => { if (live) setBoot(result); }, () => { if (live) setBoot({ ok: false, error: "unavailable" }); });
+    const onStaff = e => { if (e.key === STAFF_MODE_KEY || e.key === null) { staffEpoch.current++; setStaff(readStaffMode()); } };
+    window.addEventListener("storage", onStaff);
+    return () => { live = false; window.removeEventListener("storage", onStaff); };
+  }, []);
+  const retry = async () => {
+    setBusy(true);
+    try { const result = await readBoot(); setBoot(result); } catch (e) { setBoot({ ok: false, error: "unavailable" }); }
+    finally { setBusy(false); }
+  };
+  const recover = async () => {
+    const epoch = staffEpoch.current;
+    const allowed = () => !readStaffMode() && epoch === staffEpoch.current;
+    if (!allowed()) return;
+    setBusy(true);
+    try {
+      const result = await store.resolveConflictsToSaved({ ownerAllowed: allowed });
+      if (!allowed()) return;
+      if (result && result.ok) location.reload();
+      else setBoot(b => ({ ...b, error: result?.error || "recovery-failed" }));
+    } catch (e) { setBoot(b => ({ ...b, error: "recovery-failed" })); }
+    finally { setBusy(false); }
+  };
+  if (boot.ok) return <App mainStore={store} />;
+  const raw = typeof boot.raw === "string" ? boot.raw : store.getRaw();
+  const copies = Array.isArray(boot.conflictPayloads) ? boot.conflictPayloads.filter(x => x && typeof x.raw === "string" && x.raw) : [];
+  return <div style={{ minHeight: "100vh", background: T.paper, color: T.ink, colorScheme: "light", fontFamily: T.fontSans, padding: "40px 20px", boxSizing: "border-box" }}>
+    <style>{GLOBAL_CSS}</style>
+    <div style={{ maxWidth: 560, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 32 }}><Wordmark size={22} /><LangToggle lang={lang} onChange={setLang} /></div>
+      <div role="status" style={{ fontFamily: T.fontSerif, fontSize: 20 }}>{boot.loading ? U.loading : staff ? U.staff : U.blocked}</div>
+      {!boot.loading && !staff && <>
+        <p style={{ color: T.secondary, lineHeight: 1.7 }}>{U.blockedHint}</p>
+        {boot.conflicts?.length > 0 && <p style={{ lineHeight: 1.7 }}>{U.conflict}</p>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <Btn disabled={busy} onClick={retry}>{U.retry}</Btn>
+          {raw && <Btn disabled={busy} onClick={() => { if (!readStaffMode()) snapshotDownloadRaw(raw, "korora-readable-snapshot.json"); }}>{U.export}</Btn>}
+          {copies.map((copy, i) => <Btn key={i} disabled={busy} onClick={() => { if (!readStaffMode()) snapshotDownloadRaw(copy.raw, `korora-unsaved-copy-${i + 1}.json`); }}>{U.rescue} {i + 1}</Btn>)}
+          {boot.conflicts?.length > 0 && <Btn disabled={busy} variant="primary" onClick={recover}>{U.recover}</Btn>}
+        </div>
+      </>}
+      {!boot.loading && staff && <div style={{ marginTop: 16 }}><Btn disabled={busy} onClick={retry}>{U.resume}</Btn></div>}
+    </div>
+  </div>;
+}
+async function restoreSnapshotMainPayload(payload, { lang, showToast, ownerAllowed }) {
+  const store = activeSnapshotStore, runtime = activeSnapshotRuntime;
+  if (!ownerAllowed() || !store || store.mode !== "idb" || !runtime || runtime.store !== store) return;
+  let completed = false;
+  runtime.lock(true);
   try {
-    const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    const flushed = await runtime.flush();
+    if (!ownerAllowed()) return;
+    if (!flushed?.ok || flushed.suspended) throw new Error("save");
+    const latest = await store.readLatest();
+    if (!ownerAllowed()) return;
+    if (!latest?.ok || typeof latest.raw !== "string") throw new Error("read");
+    const pinned = await addBackupSnapshot(latest.raw, null, { pinned: true, reason: "restore" });
+    if (!ownerAllowed()) return;
+    if (!pinned) throw new Error("backup");
+    _suspendSaves = true;
+    const restored = await store.commit(payload, { expectedRev: latest.rev, ownerAllowed });
+    if (!restored?.ok) throw new Error(restored?.error || "restore");
+    completed = true; runtime.allowReload();
+    if (ownerAllowed()) showToast(lang === "zh" ? "✓ 恢复成功，即将刷新" : "✓ 復元完了、再読み込み中");
+    setTimeout(() => location.reload(), 300);
+  } catch (error) {
+    if (ownerAllowed()) showToast(lang === "zh" ? "恢复没有完成，原存档仍保留。请先导出完整备份，再重试。" : "復元できませんでした。元のデータは保持されています。フル出力してから再試行してください。");
+  } finally {
+    if (!completed) { _suspendSaves = false; runtime.lock(false); }
+  }
+}
+// ─── END snapshot-main UI ───
+
+function loadData(rawOverride) {
+  const supplied = arguments.length > 0;
+  try {
+    const d = JSON.parse((supplied ? rawOverride : localStorage.getItem(STORAGE_KEY)) || "null");
     if (d && (d.recipes || d.cats)) {
       // v11 迁移
       if (!d.version || d.version < 11) {
@@ -5860,7 +6402,8 @@ function loadData() {
       }
       return d;
     }
-  } catch (e) {}
+  } catch (e) { if (supplied) throw e; }
+  if (supplied && rawOverride) throw new Error("invalid-main-snapshot");
   return null;
 }
 
@@ -5882,13 +6425,22 @@ function lsHasMovedTo(raw) {
 }
 function unfreeze(raw) { const o = JSON.parse(raw); delete o.movedTo; return JSON.stringify(o); }   // 去掉 movedTo,键顺序不变
 function saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, opts = {}) {
-  if (_suspendSaves) return { ok: true, skipped: true };
+  if (_suspendSaves) return { ok: true, skipped: true, suspended: true };
   try {
     // 2026-09-29:内容(不含 savedAt)和上次写入 / 载入时一样就不写 —— 每写一次,同源的其他窗口都会收到 storage 事件、
     // 被判成「过期」停止保存;以前新开或刷新一个窗口就会把另一个正在用的窗口踢成过期(内容其实一样)。顺带不再存重复的备份
     const body = JSON.stringify({ recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, version: 17 });
-    if (opts.lastBody && opts.lastBody.current === body) return { ok: true, size: body.length, skipped: true };
-    const payload = body.slice(0, -1) + ',"savedAt":' + JSON.stringify(new Date().toISOString()) + "}";
+    if (!opts.mainStore && opts.lastBody && opts.lastBody.current === body) return { ok: true, size: body.length, skipped: true };
+    const payload = opts.raw || body.slice(0, -1) + ',"savedAt":' + JSON.stringify(new Date().toISOString()) + "}";
+    if (opts.mainStore && opts.mainStore.mode === "idb") {
+      return Promise.resolve(opts.mainStore.commit(payload)).then(res => {
+        if (res && res.ok) {
+          if (opts.lastBody) opts.lastBody.current = body;
+          if (!res.skipped) addBackupSnapshot(payload, { recipes, components, creations, materials, brands, knowledge });
+        }
+        return res;
+      }, error => ({ ok: false, error: error?.message || "save" }));
+    }
     localStorage.setItem(STORAGE_KEY, payload);
     if (opts.lastBody) opts.lastBody.current = body;
     // 自动备份到 IndexedDB (fire-and-forget,失败不影响主流程)
@@ -7717,6 +8269,7 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note, own
         try { const o = payload && JSON.parse(payload); if (o && !o.recipes && !o.cats) payload = null; } catch (e) { payload = null; }
       }
       if (!payload) { showToast(lang === "zh" ? "⚠️ 这份备份读不出来,没有恢复" : "⚠️ バックアップを読み込めませんでした"); return; }
+      if (activeSnapshotStore?.mode === "idb") return await restoreSnapshotMainPayload(payload, { lang, showToast, ownerAllowed });
       const doRestore = () => {
         if (!ownerAllowed()) return;
         if (_movedAway) { movedAwayToast(); return; }
@@ -7755,42 +8308,66 @@ function restoreBackupSnapshot(snap, { lang, showToast, confirmDialog, note, own
 // ─── 第 6 批第 0 步:数据页「💾 本地存储用量」卡(从 App 里原样抽出来,DOM 一样;D 线改主数字,extraRows 留给以后 E4「其中本机草稿 N 份」)───
 // D 线(plan 决定 40):按实际算 —— 全部 localStorage 键的字数(主存档只算内容,LS_QUOTA_CHARS_EST 已经扣掉它的键名)、每字 2 字节、配额按 iPad Safari 约 5 MB 估;
 // 快满时写清该做什么;persistLine = 持久存储那一行(R47,App 传 persistLineOf 的结果,null 不画)
-function StorageMeterCard({ lang, extraRows = null, persistLine = null }) {
-  let used = 0;
+function StorageMeterCard({ lang, extraRows = null, persistLine = null, mainStore = null, onUpgrade, upgradeBusy = false }) {
+  const snapshotMode = mainStore?.mode === "idb";
+  const U = snapshotMainText(lang), oldText = devUiTxt(lang);
+  let used = 0, raw = null;
   try {
+    raw = snapshotMode ? mainStore.getRaw() : localStorage.getItem(STORAGE_KEY);
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
       if (k === null || k === undefined) continue;
       used += String(localStorage.getItem(k) || "").length + (k === STORAGE_KEY ? 0 : String(k).length);
     }
   } catch {}
-  const { usedMB, limitMB, pct, level } = storageMeterOf(used);
-  const color = level === "danger" ? T.danger : level === "warning" ? T.warning : T.success;
-  const bg = level === "danger" ? T.dangerBg : level === "warning" ? T.warningBg : T.successBg;
-  const U = devUiTxt(lang), q = Math.round(limitMB);
-  return (
-    <div style={{ background: bg, border: `0.5px solid ${color}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>
-          {lang === "zh" ? "💾 本地存储用量" : "💾 ローカル使用量"}
-        </div>
-        <div data-b6="meter-main" style={{ fontSize: 12, color, fontWeight: 500, overflowWrap: "anywhere" }}>
-          {devFill(U.meterMain, { x: usedMB.toFixed(2), q, p: pct.toFixed(0) })}
-        </div>
+  const [estimate, setEstimate] = useState(null);
+  useEffect(() => {
+    let live = true;
+    if (snapshotMode && typeof navigator !== "undefined" && navigator.storage?.estimate) {
+      Promise.resolve(navigator.storage.estimate()).then(result => { if (live) setEstimate(result); }, () => { if (live) setEstimate(null); });
+    }
+    return () => { live = false; };
+  }, [snapshotMode, raw]);
+  const oldMeter = storageMeterOf(used);
+  const usage = typeof estimate?.usage === "number" && Number.isFinite(estimate.usage) && estimate.usage >= 0 ? estimate.usage : null;
+  const quota = typeof estimate?.quota === "number" && Number.isFinite(estimate.quota) && estimate.quota > 0 ? estimate.quota : null;
+  const pct = snapshotMode ? (usage !== null && quota !== null ? Math.min(100, usage / quota * 100) : null) : oldMeter.pct;
+  const level = pct === null ? "unknown" : pct >= 95 ? "danger" : pct > 80 ? "warning" : "ok";
+  const color = level === "danger" ? T.danger : level === "warning" ? T.warning : level === "unknown" ? T.textSecondary : T.success;
+  const bg = level === "danger" ? T.dangerBg : level === "warning" ? T.warningBg : level === "unknown" ? T.bgSoft : T.successBg;
+  const mb = n => (n / (1024 * 1024)).toFixed(2);
+  const bytesOf = text => snapshotMode ? new Blob([text]).size : text.length * 2;
+  let detail = [];
+  try {
+    const value = raw && JSON.parse(raw);
+    if (value && !value.movedTo) detail = IMPORT_ENTITY_LABELS.filter(([key]) => Array.isArray(value[key])).map(([key, zh, ja]) => ({ key, label: lang === "zh" ? zh : ja, bytes: bytesOf(JSON.stringify(value[key])) })).sort((a, b) => b.bytes - a.bytes);
+  } catch {}
+  return <div data-storage-mode={snapshotMode ? "idb" : "ls"} style={{ background: bg, border: `0.5px solid ${color}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem", marginBottom: "1rem" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: T.textPrimary }}>{lang === "zh" ? "💾 本地存储用量" : "💾 ローカル使用量"}</div>
+      <div data-b6="meter-main" style={{ fontSize: 12, color, fontWeight: 500, overflowWrap: "anywhere" }}>
+        {snapshotMode ? U.idb : devFill(oldText.meterMain, { x: oldMeter.usedMB.toFixed(2), q: Math.round(oldMeter.limitMB), p: oldMeter.pct.toFixed(0) })}
       </div>
-      <div style={{ background: T.bgMuted, height: 6, borderRadius: 3, overflow: "hidden" }}>
-        <div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.3s" }} />
-      </div>
-      {pct > 80 && (
-        <div data-b6="meter-full" style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>
-          {devFill(U.meterFull, { q })}
-        </div>
-      )}
-      {persistLine && <div data-b6="persist-line" style={{ fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.6 }}>{persistLine}</div>}
-      {extraRows}
     </div>
-  );
+    {snapshotMode && <div style={{ fontSize: 13, color: T.textPrimary, marginBottom: 8 }}>{U.main}：{raw ? `${mb(bytesOf(raw))} MB` : U.unknown}</div>}
+    {pct !== null && <div style={{ background: T.bgMuted, height: 6, borderRadius: 3, overflow: "hidden" }}><div style={{ background: color, height: "100%", width: `${pct}%`, transition: "width 0.3s" }} /></div>}
+    {snapshotMode ? <div style={{ fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.6 }}>
+      <div>{usage !== null ? `${U.site}：${mb(usage)} MB${quota !== null ? ` / ${mb(quota)} MB` : ""}` : U.estimateUnknown}</div>
+      <div>{U.siteHint}</div>
+    </div> : <>
+      {pct > 80 && <div data-b6="meter-full" style={{ fontSize: 11, color: T.danger, marginTop: 8, lineHeight: 1.6 }}>{devFill(oldText.meterFull, { q: Math.round(oldMeter.limitMB) })}</div>}
+      <p style={{ fontSize: 12, color: T.textSecondary, lineHeight: 1.7, margin: "10px 0" }}>{U.upgradeHint}</p>
+      {onUpgrade && <Btn variant="primary" disabled={upgradeBusy} onClick={onUpgrade}>{U.upgrade}</Btn>}
+    </>}
+    {detail.length > 0 && <details style={{ marginTop: 12, fontSize: 12, color: T.textSecondary }}>
+      <summary style={{ cursor: "pointer" }}>{U.detail}</summary>
+      <div style={{ marginTop: 8 }}>{detail.map(row => <div key={row.key} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "3px 0" }}><span>{row.label}</span><span>{lang === "zh" ? "约 " : "約 "}{mb(row.bytes)} MB</span></div>)}</div>
+    </details>}
+    {persistLine && <div data-b6="persist-line" style={{ fontSize: 11, color: T.textSecondary, marginTop: 8, lineHeight: 1.6 }}>{persistLine}</div>}
+    {extraRows}
+  </div>;
 }
+
 // ─── 第 6 批第 0 步:数据页「上次合并 / 覆盖导入的结果」卡(从 App 里原样抽出来,DOM 一样;I 线加持久、notes、备份行、更早的几次)───
 // 第 6 批 I 线(spec_merge_plan R42 到 R44):报告存在 korora_safety 的 reports 表,刷新后还在;老的几行 DOM 和以前一样,新行一律带 data-b6
 // (而且不是「只有一个文字子节点的 div」—— 老测试按这个认报告行)。可选 props:history = reportAll() 的结果(「更早的 n 次」),
@@ -27102,9 +27679,40 @@ function ShopMatOrderFields({ editing, setEditing, suppliers, lang, inputStyle }
 // 第 6 批第 0 步:多可选 props openTarget / onOpened / returnLabel / onReturn(PA 接:从采购页跳进来编辑某一条、返回键写「← 回采购单」)
 // PA:openTarget = { id }(打开那一条)/ { newMaterialId }(这个材料还不是本店原料 → 新建;已经是 → 打开那一条);打开以后调 onOpened(App 清掉 openTarget)。
 // 这样打开的编辑页,保存 / 取消 / 删除以后调 onReturn(回采购单),返回键写 returnLabel;在列表里自己点开的不回
+// ─── BEGIN shop-material list search ───
+// 只读列表索引：不写本店价/历史/下单设置。空查询保持原数组顺序；多个词可以分别命中不同字段。
+function shopMaterialListTerms(query) {
+  return [...new Set(String(query == null ? "" : query).split(/[\s,，、;；]+/).map(normSearch).filter(Boolean))];
+}
+function shopMaterialListRows(shopMaterials, materials, brands, suppliers) {
+  const matById = materialMapOf(materials), brandKeys = brandKeyMapOf(brands), supById = new Map();
+  (suppliers || []).forEach(s => { if (s && !supById.has(s.id)) supById.set(s.id, s); });
+  return (shopMaterials || []).filter(sm => sm && typeof sm === "object").map(sm => {
+    const mat = matById.get(sm.materialId);
+    const linkedSuppliers = (Array.isArray(sm.supplierIds) ? sm.supplierIds : []).map(id => supById.get(id)).filter(Boolean);
+    return {
+      sm, mat,
+      categoryId: getMaterialCat(mat && mat.categoryId).id,
+      supplierIds: linkedSuppliers.map(s => String(s.id)),
+      keys: [...materialSearchKeys(mat), ...[sm.orderName, sm.note, !mat ? sm.materialId : "", ...linkedSuppliers.map(s => s.name)].map(normSearch).filter(Boolean)],
+      brandKeys: mat ? (brandKeys.get(mat.brandId) || []) : [],
+    };
+  });
+}
+function shopMaterialListMatch(row, terms, category = "", supplier = "") {
+  if (category && row.categoryId !== category) return false;
+  if (supplier === "none" ? row.supplierIds.length > 0 : supplier && !row.supplierIds.some(id => "id:" + id === supplier)) return false;
+  return terms.every(term => row.keys.some(key => key.includes(term)) || (term.length >= 2 && row.brandKeys.some(key => key.includes(term))));
+}
+// ─── END shop-material list search ───
+
 function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands, suppliers = [], recipes = [], components = [], creations = [], lang, showToast, confirmDialog,
   openTarget, onOpened, returnLabel, onReturn }) {
   const [search, setSearch] = useState("");
+  // 主列表查询只留在内存；与「从百科添加」选择器分开，编辑返回仍保留条件。
+  const [listQuery, setListQuery] = useState("");
+  const [listCategory, setListCategory] = useState("");
+  const [listSupplier, setListSupplier] = useState("");
   const [catFilter, setCatFilter] = useState(null);
   const [picker, setPicker] = useState(false);
   const [editing, setEditing] = useState(null); // { id, materialId, pricePerG, packSize?, casePack?, note?, _new? }
@@ -27335,6 +27943,20 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
   }
 
   // ─── 主列表 ───
+  const listRows = shopMaterialListRows(shopMaterials, materials, brands, suppliers);
+  const listTerms = shopMaterialListTerms(listQuery);
+  const filteredRows = listRows.filter(row => shopMaterialListMatch(row, listTerms, listCategory, listSupplier));
+  const usedSupplierIds = new Set(listRows.flatMap(row => row.supplierIds));
+  const listSuppliers = suppliers.filter(s => s && usedSupplierIds.has(String(s.id)));
+  const hasListFilters = !!(listTerms.length || listCategory || listSupplier);
+  const clearListFilters = () => { setListQuery(""); setListCategory(""); setListSupplier(""); };
+  const selectedSupplier = listSuppliers.find(s => "id:" + String(s.id) === listSupplier);
+  const filterChips = [
+    ...(listTerms.length ? [{ label: "「" + listQuery.trim() + "」", onRemove: () => setListQuery("") }] : []),
+    ...(listCategory ? [{ label: lang === "zh" ? getMaterialCat(listCategory).zh : getMaterialCat(listCategory).ja, onRemove: () => setListCategory("") }] : []),
+    ...(listSupplier ? [{ label: listSupplier === "none" ? (lang === "zh" ? "未指定供货商" : "仕入先未指定") : (selectedSupplier ? selectedSupplier.name : (lang === "zh" ? "供货商" : "仕入先")), onRemove: () => setListSupplier("") }] : []),
+  ];
+  const filterInputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box", minHeight: 40, padding: "8px 10px", border: `0.5px solid ${T.border}`, borderRadius: T.radiusSm, fontSize: 14, fontFamily: T.fontSans, background: T.bgCard, color: T.textPrimary };
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
@@ -27349,6 +27971,41 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
         </Btn>
       </div>
 
+      {shopMaterials.length > 0 && <div data-shop-material-filters="" style={{ marginBottom: 16 }}>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <span style={{ display: "block", fontSize: 12, color: T.textSecondary, marginBottom: 5 }}>{lang === "zh" ? "查找本店原料" : "仕入れ原料を検索"}</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="search" value={listQuery} onChange={e => setListQuery(e.target.value)}
+              aria-label={lang === "zh" ? "搜索本店原料" : "仕入れ原料を検索"}
+              placeholder={lang === "zh" ? "名称、品牌、供货商、备注…" : "名前・ブランド・仕入先・メモ…"}
+              style={{ ...filterInputStyle, flex: 1 }} />
+            {listQuery && <Btn size="sm" onClick={() => setListQuery("")}>{lang === "zh" ? "清空" : "クリア"}</Btn>}
+          </div>
+        </label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <label style={{ flex: "1 1 150px", minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 12, color: T.textSecondary, marginBottom: 5 }}>{lang === "zh" ? "分类" : "分類"}</span>
+            <select aria-label={lang === "zh" ? "原料分类" : "原料の分類"} value={listCategory} onChange={e => setListCategory(e.target.value)} style={filterInputStyle}>
+              <option value="">{lang === "zh" ? "全部分类" : "すべての分類"}</option>
+              {MATERIAL_CATEGORIES.map(c => <option key={c.id} value={c.id}>{lang === "zh" ? c.zh : c.ja}</option>)}
+            </select>
+          </label>
+          <label style={{ flex: "1 1 150px", minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 12, color: T.textSecondary, marginBottom: 5 }}>{lang === "zh" ? "供货商" : "仕入先"}</span>
+            <select aria-label={lang === "zh" ? "筛选供货商" : "仕入先で絞り込み"} value={listSupplier} onChange={e => setListSupplier(e.target.value)} style={filterInputStyle}>
+              <option value="">{lang === "zh" ? "全部供货商" : "すべての仕入先"}</option>
+              <option value="none">{lang === "zh" ? "未指定供货商" : "仕入先未指定"}</option>
+              {listSuppliers.map(s => <option key={s.id} value={"id:" + String(s.id)}>{s.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          <span role="status" style={{ fontSize: 12, color: T.textSecondary }}>{lang === "zh" ? `显示 ${filteredRows.length} / 共 ${shopMaterials.length} 条` : `${filteredRows.length} / 全 ${shopMaterials.length} 件`}</span>
+          {hasListFilters && <Btn size="sm" variant="ghost" onClick={clearListFilters}>{lang === "zh" ? "清除筛选" : "絞り込みを解除"}</Btn>}
+        </div>
+        <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 5 }}>{lang === "zh" ? "可搜中 / 日 / 法文、别名和下单叫法；多个词用空格分开，例如「安佳 奶油」。" : "中・日・仏名、別名、発注名でも検索できます。複数の語は空白で区切ると、すべての語を含む原料に絞れます。"}</div>
+      </div>}
+
       {shopMaterials.length === 0 ? (
         <div style={{ background: T.bgSoft, borderRadius: T.radius, padding: "40px 20px", textAlign: "center" }}>
           <div style={{ fontSize: 13, color: T.textSecondary, lineHeight: 1.8 }}>
@@ -27358,17 +28015,21 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
             }
           </div>
         </div>
+      ) : filteredRows.length === 0 ? (
+        <EmptyState variant="filter" lang={lang}
+          title={lang === "zh" ? "没有符合条件的本店原料" : "条件に合う仕入れ原料がありません"}
+          hint={lang === "zh" ? "试试少填一个关键词，或取消分类、供货商筛选。" : "検索語を減らすか、分類・仕入先の絞り込みを解除してください。"}
+          chips={filterChips} onClearAll={clearListFilters} />
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
-          {shopMaterials.map(sm => {
-            const mat = materials.find(m => m.id === sm.materialId);
+          {filteredRows.map(({ sm, mat }) => {
             const brand = mat && brands.find(b => b.id === mat.brandId);
             const refPrice = (mat && mat.priceRange && mat.priceRange.mid) || (mat && mat.pricePerG);
             // v17: 只有同币种才比得了 —— 本店价人民币 vs 百科日元,两个数直接相减没有意义
             const diff = (sm.pricePerG && refPrice && mat && curOf(sm) === curOf(mat))
               ? (parseFloat(sm.pricePerG) - parseFloat(refPrice)) : null;
             return (
-              <div key={sm.id} onClick={() => setEditing({ ...sm })} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div key={sm.id} data-shop-material-id={sm.id} onClick={() => setEditing({ ...sm })} style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radius, padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>
                     {mat ? mLabel(mat) : <span style={{ color: T.danger }}>{lang === "zh" ? "⚠️ 关联的材料已经删掉了" : "⚠️ 材料なし"}<TapTip tipId="deleted-material" text={lang === "zh" ? `编号 ${sm.materialId}` : `番号 ${sm.materialId}`} lang={lang} /></span>}
@@ -36874,14 +37535,18 @@ export default function AppRoot() {
     try { return localStorage.getItem(RURU_V1_PWD_KEY) === "true"; } catch { return false; }
   });
   if (!pwdOk) return <PasswordGate onUnlock={() => setPwdOk(true)} />;
-  return <App />;
+  return <SnapshotBootGate />;
 }
 
 // ─── Main App ─────────────────────────────────────────────────────
-function App() {
+function App({ mainStore = null } = {}) {
+  const snapshotMode = mainStore?.mode === "idb";
+  activeSnapshotStore = mainStore;
+  if (snapshotMode) _movedAway = false;
+  else activeSnapshotRuntime = null;
   // 2026-09-29 体检第 2 批:以前 const stored = loadData() 写在函数体里,App 每重画一次就把整份存档(约 186 万字)重新解析一遍;
   // 现在只在第一次渲染读一次,下面各 useState 的初值也改成惰性函数(只在第一次算)
-  const [stored] = useState(loadData);
+  const [stored] = useState(() => snapshotMode ? loadData(mainStore.getRaw()) : loadData());
   // 删掉过的预置条目(见 mergeWithDefaults / 下面的 dismissedSeedIds effect)
   const [dismissedSeeds] = useState(() => new Set(Array.isArray(stored?.appSettings?.dismissedSeedIds) ? stored.appSettings.dismissedSeedIds : []));
   // v1 内测: 默认种子 = 今天录入的 Framboisier + Caramel Abricot 全套
@@ -37159,10 +37824,10 @@ function App() {
   const lastBodyRef = useRef(undefined);
   if (lastBodyRef.current === undefined) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = snapshotMode ? mainStore.getRaw() : localStorage.getItem(STORAGE_KEY);
       lastBodyRef.current = storageBodyOf(raw);
       // big-2 第 −1 步(规格 R113):数据已经搬进新库 → 一打开就停止保存、出红条(数据照样显示,任何保存都不写)
-      if (lsHasMovedTo(raw)) { _movedAway = true; staleRef.current = true; }
+      if (!snapshotMode && lsHasMovedTo(raw)) { _movedAway = true; staleRef.current = true; }
     } catch (e) { lastBodyRef.current = null; }
   }
   // staleWindow:false / true(别的窗口改过)/ "moved"(数据搬进新库了,红条换说法)
@@ -37172,6 +37837,7 @@ function App() {
   valuesRef.current = { recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings };
   useEffect(() => {
     const onStorage = (e) => {
+      if (snapshotMode) { checkSnapshot(); return; }
       // big-2 第 −1 步(规格 R114):别的窗口(新版)把数据搬进新库了。手里有还没存的改动 → 先存成固定备份「旧版窗口存的」(不等),再停止保存
       if (e.key === STORAGE_KEY && lsHasMovedTo(e.newValue)) {
         if (pendingRef.current) {
@@ -37185,8 +37851,18 @@ function App() {
       if (e.key === STORAGE_KEY && storageBodyOf(e.newValue) === lastBodyRef.current) return;
       staleRef.current = true; setStaleWindow(s => s === "moved" ? s : true);   // 已经是「搬走了」就不换回「别的窗口改过」
     };
+    let live = true;
+    const checkSnapshot = () => {
+      if (!snapshotMode || staleRef.current || _suspendSaves) return;
+      Promise.resolve(mainStore.checkExternal()).then(result => {
+        if (live && result && (!result.ok || result.changed)) markStoreStale(result.error || "stale");
+      }, () => { if (live) markStoreStale("unavailable"); });
+    };
+    const onVisibleSnapshot = () => { if (document.visibilityState !== "hidden") checkSnapshot(); };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("focus", checkSnapshot);
+    document.addEventListener("visibilitychange", onVisibleSnapshot);
+    return () => { live = false; window.removeEventListener("storage", onStorage); window.removeEventListener("focus", checkSnapshot); document.removeEventListener("visibilitychange", onVisibleSnapshot); };
   }, []);
   // 2026-09-29 体检第 2 批(新功能):App 更新以后,以前要关掉重开才换上新版,她不知道自己用的是旧版。
   // 离线缓存(src/sw.js)下载好新版会 skipWaiting + clients.claim,页面收到 controllerchange ——
@@ -37215,67 +37891,168 @@ function App() {
     window.addEventListener("focus", onVisible);
     return () => { sw.removeEventListener("controllerchange", onChange); clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", onVisible); };
   }, []);
-  const doSave = () => staleRef.current
-    ? { ok: false, error: "stale" }
-    : saveData(recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, { lastBody: lastBodyRef });
-  // 刚改完 0.8 秒内就关页面 / 切走 iPad,防抖计时器来不及跑,最后一次修改会丢:离开时立刻存一次
-  const saveNowRef = useRef(doSave);
-  saveNowRef.current = doSave;
-  const pendingRef = useRef(false);   // 有没有还没写进去的改动;没有就不在离开时写(每写一次都会让别的窗口变成「过期」)
+  const saveSeqRef = useRef(0), saveSnapshotRef = useRef(null), activeSavePromiseRef = useRef(null), activeSaveSeqRef = useRef(null);
+  const pendingRef = useRef(false), urgentSaveRef = useRef(false), allowUnloadRef = useRef(false);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const storageBusyRef = useRef(false); storageBusyRef.current = storageBusy;
+  const markStoreStale = (error = "stale") => {
+    staleRef.current = true;
+    setStaleWindow(true);
+    setSaveState({ status: "error", at: null, reason: "stale", storeError: error });
+  };
+  const captureSaveSnapshot = () => {
+    const body = JSON.stringify({ ...valuesRef.current, version: 17 });
+    let snap = saveSnapshotRef.current;
+    if (!snap || snap.body !== body) {
+      const at = Date.now();
+      snap = { seq: ++saveSeqRef.current, body, raw: body.slice(0, -1) + ',"savedAt":' + JSON.stringify(new Date(at).toISOString()) + "}", at };
+      saveSnapshotRef.current = snap;
+    }
+    if (snapshotMode && !staleRef.current && !_suspendSaves) {
+      const checkpoint = mainStore.checkpoint(snap.raw);
+      snap.checkpointError = checkpoint && !checkpoint.ok ? checkpoint.error : null;
+    }
+    return snap;
+  };
+  const settleSave = (snap, result) => {
+    const res = result || { ok: false, error: "save" };
+    if (res.error === "stale" || ["missing", "corrupt", "versionchange"].includes(res.error)) markStoreStale(res.error);
+    if (snap.seq !== saveSnapshotRef.current?.seq) return res;
+    if (res.ok && !res.suspended && !_suspendSaves && !staleRef.current) {
+      pendingRef.current = false;
+      // 这份快照拍下以后产生的回收站还原，不能被较早快照的异步完成提前结算。
+      setSaveState({ status: "saved", at: new Date(snap.at) });
+    } else if (!res.suspended && !_suspendSaves) {
+      setSaveState(staleRef.current ? { status: "error", at: null, reason: _movedAway ? "moved" : "stale" }
+        : { status: "error", at: null, msg: snapshotMainText(lang).fail });
+    }
+    return res;
+  };
+  const doSave = () => {
+    if (staleRef.current) return { ok: false, error: "stale" };
+    if (_suspendSaves) return { ok: true, skipped: true, suspended: true };
+    const snap = captureSaveSnapshot();
+    if (snapshotMode && activeSaveSeqRef.current === snap.seq && activeSavePromiseRef.current) return activeSavePromiseRef.current;
+    pendingRef.current = true;
+    const v = valuesRef.current;
+    const result = saveData(v.recipes, v.cats, v.components, v.creations, v.knowledge, v.brands, v.materials, v.printSettings, v.customCompCats, v.productFamilies, v.shopMaterials, v.products, v.salesLog, v.productionLog, v.suppliers, v.appSettings,
+      { lastBody: lastBodyRef, mainStore: snapshotMode ? mainStore : null, raw: snap.raw, body: snap.body });
+    if (!result || typeof result.then !== "function") return settleSave(snap, result);
+    activeSaveSeqRef.current = snap.seq;
+    const p = Promise.resolve(result).then(res => settleSave(snap, res), error => settleSave(snap, { ok: false, error: error?.message || "save" }));
+    activeSavePromiseRef.current = p;
+    p.finally(() => { if (activeSavePromiseRef.current === p) { activeSavePromiseRef.current = null; activeSaveSeqRef.current = null; } });
+    return p;
+  };
+  const saveNowRef = useRef(doSave); saveNowRef.current = doSave;
+  const retrySave = () => {
+    if (staleRef.current || _suspendSaves) return doSave();
+    setSaveState(s => ({ ...s, status: "saving" }));
+    return doSave();
+  };
+  const flushLatestSnapshot = async () => {
+    let result;
+    for (let n = 0; n < 3; n++) {
+      result = await saveNowRef.current();
+      if (!result?.ok || !pendingRef.current) return result;
+    }
+    return { ok: false, error: "pending" };
+  };
+  if (snapshotMode) activeSnapshotRuntime = {
+    store: mainStore, flush: flushLatestSnapshot, lock: setStorageBusy, onExternal: e => markStoreStale(e?.error),
+    allowReload: () => { allowUnloadRef.current = true; }, getSnapshot: () => snapshotPayloadOf(valuesRef.current),
+  };
   useEffect(() => {
     const flush = () => {
-      if (staleRef.current || !pendingRef.current) return;
+      if (_suspendSaves || staleRef.current || !pendingRef.current) return;
+      // checkpoint 在异步提交之前同步写完，关闭页面也可从日志恢复。
       const res = saveNowRef.current();
-      if (res && res.ok) pendingRef.current = false;
+      if (res && typeof res.catch === "function") res.catch(() => {});
     };
     const onVis = () => { if (document.visibilityState === "hidden") flush(); };
-    window.addEventListener("pagehide", flush);
+    const beforeUnload = e => {
+      if (!snapshotMode || allowUnloadRef.current || _suspendSaves || !pendingRef.current) return;
+      flush(); e.preventDefault(); e.returnValue = "";
+    };
+    window.addEventListener("pagehide", flush); window.addEventListener("beforeunload", beforeUnload);
     document.addEventListener("visibilitychange", onVis);
-    return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", onVis); };
+    return () => { window.removeEventListener("pagehide", flush); window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("visibilitychange", onVis); };
   }, []);
-  // 2026-09-29 体检第 2 批:覆盖导入 / 清除全部之前存一份「固定」备份(不参与自动轮换)。
-  // 先把还没写进去的改动写掉,再拿存档里的内容备份。返回 true = 存上了
-  // big-2 第 −1 步复查(recheck-md-3):数据已经搬进新库的旧窗口(或存档已经是搬家标记、storage 事件还没到)—— 存档是标记,
-  // 存成固定备份只占一格、恢复了也读不出来;清掉 / 导入也存不进去。toast 后返回 "moved",三个调用方整件事不做
   const pinBackupNow = async (reason, out) => {
+    // 必须在第一个 await 之前取完整内存快照：合并导入调用本函数后立即 setState。
+    const captured = snapshotMode ? snapshotPayloadOf(valuesRef.current) : null;
     const moved = () => { showToast(lang === "zh" ? "这个窗口是旧版本,请先刷新再操作" : "このウィンドウは古いバージョンです。再読み込みしてから操作してください"); return "moved"; };
     try {
-      if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) return moved();
-      if (pendingRef.current && !staleRef.current) {
+      if (!snapshotMode && (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY)))) return moved();
+      if (staleRef.current) return moved();
+      if (snapshotMode) return await addBackupSnapshot(captured, null, { pinned: true, reason, out });
+      if (pendingRef.current) {
         const res = saveNowRef.current();
         if (res && res.ok) pendingRef.current = false;
       }
       const cur = localStorage.getItem(STORAGE_KEY);
-      if (!cur) return true;   // 本来就没有存档,没什么可备份的
+      if (!cur) return true;
       return await addBackupSnapshot(cur, null, { pinned: true, reason, out });
     } catch (e) { return false; }
   };
-
   useEffect(() => {
+    if (_suspendSaves) return;
     if (staleRef.current) {
-      // recheck-ui-print-2:只记原因(搬走了 / 别的窗口改过),文字由 SaveStatus 按当下的语言出 —— 一打开就搬走了的窗口这里跑在第一次渲染,lang 还是缺省中文
       setSaveState({ status: "error", at: null, reason: _movedAway ? "moved" : "stale" });
       return;
     }
-    setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
     pendingRef.current = true;
-    const t = setTimeout(() => {
-      const res = doSave();
-      if (res && res.ok) {
-        pendingRef.current = false;
-        // 数据只存在浏览器本地，所以「已保存」必须显式给出时间 —— 老板要能确信东西没丢
-        setSaveState({ status: "saved", at: new Date() });
-      } else if (res && res.error === "stale") {
-        setSaveState({ status: "error", at: null, reason: _movedAway ? "moved" : "stale" });
-      } else {
-        const msg = (res && res.error && res.error.includes("uota"))
-          ? (lang === "zh" ? "保存失败：本地空间不足，去「数据」页清理旧数据" : "保存失敗：容量不足。データ画面で整理してください")
-          : (lang === "zh" ? "保存失败，请截图给开发者" : "保存失敗。スクショを開発者へ");
-        setSaveState({ status: "error", at: null, msg });
-      }
-    }, 800);
-    return () => clearTimeout(t);
+    setSaveState(s => (s.status === "saving" ? s : { ...s, status: "saving" }));
+    const snap = captureSaveSnapshot();
+    if (snap.checkpointError) setSaveState({ status: "error", at: null, msg: snapshotMainText(lang).fail });
+    const immediate = urgentSaveRef.current; urgentSaveRef.current = false;
+    const timer = setTimeout(() => { const result = saveNowRef.current(); if (result && typeof result.catch === "function") result.catch(() => {}); }, immediate ? 0 : 800);
+    return () => clearTimeout(timer);
   }, [recipes, cats, components, creations, knowledge, brands, materials, printSettings, customCompCats, productFamilies, shopMaterials, products, salesLog, productionLog, suppliers, appSettings, staleWindow]);
+
+  const upgradeSnapshotStorage = () => {
+    const ownerAllowed = beginPurchaseOwnerOp();
+    if (!ownerAllowed() || !mainStore || snapshotMode || staleRef.current || storageBusyRef.current) return;
+    const U = snapshotMainText(lang);
+    confirmDialog(lang === "zh" ? "升级会先把当前完整数据存一份固定备份，再搬到浏览器的大容量保存区。原存档会保留，核对成功后自动刷新。请保持此页面打开。" : "現在の全データを固定バックアップに保存してから、大容量の保存先へ移します。元のデータも保管し、確認後に再読み込みします。この画面を開いたままにしてください。", async () => {
+      if (!ownerAllowed() || storageBusyRef.current || staleRef.current) return;
+      const captured = snapshotPayloadOf(valuesRef.current), capturedBody = storageBodyOf(captured);
+      let expectedLegacyRaw;
+      try {
+        expectedLegacyRaw = localStorage.getItem(STORAGE_KEY);
+        if (lsHasMovedTo(expectedLegacyRaw) || storageBodyOf(expectedLegacyRaw) !== lastBodyRef.current) { markStoreStale(); return; }
+      } catch (e) { showToast(U.fail); return; }
+      const allowed = () => ownerAllowed() && !staleRef.current && storageBodyOf(snapshotPayloadOf(valuesRef.current)) === capturedBody;
+      let completed = false;
+      storageBusyRef.current = true; setStorageBusy(true); _suspendSaves = true;
+      try {
+        const pinned = await addBackupSnapshot(captured, null, { pinned: true, reason: "storage-upgrade" });
+        if (!allowed()) { if (ownerAllowed()) showToast(U.changed); return; }
+        if (!pinned) { showToast(U.backupFail); return; }
+        const result = await mainStore.migrate(captured, { expectedLegacyRaw, ownerAllowed: allowed });
+        if (!ownerAllowed()) return;
+        if (!result || !result.ok) { showToast(result?.error === "stale" ? U.changed : U.fail); return; }
+        completed = true; allowUnloadRef.current = true;
+        showToast(U.migrated); setTimeout(() => location.reload(), 300);
+      } catch (error) { if (ownerAllowed()) showToast(U.fail); }
+      finally {
+        if (!completed) {
+          // 切换标记已经写下后，即使最后一次激活失败，也只能让 BootGate 恢复，不能再把旧 LS 全存档盖回去。
+          let switched = mainStore.mode === "idb", checked = true;
+          try { switched = switched || lsHasMovedTo(localStorage.getItem(STORAGE_KEY)) || !!localStorage.getItem(SNAPSHOT_MAIN_MOVED_KEY); }
+          catch (e) { checked = false; }
+          if (switched) { _suspendSaves = true; allowUnloadRef.current = true; setTimeout(() => location.reload(), 300); return; }
+          if (!checked) { _suspendSaves = true; storageBusyRef.current = false; setStorageBusy(false); markStoreStale("unavailable"); return; }
+          _suspendSaves = false; storageBusyRef.current = false; setStorageBusy(false);
+          if (!staleRef.current) { const result = saveNowRef.current(); if (result && typeof result.catch === "function") result.catch(() => {}); }
+        }
+      }
+    }, { title: U.upgrade, danger: false, confirmText: U.upgrade });
+  };
+  const exportUnsavedSnapshot = () => {
+    if (!beginPurchaseOwnerOp()()) return;
+    snapshotDownloadRaw(snapshotPayloadOf(valuesRef.current), `korora-unsaved-${localDateStr()}.json`);
+  };
 
   // v17.8: 组合产品里「跟组件库走」的部分 = 组件的最新内容(写进副本,见 syncFollowingLayers)。
   // 组件 / 组合产品 / 材料一变就对一遍;没东西要改时原样返回同一个数组,setState 不会重渲染,不会空转。
@@ -38699,7 +39476,7 @@ function App() {
     const exportStopped = () => {
       if (staffEpoch !== exportStaffEpochRef.current || readStaffMode()) return true;
       try {
-        if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) {
+        if (!snapshotMode && (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY)))) {
           _movedAway = true; staleRef.current = true; setStaleWindow("moved");
         }
       } catch (e) { /* 读取失败沿用停止标记；空间不足仍可紧急导出。 */ }
@@ -38800,7 +39577,7 @@ function App() {
   const importStopped = (ownerAllowed) => {
     if (!ownerAllowed()) return true;
     try {
-      if (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY))) {
+      if (!snapshotMode && (_movedAway || lsHasMovedTo(localStorage.getItem(STORAGE_KEY)))) {
         _movedAway = true; staleRef.current = true; setStaleWindow("moved");
         showToast(lang === "zh" ? "数据已搬到新版本，请刷新后再导入" : "新しいバージョンに移行済みです。再読み込み後にインポートしてください");
         return true;
@@ -38849,6 +39626,7 @@ function App() {
       const idbOk = typeof indexedDB !== "undefined";
       const pinP = pinBackupNow("merge", out);
       if (importStopped(ownerAllowed)) return;
+      urgentSaveRef.current = true;
       applyMergePlan(plan, base, {
         cats: setCats, components: setComponents, recipes: setRecipes, creations: setCreations, knowledge: setKnowledge,
         brands: setBrands, materials: setMaterials, shopMaterials: setShopMaterials, products: setProducts,
@@ -38922,6 +39700,7 @@ function App() {
               : `ファイルの内容で現在のデータを置き換えます。\n上書き前に固定バックアップを保存します。`);
         const applyOverwrite = () => {
           if (importStopped(ownerAllowed)) return false;
+          urgentSaveRef.current = true;
           setRecipes(d.recipes || []);
           setCats(migrateCats(d.cats || []));
           setComponents(d.components || []);
@@ -38951,7 +39730,7 @@ function App() {
         const it = _impTxt(lang);
         const info = importFileInfo(d, f.name);
         let localSavedAt = null;
-        try { localSavedAt = localSavedAtOf(localStorage.getItem(STORAGE_KEY)); } catch (e2) {}
+        try { localSavedAt = localSavedAtOf(snapshotMode ? mainStore.getRaw() : localStorage.getItem(STORAGE_KEY)); } catch (e2) {}
         const oplan = overwritePlan({ ...cur, printSettings, appSettings }, d, { localSavedAt, lang });
         const owRows = overwritePreviewView(oplan, info, lang, { fileName: f.name, deviceName: importDeviceName(), localSavedAt, now: Date.now() });
         confirmDialog(msg, async () => {
@@ -39264,11 +40043,12 @@ function App() {
   return (
     <div style={{ fontFamily: T.fontSans, color: T.textPrimary, fontSize: 14, position: "relative", background: T.bgApp, minHeight: "100vh", colorScheme: "light" }}>
       <style>{GLOBAL_CSS}</style>
+      {storageBusy && <div role="alertdialog" aria-modal="true" aria-label={snapshotMainText(lang).upgrading} style={{ position: "fixed", inset: 0, zIndex: T.z.toast + 20, background: T.bgApp, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><div style={{ maxWidth: 480, fontSize: 16, lineHeight: 1.8 }}>{snapshotMainText(lang).upgrading}</div></div>}
       {/* 2026-09-29:别的窗口改过数据 → 本窗口已停止保存,提示刷新(见 staleRef) */}
       {staleWindow && (
         <div role="alert" data-app-banner="" style={{ position: "sticky", top: 0, zIndex: T.z.toast, background: T.danger, color: "#FFFFFF", padding: "10px 16px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}>
           <span style={{ flex: 1, minWidth: 220 }}>
-            {staleWindow === "moved"   // big-2 第 −1 步(规格 R113 / R114):数据搬进新库了,这个窗口是旧版本
+            {snapshotMode ? (staffMode ? snapshotMainText(lang).staff : (lang === "zh" ? "这个窗口已停止保存，以免覆盖别处的修改。请先导出未保存副本，再刷新处理存档冲突。" : "別の変更を上書きしないよう保存を停止しています。未保存コピーを書き出してから再読み込みしてください。")) : staleWindow === "moved"   // big-2 第 −1 步(规格 R113 / R114):数据搬进新库了,这个窗口是旧版本
               ? (lang === "zh"
                 ? "数据已经搬到新版本的数据库里了,这个窗口还是旧版本,改的东西存不进去。请刷新;刷新后还是这句,等一分钟再刷新。"
                 : "データは新しいバージョンのデータベースに移りました。このウィンドウは古いバージョンのため保存できません。再読み込みしてください(同じ表示が出たら 1 分待ってから再読み込み)。")
@@ -39276,7 +40056,8 @@ function App() {
               ? "这份数据在别的窗口或标签页里改过了。这个窗口已经停止保存,免得把那边的修改冲掉。请刷新载入最新数据(这个窗口里刚改、还没存的内容会丢)。"
               : "別のウィンドウでデータが変更されました。このウィンドウは保存を停止しています。再読み込みしてください。"}
           </span>
-          <button type="button" onClick={() => window.location.reload()} style={{ background: "#FFFFFF", color: T.danger, border: "none", borderRadius: T.radius, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+          {snapshotMode && !staffMode && <Btn onClick={exportUnsavedSnapshot}>{snapshotMainText(lang).rescue}</Btn>}
+          <button type="button" onClick={() => { allowUnloadRef.current = true; window.location.reload(); }} style={{ background: "#FFFFFF", color: T.danger, border: "none", borderRadius: T.radius, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
             {lang === "zh" ? "刷新" : "再読み込み"}
           </button>
         </div>
@@ -39723,10 +40504,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             <ExportChip view={exportView} level={exportRem.level} lang={lang} onExport={exportData} />
             {/* 第 5 批 E4:「📝 N」没保存的修改(第 0 步空壳),放在 SaveStatus 左边 */}
             <DraftChip lang={lang} />
-            <SaveStatus state={saveState} lang={lang} onRetry={() => {
-              const res = doSave();
-              setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
-            }} />
+            <SaveStatus state={saveState} lang={lang} onRetry={retrySave} />
             {/* 第 3 批 F4:员工模式入口(每台设备各自的开关)。审查 r1:手机宽度下这一组放不下(语言切换被挤出屏幕),顶栏只在 600px 以上显示,手机从「更多」抽屉进 */}
             <span className="k-desktop-only"><Btn size="sm" variant="ghost" onClick={askStaffEnter} title={lang === "zh" ? "给员工用:看不到钱、改不了配方" : "スタッフ用:価格非表示・編集不可"}>{staffTxt(lang).enterBtn}</Btn></span>
             <LangToggle lang={lang} onChange={setLang} />
@@ -40780,7 +41558,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           <FxSettingCard appSettings={appSettings} setAppSettings={setAppSettings} lang={lang} />
 
           {/* v57: 本地存储用量(第 6 批第 0 步抽成 StorageMeterCard;D 线改成按实际算 + 持久存储那一行;位置不挪) */}
-          <StorageMeterCard lang={lang} persistLine={persistLineOf(deviceInfo, lang)} />
+          <StorageMeterCard lang={lang} persistLine={persistLineOf(deviceInfo, lang)} mainStore={mainStore} onUpgrade={mainStore && !snapshotMode ? upgradeSnapshotStorage : undefined} upgradeBusy={storageBusy} />
 
           {(() => {
             // v17: 数据管理页整理 — 6 张操作卡片按用途分 3 组 + 小标题(功能/handler 不变,仅重排+加层次)
@@ -40887,7 +41665,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
             {/* 2026-09-29 体检第 2 批:清除前先存一份「固定」备份(不参与自动轮换),以前清完只能靠很快就被挤掉的自动备份 */}
             <Btn variant="danger" onClick={() => { const ownerAllowed = beginPurchaseOwnerOp(); if (!ownerAllowed()) return; confirmDialog("确认清除全部数据？\n\n清除前会自动存一份「固定」备份,可以在「恢复备份」里找回。", async () => {
               if (!ownerAllowed()) return;
-              const doClear = () => { if (!ownerAllowed()) return; setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
+              const doClear = () => { if (!ownerAllowed()) return; urgentSaveRef.current = true; setRecipes([]); setCats([]); setComponents([]); setCreations([]); setKnowledge([]); setBrands([]); setMaterials([]); setShopMaterials([]); setProducts([]); setSalesLog([]); setProductionLog([]); setSuppliers([]); setProductFamilies([]); setCustomCompCats([]);
                 // 审查 r5:今天的生产单一起清(同覆盖导入);汇率 / 显示口径 / 员工 PIN 是这台设备的设置,留着
                 // 备货 G 线:库存账 prepStock 和 prodPlan 一起删(两个都没有时返回 prev,不触发保存)
                 setAppSettings(prev => { if (!prev || (!prev.prodPlan && !prev.prepStock)) return prev; const { prodPlan, prepStock: _ps, ...rest } = prev; return rest; });
@@ -40915,10 +41693,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           onPrint={(data) => setPrintTarget({ type: "prodSheet", data, stage: "preview", lang: data.lang })}
           onDailyClose={saveDailyClose} confirmDialog={confirmDialog} showToast={showToast} onExit={askStaffExit} safetyNote={safetyNote}
           knowledge={knowledge} onPrintKnowledge={(src) => openKnowledgePrint(src, true)}
-          saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={() => {
-            const res = doSave();
-            setSaveState(res && res.ok ? { status: "saved", at: new Date() } : { ...saveState });
-          }} />} />
+          saveSlot={<SaveStatus state={saveState} lang={lang} onRetry={retrySave} />} />
       )}
     </div>
   );
