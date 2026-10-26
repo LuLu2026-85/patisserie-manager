@@ -4445,7 +4445,7 @@ async function addBackupSnapshot(payload, counts, opts = {}) {
             }
           } else { outId = same.id; result = true; return; }
         }
-        const meta = { savedAt: new Date(now).toISOString(), size: payload.length, hash, summary, pinned, reason: pinned ? (opts.reason || "") : "" };
+        const meta = { savedAt: new Date(now).toISOString(), size: payload.length, sizeBytes: new Blob([payload]).size, hash, summary, pinned, reason: pinned ? (opts.reason || "") : "" };
         const addReq = metaStore.add(meta);
         addReq.onsuccess = () => {
           const id = addReq.result;
@@ -8811,6 +8811,12 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
     return (bytes / 1024 / 1024).toFixed(2) + " MB";
   };
 
+  const formatSnapshotSize = (s) => {
+    if (Number.isFinite(s.sizeBytes) && s.sizeBytes >= 0) return formatSize(s.sizeBytes);
+    if (!(s.size > 0)) return "";
+    return lang === "zh" ? `旧计量 · 约 ${s.size.toLocaleString()} 字符` : `旧カウント · 約 ${s.size.toLocaleString()} 文字`;
+  };
+
   // 2026-09-29 体检第 2 批:摘要是备份时存下的条数,不再把每份整份数据解析一遍(以前 30 份 × 186 万字,每次重画都解析)
   const summarizeSnap = (s) => {
     if (s.legacy) return lang === "zh" ? "升级前的旧备份(内容在点「恢复」时才读取)" : "旧形式のバックアップ(内容は復元時に読込)";
@@ -8827,6 +8833,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
     "clear-cats": lang === "zh" ? "清掉旧价格表之前" : "旧価格表の削除前",   // 数据体检 H14(2026-09-29 第 2 批 2c)
     // big-2 第 −1 步(规格 R91 / R116):下一版存的固定备份,这一版的恢复列表也认得
     move: lang === "zh" ? "搬家之前" : "移行前",
+    "storage-upgrade": lang === "zh" ? "存储升级之前" : "保存先の移行前",
     oldapp: lang === "zh" ? "旧版窗口存的" : "旧版の保存",
     "oldapp-seed": lang === "zh" ? "旧版窗口存的(预置数据)" : "旧版の保存(初期データ)",
     journal: lang === "zh" ? "关页时没存完的" : "未保存の変更",
@@ -8883,7 +8890,7 @@ function BackupRestoreDialog({ onClose, lang, showToast, confirmDialog, highligh
                   <div style={{ fontSize: 12, fontWeight: 500, color: T.textPrimary }}>
                     {formatTime(s.savedAt)}
                     {highlightSavedAt && s.savedAt === highlightSavedAt && <span data-b6="backup-newest" style={{ color: T.info, marginLeft: 8 }}>{devUiTxt(lang).backupNewest}</span>}
-                    {s.size > 0 && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 8 }}>· {formatSize(s.size)}</span>}
+                    {formatSnapshotSize(s) && <span style={{ color: T.textTertiary, fontSize: 10, marginLeft: 8 }}>· {formatSnapshotSize(s)}</span>}
                     {s.pinned && (
                       <span style={{ ...T.fs.label, color: T.info, border: `1px solid ${T.info}`, borderRadius: T.radius, padding: "0 6px", marginLeft: 8 }}>
                         {lang === "zh" ? "固定" : "固定"}{reasonLabel(s.reason) ? ` · ${reasonLabel(s.reason)}` : ""}
@@ -27739,23 +27746,20 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
   };
   useEffect(() => { if (!editing && fromTarget) setFromTarget(false); }, [editing]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const linkedIds = new Set(shopMaterials.map(sm => sm.materialId));
-  const availableMaterials = materials.filter(m => !linkedIds.has(m.id));
+  const linkedIds = useMemo(() => new Set(shopMaterials.map(sm => sm.materialId)), [shopMaterials]);
+  const availableMaterials = useMemo(() => materials.filter(m => !linkedIds.has(m.id)), [materials, linkedIds]);
+  const pickerBrandKeys = useMemo(() => brandKeyMapOf(brands), [brands]);
 
   const mLabel = (m) => lang === "zh" ? (m.nameZh || m.nameJa) : (m.nameJa || m.nameZh);
   const bLabel = (b) => b ? (lang === "zh" ? (b.nameZh || b.nameJa) : (b.nameJa || b.nameZh)) : "";
 
-  const filteredAvailable = availableMaterials.filter(m => {
-    if (catFilter && getMaterialCat(m.categoryId).id !== catFilter) return false;  // 2026-09-29 体检第 2 批:认不出的分类(misc / 旧 id)归「其他」,以前按分类筛不出来
-    if (search) {
-      const q = search.toLowerCase();
-      const name = `${m.nameZh || ''}${m.nameJa || ''}${m.nameFr || ''}`.toLowerCase();
-      const brand = brands.find(b => b.id === m.brandId);
-      const brandName = brand ? `${brand.nameZh || ''}${brand.nameJa || ''}`.toLowerCase() : '';
-      return name.includes(q) || brandName.includes(q);
-    }
-    return true;
-  });
+  const filteredAvailable = useMemo(() => {
+    const terms = shopMaterialListTerms(search);
+    return availableMaterials.filter(m => {
+      if (catFilter && getMaterialCat(m.categoryId).id !== catFilter) return false;  // 认不出的分类仍归「其他」
+      return terms.every(term => materialQueryRank(m, term, pickerBrandKeys) < 9);
+    });
+  }, [availableMaterials, search, catFilter, pickerBrandKeys]);
 
   // 新建一条的草稿(从百科选 / 采购页「加进本店原料」共用)
   function newShopMatDraft(mat) {
@@ -27801,7 +27805,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       if (idx >= 0) { const next = [...prev]; next[idx] = out; return next; }
       return [...prev, out];
     });
-    showToast(lang === "zh" ? "✓ 已保存" : "✓ 保存しました");
+    showToast(lang === "zh" ? "正在保存…" : "保存中…");
     closeEditor();
   };
 
@@ -27910,8 +27914,9 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
       <div>
         <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center" }}>
           <Btn onClick={() => { setPicker(false); setSearch(""); setCatFilter(null); }}>← {lang === "zh" ? "返回" : "戻る"}</Btn>
-          <input type="text" placeholder={lang === "zh" ? "搜索材料名 / 品牌..." : "材料 / ブランド検索..."} value={search} onChange={e => setSearch(e.target.value)} style={inputStyle} />
+          <input type="text" placeholder={lang === "zh" ? "搜索材料名 / 别名 / 品牌…" : "材料名 / 別名 / ブランドを検索…"} value={search} onChange={e => setSearch(e.target.value)} style={inputStyle} />
         </div>
+        <div style={{ ...T.fs.caption, color: T.textTertiary, marginBottom: T.sp.m }}>{lang === "zh" ? "支持中／日／法名称；多个词用空格分开，须同时符合。" : "中国語・日本語・フランス語に対応。複数語はスペースで区切ると、すべてに一致する材料を表示。"}</div>
         <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
           <button onClick={() => setCatFilter(null)} style={{ padding: "4px 10px", background: !catFilter ? T.brand : "transparent", color: !catFilter ? T.bgCard : T.textSecondary, border: `0.5px solid ${!catFilter ? T.brand : T.border}`, borderRadius: T.radiusPill, fontSize: 11, cursor: "pointer", fontFamily: T.fontSans }}>{lang === "zh" ? "全部" : "全部"}</button>
           {MATERIAL_CATEGORIES.map(c => (
@@ -28140,7 +28145,7 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           const found = prev.find(x => x.id === p.id);
           return found ? prev.map(x => x.id === p.id ? p : x) : [...prev, p];
         });
-        showToast(lang === "zh" ? "✓ 商品已保存" : "✓ 商品保存");
+        showToast(lang === "zh" ? "正在保存…" : "保存中…");
         setViewId(p.id);
         setEditTarget(null);
       }}
@@ -28814,7 +28819,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
           return found ? prev.map(x => x.id === s.id ? s : x) : [...prev, s];
         });
         if (onReturn) showToast(_supTxt(lang).supSaved, { undo: onReturn, actionLabel: _supTxt(lang).supBackTo });
-        else showToast(lang === "zh" ? "✓ 供货商已保存" : "✓ 仕入先保存");
+        else showToast(lang === "zh" ? "正在保存…" : "保存中…");
         setViewId(s.id);
         setEditTarget(null);
       }}
@@ -28894,7 +28899,7 @@ function SuppliersView({ suppliers, setSuppliers, shopMaterials, setShopMaterial
           <div style={{ background: T.bgCard, border: `0.5px solid ${T.border}`, borderRadius: T.radiusLg, padding: "1rem 1.25rem" }}>
             <div style={{ fontFamily: T.fontSerif, fontWeight: 500, fontSize: 14, marginBottom: 10 }}>{lang === "zh" ? "关联的本店原料" : "関連する仕入原料"}</div>
             <div style={{ display: "grid", gap: 5 }}>
-              {linkedSMs.slice(0, 30).map(sm => {
+              {linkedSMs.map(sm => {
                 const mat = materials.find(m => m.id === sm.materialId);
                 return (
                   <div key={sm.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 10px", background: T.bgMuted, borderRadius: T.radiusSm }}>
