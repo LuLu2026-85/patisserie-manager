@@ -7848,6 +7848,14 @@ const hoverOnly = (fn, mm) => (canHover(mm) ? fn : undefined);
 // 不过渡 transform 和尺寸。
 // ═══════════════════════════════════════════════════════════════
 const GLOBAL_CSS = `
+.k-price-tag-editor { width:min(620px, calc(100% - 24px)); max-height:90vh; box-sizing:border-box; padding:0; border:1px solid ${T.border}; color:${T.ink}; background:${T.paper}; font-family:${T.fontSans}; }
+.k-price-tag-editor::backdrop { background:rgba(0,0,0,.45); }
+.k-price-tag-editor form { display:grid; gap:16px; padding:20px; }
+.k-price-tag-editor label { display:grid; gap:4px; min-width:0; font-size:13px; }
+.k-price-tag-editor input, .k-price-tag-editor select { width:100%; min-width:0; box-sizing:border-box; padding:7px 9px; font:inherit; color:${T.ink}; background:${T.surface}; border:1px solid ${T.border}; border-radius:${T.radius}; }
+.k-price-tag-editor fieldset { min-width:0; margin:0; padding:12px; border:1px solid ${T.border}; display:grid; gap:10px; }
+.k-price-tag-editor summary { cursor:pointer; font-size:13px; }
+.k-price-tag-fields { display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); }
 /* 成品结构：独立图例不受薄层高度约束。 */
 .k-section-view { padding: 20px 0; min-width: 0; }
 .k-section-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(220px, 1fr); gap: 28px; align-items: center; }
@@ -17040,6 +17048,9 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
   // 第 5 批 P:顶栏、LOGO 设置弹窗的文字跟 App 语言(uiLang);没传 uiLang 时照旧按打印语言 lang(双语时是日文,和以前一样)。模板分发、@media print、print-overlay 结构都不动
   const uiZh = (uiLang || lang) === "zh";
   const [showLogoUpload, setShowLogoUpload] = useState(false);
+  const isPriceTag = itemType === "priceTag";
+  const isLabelSheet = isPriceTag || itemType === "label" || itemType === "prepLabel";
+  const [tagOverflow, setTagOverflow] = useState(null);
   const [logoUrlInput, setLogoUrlInput] = useState(printSettings.logoUrl || "");
   const [brandNameInput, setBrandNameInput] = useState(printSettings.brandName || "kororā");
   // 2026-09-29 体检第 2 批:以前副标题清空保存后又被填回默认值、没设过时印写死的 PATISSERIE —— 现在空就是不印
@@ -17100,6 +17111,19 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           box-sizing: border-box;
         }
         .print-area h1, .print-area h2, .print-area h3 { font-family: inherit; margin: 0; }
+        .k-price-tag-page { display: grid; grid-template-columns: repeat(var(--tag-cols), var(--tag-width)); justify-content: center; }
+        .k-price-tag-page + .k-price-tag-page { margin-top: 10mm; }
+        .k-price-tag { box-sizing: border-box; width: var(--tag-width); height: var(--tag-height); padding: 1.8mm 2.5mm; border: .16mm solid #999; display: flex; flex-direction: column; overflow: hidden; overflow-wrap: anywhere; line-height: 1.2; color: #1c1c1b; font-family: ${T.fontSans}; }
+        .k-price-tag > * { flex-shrink: 0; }
+        .k-price-tag footer { margin-top: auto; padding-top: .8mm; display: flex; align-items: baseline; justify-content: space-between; gap: 1.3mm; }
+        .k-price-tag footer strong { font-family: ${T.fontSerif}; font-variant-numeric: tabular-nums; text-align: right; }
+        .k-price-tag footer small { font-size: .64em; font-weight: normal; }
+        @media screen and (max-width: 700px) { .k-price-tag-page { grid-template-columns: repeat(auto-fit, var(--tag-width)); } }
+        @media print {
+          .k-price-tag-page + .k-price-tag-page { margin-top: 0; break-before: page; }
+          .k-price-tag { break-inside: avoid; }
+          .k-price-tag-overflow .k-price-tag-page { display: none; }
+        }
         .print-area table { border-collapse: collapse; width: 100%; }
         /* 盆列：不用颜色，用粗体编号 */
         .print-area .p-bowl { font-size: 14pt; font-weight: 700; width: 42px; vertical-align: top; }
@@ -17140,8 +17164,8 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
           {uiZh ? "🖨 打印预览" : "🖨 印刷プレビュー"}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {canEditSettings && <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{uiZh ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>}
-          <Btn size="sm" variant="primary" onClick={doPrint}>{uiZh ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
+          {canEditSettings && !isPriceTag && <Btn size="sm" onClick={() => setShowLogoUpload(true)} style={{ background: T.paper }}>{uiZh ? "⚙ LOGO设置" : "⚙ ロゴ設定"}</Btn>}
+          <Btn size="sm" variant="primary" onClick={doPrint} disabled={isPriceTag && (!tagOverflow || tagOverflow.length > 0)}>{uiZh ? "🖨 打印 (Ctrl+P)" : "🖨 印刷 (Ctrl+P)"}</Btn>
           <Btn size="sm" onClick={onClose} style={{ background: T.paper }}>{uiZh ? "← 返回" : "← 戻る"}</Btn>
         </div>
       </div>
@@ -17197,14 +17221,16 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
 
       {/* 打印区域（实际打印内容） */}
       {/* 第 6 批 PC:半成品标签(prepLabel)和顾客标签同一类 —— 不加页内边距、不印水印 */}
-      <div className={itemType === "label" || itemType === "prepLabel" ? "print-area k-label-area" : "print-area"} style={{ padding: itemType === "label" || itemType === "prepLabel" ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
+      <div className={isLabelSheet ? "print-area k-label-area" : "print-area"} style={{ padding: isLabelSheet ? "10mm 0" : "20mm 15mm", maxWidth: "210mm", margin: "0 auto", background: "white", minHeight: "297mm", position: "relative" }}>
         {/* 水印(标签不印) */}
-        {itemType !== "label" && itemType !== "prepLabel" && <div className="watermark">{brandName}</div>}
+        {!isLabelSheet && <div className="watermark">{brandName}</div>}
 
         {itemType === "prodSheet" ? (
           <ProductionSheetTemplate data={item} lang={lang} brandName={brandName} />
         ) : itemType === "label" ? (
           <LabelTemplate data={item} printSettings={printSettings} />
+        ) : isPriceTag ? (
+          <PriceTagTemplate data={item} brandName={brandName} uiZh={uiZh} overflow={tagOverflow} onMeasured={setTagOverflow} />
         ) : itemType === "creation" ? (
           <CreationPrintTemplate data={item} lang={lang} sections={sections} brandName={brandName} brandSubtitle={brandSubtitle} />
         ) : itemType === "knowledge" ? (
@@ -17223,6 +17249,74 @@ function PrintView({ item, itemType, template, lang, sections, printSettings, on
         )}
       </div>
     </>
+  );
+}
+
+// A4 四边各留 15 mm，可用面积为 180 × 267 mm；相邻价签共用裁切边。
+const PRICE_TAG_SIZES = {
+  counter: { w: 60, h: 40, pt: 15 },
+  large: { w: 75, h: 50, pt: 17 },
+  bread: { w: 50, h: 30, pt: 12 },
+};
+
+function PriceTagTemplate({ data, brandName, uiZh, overflow, onMeasured }) {
+  const sheet = useRef(null);
+  const size = PRICE_TAG_SIZES[data.size] || PRICE_TAG_SIZES.counter;
+  const cols = Math.floor(180 / size.w);
+  const perPage = cols * Math.floor(267 / size.h);
+  const copies = data.rows.flatMap((row, index) => Array.from({ length: row.copies }, () => index));
+  const pages = [];
+  for (let i = 0; i < copies.length; i += perPage) pages.push(copies.slice(i, i + perPage));
+
+  // 使用实际载入的字体和实寸卡片测量。每款只试排一次，同一款的所有副本共用字号。
+  useEffect(() => {
+    let cancelled = false;
+    const measure = () => {
+      if (cancelled || !sheet.current) return;
+      const byRow = new Map();
+      const problems = [];
+      for (const card of sheet.current.querySelectorAll('.k-price-tag')) {
+        const index = Number(card.dataset.row);
+        if (!byRow.has(index)) {
+          let pt = size.pt;
+          card.style.fontSize = pt + 'pt';
+          const overflows = () => card.scrollHeight > card.clientHeight + 1 || card.scrollWidth > card.clientWidth + 1;
+          while (pt > 10 && overflows()) card.style.fontSize = --pt + 'pt';
+          if (overflows()) problems.push(data.rows[index].name);
+          byRow.set(index, pt);
+        }
+        card.style.fontSize = byRow.get(index) + 'pt';
+      }
+      onMeasured(problems);
+    };
+    sheet.current.getBoundingClientRect(); // 先触发排版，让浏览器请求本批价签实际用到的字形。
+    if (document.fonts) document.fonts.ready.then(measure);
+    else measure();
+    return () => { cancelled = true; };
+  }, [data, size, brandName, onMeasured]);
+
+  return (
+    <div ref={sheet} className={overflow?.length ? 'k-price-tag-overflow' : undefined} style={{ '--tag-width': size.w + 'mm', '--tag-height': size.h + 'mm', '--tag-cols': cols }}>
+      {!!overflow?.length && <div role="alert" style={{ margin: '0 auto 5mm', maxWidth: '180mm', padding: '2mm', color: T.danger }}>
+        {uiZh ? `以下商品的文字超出价签，请返回缩短文字或换大一号：${overflow.join('、')}` : `文字が収まりません。戻って短くするか、大きい札を選んでください：${overflow.join('、')}`}
+      </div>}
+      {pages.map((page, pi) => (
+        <div className="k-price-tag-page" key={pi}>
+          {page.map((index, ci) => {
+            const row = data.rows[index];
+            return (
+              <article className="k-price-tag" data-row={index} key={ci} style={{ fontSize: size.pt + 'pt' }}>
+                <strong>{row.name}</strong>
+                {row.frenchName && <div lang="fr" style={{ fontFamily: T.fontSerif, fontSize: '.72em' }}>{row.frenchName}</div>}
+                {row.description && <div style={{ fontSize: '.67em', marginTop: '.6mm' }}>{row.description}</div>}
+                {row.allergens && <div style={{ fontSize: '.66em', marginTop: '.5mm' }}>{row.allergens}</div>}
+                <footer><span style={{ fontFamily: T.fontSerif, fontSize: '.68em' }}>{brandName}</span><strong><span style={{ whiteSpace: 'nowrap' }}>{row.priceText}</span>{row.unit && <small> / {row.unit}</small>}</strong></footer>
+              </article>
+            );
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -18121,6 +18215,108 @@ const labelDefaultsOf = (kind, e, ctx) => {
   // 第 5 批 P:配方有了「🏷 保质期 · 贮存条件」两格(shelfLifeZh / storageCondZh)就预填它们;贮存条件填了就不再提示旧「保存」。没有新字段时和以前一样
   return { shelfLife: _normTxt(src.shelfLifeZh) || _normTxt(src.shelfLife), storage: _normTxt(src.storageCondZh), storageHint: _normTxt(src.storageCondZh) ? "" : _normTxt(src.storage) };
 };
+// 柜台价签只保存本次排版草稿。商品备注可能是店内用语，顾客可见的一句话和过敏原由店员填写。
+function makePriceTagRow(product, key, lang) {
+  const priced = Number.isFinite(Number(product?.sellPrice)) && Number(product.sellPrice) > 0;
+  return {
+    key, name: pickLang(product, "name", lang), frenchName: product?.nameFr || "", description: "", allergens: "",
+    price: priced ? String(product.sellPrice) : "", currency: priced ? priceCurOf(product) : "CNY",
+    unit: lang === "ja" ? "個" : "个", copies: "1",
+  };
+}
+
+function PriceTagEditor({ products, lang, initialProductId, draft, onClose, onPreview }) {
+  const zh = lang !== "ja";
+  const [size, setSize] = useState(draft?.size || "large");
+  const [rows, setRows] = useState(() => {
+    if (draft) return draft.rows;
+    const product = products.find(p => p.id === initialProductId);
+    return product || !products.length ? [makePriceTagRow(product, 0, lang)] : [];
+  });
+  const nextKey = useRef(Math.max(0, ...rows.map(row => row.key)) + 1);
+  const dialog = useRef(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const el = dialog.current;
+    el.showModal();
+    return () => el.close();
+  }, []);
+
+  const add = product => {
+    const row = makePriceTagRow(product, nextKey.current++, lang);
+    setRows(prev => [...prev, row]);
+  };
+  const change = (key, patch) => {
+    setError("");
+    setRows(prev => prev.map(row => row.key === key ? { ...row, ...patch } : row));
+  };
+  const preview = event => {
+    event.preventDefault();
+    const cards = [];
+    for (const [i, row] of rows.entries()) {
+      const price = Number(row.price);
+      const copies = Number(row.copies);
+      if (!row.name.trim() || !row.unit.trim() || !Number.isFinite(price) || price <= 0 || !Number.isInteger(copies) || copies < 1 || copies > 99) {
+        setError(zh ? `请核对第 ${i + 1} 款的品名、售价、计价单位和张数（1–99）。` : `${i + 1} 番目の品名・価格・単位・枚数（1～99）を確認してください。`);
+        return;
+      }
+      cards.push({ name: row.name.trim(), frenchName: row.frenchName.trim(), description: row.description.trim(),
+        allergens: row.allergens.trim(), priceText: fmtSellPrice(price, { priceCurrency: row.currency }, { raw: true }), unit: row.unit.trim(), copies });
+    }
+    if (cards.length) onPreview({ size, rows: cards }, { size, rows });
+  };
+  const sizeNames = zh ? { counter: "小展签", large: "门店展签", bread: "面包夹签" } : { counter: "小型", large: "店頭用", bread: "パン用" };
+  return (
+    <dialog className="k-price-tag-editor" ref={dialog} aria-labelledby="price-tag-title" onCancel={e => { e.preventDefault(); onClose(); }}>
+      <form onSubmit={preview}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <h2 id="price-tag-title" style={{ ...T.fs.titleS, margin: 0 }}>{zh ? "打印价签" : "値札を印刷"}</h2>
+          <Btn type="button" onClick={onClose}>{zh ? "关闭" : "閉じる"}</Btn>
+        </div>
+        <label>{zh ? "A4 拼版 · 价签尺寸" : "A4 面付け・値札サイズ"}
+          <select value={size} onChange={e => setSize(e.target.value)}>
+            {Object.entries(PRICE_TAG_SIZES).map(([id, s]) => <option key={id} value={id}>{sizeNames[id]} · {s.w} × {s.h} mm</option>)}
+          </select>
+        </label>
+        {products.length > 0 && <label>{zh ? "从商品添加" : "商品から追加"}
+          <select value="" onChange={e => { if (e.target.value !== "") add(products[Number(e.target.value)]); }}>
+            <option value="">{zh ? "选择商品…" : "商品を選択…"}</option>
+            {products.map((p, i) => <option key={p.id} value={i}>{pickLang(p, "name", lang)} {fmtSellPrice(p.sellPrice, p, { raw: true })}</option>)}
+          </select>
+        </label>}
+        {rows.map((row, i) => (
+          <fieldset key={row.key}>
+            <legend>{zh ? `价签 ${i + 1}` : `値札 ${i + 1}`}</legend>
+            <label>商品名<input required value={row.name} onChange={e => change(row.key, { name: e.target.value })} /></label>
+            <div className="k-price-tag-fields">
+              <label>{zh ? "币种" : "通貨"}<select value={row.currency} onChange={e => change(row.key, { currency: e.target.value, price: "" })}>
+                <option value="CNY">{zh ? "人民币 ¥" : "人民元 ¥"}</option><option value="JPY">{zh ? "日元 円" : "日本円"}</option>
+              </select></label>
+              <label>{zh ? "售价" : "販売価格"}<input type="number" inputMode="decimal" required min="0.01" step="0.01" value={row.price} onChange={e => change(row.key, { price: e.target.value })} /></label>
+              <label>{zh ? "计价单位" : "販売単位"}<input required value={row.unit} onChange={e => change(row.key, { unit: e.target.value })} /></label>
+              <label>{zh ? "张数" : "枚数"}<input type="number" inputMode="numeric" required min="1" max="99" step="1" value={row.copies} onChange={e => change(row.key, { copies: e.target.value })} /></label>
+            </div>
+            <details><summary>{zh ? "法文名、简介与过敏原（选填）" : "フランス語名・商品説明・アレルゲン（任意）"}</summary>
+              <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                <label>{zh ? "法文名" : "フランス語名"}<input value={row.frenchName} onChange={e => change(row.key, { frenchName: e.target.value })} /></label>
+                <label>{zh ? "一句话简介" : "ひとこと紹介"}<input value={row.description} onChange={e => change(row.key, { description: e.target.value })} /></label>
+                <label>{zh ? "过敏原标示" : "アレルゲン表示"}<input placeholder={zh ? "例如：含乳、蛋、小麦" : "例：乳成分・卵・小麦を含む"} value={row.allergens} onChange={e => change(row.key, { allergens: e.target.value })} /></label>
+              </div>
+            </details>
+            <Btn type="button" size="sm" style={{ justifySelf: "end" }} onClick={() => { setRows(prev => prev.filter(r => r.key !== row.key)); setError(""); }}>{zh ? "移除这款" : "この値札を外す"}</Btn>
+          </fieldset>
+        ))}
+        {error && <InlineError title={error} />}
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <Btn type="button" onClick={() => add(null)}>{zh ? "＋ 手填价签" : "＋ 手入力で追加"}</Btn>
+          <Btn type="submit" variant="primary" disabled={!rows.length}>{zh ? "打印预览" : "印刷プレビュー"}</Btn>
+        </div>
+        <div style={{ ...T.fs.caption, color: T.textSecondary }}>{zh ? "修改仅用于本次打印。请按实际大小（100%）打印，再沿细线裁切。" : "変更は今回の印刷にのみ適用します。実際のサイズ（100%）で印刷し、細線に沿って切り取ってください。"}</div>
+      </form>
+    </dialog>
+  );
+}
+
 function LabelPrintModal({ kind, entity, lang, materials = [], brands = [], components = [], recipes = [], creations = [], printSettings = {}, onClose, onConfirm, onUpdateSettings }) {
   const zh = lang !== "ja";
   const { summary, draft, defaults } = useMemo(() => {
@@ -28077,7 +28273,7 @@ function ShopMaterialsView({ shopMaterials, setShopMaterials, materials, brands,
 //        currentStock, threshold, leadTimeDays, sellPrice, note }
 // ═══════════════════════════════════════════════════════════════
 // [B6 修复] 加 components 参数,商品可关联组件
-function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet, onPrintLabel,
+function ProductsView({ products, setProducts, recipes, creations, components = [], materials = [], brands = [], lang, showToast, confirmDialog, viewId, setViewId, editTarget, setEditTarget, salesLog, setSalesLog, productionLog, setProductionLog, onOpenProdSheet, onPrintLabel, onPrintPriceTags,
   onLogProdWithPrep, prepRestorePreviewOf, onProdLogDeleted }) {   // 备货 F 线:「记录生产」先问 onLogProdWithPrep(没传 / 返回 false = 走原来的代码);删生产记录的确认框 + 加回
   // 2026-09-29 体检第 2 批:以前用 UTC 日期,北京早上 8 点前记的销售 / 生产落到前一天,日期框也选不了今天
   const today = localDateStr();
@@ -28189,9 +28385,10 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
     const prods = productionLog.filter(l => l.productId === p.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return (
       <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 8 }}>
           <div style={{ fontSize: 11, color: T.textTertiary, letterSpacing: "1.5px", textTransform: "uppercase" }}>{lang === "zh" ? "商品详情" : "商品詳細"}</div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {onPrintPriceTags && <Btn size="sm" onClick={() => onPrintPriceTags(p.id)}>{lang === "zh" ? "打印价签" : "値札を印刷"}</Btn>}
             <Btn size="sm" onClick={() => setEditTarget(p)}>{lang === "zh" ? "编辑" : "編集"}</Btn>
             <Btn onClick={() => setViewId(null)}>{lang === "zh" ? "← 返回" : "← 戻る"}</Btn>
           </div>
@@ -28331,7 +28528,10 @@ function ProductsView({ products, setProducts, recipes, creations, components = 
           <div style={{ fontSize: 18, fontWeight: 500, color: T.textPrimary, fontFamily: T.fontSerif }}>{lang === "zh" ? "🍰 商品" : "🍰 商品"}</div>
           <div style={{ fontSize: 11, color: T.textTertiary, marginTop: 3 }}>{lang === "zh" ? `${products.length} 个商品 · 管理库存 / 待办 / 销售` : `${products.length} 件 · 在庫・予定・販売`}</div>
         </div>
-        <Btn variant="primary" onClick={() => setEditTarget({ _new: true })}>{lang === "zh" ? "+ 新建商品" : "+ 新規商品"}</Btn>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {onPrintPriceTags && <Btn onClick={() => onPrintPriceTags(null)}>{lang === "zh" ? "打印价签" : "値札を印刷"}</Btn>}
+          <Btn variant="primary" onClick={() => setEditTarget({ _new: true })}>{lang === "zh" ? "+ 新建商品" : "+ 新規商品"}</Btn>
+        </div>
       </div>
       {products.length === 0 ? (
         <div style={{ background: T.bgSoft, borderRadius: T.radius, padding: "40px 20px", textAlign: "center", fontSize: 13, color: T.textSecondary, lineHeight: 1.8 }}>
@@ -40109,6 +40309,11 @@ function App({ mainStore = null } = {}) {
       )}
 
       {/* 🖨 打印设置弹窗 */}
+      {!staffMode && printTarget?.stage === "priceTagOptions" && (
+        <PriceTagEditor products={products} lang={lang} initialProductId={printTarget.initialProductId} draft={printTarget.draft}
+          onClose={() => setPrintTarget(null)}
+          onPreview={(data, draft) => setPrintTarget({ ...printTarget, stage: "preview", lang, data, draft })} />
+      )}
       {printTarget && printTarget.stage === "settings" && printTarget.type === "label" && (
         <LabelPrintModal
           kind={printTarget.data.kind}
@@ -40157,9 +40362,9 @@ function App({ mainStore = null } = {}) {
             lang={printTarget.lang}
             sections={printTarget.sections}
             printSettings={printTarget.type === "knowledge" ? knowledgePrintBrandSettings(printSettings, !staffMode && printTarget.data && printTarget.data.keepMoney === true) : printSettings}
-            onClose={() => setPrintTarget(null)}
+            onClose={() => setPrintTarget(printTarget.type === "priceTag" ? { type: "priceTag", stage: "priceTagOptions", initialProductId: printTarget.initialProductId, draft: printTarget.draft } : null)}
             onUpdateSettings={(newSettings) => setPrintSettings(prev => ({ ...prev, ...newSettings }))}
-            canEditSettings={!staffMode}
+            canEditSettings={!staffMode && printTarget.type !== "priceTag"}
             uiLang={lang}
           />
         </div>
@@ -41185,6 +41390,7 @@ node .claude/scripts/orderie_image_fetcher.cjs \\
           setProductionLog={setProductionLog}
           onOpenProdSheet={openProdSheetWith}
           onPrintLabel={openLabelPrint}
+          onPrintPriceTags={(initialProductId) => setPrintTarget({ type: "priceTag", stage: "priceTagOptions", initialProductId })}
           onLogProdWithPrep={logProdWithPrep}
           prepRestorePreviewOf={prepRestorePreviewOf}
           onProdLogDeleted={onProdLogDeleted}
